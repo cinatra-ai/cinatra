@@ -269,7 +269,15 @@ describe("point 2 — a fired recurring schedule stays editable", () => {
     expect(disabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
   });
 
-  it("…and in the conversation too, where Save changes is the card's whole floor", async () => {
+  // SUPERSEDED BY THE RATIFIED DRAWING (cinatra#3174 fix leg 3). This test used
+  // to pin the plan's own split — Cancel schedule on the page, Save changes in
+  // the conversation. Section VI draws the fired-recurring card IN A CHAT
+  // THREAD with both controls on its floor, and says so in words: "Wherever a
+  // schedule is read — this card, the run's schedule step …, the widget — it is
+  // drawn as this form in one of the five readings above… Cancel schedule
+  // appears only where the schedule is recurring." The second graded proof
+  // round failed this floor for the missing control. The drawing wins.
+  it("…and in the conversation too, with BOTH controls on the floor", async () => {
     for (const host of ["chat_thread", "site_widget"] as const) {
       const view = mount(BODIES.recurringFired, host);
       await waitFor(() => expect(rows(view.container)).not.toBeNull());
@@ -277,8 +285,8 @@ describe("point 2 — a fired recurring schedule stays editable", () => {
       expect(disabled(view.container.querySelector('[data-field="recurring-timezone"]')), host).toBe(
         false,
       );
-      // Cancel schedule belongs to the page step, not to the conversation.
-      expect(cancel(view.container), host).toBeNull();
+      expect(cancel(view.container), host).not.toBeNull();
+      expect(cancel(view.container)?.textContent, host).toContain("Cancel schedule");
       view.unmount();
       cleanup();
     }

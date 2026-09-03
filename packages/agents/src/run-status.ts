@@ -811,6 +811,33 @@ export const RUN_START_SCHEDULE_FIRED_SENTENCE =
   "It ran at the time you set. A one-time schedule is spent once it fires, " +
   "so the rows below are the record of it and cannot be changed.";
 
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A FIRED RECURRING SCHEDULE
+ * (cinatra#3174 fix leg 3, criterion 4).
+ *
+ * Section VI's fifth reading is not the fourth one. Its own example draws the
+ * assistant's whole line above the still-editable rows:
+ *
+ *   "It is still recurring, so the rows below still take a change — it applies
+ *    to the runs still to come."
+ *
+ * and its note-line says why the two readings cannot share a sentence: "A
+ * recurring schedule is never spent by firing: its past runs are history and
+ * its runs still to come stay changeable, so it keeps editable rows over Save
+ * changes, and gains Cancel schedule beside them."
+ *
+ * THE SECOND GRADED ROUND MEASURED THE NEVER-FIRED SENTENCE HERE. A recurring
+ * schedule that had genuinely fired drew the wait clause, which says the run
+ * has not started — of a schedule that had already run once and will run again.
+ *
+ * IT REPLACES THE PLATFORM'S SENTENCE WHOLE, for the same reason the spent
+ * one-off's does: the drawing writes it as one standing sentence with no
+ * dispatch head, and the subject is the schedule rather than the run.
+ */
+export const RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE =
+  "It is still recurring, so the rows below still take a change — " +
+  "it applies to the runs still to come.";
+
 /** Regex-escape a literal. */
 function escapeLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -987,10 +1014,53 @@ export function correctRunStartSentenceForFiredSchedule(input: {
    */
   firedScheduleRunIds?: readonly string[];
 }): string {
+  return correctRunStartSentenceForFiredReading(input, RUN_START_SCHEDULE_FIRED_SENTENCE);
+}
+
+/**
+ * THE SAME CORRECTION, OVER A RECURRING SCHEDULE THAT HAS FIRED (cinatra#3174
+ * fix leg 3, criterion 4).
+ *
+ * Section VI gives this reading its own sentence — see
+ * `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` — and the second graded proof
+ * round measured the never-fired wait clause over it. The narrowness is
+ * IDENTICAL to the spent one-off's, and deliberately shares its implementation:
+ * the keyed road rewrites only the platform's own sentence for the run named in
+ * it, and the headless road refuses unless the caller can prove whose standing
+ * clause it is rewriting.
+ *
+ * THE TWO FIRED READINGS CANNOT COLLIDE ON THE HEADLESS ROAD. A caller passes
+ * `firedScheduleRunIds` for the reading it is correcting, so the "every run has
+ * fired" lift is only taken where every schedule run in the turn is in THAT
+ * reading; a turn holding one spent one-off and one fired recurring schedule
+ * lifts neither, and each keyed sentence is still corrected by run id.
+ */
+export function correctRunStartSentenceForFiredRecurringSchedule(input: {
+  text: string;
+  runId: string;
+  scheduleRunIds?: readonly string[];
+  firedScheduleRunIds?: readonly string[];
+}): string {
+  return correctRunStartSentenceForFiredReading(
+    input,
+    RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
+  );
+}
+
+/** The body both fired corrections share; only the drawing's sentence differs. */
+function correctRunStartSentenceForFiredReading(
+  input: {
+    text: string;
+    runId: string;
+    scheduleRunIds?: readonly string[];
+    firedScheduleRunIds?: readonly string[];
+  },
+  sentence: string,
+): string {
   const keyed = rewritePlatformStartSentence({
     text: input.text,
     runId: input.runId,
-    replace: () => RUN_START_SCHEDULE_FIRED_SENTENCE,
+    replace: () => sentence,
   });
   if (keyed !== input.text) return keyed;
   const onlyThisRun = thisRunIsTheOnlyScheduleRun(input.runId, input.scheduleRunIds);
@@ -999,7 +1069,7 @@ export function correctRunStartSentenceForFiredSchedule(input: {
     input.firedScheduleRunIds,
   );
   if (!onlyThisRun && !everyRunFired) return input.text;
-  return rewriteStandingWaitClause(keyed, everyRunFired && !onlyThisRun);
+  return rewriteStandingWaitClause(keyed, sentence, everyRunFired && !onlyThisRun);
 }
 
 /**
@@ -1070,13 +1140,17 @@ function thisRunIsTheOnlyScheduleRun(
  * quotation of the line, not the line, and rewriting a quotation would make
  * this a second author of the turn.
  */
-function rewriteStandingWaitClause(text: string, all: boolean = false): string {
+function rewriteStandingWaitClause(
+  text: string,
+  sentence: string,
+  all: boolean = false,
+): string {
   const clause = escapeLiteral(RUN_START_SCHEDULE_WAIT_CLAUSE);
   const standing = new RegExp("(?:^|\\n)[ \\t]*" + clause + "[ \\t]*(?=\\n|$)", "g");
   const hits = text.match(standing);
   if (hits === null) return text;
   if (!all && hits.length !== 1) return text;
   return text.replace(standing, (match) =>
-    match.replace(RUN_START_SCHEDULE_WAIT_CLAUSE, RUN_START_SCHEDULE_FIRED_SENTENCE),
+    match.replace(RUN_START_SCHEDULE_WAIT_CLAUSE, sentence),
   );
 }

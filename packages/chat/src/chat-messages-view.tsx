@@ -91,6 +91,7 @@ import {
 // applies to a sentence that has been outlived by its own card (cinatra#3044).
 // The zero-dependency run-status leaf, reached by its own subpath.
 import {
+  correctRunStartSentenceForFiredRecurringSchedule,
   correctRunStartSentenceForFiredSchedule,
   correctRunStartSentenceForScheduleWait,
   runIsWaitingForItsSchedule,
@@ -278,6 +279,7 @@ function AgentRunTurnSlot({
   onActiveGateChange,
   onScheduleWaitChange,
   onScheduleFiredChange,
+  onScheduleFiredRecurringChange,
   onApplyIntent,
   children,
 }: {
@@ -307,6 +309,12 @@ function AgentRunTurnSlot({
    *  exactly the reason the wait is: the sentence is a SIBLING of this
    *  container, not a child of it. */
   onScheduleFiredChange?: (runId: string, fired: boolean) => void;
+  /** THE THIRD READING THE DRAWING HAS A LINE FOR (cinatra#3174 fix leg 3,
+   *  criterion 4). A RECURRING schedule that has fired is not waiting and is
+   *  not spent: §VI gives it its own sentence, and it is reported here on
+   *  exactly the terms the other two are — off this container's own settled
+   *  reading, up to the parts list that draws the sibling line. */
+  onScheduleFiredRecurringChange?: (runId: string, firedRecurring: boolean) => void;
   /** The §6e apply-intent seam, threaded to the settled reading this container
    *  draws for exactly the reason the ordinary slotted views get it: the card is
    *  the same card, drawn through the same registry, and the gesture the widget
@@ -533,6 +541,21 @@ function AgentRunTurnSlot({
       onScheduleFiredChange?.(runId, false);
     };
   }, [onScheduleFiredChange, runId, scheduleHasFired]);
+
+  // THE RECURRING HALF OF THE SAME REPORT (cinatra#3174 fix leg 3). Kept as its
+  // own list rather than folded into the fired one: §VI draws a DIFFERENT
+  // sentence over it, so a turn that could not tell the two apart would say
+  // "the rows below are the record of it and cannot be changed" over a schedule
+  // whose rows still take a change.
+  const scheduleFiredRecurring =
+    settledMomentViews.length > 0 && settledReading === "fired-recurring";
+  useEffect(() => {
+    onScheduleFiredRecurringChange?.(runId, scheduleFiredRecurring);
+    if (!scheduleFiredRecurring) return;
+    return () => {
+      onScheduleFiredRecurringChange?.(runId, false);
+    };
+  }, [onScheduleFiredRecurringChange, runId, scheduleFiredRecurring]);
 
   // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
   // slot. It also WAITS on a turn that carries the moment's card until the run
@@ -932,6 +955,7 @@ function OrderedPartsSection({
   onApplyIntent,
   onWaitingRunsChange,
   onFiredRunsChange,
+  onFiredRecurringRunsChange,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -962,6 +986,8 @@ function OrderedPartsSection({
   /** The same answer for the runs whose one-off has FIRED (cinatra#3044), for
    *  the same layouts and the same reason. */
   onFiredRunsChange?: (runIds: readonly string[]) => void;
+  /** The fired-RECURRING readings in this turn (cinatra#3174 fix leg 3). */
+  onFiredRecurringRunsChange?: (runIds: readonly string[]) => void;
 }) {
   // WHICH RUNS IN THIS TURN ARE WAITING FOR A SCHEDULE (cinatra#3044). Each
   // run's own container reads its row for the card it draws and reports the
@@ -1002,6 +1028,24 @@ function OrderedPartsSection({
   useEffect(() => {
     onFiredRunsChange?.(scheduleFiredRunIds);
   }, [onFiredRunsChange, scheduleFiredRunIds]);
+  // AND WHICH OF THEM ARE RECURRING SCHEDULES THAT HAVE FIRED (cinatra#3174 fix
+  // leg 3). A third list, for the third sentence §VI draws.
+  const [scheduleFiredRecurringRunIds, setScheduleFiredRecurringRunIds] = useState<
+    readonly string[]
+  >([]);
+  const onScheduleFiredRecurringChange = useCallback(
+    (runId: string, firedRecurring: boolean) => {
+      setScheduleFiredRecurringRunIds((prev) => {
+        const known = prev.includes(runId);
+        if (firedRecurring === known) return prev;
+        return firedRecurring ? [...prev, runId] : prev.filter((id) => id !== runId);
+      });
+    },
+    [],
+  );
+  useEffect(() => {
+    onFiredRecurringRunsChange?.(scheduleFiredRecurringRunIds);
+  }, [onFiredRecurringRunsChange, scheduleFiredRecurringRunIds]);
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
@@ -1022,11 +1066,31 @@ function OrderedPartsSection({
               runId: firedRunId,
               // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
               // whether a standing clause is provably this run's line.
-              scheduleRunIds: [...scheduleFiredRunIds, ...scheduleWaitRunIds],
+              scheduleRunIds: [
+                ...scheduleFiredRunIds,
+                ...scheduleFiredRecurringRunIds,
+                ...scheduleWaitRunIds,
+              ],
               // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
               // schedule runs have ALL fired is corrected rather than left
               // permanently saying that runs which have all started have not.
+              // THE READING'S OWN LIST (fix leg 3): the lift is taken only where
+              // every schedule run in the turn is in THIS reading, so the two
+              // fired sentences can never both claim one standing clause.
               firedScheduleRunIds: scheduleFiredRunIds,
+            });
+          }
+          // THE FIRED RECURRING LINE, ON THE SAME TERMS (cinatra#3174 fix leg 3).
+          for (const firedRunId of scheduleFiredRecurringRunIds) {
+            raw = correctRunStartSentenceForFiredRecurringSchedule({
+              text: raw,
+              runId: firedRunId,
+              scheduleRunIds: [
+                ...scheduleFiredRunIds,
+                ...scheduleFiredRecurringRunIds,
+                ...scheduleWaitRunIds,
+              ],
+              firedScheduleRunIds: scheduleFiredRecurringRunIds,
             });
           }
           for (const waitingRunId of scheduleWaitRunIds) {
@@ -1098,6 +1162,7 @@ function OrderedPartsSection({
               onActiveGateChange={onActiveGateChange}
               onScheduleWaitChange={onScheduleWaitChange}
               onScheduleFiredChange={onScheduleFiredChange}
+              onScheduleFiredRecurringChange={onScheduleFiredRecurringChange}
               {...(onApplyIntent ? { onApplyIntent } : {})}
             >
               {slottedViews}
@@ -1754,8 +1819,10 @@ function MessageRenderableViews({
 const ScheduleWaitContext = createContext<{
   waitingRunIds: readonly string[];
   firedRunIds: readonly string[];
+  firedRecurringRunIds: readonly string[];
   reportWaitingRunIds: (runIds: readonly string[]) => void;
   reportFiredRunIds: (runIds: readonly string[]) => void;
+  reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
@@ -1768,6 +1835,7 @@ function ScheduleWaitTurnBody({
 }) {
   const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
   const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
+  const [firedRecurringRunIds, setFiredRecurringRunIds] = useState<readonly string[]>([]);
   // Identity is preserved when the answer did not change, so a run that reports
   // the same reading on every poll cannot re-render the transcript.
   const reportWaitingRunIds = useCallback((next: readonly string[]) => {
@@ -1780,9 +1848,28 @@ function ScheduleWaitTurnBody({
       prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
     );
   }, []);
+  const reportFiredRecurringRunIds = useCallback((next: readonly string[]) => {
+    setFiredRecurringRunIds((prev) =>
+      prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
+    );
+  }, []);
   const value = useMemo(
-    () => ({ waitingRunIds, firedRunIds, reportWaitingRunIds, reportFiredRunIds }),
-    [waitingRunIds, firedRunIds, reportWaitingRunIds, reportFiredRunIds],
+    () => ({
+      waitingRunIds,
+      firedRunIds,
+      firedRecurringRunIds,
+      reportWaitingRunIds,
+      reportFiredRunIds,
+      reportFiredRecurringRunIds,
+    }),
+    [
+      waitingRunIds,
+      firedRunIds,
+      firedRecurringRunIds,
+      reportWaitingRunIds,
+      reportFiredRunIds,
+      reportFiredRecurringRunIds,
+    ],
   );
   return (
     <ScheduleWaitContext.Provider value={value}>
@@ -1819,9 +1906,22 @@ function FlatAssistantContent({
       // Same knowledge, same reason as the trace's own correction.
       scheduleRunIds: [
         ...(scheduleSentences?.firedRunIds ?? []),
+        ...(scheduleSentences?.firedRecurringRunIds ?? []),
         ...(scheduleSentences?.waitingRunIds ?? []),
       ],
       firedScheduleRunIds: scheduleSentences?.firedRunIds ?? [],
+    });
+  }
+  for (const runId of scheduleSentences?.firedRecurringRunIds ?? []) {
+    raw = correctRunStartSentenceForFiredRecurringSchedule({
+      text: raw,
+      runId,
+      scheduleRunIds: [
+        ...(scheduleSentences?.firedRunIds ?? []),
+        ...(scheduleSentences?.firedRecurringRunIds ?? []),
+        ...(scheduleSentences?.waitingRunIds ?? []),
+      ],
+      firedScheduleRunIds: scheduleSentences?.firedRecurringRunIds ?? [],
     });
   }
   for (const runId of scheduleSentences?.waitingRunIds ?? []) {
@@ -1858,6 +1958,7 @@ function MessageLifecycleSlots({
   const scheduleSentences = useContext(ScheduleWaitContext);
   const reportWaitingRunIds = scheduleSentences?.reportWaitingRunIds;
   const reportFiredRunIds = scheduleSentences?.reportFiredRunIds;
+  const reportFiredRecurringRunIds = scheduleSentences?.reportFiredRecurringRunIds;
   // The ordered-parts branch condition, restated: when it ran, it already drew
   // every slot in the trace and this mount must draw nothing.
   if (message.parts && message.parts.length > 0 && !message.error) return null;
@@ -1871,6 +1972,9 @@ function MessageLifecycleSlots({
       onActiveGateChange={onActiveGateChange}
       {...(reportWaitingRunIds ? { onWaitingRunsChange: reportWaitingRunIds } : {})}
       {...(reportFiredRunIds ? { onFiredRunsChange: reportFiredRunIds } : {})}
+      {...(reportFiredRecurringRunIds
+        ? { onFiredRecurringRunsChange: reportFiredRecurringRunIds }
+        : {})}
     />
   );
 }

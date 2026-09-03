@@ -1014,9 +1014,19 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
 // PASSIVE. A turn that provides no sink gets no report and the card behaves
 // exactly as it did before this seam existed.
 
-/** The two readings a schedule card's own body can settle into, for the one
- *  question the turn's sentence turns on. */
-export type ScheduleCardReading = "spent-one-off" | "other";
+/**
+ * The readings a schedule card's own body can settle into, for the questions
+ * the turn's sentence turns on.
+ *
+ * A THIRD VALUE (cinatra#3174 fix leg 3, criterion 4). Section VI gives the
+ * fired-recurring reading its own line above the card — "It is still recurring,
+ * so the rows below still take a change — it applies to the runs still to
+ * come." — and with two values that reading was reported as `other`, the same
+ * answer a schedule that has never run gives, so the turn drew the never-fired
+ * sentence over a schedule that had fired. The readings the turn has a sentence
+ * for are named; everything else is still `other`.
+ */
+export type ScheduleCardReading = "spent-one-off" | "fired-recurring" | "other";
 
 const ScheduleReadingSinkContext = createContext<
   ((reading: ScheduleCardReading) => void) | null

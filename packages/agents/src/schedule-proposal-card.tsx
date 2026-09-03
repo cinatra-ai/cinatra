@@ -170,6 +170,7 @@ import type {
 // The recurring reading a read-only row draws is the SAME renderer the
 // settled card's own plain-language line comes from (cinatra#3174 fix leg
 // 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
+import { durationLineValue } from "./duration-copy";
 import { describeRecurrence } from "./trigger-recurrence";
 
 import { Button } from "@/components/ui/button";
@@ -217,30 +218,32 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /**
- * Does THIS host draw the settled schedule's ONE operation — Cancel schedule?
+ * WHICH HOST DRAWS CANCEL SCHEDULE: ALL OF THEM (cinatra#3174 fix leg 3).
  *
- * ONLY THE TWO PAGE HOSTS: §7.4's as-designed step 6 puts Cancel schedule on
- * the page and Save changes in the conversation, and on those two hosts this
- * card IS the page's schedule step (§7.2 step 5, §7.4 step 7), so they have
- * nowhere else to live.
+ * This was a total map that answered `false` for the two conversation hosts,
+ * on §7.4's as-designed step 6 — Cancel schedule on the page, Save changes in
+ * the conversation. THE RATIFIED DRAWING SAYS THE OPPOSITE, in the two places
+ * that decide it, and the drawing is what this card is graded against:
  *
- * THE NAME IS HISTORICAL. This map once also gated a read-only chrome block —
- * the Trigger configuration summary and the held-steps tree — which PR #2939
- * removed from every host, and a second operation, Run now, which cinatra#2972
- * removed from the product. What it gates now is Cancel schedule alone.
+ *   - section VI's fired-recurring example draws the card IN A CHAT THREAD with
+ *     "Save changes" and "Cancel schedule" side by side on its floor;
+ *   - its closing callout: "Wherever a schedule is read — this card, the run's
+ *     schedule step …, the widget — it is drawn as this form in one of the
+ *     five readings above… Cancel schedule appears only where the schedule is
+ *     recurring, and it stops the recurring schedule and then leaves the rows
+ *     no longer editable."
  *
- * A TOTAL MAP, like `HOST_FRAME`, for the same reason: this is the one question
- * this renderer answers differently per host, so a new host cannot be added
- * without someone deciding it. It is not a second drawing — the rows, the
- * duration line and the Save-changes floor are byte-identical on all four hosts;
- * a page host draws an ADDITIONAL region the conversation is ruled not to have.
+ * The one narrowing left is the drawing's own, and it is not a host question at
+ * all: the control is drawn where the schedule is recurring and has fired,
+ * which the server resolves once into `canCancel`. So the map goes rather than
+ * gaining four `true`s — there is no per-host question left for it to answer,
+ * and leaving it would invite a fifth host to be given a reading the drawing
+ * does not have.
+ *
+ * NAMED, because it is a real conflict between two governing documents: the
+ * older plan text (§7.2/§7.4) still reads the other way, and the second graded
+ * proof round failed this floor against the drawing. The drawing wins.
  */
-const HOST_SHOWS_TRIGGER_CHROME: Record<LifecycleCardHost, boolean> = {
-  chat_thread: false,
-  site_widget: false,
-  run_card: true,
-  page_gate_region: true,
-};
 
 // ---------------------------------------------------------------------------
 // The ACTION SURFACE — exported so #2853's prompt window calls the card's own
@@ -475,10 +478,22 @@ export function ScheduleProposalCard({
   // hears the neutral reading rather than keeping a stale one. Called before
   // this component's own early returns for the ordinary reason: a hook may not
   // be skipped.
+  //
+  // AND THE RECURRING HALF IS REPORTED TOO (cinatra#3174 fix leg 3, criterion
+  // 4). §VI gives the fired-recurring reading its OWN line above the card —
+  // "It is still recurring, so the rows below still take a change" — and the
+  // second graded round measured the never-fired sentence over it, because the
+  // report had only two values and this reading fell into the same bucket as a
+  // schedule that has never run. The election is the same one call; only the
+  // report it feeds got a third answer.
   useReportScheduleReading(
-    body !== null && scheduleReadingOf(body, firedOnce) === "fired-one-off"
-      ? "spent-one-off"
-      : "other",
+    body === null
+      ? "other"
+      : scheduleReadingOf(body, firedOnce) === "fired-one-off"
+        ? "spent-one-off"
+        : scheduleReadingOf(body, firedOnce) === "fired-recurring"
+          ? "fired-recurring"
+          : "other",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
@@ -547,7 +562,6 @@ export function ScheduleProposalCard({
     ) : (
       <SettledPhase
         body={body}
-        host={host}
         onDecide={decide}
         firedOnce={firedOnce}
         durationCopy={resolved?.aside?.durationCopy ?? null}
@@ -784,20 +798,19 @@ function ExpiredPhase({
 
 function SettledPhase({
   body,
-  host,
   onDecide,
   firedOnce,
   durationCopy,
 }: {
   body: TriggerScheduleProposalSettledView;
-  host: LifecycleCardHost;
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
   /** The server's durable firing reading, off the answer's own aside. The ONE
    *  signal this phase's frozen rows and absent floor are decided by
    *  (cinatra#3174 fix leg 1). */
   firedOnce: boolean;
   /** The estimated-duration line, already rendered, or `null` for a template
-   *  with no history — which draws no line at all. */
+   *  with no history — which still draws the LINE, over the empty reading's own
+   *  word (cinatra#3174 fix leg 3; see `durationLineValue`). */
   durationCopy: string | null;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
@@ -808,14 +821,13 @@ function SettledPhase({
   const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  // The one host-dependent region, decided by a total map rather than by a
-  // condition someone can forget to extend. What it now gates is the ONE
-  // operation Cancel schedule: the read-only summary box and the held-steps
-  // tree it used to gate were removed on the maintainer's reading of PR #2939,
-  // and Run now was withdrawn by cinatra#2972 — plan (A) §7.2, "the schedule
-  // step … shows the same form and nothing else — no summary box, no status
-  // label; its one control is **Cancel schedule** … there is no Run now".
-  const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
+  // NO HOST-DEPENDENT REGION IS LEFT ON THIS CARD (cinatra#3174 fix leg 3).
+  // The read-only summary box and the held-steps tree went with PR #2939, Run
+  // now with cinatra#2972, and Cancel schedule is now drawn wherever the
+  // schedule is read — see the note above the retired map. `host` decides the
+  // outer FRAME and nothing else, so this phase is no longer given it at all
+  // (converge round): a host argument nothing reads is a question a later
+  // reader would think this renderer still answers.
 
   // AN EDIT IS THE READER'S, AND THE THREAD DOES NOT GET A VOTE (cinatra#3053).
   //
@@ -1016,15 +1028,17 @@ function SettledPhase({
             <Check aria-hidden="true" className="size-3.5" />
             {pending === "save" ? "Saving…" : "Save changes"}
           </Button>
-          {/* CANCEL SCHEDULE IS THE PAGE STEP'S, NOT THE CONVERSATION'S — and
-              it is drawn only where the plan puts it: "shown only for a
-              recurring schedule that has fired once" (§7.2, amended
-              2026-08-25). `canCancel` IS that whole reading, resolved
-              server-side, so the control is ABSENT rather than disabled
-              wherever the plan does not put it — a one-off, a recurring
-              schedule that has not fired yet, and one already stopped. There is
-              no Run now beside it any more (cinatra#2972). */}
-          {showsChrome && body.canCancel ? (
+          {/* CANCEL SCHEDULE, BESIDE SAVE CHANGES, WHEREVER THE SCHEDULE IS
+              READ (cinatra#3174 fix leg 3). Section VI's fired-recurring
+              example draws exactly this floor in a chat thread, and its callout
+              puts the form on every host the schedule is read on. The one
+              narrowing is the drawing's own — "Cancel schedule appears only
+              where the schedule is recurring" — and `canCancel` IS that whole
+              reading, resolved server-side, so the control is ABSENT rather
+              than disabled over a one-off, a recurring schedule that has not
+              fired yet, and one already stopped. There is no Run now beside it
+              (cinatra#2972). */}
+          {body.canCancel ? (
             <Button
               type="button"
               variant="secondary"
@@ -1428,21 +1442,22 @@ function ScheduleOptionRows({
         </div>
       </OptionRow>
 
-      {/* §VI — "Estimated run duration / About 45s – 3.4 hr.", DRAWN ONLY WHERE
-          THERE IS ONE (cinatra#3174 fix leg 1). This used to answer a missing
-          estimate with the literal "Unavailable." — a sentence the drawing
-          never draws, in any of the section's five pictures, and the one the
-          first graded round measured on every frame. The scheduling step this
-          card reproduces already withdrew that same wording (cinatra#3182 item
-          5): where the drawing gives nothing, nothing is drawn. */}
-      {durationCopy === null ? null : (
-        <div className="flex flex-col gap-1 pt-1">
-          <p className="text-sm font-medium text-foreground">Estimated run duration</p>
-          <p data-conformance-id="schedule-duration" className="text-sm text-muted-foreground">
-            {durationCopy}
-          </p>
-        </div>
-      )}
+      {/* §VI — "Estimated run duration / About 45s – 3.4 hr.", BENEATH THE ROWS
+          IN EVERY READING (cinatra#3174 fix leg 3). The section draws this line
+          in all five of its pictures, and the second graded proof round
+          measured it in none of its eight frames: a freshly installed agent has
+          no run history, the history tier answers null, and the card answered
+          null by drawing nothing at all. A line the drawing draws in every
+          picture may not go missing because the estimator had nothing to say,
+          so the line stands and its VALUE carries the empty reading — the one
+          word this pipeline keeps in `duration-copy`, which is where the note
+          on whose word it is lives. */}
+      <div className="flex flex-col gap-1 pt-1">
+        <p className="text-sm font-medium text-foreground">Estimated run duration</p>
+        <p data-conformance-id="schedule-duration" className="text-sm text-muted-foreground">
+          {durationLineValue(durationCopy)}
+        </p>
+      </div>
     </div>
   );
 }

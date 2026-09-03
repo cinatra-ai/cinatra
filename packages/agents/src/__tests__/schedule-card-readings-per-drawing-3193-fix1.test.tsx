@@ -41,6 +41,7 @@ import type {
   TriggerScheduleProposalViewBody,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
+import { DURATION_LINE_NO_ESTIMATE } from "../duration-copy";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ScheduleProposalCard } from "../schedule-proposal-card";
 
@@ -250,16 +251,24 @@ describe("the estimated-duration line says only what the drawing gives it", () =
     ).toBe("About 45s – 3.4 hr.");
   });
 
-  it("draws NO LINE where there is no estimate — never the invented sentence", async () => {
+  // SUPERSEDED BY THE SECOND GRADED ROUND (cinatra#3174 fix leg 3). This used
+  // to pin the opposite reading — no line at all where there is no estimate —
+  // on the ground that the drawing gives no wording for an empty one. The
+  // second round then measured the line missing from all eight frames and
+  // failed it against §VI, which draws "Estimated run duration" beneath the
+  // rows in every one of its five pictures. The line therefore stands in every
+  // reading, and the empty reading's word is kept in the shared leaf.
+  it("draws the LINE even where there is no estimate — the drawing draws it in every picture", async () => {
     for (const [body, aside] of [
       [settled({}), {}],
       [FIRED_ONE_OFF, { firedOnce: true }],
     ] as Array<[TriggerScheduleProposalViewBody, Aside]>) {
       const view = mount(body, aside);
       await rowsOf(view);
-      expect(view.container.querySelector('[data-conformance-id="schedule-duration"]')).toBeNull();
-      expect(view.container.textContent ?? "").not.toContain("Unavailable");
-      expect(view.container.textContent ?? "").not.toContain("Estimated run duration");
+      expect(view.container.textContent ?? "").toContain("Estimated run duration");
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-duration"]')?.textContent,
+      ).toBe(DURATION_LINE_NO_ESTIMATE);
       cleanup();
     }
   });

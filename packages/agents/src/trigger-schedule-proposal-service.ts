@@ -41,7 +41,6 @@ import "server-only";
 
 import { durationCopyFor } from "./duration-copy";
 import { estimateRunDuration } from "./trigger-duration-estimate";
-import { runHasActuallyRun } from "./run-status";
 import {
   buildCron,
   describeRecurrence,
@@ -879,16 +878,17 @@ export async function resolveProposalForReader(
 
   const consumed = await readProposalConsume(proposalConsumeKey(proposal.nonce));
   if (consumed) {
-    // THE RUN'S OWN ROW IS READ HERE TOO (cinatra#3174 fix leg 1). A one-off's
-    // firing is not the gate stamp — see `scheduleFiredOnce` — so the reading
-    // needs the row the gate opened over. Read unauthorized, exactly like the
-    // trigger and intent rows beside it: this reader already passed the
-    // proposal token's own (user, org) binding above, and nothing off the run
-    // is drawn — only whether it ran.
-    const [trigger, intent, run, durationCopy] = await Promise.all([
+    // THE RUN'S OWN ROW IS NOT READ HERE ANY MORE (cinatra#3174 fix leg 3,
+    // converge round). Fix leg 1 read it on this road for one question only —
+    // whether the one-off had actually run — and fix leg 3 settled that the
+    // schedule's firing is the trigger's own record, `releasedAt`, which is
+    // already in hand from the trigger row beside this. With the question gone
+    // the read is a round-trip and a failure mode this card no longer needs,
+    // and it was an unauthorized read of a run row: the narrowest thing to do
+    // with a read nothing consumes is not to make it.
+    const [trigger, intent, durationCopy] = await Promise.all([
       readRunTriggerByRunId(consumed.runId),
       readInstallIntent(consumed.runId),
-      readAgentRunById(consumed.runId),
       templateDurationCopy(template),
     ]);
     // Spent — but spent on WHAT? Under #2859's shared consume identity every
@@ -934,7 +934,6 @@ export async function resolveProposalForReader(
           (intent?.triggerType ?? "immediate"),
         releasedAt: trigger?.releasedAt,
         lastFiredAt: trigger?.lastFiredAt,
-        run,
       }),
       durationCopy,
       stopped: trigger?.stoppedAt != null,
@@ -1232,7 +1231,6 @@ export async function resolveProposalForRun(
       triggerType,
       releasedAt: trigger?.releasedAt,
       lastFiredAt: trigger?.lastFiredAt,
-      run,
     }),
     durationCopy: await templateDurationCopy(template),
     stopped: trigger?.stoppedAt != null,
@@ -1285,18 +1283,32 @@ export async function resolveProposalForRun(
  * firing is the tick's own stamp, `lastFiredAt`, written once per fire. That
  * half is unchanged.
  *
- * A ONE-OFF'S GATE STAMP IS NOT ITS FIRING, and that is what this corrects. The
- * first graded proof round drew "It ran at the time you set." over a run whose
- * `released_at` was stamped, whose `last_fired_at` was NULL and which had
- * FAILED without ever starting — the transition table's own `armed->failed`
- * edge, "defensive — failure during arming/release". `markTriggerReleasedInDb`
- * records that the side-effect gate was opened; whether the run then ran is a
- * question only the run's own row answers, so the one-off family reads both.
+ * A ONE-OFF'S FIRING IS `releasedAt`, AND NOTHING ELSE (cinatra#3174 fix leg
+ * 3, after the second graded proof round). Fix leg 1 read the gate stamp
+ * TOGETHER WITH the run's own row, so that a released one-off whose run had
+ * failed before starting would not take the spent reading. The second round
+ * measured what that costs on the ordinary road: two REAL one-off firings
+ * (`released_at` stamped, real downstream work materialised) whose run rows
+ * were still `pending_approval` with `started_at` NULL, because the run's next
+ * gate had not been answered — and the card drew the CONFIGURED reading over
+ * both, live pickers and a Save changes floor over a schedule that was spent.
  *
- * Section VI is what makes that the right pair: "A one-time schedule is spent
- * once it fires", and the reading it elects is the one whose rows go read-only
- * and whose floor disappears. A schedule whose run never happened is not spent,
- * its rows still take a change, and the server still authorizes the save.
+ * THE SERVER ALREADY READS IT THIS WAY, which is what settles it rather than a
+ * preference between two roundings. `saveScheduleGuardRefusal` in
+ * `trigger-service` refuses a save on a fired one-off and says so in its own
+ * words: "FIRED is read off the trigger's OWN record — `releasedAt`, the stamp
+ * the release job writes when it opens the gate — never off the run's status,
+ * which moves on for reasons that have nothing to do with the schedule." The
+ * trigger store says the same about the other half of the pair: "a one-off's
+ * firing is `releasedAt`". A card that elected its reading on a second rule
+ * drew a form the server would refuse to save.
+ *
+ * WHAT THIS GIVES BACK, named rather than hidden: a one-off whose gate opened
+ * and whose run then failed before starting now takes the spent reading too.
+ * Section VI has no reading for "the gate opened and nothing ran", the server
+ * authorises no save there either, and the run's own failure is drawn by the
+ * run's own surfaces — so the card reads the trigger's record, which is the
+ * only thing it is drawing.
  *
  * Pure — no DB, no session, no render.
  */
@@ -1304,13 +1316,20 @@ export function scheduleFiredOnce(input: {
   triggerType: "immediate" | "scheduled" | "recurring";
   releasedAt: Date | null | undefined;
   lastFiredAt: Date | null | undefined;
-  /** The run the schedule gated, as its own durable row reads. `null` where it
-   *  could not be read, which is never a firing: an unknown record cannot say
-   *  a run happened. */
-  run: { status?: string | null; startedAt?: Date | string | null } | null | undefined;
+  /**
+   * The run the schedule gated, as its own durable row reads — accepted, and
+   * NOT consulted for the election (see the note above). A run's status answers
+   * what the RUN did; this function answers what the SCHEDULE did, and those
+   * are two questions. No production caller passes it any more (converge
+   * round): the token road stopped reading the run row for it, and the
+   * run-addressed road stopped handing over the row it holds for access. It is
+   * kept on the type, and exercised by the suite, so that the answer stays
+   * provably independent of whatever a caller believes the run did.
+   */
+  run?: { status?: string | null; startedAt?: Date | string | null } | null | undefined;
 }): boolean {
   if (input.triggerType === "recurring") return input.lastFiredAt != null;
-  return input.releasedAt != null && runHasActuallyRun(input.run);
+  return input.releasedAt != null;
 }
 
 /**
