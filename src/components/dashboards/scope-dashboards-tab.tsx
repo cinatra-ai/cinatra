@@ -133,8 +133,10 @@ export function ScopeDashboardsTab({
           ))}
         </ul>
       ) : (
+        /* The empty block's helper turns on whether the SCOPE offers an Add at
+           all, not on this viewer's authority — see the module's own note. */
         <ScopeDashboardsEmptyState
-          canManage={data.canManage}
+          scopeKind={data.scopeKind}
           data-testid="scope-dashboards-empty"
         />
       )}

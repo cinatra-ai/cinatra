@@ -131,6 +131,115 @@ describe("the body's frame", () => {
   });
 });
 
+describe("the ORGANIZATION scope draws the whole drawn body (fix leg 5)", () => {
+  // The fourth proof round graded this cell at 11 of 16: the organization
+  // landing drew no tab body at all. The landing's own wiring is fixed at the
+  // screen (see the screens suite); this locks WHAT that body must read once it
+  // renders — the drawing gives an organization the same body it gives a team,
+  // with the entity named in the caption and the manager's Add in that row.
+  it("names the organization in the caption, over the drawn empty reading, with the Add in the caption row", () => {
+    render(
+      <ScopeDashboardsTab
+        data={data({ scopeKind: "organization", canManage: true })}
+        caption={{ kind: "entity", entityLabel: "Organization: Acme Inc" }}
+        add={<Button type="button">Add dashboard</Button>}
+      />,
+    );
+    const caption = screen.getByTestId("scope-dashboards-caption");
+    expect(caption.textContent).toBe(
+      "The dashboards in Organization: Acme Inc.",
+    );
+    expect(caption.querySelector("b")?.textContent).toBe(
+      "Organization: Acme Inc",
+    );
+    const add = screen.getByRole("button", { name: "Add dashboard" });
+    expect(caption.parentElement).toBe(add.parentElement);
+    const empty = screen.getByTestId("scope-dashboards-empty");
+    expect(empty.className).toContain("border-dashed");
+    expect(empty.textContent).toBe(
+      "No dashboards in this scope yetA manager can Add an existing dashboard, or create one that homes here.",
+    );
+    // Leaf text below the tablist is exactly what the round found missing.
+    expect(document.body.textContent).toContain(
+      "No dashboards in this scope yet",
+    );
+  });
+});
+
+describe("the empty block, at the drawn type step and under the drawing's own suppression rule (fix leg 5)", () => {
+  // The load-states drawing gives the empty panel two lines at two different
+  // steps: the headline at `font-weight:600; font-size:12.5px; color:var(--ink)`
+  // over the helper at `font-size:11px; color:var(--muted); line-height:1.5`.
+  it("draws the headline one step over the helper, at the drawn sizes", () => {
+    render(
+      <ScopeDashboardsTab
+        data={data({ scopeKind: "team" })}
+        caption={{ kind: "entity", entityLabel: "Team: Growth" }}
+      />,
+    );
+    const headline = screen.getByText("No dashboards in this scope yet");
+    expect(headline.className).toContain("text-scope-empty-title");
+    expect(headline.className).toContain("font-semibold");
+    expect(headline.className).toContain("text-foreground");
+    const helper = screen.getByText(/an existing dashboard, or create one/);
+    expect(helper.className).toContain("text-scope-empty-help");
+    expect(helper.className).not.toContain("font-semibold");
+    expect(helper.className).toContain("text-muted-foreground");
+    // The two steps are distinct — the round graded them equal.
+    expect(headline.className).not.toContain("text-scope-empty-help");
+    expect(helper.className).not.toContain("text-scope-empty-title");
+  });
+
+  // "a personal user scope and the whole-workspace scope are not add-to-scope
+  // targets — they carry no Add, so add-to-scope is the three shared scopes
+  // only", and §IX.2: "Suppression, not a disabled control: a management action
+  // the member cannot take is not rendered." A helper sentence whose whole
+  // subject is an Add this scope does not offer is that same unavailable action
+  // in prose, so it is not rendered either — the headline stands alone.
+  it.each(["personal", "workspace"] as const)(
+    "on %s the headline stands ALONE inside the dashed container — no helper sentence at all",
+    (scopeKind) => {
+      render(
+        <ScopeDashboardsTab
+          data={data({ scopeKind })}
+          caption={{ kind: "own" }}
+        />,
+      );
+      const empty = screen.getByTestId("scope-dashboards-empty");
+      expect(empty.textContent).toBe("No dashboards in this scope yet");
+      expect(empty.querySelectorAll("p").length).toBe(1);
+      expect(empty.className).toContain("border-dashed");
+      // Neither the drawn manager sentence nor the invented substitute.
+      expect(document.body.textContent).not.toContain("A manager can");
+      expect(document.body.textContent).not.toContain(
+        "Dashboards homed or listed here will appear on this tab.",
+      );
+    },
+  );
+
+  // On a scope that DOES offer an Add the drawing's one helper sentence is the
+  // reading, verbatim — it is third-person prose about what a manager can do,
+  // not a control, so it does not depend on this viewer's own authority.
+  it.each(["team", "project", "organization"] as const)(
+    "on %s the drawn manager sentence renders verbatim, even for a read-only member",
+    (scopeKind) => {
+      render(
+        <ScopeDashboardsTab
+          data={data({ scopeKind, canManage: false })}
+          caption={{ kind: "entity", entityLabel: "Team: Growth" }}
+        />,
+      );
+      const empty = screen.getByTestId("scope-dashboards-empty");
+      expect(empty.textContent).toBe(
+        "No dashboards in this scope yetA manager can Add an existing dashboard, or create one that homes here.",
+      );
+      expect(empty.textContent).not.toContain(
+        "Dashboards homed or listed here will appear on this tab.",
+      );
+    },
+  );
+});
+
 describe("row anatomy", () => {
   it("draws the glyph, the name, the updated time and Open — and no relation badge", () => {
     const { container } = render(

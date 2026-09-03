@@ -257,10 +257,12 @@ test.describe("/personal Dashboards tab live-verify (cinatra#2807, cinatra#1119)
       const empty = tab.getByTestId("scope-dashboards-empty");
       await expect(empty).toBeVisible();
       await expect(empty).toContainText("No dashboards in this scope yet");
-      // This scope carries no Add, so the drawing's manager helper cannot be
-      // shown here (fix leg 3's named gap); the tab says what it will hold.
-      await expect(empty).toContainText(
-        "Dashboards homed or listed here will appear on this tab.",
+      // This scope carries no Add, and the drawing's own rule — "Suppression,
+      // not a disabled control: a management action the member cannot take is
+      // not rendered" — applies to the helper naming that Add too, so the
+      // headline stands alone inside the dashed container (fix leg 5).
+      expect((await empty.innerText()).trim()).toBe(
+        "No dashboards in this scope yet",
       );
       await expect(
         empty.getByText("A manager can", { exact: false }),

@@ -92,18 +92,36 @@ export async function OrganizationDetailDashboardPage({
   const orgName = org.name ?? "";
   const isArchived = org.archivedAt !== null;
 
-  // ACTIVE-TENANT FENCE — this is the retired collection route's own gate,
-  // preserved exactly. `readUserIsOrgMember` above admits a member of ANY of
-  // their orgs, active or not; the collection read must not be wider than the
-  // route it replaced, so the panel is suppressed (not redirected) outside the
-  // active tenant, keeping the landing reachable for every member.
+  // ACTIVE-TENANT FENCE, narrowed to the WRITE path (cinatra#2807 fix leg 5).
+  //
+  // This fence came over from the retired `/organizations/[id]/dashboards`
+  // route, which refused any request whose target org was not the session's
+  // ACTIVE org, and cinatra#2474 PR2 wrapped the WHOLE folded panel in it. The
+  // fourth proof round graded what that costs: a member viewing an org that is
+  // not their active one gets no Dashboards tab body at all — no caption, no
+  // empty reading, no Add — where personal, team, project and the workspace all
+  // draw one.
+  //
+  // The drawing rules the read universal and gates only management: "A member
+  // without write authority still sees the Dashboards tab and every row —
+  // homed and listed alike — and opens any of them; they simply get no Add
+  // affordance and no Remove control. Suppression, not a disabled control: a
+  // management action the member cannot take is not rendered."
+  //
+  // So the fence now covers exactly the two things that BIND a mutation to the
+  // ambient tenant — the §IX.1 add-to-scope source and the installed-catalog
+  // node — and no longer covers the read. Nothing widens: the read is keyed on
+  // the VIEWED org's own id (never the session's active org) and only runs
+  // after `readUserIsOrgMember` above confirmed membership of THIS org, and
+  // `actorMayWriteScope` inside the section is tenant-fenced in its own right,
+  // so Remove stays suppressed here too.
   const actor = await getActorContext();
   const actorIsActiveInThisOrg = actor?.organizationId === id;
   const scope = { kind: "organization", scopeId: id, orgId: id } as const;
 
   // The add-to-scope source for the unified Add-dashboard popup. It is `null`
-  // for anyone who may not write this scope (§IX.2 suppression), and it rides
-  // the SAME active-tenant fence the panel rides.
+  // for anyone who may not write this scope (§IX.2 suppression), and it keeps
+  // the active-tenant fence: the Add is where the widening risk lives.
   const scopeReference =
     actor && actorIsActiveInThisOrg
       ? buildScopeReferenceSource(actor, scope)
@@ -172,10 +190,14 @@ export async function OrganizationDetailDashboardPage({
           </div>
         ) : null}
 
-        {/* The Dashboards tab body. The provider hands the Add affordance its
-            sources; what crosses is server-bound actions and a label, never the
-            actor or the scope's owner axis. */}
-        {actor && actorIsActiveInThisOrg ? (
+        {/* The Dashboards tab body, drawn for every confirmed member of this
+            organization — the caption "The dashboards in Organization: <name>.",
+            the scope's rows, and the drawn empty reading. The provider hands the
+            Add affordance its sources; what crosses is server-bound actions and
+            a label, never the actor or the scope's owner axis. Outside the
+            active tenant those sources are `null`, so the Add is simply absent
+            (§IX.2 suppression) while the read still draws. */}
+        {actor ? (
           <ScopeAddSourcesProvider
             scopeLabel={scopeLabel}
             reference={scopeReference}

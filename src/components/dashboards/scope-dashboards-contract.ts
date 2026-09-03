@@ -46,6 +46,24 @@ export type ScopeDashboardsTabScopeKind =
   | "personal"
   | "workspace";
 
+/**
+ * Does this scope KIND offer an add-to-scope at all? A scope-level fact, and a
+ * different axis from `canManage` (which asks whether THIS viewer may write
+ * THIS scope): "a personal user scope and the whole-workspace scope are not
+ * add-to-scope targets — they carry no Add, so add-to-scope is the three shared
+ * scopes only".
+ *
+ * The tab's empty reading turns on this, not on the viewer's own authority: the
+ * drawn helper sentence describes what a manager can do, which is true for a
+ * read-only member of a shared scope, and false — an Add that is not drawn
+ * anywhere on that scope — for personal and the whole workspace.
+ */
+export function scopeOffersAddToScope(
+  kind: ScopeDashboardsTabScopeKind,
+): boolean {
+  return kind !== "personal" && kind !== "workspace";
+}
+
 export type ScopeDashboardsTabData = {
   /** The scope kind. It no longer names the panel heading — the drawing gives
    *  the tab a muted caption naming the ENTITY, which the hosting page supplies

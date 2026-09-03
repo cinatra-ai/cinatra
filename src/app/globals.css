@@ -673,6 +673,14 @@
      bracket literal. */
   --text-scope-caption: 13px;
   --text-scope-caption--line-height: 1.5;
+  /* The Dashboards tab's own empty reading — the load-states drawing sets its
+     headline at 12.5px/600 over its helper at 11px/1.5, a real step between the
+     two lines. Named here (cinatra#2807 fix leg 5) for the same reason the
+     caption above is: the site carries a token, never a bracket literal. */
+  --text-scope-empty-title: 12.5px;
+  --text-scope-empty-title--line-height: 1.4;
+  --text-scope-empty-help: 11px;
+  --text-scope-empty-help--line-height: 1.5;
   --tracking-title-tight: var(--title-tracking-tight);
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);
