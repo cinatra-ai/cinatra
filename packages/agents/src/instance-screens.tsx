@@ -106,6 +106,7 @@ import { RunSurfaceRail } from "./run-surface-rail";
 // answer (`instance-screens-client-boundary.test.ts`).
 import {
   runSurfaceRailNumberedCount,
+  runSurfaceStepDrawsGlyph,
   type RunInputStepKey,
   type RunStepSelection,
   type RunSurfaceRailStep,
@@ -538,9 +539,20 @@ export function railDrawsUpcomingRunSteps(params: {
  * The setup flow's own three steps, in the order the rail draws them -- the same
  * three the schedule screen's rail names.
  */
+/**
+ * THE STILL-TO-COME ROWS, IN THE DRAWING'S OWN ORDER (order corrected by
+ * cinatra#3047 fix leg 8).
+ *
+ * The Skills entry heads this list because the ratified drawing puts it at the
+ * head of the rail — "that question is the run's first gate — the first entry
+ * on the step rail, where it is named Skills, ahead of the work steps it would
+ * authorize" — and an upcoming row is drawn in the place its step will take.
+ * Listing the schedule first is what drew the Skills entry third on a run that
+ * also carried an input form, which the eighth proof round photographed.
+ */
 export const UPCOMING_RUN_RAIL_STEP_KEYS = [
-  "schedule",
   "recommendation",
+  "schedule",
   "review",
 ] as const;
 
@@ -726,8 +738,14 @@ export function runDetailInitialStep(params: {
    */
   openInputStepKey?: RunInputStepKey | null;
 }): RunStepSelection {
-  if (params.openInputStepKey) return params.openInputStepKey;
+  // THE RUN'S FIRST GATE OPENS FIRST (cinatra#3047 fix leg 8). The rail lists
+  // the Skills entry above the run's own input forms because the drawing puts
+  // it there, and the step the detail opens on is the step the rail
+  // highlights — so a held Skills question wins over an open form, exactly as
+  // it wins the place above it. Once that question is no longer held the form
+  // opens as cinatra#3068 shipped it.
   if (params.hasRecommendationStep && params.recommendationHeld) return "recommendation";
+  if (params.openInputStepKey) return params.openInputStepKey;
   if (
     runDetailOpensOnSchedule({
       hasScheduleStep: params.hasScheduleStep,
@@ -1298,6 +1316,21 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     held: recommendationHeld,
   });
   const hasRecommendationStep = recommendationEntry !== "none";
+
+  /**
+   * IS THE TWO-COLUMN RUN FRAME DRAWN BESIDE THE DETAIL COLUMN?
+   * (cinatra#3047 fix leg 8.)
+   *
+   * The frame is drawn whenever the rail has an entry to list, which is the
+   * same three facts the rail is built from below. The panels in that column
+   * need it because the drawing gives the step's own card the whole page —
+   * "One page per gate — the step's own card, and nothing else ... two cards
+   * are never stacked in one detail" — so a panel that draws its own section
+   * plate inside the frame stacks a second card around the gate. Read once
+   * here rather than re-derived in each panel.
+   */
+  const railFramesTheRunDetail =
+    inputStepsInRail || hasRecommendationStep || scheduleRailRef !== null;
   // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
   // skill picker inside itself for a run whose skills were decided on the card
   // ("The agentic run progress card appears once the skills are decided; no
@@ -1618,6 +1651,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
                     inputStepInRail={inputStepIsOpen}
+                    railDrawsTheFrame={railFramesTheRunDetail}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -1660,6 +1694,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // the run's own park row, before the first paint.
                     recommendationDecided={recommendationDecided}
                     inputStepInRail={inputStepIsOpen}
+                    railDrawsTheFrame={railFramesTheRunDetail}
                   />
                 )
               )}
@@ -1672,15 +1707,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // step 5). Built before the rail below, because the rail renumbers
               // around however many there are.
               const railSteps: RunSurfaceRailStep[] = [];
-              // AND THE RUN'S OWN INPUT FORMS AHEAD OF BOTH (cinatra#3068).
-              // The input form is the first step a person meets on this page,
-              // so it is the rail's first entry — one per form the agent asks,
-              // in the order it asks them. Each opens the run detail beside it,
-              // where the panel draws the form itself; a form the run has not
-              // reached yet is drawn muted and opens nothing.
-              if (inputStepsInRail) {
-                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
-              }
               if (hasRecommendationStep) {
                 railSteps.push({
                   key: "recommendation",
@@ -1724,6 +1750,24 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   // `decided` ladder the panel above is handed.
                   reached: recommendationRailStepReached,
                 });
+              }
+              // AND THE RUN'S OWN INPUT FORMS BENEATH IT (cinatra#3068, order
+              // corrected by cinatra#3047 fix leg 8). One entry per form the
+              // agent asks, in the order it asks them; each opens the run
+              // detail beside it, where the panel draws the form itself, and a
+              // form the run has not reached yet is drawn muted and opens
+              // nothing. cinatra#3068 put these AHEAD of the Skills entry on
+              // the strength of a sentence in its own issue. The ratified
+              // drawing says the opposite in the section that governs this
+              // rail: the Skills question "is the run's first gate — the first
+              // entry on the step rail, where it is named Skills, ahead of the
+              // work steps it would authorize", and an input form is one of
+              // the work steps it would authorize. The drawing carves out no
+              // exception for it — it names no input step anywhere — so there
+              // is no second drawn sentence to weigh, and the Skills entry
+              // stands above these.
+              if (inputStepsInRail) {
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
               }
               if (scheduleRailRef) {
                 railSteps.push({
@@ -1784,15 +1828,40 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
               });
-              if (upcomingRailStepKeys.length > 0) {
+              // AND THE SKILLS PLACEHOLDER KEEPS THE HEAD OF THE RAIL, LIKE
+              // THE STEP IT STANDS FOR (cinatra#3047 fix leg 8, convergence).
+              //
+              // An upcoming row is drawn where its step will stand, and the
+              // drawing stands the Skills question first — "the first entry on
+              // the step rail ... ahead of the work steps it would authorize".
+              // Ordering the KEYS was not enough: this whole block runs after
+              // the input forms were pushed, so a run with no live park drew
+              // Setup, then Skills — the Skills entry second, which is exactly
+              // what the eighth proof round photographed. The row that draws
+              // the glyph goes to the FRONT; the numbered ones continue the
+              // series beneath, and because the glyph row carries no numeral
+              // the series is unchanged by the move.
+              const upcomingHeadKeys = upcomingRailStepKeys.filter((key) =>
+                runSurfaceStepDrawsGlyph(key),
+              );
+              const upcomingNumberedKeys = upcomingRailStepKeys.filter(
+                (key) => !runSurfaceStepDrawsGlyph(key),
+              );
+              const asUpcomingStep = (key: UpcomingRunRailStepKey) => ({
+                key,
+                reached: false,
+                settled: false,
+                surface: null,
+              });
+              if (upcomingHeadKeys.length > 0) {
+                railSteps.unshift(
+                  ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
+                );
+              }
+              if (upcomingNumberedKeys.length > 0) {
                 railSteps.push(
                   ...buildSetupRailSteps(
-                    upcomingRailStepKeys.map((key) => ({
-                      key,
-                      reached: false,
-                      settled: false,
-                      surface: null,
-                    })),
+                    upcomingNumberedKeys.map(asUpcomingStep),
                     // THE OFFSET IS THE RAIL'S OWN NUMERAL RULE (cinatra#3047),
                     // not this list's length. The Skills entry above draws the
                     // drawing's glyph and consumes no numeral, so the steps

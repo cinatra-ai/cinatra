@@ -116,7 +116,7 @@ export type SerializedAgentRunMessage = {
   createdAt: string;
 };
 
-type AgenticRunPanelProps = {
+export type AgenticRunPanelProps = {
   runId: string;
   taskId?: string; // present for runs created via A2A sendMessage
   initialStatus: string;
@@ -209,6 +209,23 @@ type AgenticRunPanelProps = {
    * the chat thread's run card — a host with no rail beside it — unchanged.
    */
   inputStepInRail?: boolean;
+  /**
+   * THE RAIL BESIDE THIS COLUMN ALREADY DRAWS THE FRAME (cinatra#3047 fix leg
+   * 8).
+   *
+   * The ratified drawing: "One page per gate — the step's own card, and
+   * nothing else ... two cards are never stacked in one detail." This panel's
+   * own `soft-panel rounded-card` plate is a card, and inside the run frame it
+   * wraps the gate's own card — the doubled wrapper the eighth proof round
+   * photographed. cinatra#3068 retired the HEADING inside the plate for one
+   * moment; the plate itself stayed, on every moment.
+   *
+   * So inside the frame the box keeps its job — it is still the flow container
+   * for the failure block, the trace link, the streamed output and the message
+   * list — and gives up its CARD chrome and its heading, leaving the step's own
+   * card alone in the detail. Every other host is untouched.
+   */
+  railDrawsTheFrame?: boolean;
   /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
@@ -424,6 +441,7 @@ export function AgenticRunPanel({
   initialReviewGate,
   readReviewSlot,
   inputStepInRail = false,
+  railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -1689,7 +1707,11 @@ export function AgenticRunPanel({
   return (
     <>
     <section
-      className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+      className={
+        railDrawsTheFrame
+          ? "flex flex-col gap-4"
+          : "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+      }
       // WHICH BOX THIS IS. Passive — it draws nothing and drives nothing — and
       // it is here for the same reason `data-run-review-slot` above is: the
       // ruled property is that the skills row is NOT in this box (cinatra#3047),
@@ -1701,7 +1723,7 @@ export function AgenticRunPanel({
           beside this column names that step and the form below is its screen,
           so a progress heading over a run that has produced no progress is the
           one reading this surface must not make. Every other host keeps it. */}
-      {inputStepInRail ? null : (
+      {inputStepInRail || railDrawsTheFrame ? null : (
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
         <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">

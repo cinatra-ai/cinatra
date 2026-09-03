@@ -107,6 +107,13 @@ type SetupCompletionWatcherProps = {
    *  draws no "Agentic Run Progress" heading over the form. Forwarded through
    *  unchanged; see `AgenticRunPanel`'s own prop. */
   inputStepInRail?: boolean;
+  /**
+   * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
+   * the run page's two-column frame is drawn beside this column, so the gate's
+   * own card is the whole page and no section plate is stacked around it
+   * (cinatra#3047 fix leg 8).
+   */
+  railDrawsTheFrame?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -127,6 +134,7 @@ export function SetupCompletionWatcher({
   triggerConfigured = false,
   initialStreamedText,
   inputStepInRail = false,
+  railDrawsTheFrame = false,
   canRespondInWindow,
   templateId,
   initialHitlContext,
@@ -275,6 +283,7 @@ export function SetupCompletionWatcher({
       initialReviewGate={initialReviewGate}
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
+      railDrawsTheFrame={railDrawsTheFrame}
     />
   );
 }
