@@ -13,7 +13,12 @@ import {
 } from "@/components/reui/stepper";
 
 import type { RunStepRailEntry } from "./run-step-rail";
-import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import {
+  RailExtraEntry,
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
 // through the `./run-step-rail-panel` subpath can TYPE the entries it passes
@@ -120,7 +125,7 @@ export function RunStepRailPanel({
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
                   />
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             }
@@ -132,7 +137,7 @@ export function RunStepRailPanel({
             );
 
             const indicatorNode = (
-              <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+              <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                 {displayStep}
               </StepperIndicator>
             );
@@ -161,22 +166,23 @@ export function RunStepRailPanel({
                       a StepperTrigger — a button, ticked and numbered like the
                       rows that DO open — and clicking it did nothing. Same
                       indicator, same title, same geometry (the trigger's own
-                      spacing is carried here); no button. StepperIndicator and
+                      spacing is carried here, from the shared row constant so
+                      the two rows cannot drift); no button. StepperIndicator and
                       StepperTitle read the item context, not the trigger, so
                       both still show this row's real state. */}
                   {entry.openable === false ? (
-                    <div className="flex items-center gap-2 px-0 py-0.5">
+                    <div className={`flex items-center ${RUN_PAGE_RAIL_ROW_CLASS}`}>
                       {indicatorNode}
                       {titleNode}
                     </div>
                   ) : (
-                    <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
+                    <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} tabIndex={-1}>
                       {indicatorNode}
                       {titleNode}
                     </StepperTrigger>
                   )}
                 </div>
-                {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
               </StepperItem>
             );
           })}
