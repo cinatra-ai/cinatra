@@ -12,6 +12,7 @@ import {
   findSavedConnectionForAgentUrl,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
+  updateAgentRunStreamedText,
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
@@ -1180,6 +1181,72 @@ function buildReviewRunBasePath(agentPackageName: string, instanceId: string): s
   return `/agents/${agentPackageName}/${instanceId}`;
 }
 
+/**
+ * THE TEXT THE RUN'S RECEIPT IS WRITTEN FROM (cinatra#3002, fix leg 1).
+ *
+ * The terminal handler's `finalText` reads the LAST agent message only, and
+ * everything it feeds keeps that exact meaning: the parsed terminal output, the
+ * unbound-output derivation capture, and the AG-UI text frames are all about
+ * the run's last word.
+ *
+ * The RECEIPT asks a different question — what text did this run produce that a
+ * reader can be pointed at? — and the first proof round measured the difference
+ * on a real completed run: an artifact-producing run's declared outputs travel
+ * as DataParts, so its last agent message carries no text at all, `finalText`
+ * came out empty, and the run finished with ZERO transcript rows. That is the
+ * blank page under a completion card this issue closes, surviving on the path
+ * the graded run took. So the receipt reads back through the run's own history
+ * for the last agent message that CARRIES text.
+ *
+ * A run with no text anywhere still writes nothing. Its evidence is the
+ * artifacts it wrote, not a transcript, and inventing a row for it would be the
+ * same lie pointed the other way.
+ */
+function lastAgentResponseText(
+  history: ReadonlyArray<HistoryMessage> | undefined,
+): string {
+  if (!history) return "";
+  // THE SEARCH IS BOUNDED TO THE RUN'S LAST TURN. Reading back through the WHOLE
+  // history would answer a different question again: a run that asked the user
+  // something mid-flight and then finished on a data-only message would have the
+  // QUESTION written as its answer, and an artifact-only run whose earlier turn
+  // happened to carry text would get an invented receipt after all — the guard
+  // below defeated by the scan above it. So the scan starts after the last user
+  // message: everything from there on is the run's reply to what it was last
+  // asked, and nothing before it can be mistaken for that reply.
+  let turnStart = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === "user") {
+      turnStart = i + 1;
+      break;
+    }
+  }
+  for (let i = history.length - 1; i >= turnStart; i -= 1) {
+    const message = history[i];
+    if (!message) continue;
+    // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
+    if (message.role !== "agent" && message.role !== "assistant") continue;
+    // Parts arrive from a peer runtime and are typed `unknown` at this boundary
+    // on purpose (see the handler's own note). Narrow at access time — a
+    // malformed earlier message newly reachable by this scan must not throw and
+    // take the run's terminal handling down with it.
+    const parts: unknown = message.parts;
+    if (!Array.isArray(parts)) continue;
+    const text = parts
+      .filter(
+        (p): p is { kind: string; text: string } =>
+          typeof p === "object" &&
+          p !== null &&
+          (p as { kind?: unknown }).kind === "text" &&
+          typeof (p as { text?: unknown }).text === "string",
+      )
+      .map((p) => p.text)
+      .join("");
+    if (text.length > 0) return text;
+  }
+  return "";
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
@@ -1955,9 +2022,19 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // genuinely succeeded. Without it the card reads the absence honestly (see
   // `resolveRunTerminalOutcome` — step results no longer stand in for a
   // transcript) instead of pointing at nothing.
-  if (finalText.length > 0) {
+  //
+  // AND IT IS WRITTEN FROM THE RUN'S HISTORY, not from the last message alone
+  // (fix leg 1). `finalText` is the last agent message's text and stays that,
+  // because the terminal output, the derivation capture and the text frames all
+  // mean "the run's last word". A run whose declared outputs travel as
+  // DataParts ends on a message with no text, and reading only that message
+  // left the very run the first proof round graded with zero transcript rows —
+  // the defect above, alive on the path that run took.
+  const finalResponseText =
+    finalText.length > 0 ? finalText : lastAgentResponseText(history);
+  if (finalResponseText.length > 0) {
     try {
-      await recordRunFinalResponseMessage({ runId, text: finalText });
+      await recordRunFinalResponseMessage({ runId, text: finalResponseText });
     } catch (err) {
       console.warn(
         `[run-final-response-receipt] run=${runId} could not persist the run's final response as a transcript message:`,
@@ -3141,6 +3218,14 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await startExternalSseProxyFromStream(resumeStream(), initialStatus, runId, {
         publishAgUiEvent: (event) => publishAgUiEvent(runId, event as never),
+        // cinatra#3002 fix leg 1 — AND THE PEER'S TEXT IS PERSISTED HERE TOO.
+        // This branch mirrors the external dispatch in `a2a-actions.ts`, which
+        // has always passed this hook; the mirror dropped it, so a run dispatched
+        // through the WORKER against an external peer streamed its answer past a
+        // live reader and left the run row's `streamed_text` empty — the same
+        // blank run page this issue closes, on a second path. The proxy calls the
+        // hook exactly once, on clean completion, with the accumulated text.
+        persistStreamedText: (text) => updateAgentRunStreamedText(runId, text),
         onCleanCompletion: ({ outputs, lastRemoteState }) => {
           externalStreamCompletedCleanly = true;
           externalStructuredOutputs = outputs;

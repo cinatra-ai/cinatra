@@ -22,6 +22,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //      at all — a success-shaped transcript row on a failed run is the same
 //      lie this issue closes, pointed the other way.
 //
+// Fix leg 1 (the first proof round's finding 2) adds the two that decide WHICH
+// text the receipt is written from:
+//
+//   6. a run whose LAST agent message carries only data — the shape a real
+//      artifact-producing run completed in, its declared outputs travelling as
+//      DataParts — still leaves its answer as the run's transcript row;
+//   7. a run with no text anywhere in its history still writes nothing.
+//
 // Harness mirrors wayflow-materialization-outcome-honesty.test.ts.
 //
 // Run:
@@ -157,6 +165,19 @@ function completedTask(parts: Array<Record<string, unknown>>) {
   };
 }
 
+/** The same terminal task, with the WHOLE history spelled out. */
+function completedTaskWithHistory(
+  history: Array<{ role: string; parts: Array<Record<string, unknown>> }>,
+) {
+  return {
+    id: "task-3002",
+    contextId: "ctx-3002",
+    status: { state: "completed", message: { parts: [] } },
+    metadata: {},
+    history,
+  };
+}
+
 describe("cinatra#3002 — the runtime run's transcript receipt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -245,6 +266,118 @@ describe("cinatra#3002 — the runtime run's transcript receipt", () => {
       string,
     ];
     expect(to).toBe("failed");
+  });
+
+  it("persists the answer of a run whose LAST agent message carries only data (fix leg 1)", async () => {
+    // THE SHAPE THE FIRST PROOF ROUND MEASURED on a real completed run. An
+    // artifact-producing run's declared outputs travel as DataParts, so the run
+    // ends on an agent message with no text and its answer sits one message
+    // earlier. The receipt read the LAST message only, so that run — a run that
+    // executed on the agent runtime, completed, and wrote four artifacts —
+    // finished with ZERO transcript rows: the blank page under a completion
+    // card, alive on the path the graded run took.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        {
+          role: "agent",
+          parts: [{ kind: "data", data: { ideas: ["one", "two", "three", "four"] } }],
+        },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("still writes NO receipt for a run that produced no text anywhere in its history", async () => {
+    // The other half of the same rule: a run whose evidence is the artifacts it
+    // wrote has no transcript to point at, and a row invented for it would be
+    // the same false claim of output, pointed the other way.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["two"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT write a mid-run question as the run's answer (the scan stops at the last turn)", async () => {
+    // The convergence round's finding. A run that asked the user something and
+    // then finished on a data-only message must not have the QUESTION written as
+    // its answer — and this is also the shape that would defeat the guard above:
+    // an artifact-only LAST TURN whose earlier turn carried text.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Which audience is this for?" }] },
+        { role: "user", parts: [{ kind: "text", text: "Founders." }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one", "two"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("takes the LAST text-carrying message of the run's final turn, not an earlier one", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Working on it." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("survives a malformed earlier message rather than failing the run's terminal handling", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        // Malformed, and NOT last: only the backward scan reaches it.
+        { role: "agent", parts: {} as unknown as Array<Record<string, unknown>> },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
   });
 
   it("writes no second receipt when the terminal handling is re-entered", async () => {

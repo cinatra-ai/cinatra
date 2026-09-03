@@ -2128,6 +2128,17 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     //
     // The completion notice stays for the reading the request does not cover: a
     // run that finished with nothing reviewable.
+    //
+    // AND THE DRAWING KEEPS IT THAT WAY (cinatra#3002 fix leg 1). A completed
+    // run whose gates were decided draws the review's own page here, not a
+    // completion notice over it: "One page per gate — the step's own card, and
+    // nothing else. Selecting a step opens that step's page in the run detail,
+    // and the page carries the one card of the step it belongs to". What the drawing gives a
+    // finished run INSTEAD is a step of its own — "A finished run says what it
+    // made. The rail's last entry is the run's own record, and its page lists
+    // the run's work" — an entry this surface does not carry yet. That entry is
+    // the run's completion reading here; this card is not, and mounting it in
+    // the review's place would stack two readings in one detail.
     stageCard =
       status === "completed" ? (
         reviewSlot.ref ? (
