@@ -18,8 +18,8 @@
 //      directory, at file mode 0600 — and says where it put it. The database
 //      only ever holds a hash;
 //   2. seeding is REFUSED, with a sentence the operator can read, whenever any
-//      origin the instance is configured to be served on is not a loopback or
-//      private-network address;
+//      origin the instance is configured to be served on is not a loopback, a
+//      private-network or an otherwise local-only origin;
 //   3. an account an earlier boot left behind is rotated onto this boot's
 //      secret, so a password from an earlier boot stops working;
 //   4. a harness that needs the password reads the value the instance was
@@ -174,10 +174,44 @@ export function generateDevFixturePassword(): string {
 }
 
 /**
- * True when the given address is one only this machine or its own network can
- * reach. Loopback in all its spellings is decided here, as are the IPv6 private
- * ranges; the IPv4 private ranges are decided by the shared classifier so there
- * is one reading of them.
+ * The names a process inside a container calls the machine that runs it. A
+ * container reaching the app on its own host has to spell the host gateway,
+ * because the container's own loopback address is the container. Such a name
+ * resolves only from inside that machine, so an instance served at one is
+ * exactly as private as an instance served at the loopback address.
+ */
+const CONTAINER_HOST_GATEWAY_NAMES: readonly string[] = [
+  "host.docker.internal",
+  "gateway.docker.internal",
+];
+
+/**
+ * The name endings reserved for one machine or one network. None of them is
+ * delegated in the public domain name system — `.localhost`, `.local` and
+ * `.home.arpa` are reserved by standard, and `.internal` and `.lan` are the
+ * private-network endings in ordinary use — so a name ending in one of them
+ * cannot be an origin somebody outside this network reaches the instance at.
+ */
+const LOCAL_ONLY_NAME_ENDINGS: readonly string[] = [
+  ".localhost",
+  ".local",
+  ".internal",
+  ".lan",
+  ".home.arpa",
+];
+
+/**
+ * True when the given origin is one only this machine or its own network can
+ * reach — which is what this rule means by private, and what it must call an
+ * origin that IS private. Three families are local, read in this one place so
+ * the boot and its tests read them the same way:
+ *   - ADDRESSES: loopback in all its spellings, the IPv4 private ranges (via
+ *     the shared classifier, so there is one reading of them), IPv4 link-local,
+ *     and the IPv6 unique-local and link-local ranges;
+ *   - CONTAINER HOST NAMES: the host-gateway alias a container uses to reach
+ *     the app on the machine running it;
+ *   - LOCAL-ONLY NAMES: a name ending in a reserved local ending, and a
+ *     single-label name, neither of which the public name system resolves.
  *
  * FAIL CLOSED. Everything this function cannot positively recognise as local is
  * NOT local, because the caller refuses on a false answer:
@@ -185,7 +219,9 @@ export function generateDevFixturePassword(): string {
  *     hostname is empty — it is a public host name, never a local one;
  *   - a wildcard bind address (`0.0.0.0`, `[::]`) is the address a server
  *     listens on for EVERY interface, so an instance configured to be served
- *     there is reachable from outside and is treated as public.
+ *     there is reachable from outside and is treated as public;
+ *   - a resolvable public name or a public address (`https://app.example.com`,
+ *     `http://203.0.113.10:3000`) is public under every scheme.
  */
 export function isLoopbackOrPrivateOrigin(value: string | null | undefined): boolean {
   if (typeof value !== "string" || value.trim() === "") return false;
@@ -202,14 +238,25 @@ export function isLoopbackOrPrivateOrigin(value: string | null | undefined): boo
   const hostname = url.hostname.toLowerCase();
   if (hostname === "") return false;
   // `new URL("http://[::1]:3000").hostname` keeps the brackets.
-  const host = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  const bracketed = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  // A trailing dot spells the root of the name out (`build-box.`); it is not a
+  // label of its own, and it is removed so one name is classified one way.
+  const host = bracketed.endsWith(".") ? bracketed.slice(0, -1) : bracketed;
   if (host === "") return false;
   if (host.includes(":")) return isPrivateIpv6(host);
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "localhost") return true;
+  if (CONTAINER_HOST_GATEWAY_NAMES.includes(host)) return true;
+  if (LOCAL_ONLY_NAME_ENDINGS.some((ending) => host.endsWith(ending))) return true;
   if (/^127\./.test(host)) return true;
   if (/^169\.254\./.test(host)) return true;
   // `0.0.0.0` is the every-interface bind address, not a local address.
   if (host === "0.0.0.0") return false;
+  // A single-label name is a machine on this network. The public name system
+  // resolves nothing without a delegated ending, so no name somebody outside
+  // reaches this instance at can arrive here. An address is never single-label:
+  // a dotted quad carries its dots, and every other spelling of an IPv4 address
+  // is normalised into one before this line reads it.
+  if (!host.includes(".")) return true;
   return isPrivateUrl(`http://${host}`);
 }
 
@@ -228,26 +275,138 @@ function isPrivateIpv6(host: string): boolean {
 }
 
 /**
- * The sentence to print instead of seeding the fixture account, or null when
- * seeding may go ahead. An instance that is reachable from outside its own
- * network never carries the fixture account, so a password printed on one
- * operator's screen can never be typed at somebody else's sign-in page.
+ * The two signals that say an instance is reachable from outside its own
+ * network without naming an environment setting at all.
+ *
+ * The authentication base URL is the origin the sign-in stack is built on. The
+ * public base URL is the one the operator configured for the instance and the
+ * instance stored about itself; it also enters the set of origins the sign-in
+ * stack trusts, which is exactly what makes it an exposure signal and not a
+ * cosmetic setting. An instance can be served to the whole internet through the
+ * second while the first is still the loopback address it always is in
+ * development, so a rule that reads one and not the other seeds the fixture
+ * account on precisely the instance it exists to protect.
  */
-export function devFixtureSeedRefusal(
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  for (const setting of SERVED_ORIGIN_SETTINGS) {
-    const value = env[setting];
+const AUTH_BASE_URL_SIGNAL = "the authentication base URL";
+const PUBLIC_BASE_URL_SIGNAL = "the public base URL configured for this instance";
+
+/** One origin the instance is configured to be reachable at, and what names it. */
+type NamedOrigin = { setting: string; value: string | null | undefined };
+
+/**
+ * The first configured origin that is not loopback, private-network or
+ * otherwise local-only, as a sentence the operator can read — or null when
+ * every one of them is local.
+ * This is the ONE reading of the exposure rule; everything below calls it.
+ */
+function firstPublicOriginRefusal(origins: readonly NamedOrigin[]): string | null {
+  for (const { setting, value } of origins) {
     if (typeof value !== "string" || value.trim() === "") continue;
     if (!isLoopbackOrPrivateOrigin(value)) {
       return (
         `refusing to seed the development fixture account: this instance is configured to be served at ` +
-        `${value.trim()} (${setting}), which is not a loopback or private-network address. ` +
+        `${value.trim()} (${setting}), which is not a loopback, a private-network or an ` +
+        `otherwise local-only origin. ` +
         `The fixture account exists only on an instance nobody else can reach.`
       );
     }
   }
   return null;
+}
+
+/** Everything the seeding decision is allowed to depend on. */
+export type DevFixtureSeedingInputs = {
+  /** `CINATRA_RUNTIME_MODE` — the fixture account exists only in development. */
+  runtimeMode?: string | null;
+  /** `NODE_ENV` — a production build is never a development runtime. */
+  nodeEnv?: string | null;
+  /** The origin the sign-in stack is built on. */
+  authBaseUrl?: string | null;
+  /** The public base URL the instance stores about itself. */
+  publicBaseUrl?: string | null;
+  /**
+   * True when that public base URL could not be read at all. A signal this rule
+   * cannot read is NOT a signal it may ignore: an instance whose stored
+   * configuration is unreadable may well be a publicly served one, so the rule
+   * fails CLOSED on it rather than treating it as "nothing configured".
+   */
+  publicBaseUrlUnreadable?: boolean;
+  /** The settings that can name the origin the instance is served on. */
+  env?: Record<string, string | undefined>;
+};
+
+/**
+ * Whether the fixture account may be seeded, and — when it may not — the
+ * sentence to print instead, and which arm of the rule refused. `runtime` is a
+ * silent no: an instance that is not a development runtime has no fixture
+ * account to speak of. `exposure` is a refusal the operator is told about,
+ * because an instance that used to be private may still be carrying an account
+ * from an earlier boot.
+ */
+export type DevFixtureSeedingDecision =
+  | { allowed: true; reason: null; refusal: null }
+  | { allowed: false; reason: "runtime" | "exposure"; refusal: string };
+
+/**
+ * THE rule. The development boot decides with this function and so do its
+ * tests, so there is one reading of "may this instance carry the fixture
+ * account" and no second copy of it to drift.
+ *
+ * FAIL CLOSED on both arms: a runtime this function cannot positively recognise
+ * as development refuses, and so does any configured origin it cannot
+ * positively recognise as local. An origin that is simply not configured is
+ * not a signal — an instance with no public base URL, or one whose database
+ * cannot be asked for it yet, is not thereby public.
+ */
+export function devFixtureSeedingAllowed(
+  inputs: DevFixtureSeedingInputs = {},
+): DevFixtureSeedingDecision {
+  const { runtimeMode, nodeEnv, authBaseUrl, publicBaseUrl, publicBaseUrlUnreadable, env } = inputs;
+  if (runtimeMode !== "development" || nodeEnv === "production") {
+    return {
+      allowed: false,
+      reason: "runtime",
+      refusal:
+        `refusing to seed the development fixture account: this instance is not a development runtime. ` +
+        `The fixture account exists only where it is the development boot that made it.`,
+    };
+  }
+  // A signal that cannot be read is not a signal that may be ignored.
+  if (publicBaseUrlUnreadable) {
+    return {
+      allowed: false,
+      reason: "exposure",
+      refusal:
+        `refusing to seed the development fixture account: ${PUBLIC_BASE_URL_SIGNAL} could not be read, ` +
+        `so this instance cannot be shown to be private. The fixture account is seeded only where every ` +
+        `origin this instance is served on is known to be local.`,
+    };
+  }
+  const origins: NamedOrigin[] = [
+    { setting: AUTH_BASE_URL_SIGNAL, value: authBaseUrl },
+    { setting: PUBLIC_BASE_URL_SIGNAL, value: publicBaseUrl },
+  ];
+  for (const setting of SERVED_ORIGIN_SETTINGS) {
+    origins.push({ setting, value: env?.[setting] });
+  }
+  const refusal = firstPublicOriginRefusal(origins);
+  if (refusal) return { allowed: false, reason: "exposure", refusal };
+  return { allowed: true, reason: null, refusal: null };
+}
+
+/**
+ * The exposure arm of the rule above, read off the environment alone, for a
+ * caller that holds nothing but the settings — the sentence to print instead of
+ * seeding, or null when seeding may go ahead. An instance that is reachable
+ * from outside its own network never carries the fixture account, so a password
+ * on one operator's screen can never be typed at somebody else's sign-in page.
+ */
+export function devFixtureSeedRefusal(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  return firstPublicOriginRefusal(
+    SERVED_ORIGIN_SETTINGS.map((setting) => ({ setting, value: env[setting] })),
+  );
 }
 
 /** Where this boot's password came from. */
