@@ -62,10 +62,15 @@ describe("cinatra#3080 — the link to a repair run's page", () => {
       join(process.cwd(), "packages/agents/src/agent-page-layout.tsx"),
       "utf8",
     );
-    const at = source.indexOf("publishCrumbContributions(pathname");
+    // The address is built ONCE now and used twice — the run's own crumb and the
+    // step appended after it (cinatra#3068 fix leg 2) — so the encoding is read
+    // where the address is composed rather than inside the call. Both readings
+    // still fail on a revert, which is the whole point.
+    const at = source.indexOf("const instancePath =");
     expect(at).toBeGreaterThan(-1);
-    const call = source.slice(at, at + 300);
+    const call = source.slice(at, at + 600);
     expect(call).toContain("encodeURIComponent(instanceId)");
     expect(call).not.toMatch(/\/\$\{instanceId\}/);
+    expect(call).toContain("publishCrumbContributions(pathname");
   });
 });
