@@ -19,6 +19,24 @@
 //       "titleFrom": "title"          // explicit — a title is never prompt-invented
 //     }}}]
 //
+// A FAN-OUT binding (cinatra#3034, plan item 0.27) annotates an ARRAY output
+// whose members are plain strings and materializes ONE artifact per member:
+//
+//   "outputs": [{ "title": "ideas", "type": "array",
+//     "json_schema": { "items": { "type": "string" } },
+//     "cinatra": { "artifact": {
+//       "extension": "@cinatra-ai/blog-idea-artifact",
+//       "contentFrom": "ideas",                        // the annotated list itself
+//       "declaredMime": "text/plain",
+//       "fanOut": { "mode": "member", "titleFrom": "first-line", "titlePrefix": "Title:" }
+//     }}}]
+//
+// It carries NO run-level `titleFrom` — a set has no single title — and each
+// member's title is read from that member's own first line behind the declared
+// prefix. The member level must be DECLARED (`json_schema.items.type`) and must
+// be a plain string: a bound list never leaves its members undeclared, and the
+// materializer never dissects an object member into a title.
+//
 // `objectTypeId` (cinatra#1454, completing the #1788 direction on the binding
 // side — symmetric with `cinatra.produces`'s SemanticArtifactRef.objectTypeId)
 // names the EXACT `@scope/pkg:local-id` object type the bound output
@@ -64,6 +82,32 @@ export const ARTIFACT_BINDING_AUTHORABLE_MIMES: ReadonlySet<string> = new Set([
  */
 export const BINDING_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
+/**
+ * A fanned-out member takes the ledger identity `${output}[${index}]`
+ * (run-artifact-materializer). An output that carries that shape in its OWN
+ * name would share the ledger's (run, output, extension, content-hash)
+ * identity with a member of a sibling fan-out, so the shape is RESERVED: a
+ * bound output may never be named that way.
+ */
+export const FAN_OUT_MEMBER_IDENTITY_RE = /\[\d+\]$/;
+
+/**
+ * The fan-out block of a binding (cinatra#3034, plan item 0.27). `mode` is
+ * `member` — one artifact per member of the bound array. `titleFrom` is
+ * `first-line` — the member's own first line, behind `titlePrefix`, IS the
+ * title; a title is never invented and never taken from a sibling output.
+ */
+export const artifactFanOutSchema = z
+  .object({
+    mode: z.literal("member"),
+    titleFrom: z.literal("first-line"),
+    /** Literal marker the member's first line must open with; stripped from the title. */
+    titlePrefix: z.string().min(1),
+  })
+  .strict();
+
+export type ArtifactOutputFanOut = z.infer<typeof artifactFanOutSchema>;
+
 export const artifactOutputBindingSchema = z
   .object({
     /** Artifact-extension package name — must be ∈ `cinatra.produces`. */
@@ -89,8 +133,17 @@ export const artifactOutputBindingSchema = z
     declaredMime: z.string().min(1).optional(),
     /** EndNode output name that carries the MIME at run time. XOR `declaredMime`. */
     mimeFrom: z.string().min(1).optional(),
-    /** EndNode output name that carries the artifact TITLE. */
-    titleFrom: z.string().min(1),
+    /**
+     * EndNode output name that carries the artifact TITLE. Required on a
+     * SCALAR binding; forbidden on a fan-out one (XOR with `fanOut`), where
+     * each member supplies its own title.
+     */
+    titleFrom: z.string().min(1).optional(),
+    /**
+     * Fan-out over the members of the bound ARRAY output (cinatra#3034).
+     * Present → one artifact per member; absent → the scalar binding.
+     */
+    fanOut: artifactFanOutSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -100,6 +153,16 @@ export const artifactOutputBindingSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "exactly one of declaredMime / mimeFrom is required",
+      });
+    }
+    const hasTitleFrom = value.titleFrom !== undefined;
+    const hasFanOut = value.fanOut !== undefined;
+    if (hasTitleFrom === hasFanOut) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: hasFanOut
+          ? "a fan-out binding must not carry titleFrom — each member's title comes from its own first line"
+          : "titleFrom is required (or declare fanOut, whose members title themselves)",
       });
     }
     if (
@@ -245,10 +308,23 @@ export function collectArtifactBindingsFromOasDocument(
       }
       const binding = parsed.data;
 
+      // The member-identity shape is reserved (see
+      // FAN_OUT_MEMBER_IDENTITY_RE): a bound output named `x[0]` would alias a
+      // fanned-out member of `x` in the materialization ledger.
+      if (FAN_OUT_MEMBER_IDENTITY_RE.test(title)) {
+        errors.push(
+          `${where}: a bound output may not be named "${title}" — a trailing ` +
+            "[index] is reserved for the members of a fanned-out list",
+        );
+        continue;
+      }
+
       let referenceError = false;
       for (const [field, ref] of [
         ["contentFrom", binding.contentFrom],
-        ["titleFrom", binding.titleFrom],
+        ...(binding.titleFrom !== undefined
+          ? ([["titleFrom", binding.titleFrom]] as const)
+          : []),
         ...(binding.mimeFrom !== undefined
           ? ([["mimeFrom", binding.mimeFrom]] as const)
           : []),
@@ -262,6 +338,50 @@ export function collectArtifactBindingsFromOasDocument(
         }
       }
       if (referenceError) continue;
+
+      // ------------------------------------------------------------------
+      // Fan-out member-shape disclosure (cinatra#3034, plan item 0.27). The
+      // fan-out binds the ANNOTATED list itself, that list is an array, and
+      // its member level is DECLARED as a plain string. No level of a bound
+      // list is left undeclared, and a member is never an object the host
+      // would have to dissect.
+      // ------------------------------------------------------------------
+      if (binding.fanOut !== undefined) {
+        if (binding.contentFrom !== title) {
+          errors.push(
+            `${where}.contentFrom: a fan-out binding must name its OWN output ` +
+              `("${title}"), not "${binding.contentFrom}" — the annotated list IS the fanned-out list`,
+          );
+          continue;
+        }
+        if (outputRaw.type !== "array") {
+          errors.push(
+            `${where}: fanOut requires an output of type "array" (output "${title}" ` +
+              `declares type "${String(outputRaw.type ?? "<none>")}")`,
+          );
+          continue;
+        }
+        const schema = isPlainObject(outputRaw.json_schema)
+          ? (outputRaw.json_schema as Record<string, unknown>)
+          : null;
+        const items = schema !== null && isPlainObject(schema.items)
+          ? (schema.items as Record<string, unknown>)
+          : null;
+        if (items === null) {
+          errors.push(
+            `${where}: the bound list "${title}" leaves its member level undeclared ` +
+              "(json_schema.items) — a bound structured list declares its members",
+          );
+          continue;
+        }
+        if (items.type !== "string") {
+          errors.push(
+            `${where}: fanOut members must be declared plain string members ` +
+              `(json_schema.items.type "string"; "${title}" declares "${String(items.type ?? "<none>")}")`,
+          );
+          continue;
+        }
+      }
 
       // Parity is FAIL-CLOSED against a known produces set (codex round 0):
       // an EMPTY array (package.json readable but `cinatra.produces`
