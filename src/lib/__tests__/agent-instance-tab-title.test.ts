@@ -18,6 +18,7 @@ import {
   agentInstanceTabTitle,
   resolveAgentInstanceMetadata,
 } from "../agent-instance-tab-title";
+import { PAGE_NOT_FOUND_CRUMB_LABEL } from "../breadcrumb-trail";
 
 const RUN_ID = "2494bd7d-c047-4d90-a8fc-b6ae154956fc";
 const BASE = { vendor: "acme", packageName: "blog-pipeline", instanceId: RUN_ID };
@@ -227,7 +228,7 @@ describe("resolveAgentInstanceMetadata — the gate-repeating read", () => {
   it("reads no run for the creation route", async () => {
     await expect(
       resolveAgentInstanceMetadata({ ...BASE, instanceId: "new" }),
-    ).resolves.toEqual({ title: "New" });
+    ).resolves.toEqual({ title: AGENT_INSTANCE_GENERIC_TAB_TITLE });
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 });
@@ -277,5 +278,98 @@ describe("resolveAgentInstanceMetadata never names the run", () => {
       title: "Blog Pipeline Agent (2)",
     });
     expect(ensureRunTitle).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A PAGE THAT IS NOT FOUND HAS NO HIERARCHY — AND SO NO NAME FOR ITS TAB
+ * (cinatra#2934, fix leg 11).
+ *
+ * The ratified drawing: "If a page is not found, then that page has no hierarchy
+ * — and so no trail to draw. Its breadcrumb reads Page not found and nothing
+ * else"; and the tab "mirrors the resolved trail under the same rules: an
+ * id-bearing route never shows a raw id in the tab."
+ *
+ * The whole-window proof round measured the two apart on a typed address under
+ * the agents area: the trail read "Page not found" while the tab read
+ * "No Such Run | Cinatra" — the address's own last segment, title-cased. The tab
+ * had no way to learn the reading was a not-found one: `notFound()` is thrown by
+ * the page body, long after `generateMetadata` has already resolved a title, and
+ * the label it resolved was the raw segment humanized.
+ *
+ * So the metadata repeats the route's OWN not-found determination — the same
+ * screens dispatch its body guards on — and answers the one word the trail
+ * draws. And the instance position never humanizes a raw address segment again:
+ * an unresolved run is named by its KIND, never by the address that failed.
+ */
+const registryMocks = vi.hoisted(() => ({
+  resolveAgentScreensWithA2AFallback: vi.fn(),
+}));
+
+vi.mock("@/app/plugins-registry", () => ({
+  resolveAgentScreensWithA2AFallback: registryMocks.resolveAgentScreensWithA2AFallback,
+}));
+
+const { resolveAgentScreensWithA2AFallback } = registryMocks;
+
+describe("the tab on a reading that is not found", () => {
+  beforeEach(() => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "Blog Pipeline Agent (1)",
+      status: "armed",
+      templateId: "tpl-1",
+      runBy: "user-1",
+    });
+  });
+
+  it("reads Page not found when the route's own screens do not resolve", async () => {
+    resolveAgentScreensWithA2AFallback.mockResolvedValue(null);
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, screenSlot: "instanceSetup" }),
+    ).resolves.toEqual({ title: PAGE_NOT_FOUND_CRUMB_LABEL });
+    // A page nobody reached is not a run to read: the not-found determination
+    // short-circuits before the gate-repeating identity read.
+    expect(readAgentRunById).not.toHaveBeenCalled();
+  });
+
+  it("reads Page not found when the screen this route dispatches is absent", async () => {
+    resolveAgentScreensWithA2AFallback.mockResolvedValue({ instanceResults: () => null });
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, screenSlot: "instanceSetup" }),
+    ).resolves.toEqual({ title: PAGE_NOT_FOUND_CRUMB_LABEL });
+  });
+
+  it("still mirrors the run's name when the route does resolve", async () => {
+    resolveAgentScreensWithA2AFallback.mockResolvedValue({ instanceSetup: () => null });
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, screenSlot: "instanceSetup" }),
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
+  });
+});
+
+describe("the instance position never shows the typed address", () => {
+  it("names the kind, not the address's last segment title-cased", async () => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    readAgentRunById.mockResolvedValue(null);
+    resolveAgentScreensWithA2AFallback.mockResolvedValue({ instanceSetup: () => null });
+
+    const meta = await resolveAgentInstanceMetadata({
+      ...BASE,
+      instanceId: "no-such-run",
+      screenSlot: "instanceSetup",
+    });
+    expect(meta).toEqual({ title: AGENT_INSTANCE_GENERIC_TAB_TITLE });
+    expect(String(meta.title)).not.toBe("No Such Run");
+    expect(String(meta.title)).not.toMatch(/no.?such.?run/i);
+  });
+
+  it("is the same reading for a bare segment with no run behind it", () => {
+    expect(agentInstanceTabTitle({ ...BASE, instanceId: "no-such-run" })).toBe(
+      AGENT_INSTANCE_GENERIC_TAB_TITLE,
+    );
   });
 });

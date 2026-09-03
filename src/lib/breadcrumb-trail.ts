@@ -325,7 +325,17 @@ export function agentInstanceSubRouteCrumbLabel(segment: string): string | null 
 // only; the general branch's placeholder rule (precedence step 3 above) is
 // unchanged, because a crumb elsewhere that resolves to nothing is a naming
 // gap, not a disclosure.
-const UNRESOLVED_AGENT_INSTANCE_LABEL = "Agent run";
+//
+// ONE WORD, AND THE PAGE THAT STARTS A RUN USES IT TOO (cinatra#2934, fix leg
+// 11). The ratified drawing names the run-starting page in the same breath:
+// "the page that starts a run reads 'Agents > Agent run', never 'Run agent'
+// alone." That page's header publishes this word, its trail's leaf IS that
+// word, and its tab mirrors the leaf — so the word is exported once here rather
+// than written out at each of those sites, where a rename could move one and
+// leave the others behind (the divergence the proof round measured: the trail
+// read "Agents > Agent run" while the tab read "Agents").
+export const AGENT_RUN_LABEL = "Agent run";
+const UNRESOLVED_AGENT_INSTANCE_LABEL = AGENT_RUN_LABEL;
 
 // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 10).
 //
@@ -452,15 +462,23 @@ export function buildBreadcrumbTrail(
     // and that anchor's address is the whole id, in the chrome, where the
     // shortened id used to be. Non-navigable draws the same crumb as plain
     // text; the leaf position (the run page reading) already drew text.
-    const unresolvedInstance = !contributed && isIdLikeSegment(segments[3]);
+    // AND A TYPED ADDRESS IS NOT A NAME EITHER (cinatra#2934, fix leg 11).
+    // The fallback above was reached only for an id-SHAPED segment; anything
+    // else fell through to `humanizePathSegment`, which title-cases the raw
+    // path segment. So a typed address under this area drew its own last
+    // segment as if it were the run's name — the proof round read
+    // "No Such Run" in the tab over a page that was not found. Every real run
+    // id is a UUID (the store mints one per run), so a segment that is not
+    // id-shaped names no run either: it is the address the reader typed, and
+    // the drawing's rule is unqualified — the id-bearing route never shows the
+    // raw thing in the place a name belongs. The position now has ONE
+    // unresolved reading, and the crumb carries no link to a run it cannot
+    // name.
+    const unresolvedInstance = !contributed;
     const crumbs: BreadcrumbCrumb[] = [
       { label: "Agents", href: "/agents" },
       {
-        label:
-          contributed?.label ??
-          (isIdLikeSegment(segments[3])
-            ? UNRESOLVED_AGENT_INSTANCE_LABEL
-            : humanizePathSegment(segments[3])),
+        label: contributed?.label ?? UNRESOLVED_AGENT_INSTANCE_LABEL,
         href: instancePath,
         ...(unresolvedInstance ? { nonNavigable: true } : {}),
       },

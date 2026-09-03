@@ -531,21 +531,28 @@ describe("buildBreadcrumbTrail — the agent instance's sub-route labels (cinatr
     ]);
   });
 
+  // RE-PINNED (cinatra#2934, fix leg 11). These two read the SUB-ROUTE word,
+  // and they still do. What moved is the crumb beside it: the instance position
+  // used to title-case its raw path segment when nothing named the run
+  // ("run-1" -> "Run 1"), and a typed address therefore drew itself as if it
+  // were a name. Every real run id is a UUID, so a segment that is not one names
+  // no run at all; the position now has one unresolved reading, the run's KIND.
   it("leaves every other sub-route exactly as it was", () => {
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/run-1/permissions").map((c) => c.label),
-    ).toEqual(["Agents", "Run 1", "Permissions"]);
+    ).toEqual(["Agents", "Agent run", "Permissions"]);
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/run-1/setup").map((c) => c.label),
-    ).toEqual(["Agents", "Run 1", "Setup"]);
+    ).toEqual(["Agents", "Agent run", "Setup"]);
   });
 
   it("renames the sub-route crumb only — a run whose own id is `trigger` is not a schedule", () => {
     // The map is read at the SUB-ROUTE position (segment 5) and nowhere else,
-    // so the instance segment keeps whatever names it.
+    // so an instance segment that happens to read "trigger" is NOT the schedule
+    // surface: it is a run this trail cannot name, and it says so.
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/trigger").map((c) => c.label),
-    ).toEqual(["Agents", "Trigger"]);
+    ).toEqual(["Agents", "Agent run"]);
   });
 });
 

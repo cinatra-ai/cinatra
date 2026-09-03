@@ -29,6 +29,7 @@ import "server-only";
 import type { Metadata } from "next";
 
 import {
+  PAGE_NOT_FOUND_CRUMB_LABEL,
   agentInstanceSubRouteCrumbLabel,
   buildBreadcrumbTrail,
   documentTitleLabelFromTrail,
@@ -48,6 +49,13 @@ export type AgentInstanceRouteParams = {
   instanceId: string;
   /** The sub-route segment, when this is a sub-route of the run. */
   subRoute?: string;
+  /**
+   * The plugin screen THIS route dispatches — the one its body requires before
+   * it renders anything, and the one whose absence makes it answer not-found.
+   * Given, the metadata repeats that determination (see below); omitted, it is
+   * not made at all and the route keeps the naming behaviour it had.
+   */
+  screenSlot?: string;
 };
 
 /** The run instance's own path — the crumb prefix a contribution targets. */
@@ -97,6 +105,21 @@ export function agentInstanceTabTitle(
 export async function resolveAgentInstanceMetadata(
   params: AgentInstanceRouteParams,
 ): Promise<Metadata> {
+  // A PAGE THAT IS NOT FOUND HAS NO NAME TO PUT IN ITS TAB (cinatra#2934, fix
+  // leg 11). The ratified drawing: "If a page is not found, then that page has
+  // no hierarchy - and so no trail to draw. Its breadcrumb reads 'Page not
+  // found' and nothing else", and the tab "mirrors the resolved trail under the
+  // same rules". Nothing here could obey that: `notFound()` is thrown by the
+  // page BODY, and metadata has already resolved by then, so what the tab held
+  // was a name for a page the reader never reached. The determination is made
+  // HERE too, from the same screens dispatch the body guards on, and before any
+  // identity is read - a page nobody reached is not a run to name.
+  if (
+    params.screenSlot &&
+    (await agentInstanceRouteAnswersNotFound(params.vendor, params.packageName, params.screenSlot))
+  ) {
+    return { title: PAGE_NOT_FOUND_CRUMB_LABEL };
+  }
   const subRouteDrawsItsOwnCrumb =
     params.subRoute != null &&
     agentInstanceSubRouteCrumbLabel(params.subRoute) !== null;
@@ -104,6 +127,32 @@ export async function resolveAgentInstanceMetadata(
     ? null
     : await readAgentInstanceCrumbLabel(params);
   return { title: agentInstanceTabTitle({ ...params, resolvedInstanceLabel }) };
+}
+
+/**
+ * THE ROUTE'S OWN NOT-FOUND DETERMINATION, REPEATED (cinatra#2934, fix leg 11).
+ *
+ * Every route under the run dispatches ONE plugin screen and guards it the same
+ * way: `if (!screens) notFound(); if (!screens.<slot>) notFound();`. This is
+ * that pair of lines and nothing more, so the tab and the page can only ever
+ * agree. It never throws: a registry that fell over is not a not-found reading,
+ * and a metadata read must not decide whether a page renders.
+ */
+async function agentInstanceRouteAnswersNotFound(
+  vendor: string,
+  packageName: string,
+  screenSlot: string,
+): Promise<boolean> {
+  try {
+    const { resolveAgentScreensWithA2AFallback } = await import("@/app/plugins-registry");
+    const screens = (await resolveAgentScreensWithA2AFallback(
+      vendor + "/" + packageName,
+    )) as Record<string, unknown> | null | undefined;
+    if (!screens) return true;
+    return !(screenSlot in screens) || !screens[screenSlot];
+  } catch {
+    return false;
+  }
 }
 
 /**

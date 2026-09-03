@@ -7,9 +7,19 @@ import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
 // route used to export was re-applied over the mirrored one on every live-poll
 // re-render, so the derivation moved to the server, behind one helper every
 // id-bearing route under the run shares.
+//
+// AND IT SAYS "Page not found" WHERE THIS ROUTE ANSWERS NOT FOUND (fix leg 11).
+// The screen named here is the one this body dispatches below, so the helper
+// makes the body's own determination before it resolves any name.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { vendor, packageName, instanceId } = await params;
-  return resolveAgentInstanceMetadata({ vendor, packageName, instanceId, subRoute: "data" });
+  return resolveAgentInstanceMetadata({
+    vendor,
+    packageName,
+    instanceId,
+    subRoute: "data",
+    screenSlot: "instanceData",
+  });
 }
 
 type Props = {

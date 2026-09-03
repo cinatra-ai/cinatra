@@ -27,6 +27,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  PAGE_NOT_FOUND_CRUMB_LABEL,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
@@ -678,7 +679,14 @@ export function AppShell({
             c.prefix === "/" + segments.slice(0, 4).join("/"),
         )?.label
       : undefined;
-    if (isChatThread && chatThreadTitle) {
+    if (pageNotFound) {
+      // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 11).
+      // Its trail is the single crumb "Page not found", so the tab is that one
+      // word too - before every branch below, because none of them can name a
+      // page the reader never reached: the agent-instance branch would name the
+      // run, and the general branch the address's own last segment.
+      document.title = `${PAGE_NOT_FOUND_CRUMB_LABEL} | Cinatra`;
+    } else if (isChatThread && chatThreadTitle) {
       document.title = `${chatThreadTitle} | Cinatra`;
     } else if (isAgentInstance) {
       // cinatra#2934 — a REFUSED reading of an agent-instance route publishes
@@ -720,7 +728,19 @@ export function AppShell({
       // on the route owns the tab title — clobbering it here would replace a
       // correct server title with humanized hex. Deliberately no write.
     } else {
-      document.title = deriveDocumentTitle(pathname, activeHeader?.title);
+      // THE TAB MIRRORS THE RESOLVED TRAIL HERE TOO (cinatra#2934, fix leg 11).
+      // This branch derived its own words from the PATH, which is a second
+      // reading of the same route and drifts from the first the moment the two
+      // disagree: on the run-starting page the trail appends the page's own
+      // title beneath the area crumb ("Agents > Agent run") while the derived
+      // word stayed the area segment ("Agents"), and the proof round measured
+      // exactly that. So the trail already drawn above the page decides, and the
+      // path-derived word remains only as the floor for a trail with nothing
+      // safe to say.
+      const mirrored = documentTitleLabelFromTrail(breadcrumbSegments);
+      document.title = mirrored
+        ? `${mirrored} | Cinatra`
+        : deriveDocumentTitle(pathname, activeHeader?.title);
     }
   }, [
     activeHeader?.title,
@@ -728,6 +748,7 @@ export function AppShell({
     chatThreadTitle,
     crumbContributions,
     breadcrumbSegments,
+    pageNotFound,
   ]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
