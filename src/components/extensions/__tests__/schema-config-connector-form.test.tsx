@@ -159,6 +159,108 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/listServers"))).toBe(true);
   });
 
+  // cinatra#2368 (AC1: "the calendar badge names the calendar"): a badge that
+  // declares showsValue renders the ROW's value at its key, keeping the schema
+  // word only as the badge's accessible qualifier.
+  it("record-list: a showsValue badge NAMES the row's own value, not the schema word", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("listAppointmentSchedules")) {
+        return new Response(
+          JSON.stringify({
+            result: {
+              items: [{ id: "a1", title: "Intro call", calendarSummary: "Work", disabled: true }],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const surface = surfaceOf({
+      fields: [
+        {
+          kind: "record-list",
+          label: "Appointment schedules",
+          listActionId: "listAppointmentSchedules",
+          emptyState: "None yet.",
+          itemTitleKey: "title",
+          itemBadges: [
+            { key: "calendarSummary", label: "Calendar", variant: "outline", showsValue: true },
+            { key: "disabled", label: "Disabled", variant: "secondary" },
+          ],
+        },
+      ],
+    });
+    await renderForm({ installId: "i10", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const values = Array.from(
+      container.querySelectorAll('[data-testid="record-list-badge-value"]'),
+    ).map((el) => el.textContent);
+    // The value badge shows the calendar's own name.
+    expect(values).toEqual(["Work"]);
+    // The schema word survives only as the accessible qualifier, never as the
+    // badge's visible text.
+    const qualifiers = Array.from(container.querySelectorAll('[data-slot="badge"] .sr-only')).map(
+      (el) => el.textContent,
+    );
+    expect(qualifiers).toEqual(["Calendar: "]);
+    // The flag badge beside it is untouched: still its static schema label.
+    const badges = Array.from(container.querySelectorAll('[data-slot="badge"]'));
+    expect(badges).toHaveLength(2);
+    expect(badges[1].textContent).toBe("Disabled");
+    expect(badges[1].querySelector('[data-testid="record-list-badge-value"]')).toBeNull();
+  });
+
+  // A showsValue badge is gated on its RENDERED text, so a whitespace-only
+  // value draws NO badge rather than an empty pill carrying only its
+  // screen-reader qualifier.
+  it("record-list: a showsValue badge with a blank value renders no badge at all", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("listAppointmentSchedules")) {
+        return new Response(
+          JSON.stringify({
+            result: { items: [{ id: "a1", title: "Intro call", calendarSummary: "   ", disabled: true }] },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const surface = surfaceOf({
+      fields: [
+        {
+          kind: "record-list",
+          label: "Appointment schedules",
+          listActionId: "listAppointmentSchedules",
+          emptyState: "None yet.",
+          itemTitleKey: "title",
+          itemBadges: [
+            { key: "calendarSummary", label: "Calendar", variant: "outline", showsValue: true },
+            { key: "disabled", label: "Disabled", variant: "secondary" },
+          ],
+        },
+      ],
+    });
+    await renderForm({ installId: "i11", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const badges = Array.from(container.querySelectorAll('[data-slot="badge"]'));
+    expect(badges).toHaveLength(1);
+    expect(badges[0].textContent).toBe("Disabled");
+    expect(container.querySelectorAll('[data-testid="record-list-badge-value"]')).toHaveLength(0);
+  });
+
   it("banner: an action result's variant TOASTs its static message (no in-form banner)", async () => {
     vi.mocked(toast.success).mockClear();
     const surface = surfaceOf({
