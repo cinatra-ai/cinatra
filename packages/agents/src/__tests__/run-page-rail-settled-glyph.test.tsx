@@ -48,7 +48,11 @@ import { cleanup, render } from "@testing-library/react";
 
 import { RunStepRailPanel } from "../run-step-rail-panel";
 import type { RunStepRailEntry } from "../run-step-rail";
-import { reviewSettledAct } from "@/lib/artifacts/review-surface-model";
+import {
+  REVIEW_SETTLED_ACT_STORAGE,
+  REVIEW_SETTLED_ACT_TITLE,
+  reviewSettledAct,
+} from "@/lib/artifacts/review-surface-model";
 import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
@@ -86,11 +90,14 @@ function resolvedGateEntry(): RunStepRailEntry {
     gate: {
       gateId: "g1",
       reviewTaskId: "r1",
-      disposition: "approved",
+      // The STORED disposition, which is "approve" and not "approved": the
+      // stored vocabulary is the one REVIEW_SETTLED_ACT_STORAGE names, and a
+      // fixture holding a word the column never carries derives no act at all.
+      disposition: "approve",
       // The entry's settled act is READ OFF THE DISPOSITION, exactly as the
       // rail builder reads it (cinatra#3080, fix leg 7) - a fixture carrying
       // its own word would drift from what a run actually renders.
-      settledAct: reviewSettledAct("approved"),
+      settledAct: reviewSettledAct("approve"),
       resolved: true,
     },
   } as RunStepRailEntry;
@@ -181,6 +188,31 @@ describe("the run page's panel rail draws a passed step on the drawing's muted g
     expect(groundFor(circle.className, "completed")).toBe(MUTED_GROUND);
     expect(groundFor(circle.className, "inactive")).toBe(MUTED_GROUND);
     expect(groundFor(circle.className, "active")).toBe(PRIMARY_FILL);
+  });
+
+  it("builds the resolved gate from a disposition a run actually stores", () => {
+    // The fixture is only worth what it represents. A disposition outside the
+    // stored vocabulary derives NO act, and the row then reads the fallback
+    // word instead of the act the run performed - so the fixture is pinned to
+    // the stored token and to the word that token reads as.
+    const entry = resolvedGateEntry();
+    expect(entry.gate?.disposition).toBe(REVIEW_SETTLED_ACT_STORAGE.continued);
+    expect(entry.gate?.settledAct).toBe("continued");
+
+    const { container } = render(
+      <RunStepRailPanel
+        entries={[stepEntry("Step 1", 1, "pending"), entry]}
+        activeOrdinal={1}
+        reviewHrefBase="/agents/v/p/i"
+      />,
+    );
+    const gateRow = container.querySelector<HTMLElement>('[data-rail-kind="gate"]')!;
+    // The row joins the label and the act into one sentence and keeps the act
+    // lowercase (fix leg 7), so the reading is the joined sentence itself.
+    expect(gateRow.textContent).toContain(
+      `Review \u00b7 ${REVIEW_SETTLED_ACT_TITLE.continued.toLowerCase()}`,
+    );
+    expect(gateRow.textContent?.toLowerCase()).not.toContain("settled");
   });
 
   it("draws a RESOLVED gate's circle on the muted ground too", () => {
