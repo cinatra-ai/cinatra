@@ -415,6 +415,12 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // structured trigger suggestions. Pattern copied from
   // orchestrator-stepper-panel.tsx — same fetch shape, same error handling.
   // ---------------------------------------------------------------------------
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses.
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
   // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION. What is typed
@@ -428,7 +434,6 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
     return () => { abortRef.current?.abort(); };
   }, []);
 
@@ -1052,10 +1057,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         </Card>
       )}
     </form>
-    {/* Always-visible bottom overlay — no toggle (by design).
+    {/* The window under the form — no toggle (by design).
         resetSignal omitted — trigger form has no renderer transitions.
         NOT in the read-only reading (cinatra#2980): the panel exists to FILL IN
         this form from a sentence, which is a control like any other. */}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
     <HitlConversationPanel
       portalTarget={portalTarget}
       // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
@@ -1078,6 +1084,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       storageKey={`cinatra_trigger_assist_${props.templateId}`}
       onSubmit={handlePromptSubmit}
     />
+    </div>
     </>
   );
 }
