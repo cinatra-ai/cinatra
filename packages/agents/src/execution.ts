@@ -515,7 +515,7 @@ import {
   nextUnresolvedLeg,
   planPerArtifactReviewGates,
   resolveDeclaredReviewTargets,
-} from "@/lib/lifecycle/declared-review-targets";
+} from "@/lib/artifacts/artifact-review-target";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {

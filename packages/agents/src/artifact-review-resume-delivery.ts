@@ -64,7 +64,7 @@ import {
 import {
   baseReviewTaskId,
   hasPendingSiblingLeg,
-} from "@/lib/lifecycle/declared-review-targets";
+} from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */

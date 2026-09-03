@@ -28,7 +28,7 @@ import {
   nextUnresolvedLeg,
   planPerArtifactReviewGates,
   resolveDeclaredReviewTargets,
-} from "@/lib/lifecycle/declared-review-targets";
+} from "@/lib/artifacts/artifact-review-target";
 
 const POST = { artifactId: "art-post", representationRevisionId: "rev-post-2" };
 const FEATURED = { artifactId: "art-img-featured", representationRevisionId: "rev-img-1" };
