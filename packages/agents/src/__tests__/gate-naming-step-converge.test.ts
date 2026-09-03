@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { gateNamingStep } from "../run-stepper-steps";
+import { gateNamingStep } from "../orchestrator-gate-predicate";
 
 describe("the step segment of the gate header's naming line", () => {
   it("names the parked step while the run is held at it", () => {

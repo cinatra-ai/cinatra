@@ -64,7 +64,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { gateNamingStep } from "./run-stepper-steps";
+import { gateNamingStep } from "./orchestrator-gate-predicate";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";

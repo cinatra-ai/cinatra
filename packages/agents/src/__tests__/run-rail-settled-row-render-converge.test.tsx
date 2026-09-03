@@ -11,7 +11,7 @@
  * separate badge beside it.
  */
 import React from "react";
-import { render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Stepper, StepperItem, StepperNav } from "@/components/reui/stepper";
@@ -46,8 +46,13 @@ const draw = (entry: RunStepRailEntry) =>
     </Stepper>,
   );
 
+// UNMOUNT the roots; never wipe the DOM out from under them. A root left
+// mounted keeps a scheduled continuation alive, and the scheduler runs it
+// AFTER this file's jsdom is torn down - the "window is not defined"
+// uncaught exception the full suite tallied twice from this file. cleanup()
+// is what every other render suite here uses.
 afterEach(() => {
-  document.body.innerHTML = "";
+  cleanup();
 });
 
 describe("the rail's settled review row, rendered", () => {

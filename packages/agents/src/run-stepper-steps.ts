@@ -40,34 +40,6 @@ export type ProjectedStepperStep = StepperStep & { _policyDescription: string | 
  * step number the live resolver keys on. Identical walk to the one the run-detail
  * panel used inline, extracted so the review surface renders the same list.
  */
-/**
- * WHERE THE GATED STEP SITS, for the review gate header's naming line
- * (cinatra#3080, fix leg 7, corrected at convergence).
- *
- * The header draws "step 4 of 6" from the ladder the rail already draws. The
- * live interrupt names the step while the run is parked on it — and names
- * NOTHING once the run has resumed and completed, which is the reading a
- * reviewer arrives at most often. So a run with no live interrupt falls back to
- * the step the rail is showing, bounded by the ladder's own length (a completed
- * run's rail points one past the end). A run with no ladder names no step at
- * all rather than inventing one.
- */
-export function gateNamingStep(input: {
-  /** How many steps the rail draws. */
-  ladderLength: number;
-  /** The live interrupt's step as a display index, or null when there is none. */
-  currentDisplayIndex: number | null;
-  /** The step the rail is showing right now. */
-  activeStep: number;
-}): { index: number; total: number } | null {
-  if (input.ladderLength <= 0) return null;
-  const index =
-    input.currentDisplayIndex !== null
-      ? input.currentDisplayIndex
-      : Math.min(input.activeStep, input.ladderLength);
-  return { index, total: input.ladderLength };
-}
-
 export function buildRunStepperSteps(
   policySteps: readonly RunStepperPolicyStep[],
 ): ProjectedStepperStep[] {
