@@ -11,6 +11,7 @@ import "server-only";
 // nothing else.
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { listActiveAssertions } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
@@ -137,32 +138,29 @@ ORDER BY asserted_at DESC LIMIT 1`,
  * THE PERSON'S OWN ASSERTION for one (row, extension), as the assertion store
  * recorded it — the second road §XI.10 gives onto the promotion.
  *
- * ONLY a `user` assertion counts. An agent's and an authoring skill's are
- * classic assertions too, but the drawing's sentence is about the PERSON: "or on
- * the person's own assertion, which outranks the matcher". A `system` binding
- * assertion is what every upload already carries for its base, so reading one
- * here would promote every row the moment anybody confirmed anything.
+ * IT ASKS THE ASSERTION STORE RATHER THAN THE DATABASE. The store already reads
+ * a row's active assertions for the assertion primitive; a second statement of
+ * its own here would be a second reading of the same table that can drift from
+ * the first, and this module's whole shape is that the parts touching a database
+ * are few and named.
+ *
+ * ONLY a `user` assertion counts. An agent's and an authoring skill's are classic
+ * assertions too, but the drawing's sentence is about the PERSON: "or on the
+ * person's own assertion, which outranks the matcher". A `binding` row is what
+ * every upload already carries for its base, so counting one here would promote
+ * every row the moment anybody confirmed anything.
  */
 export function readPersonAssertion(input: {
   orgId: string;
   artifactId: string;
   extension: string;
 }): boolean {
-  ensurePostgresSchema();
-  const s = schema();
-  const [res] = runPostgresQueriesSync({
-    connectionString: conn(),
-    queries: [
-      {
-        text: `SELECT 1 FROM "${s}"."semantic_assertion"
-WHERE org_id = $1 AND artifact_id = $2 AND extension = $3
-  AND asserted_by = 'user' AND eligibility <> 'archived'
-LIMIT 1`,
-        values: [input.orgId, input.artifactId, input.extension],
-      },
-    ],
-  });
-  return (res?.rows?.length ?? 0) > 0;
+  return listActiveAssertions(input.orgId, input.artifactId).some(
+    (a) =>
+      a.extension === input.extension &&
+      a.assertedBy === "user" &&
+      a.assertionBasis === "classic",
+  );
 }
 
 export type PromoteMatchedArtifactTypeResult =
