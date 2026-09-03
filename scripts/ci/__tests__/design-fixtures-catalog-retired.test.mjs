@@ -47,10 +47,10 @@ describe("design-fixtures primitives catalog stays retired (cinatra#3189)", () =
     });
   }
 
-  it("no renderable file sits directly under src/app/design-fixtures/ (sub-route harnesses only)", () => {
+  it("no renderable file sits directly under src/app/design-fixtures/ (sub-route harnesses only), in any renderable extension", () => {
     if (!existsSync(FIXTURES_DIR)) return;
     const topLevelRenderables = readdirSync(FIXTURES_DIR, { withFileTypes: true })
-      .filter((e) => e.isFile() && /\.(tsx|ts)$/.test(e.name) && !/\.test\.[cm]?tsx?$/.test(e.name))
+      .filter((e) => e.isFile() && /\.([cm]?jsx?|tsx|ts)$/.test(e.name) && !/\.test\.[cm]?[jt]sx?$/.test(e.name))
       .map((e) => e.name);
     expect(topLevelRenderables).toEqual([]);
   });
