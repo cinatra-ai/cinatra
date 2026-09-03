@@ -250,7 +250,7 @@
     {
       "packageName": "@cinatra-ai/google-appointment-schedules-connector",
       "repo": "cinatra-ai/google-appointment-schedules-connector",
-      "resolvedSha": "8432a119aefd239a393fbb11a5fd7d7e5fbe7492"
+      "resolvedSha": "90a0724dc84909dab985f9f618f8782422e05004"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
