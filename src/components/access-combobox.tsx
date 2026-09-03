@@ -263,6 +263,14 @@ export type AccessComboboxMultiProps = {
     scopes: AvailableScopes,
   ) => AccessRowState;
   /**
+   * Override the closed trigger's summary text (cinatra#3229). Default: the
+   * shared `resolveAccessSummary` composition ("Workspace: All", "Team: …",
+   * "1 project, 1 team"). A surface whose drawing reads the control as
+   * "{Field}: {value}" passes its own reading; the rows and the selection
+   * semantics are untouched.
+   */
+  summarizeSelection?: (selection: readonly string[], scopes: AvailableScopes) => string;
+  /**
    * Containment (cinatra#1607 §VI) — same contract as the single mode.
    * `parentScope` narrows offered options to strict descendants + Personal
    * always (§6.1); `allowedScopes` is the lower-level set/predicate (§6.4),
@@ -845,6 +853,7 @@ function AccessComboboxMultiSelect({
   disabledReasons,
   toggleSelection,
   rowState,
+  summarizeSelection,
   parentScope,
   allowedScopes,
 }: AccessComboboxMultiProps) {
@@ -1031,10 +1040,9 @@ function AccessComboboxMultiSelect({
   };
 
   const multiSelection = value;
-  const multiSummary = resolveAccessSummary(
-    multiSelection as AgentAuthPolicyVisibility[],
-    scopes,
-  );
+  const multiSummary = summarizeSelection
+    ? summarizeSelection(multiSelection, scopes)
+    : resolveAccessSummary(multiSelection as AgentAuthPolicyVisibility[], scopes);
   const renderMultiTriggerLabel = () => (
     <span className="flex items-center truncate">
       <span className="text-foreground truncate">{multiSummary}</span>

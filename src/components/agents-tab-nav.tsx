@@ -6,6 +6,16 @@ import { AGENTS_NAV, type AgentsTabValue } from "@/lib/agents-nav";
 
 type AgentsTabNavProps = {
   activeTab: AgentsTabValue;
+  /**
+   * cinatra#3228 — true when the view mounts a Toolbar directly beneath this
+   * strip. The drawing (components reference, Toolbar): "The toolbar sits
+   * directly below the page header and replaces the section rule for that
+   * view — never stack a toolbar and the etched paired rule." So the strip
+   * keeps its tabs and stops drawing its trailing rule; the toolbar takes the
+   * position directly under it. A view with no toolbar (the executions tab,
+   * the empty state) keeps the rule exactly as before.
+   */
+  toolbarBelow?: boolean;
 };
 
 // Route-based tab bar shown on BOTH /agents (All Agents) and
@@ -16,11 +26,11 @@ type AgentsTabNavProps = {
 // rule replaces the section rule a bare <PageHeader> would otherwise draw —
 // pair with `<PageHeader divider={false}>` on both routes (design-system.html
 // §Dividers; same pairing MetricApiNav already uses on /analytics/llm*).
-export function AgentsTabNav({ activeTab }: AgentsTabNavProps) {
+export function AgentsTabNav({ activeTab, toolbarBelow = false }: AgentsTabNavProps) {
   return (
-    <div className="mx-auto mb-4 w-full max-w-7xl px-5 sm:px-8 lg:px-0">
+    <div data-slot="agents-tab-nav" className="mx-auto mb-4 w-full max-w-7xl px-5 sm:px-8 lg:px-0">
       <Tabs value={activeTab}>
-        <TabsListRow>
+        <TabsListRow trailingRule={!toolbarBelow}>
           {AGENTS_NAV.map((item) => (
             <TabsTrigger key={item.value} value={item.value} asChild>
               <Link href={item.href}>{item.label}</Link>

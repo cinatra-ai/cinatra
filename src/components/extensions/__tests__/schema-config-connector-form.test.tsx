@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
 import { toast } from "@/lib/cinatra-toast";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 // Action outcomes (the form-level banner variant + per-row Done/error) toast
 // via the canonical wrapper (cinatra#1109) rather than rendering an in-form
@@ -672,5 +674,264 @@ describe("SchemaConfigConnectorForm — action input scoping (cinatra#2357 / #23
     // because that form is mounted first.
     expect(payload).toEqual({ secondOnlyKey: "v-secondOnlyKey" });
     expect(Object.keys(payload)).not.toContain("firstOnlyKey");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3231 — the record-list field on the connector setup page: the Empty
+// state per the ratified drawing's Empty state component ("Use whenever a list,
+// table, or section has zero content. Always include a single primary action
+// button — never just empty text."), the per-row delete through an AlertDialog
+// (connectors surface §II: "opens an AlertDialog on the --paper ground with a
+// strong hairline header rule — a Cancel outline beside the red … confirm —
+// never a bare browser prompt"), and a field header that carries the label and
+// nothing else (no control the drawing does not give).
+// ---------------------------------------------------------------------------
+
+describe("SchemaConfigConnectorForm — record-list empty state, delete confirm, header (cinatra#3231)", () => {
+  const RECORD_LIST_WITH_DETAIL = {
+    kind: "record-list",
+    label: "Appointment schedules",
+    listActionId: "listItems",
+    deleteActionId: "deleteItem",
+    emptyState: "No appointment schedules yet.",
+    emptyStateDetail: { helper: "Paste a booking page link below to add one.", actionLabel: "Add a schedule" },
+    itemTitleKey: "title",
+    itemBadges: [],
+  };
+  const RECORD_LIST_HEADLINE_ONLY = {
+    kind: "record-list",
+    label: "Registered servers",
+    listActionId: "listItems",
+    deleteActionId: "deleteItem",
+    emptyState: "No external MCP servers registered yet.",
+    itemTitleKey: "title",
+    itemBadges: [],
+  };
+  const ADD_FORM = [
+    { kind: "text", key: "bookingPageUrl", label: "Booking page URL", required: true },
+    { kind: "named-action", label: "Add schedule", actionId: "addItem" },
+  ];
+
+  function listFetch(rows: Array<Record<string, unknown>>, seen: string[] = []) {
+    const fetchMock = vi.fn(async (url: string) => {
+      seen.push(String(url));
+      if (String(url).includes("/actions/listItems")) {
+        return new Response(JSON.stringify({ result: { items: rows } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    return seen;
+  }
+
+  async function flushList() {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("(a) zero rows render the Empty primitive's media slot, headline and helper under the record-list-empty hook — not a bare description line", async () => {
+    listFetch([]);
+    const surface = surfaceOf({ fields: [RECORD_LIST_WITH_DETAIL, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const empty = container.querySelector<HTMLElement>('[data-testid="record-list-empty"]');
+    expect(empty).toBeTruthy();
+    expect(empty!.closest('[data-slot="empty"]')).toBeTruthy();
+    expect(empty!.querySelector('[data-slot="empty-icon"][data-variant="icon"]')).toBeTruthy();
+    expect(empty!.querySelector('[data-slot="empty-title"]')?.textContent).toBe("No appointment schedules yet.");
+    expect(empty!.querySelector('[data-slot="empty-description"]')?.textContent).toBe(
+      "Paste a booking page link below to add one.",
+    );
+    // 14px headline over a 12px helper (text-sm / text-xs).
+    expect(empty!.querySelector('[data-slot="empty-title"]')!.className).toMatch(/\btext-sm\b/);
+    expect(empty!.querySelector('[data-slot="empty-description"]')!.className).toMatch(/\btext-xs\b/);
+    expect(empty!.closest('[data-slot="empty"]')!.className).toMatch(/\btext-center\b/);
+    // Not a FieldDescription line: the hook is no longer a paragraph of text.
+    expect(empty!.tagName).not.toBe("P");
+  });
+
+  it("(b) the empty state carries exactly one primary action, and activating it moves focus to the add form's first input", async () => {
+    listFetch([]);
+    const surface = surfaceOf({ fields: [RECORD_LIST_WITH_DETAIL, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const empty = container.querySelector<HTMLElement>('[data-testid="record-list-empty"]')!;
+    const buttons = empty.querySelectorAll("button");
+    expect(buttons.length).toBe(1);
+    expect(buttons[0].textContent?.trim()).toBe("Add a schedule");
+    await act(async () => {
+      buttons[0].click();
+    });
+    const target = container.querySelector<HTMLInputElement>('input[name="bookingPageUrl"]');
+    expect(target).toBeTruthy();
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("(b2) the action targets the add form that FOLLOWS the list, not an unrelated input declared before it", async () => {
+    listFetch([]);
+    const surface = surfaceOf({
+      fields: [
+        { kind: "text", key: "workspaceName", label: "Workspace name" },
+        RECORD_LIST_WITH_DETAIL,
+        ...ADD_FORM,
+      ],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const empty = container.querySelector<HTMLElement>('[data-testid="record-list-empty"]')!;
+    const buttons = empty.querySelectorAll("button");
+    expect(buttons.length).toBe(1);
+    await act(async () => {
+      buttons[0].click();
+    });
+    const before = container.querySelector<HTMLInputElement>('input[name="workspaceName"]');
+    const target = container.querySelector<HTMLInputElement>('input[name="bookingPageUrl"]');
+    expect(before).toBeTruthy();
+    expect(target).toBeTruthy();
+    expect(document.activeElement).toBe(target);
+    expect(document.activeElement).not.toBe(before);
+  });
+
+  it("(c) `emptyState` alone still validates and renders headline + action; the additive detail key validates and renders both", async () => {
+    // The runtime parser, both shapes. The generator-side validator is locked
+    // to the SAME verdicts on these shapes by the node-env parity suite
+    // (scripts/extensions/__tests__/schema-config-validator-parity.test.ts,
+    // "record-list emptyStateDetail") — the jsdom transform cannot load the
+    // generator module here.
+    for (const field of [RECORD_LIST_HEADLINE_ONLY, RECORD_LIST_WITH_DETAIL]) {
+      expect(parseSchemaConfig({ fields: [field] }).ok, `parser: ${field.label}`).toBe(true);
+    }
+    // Fail-closed on a smuggled key inside the detail.
+    const smuggled = {
+      fields: [{ ...RECORD_LIST_HEADLINE_ONLY, emptyStateDetail: { helper: "h", onClick: "x" } }],
+    };
+    expect(parseSchemaConfig(smuggled).ok).toBe(false);
+
+    // Headline-only renders the headline plus the one action (no helper line).
+    listFetch([]);
+    const surface = surfaceOf({ fields: [RECORD_LIST_HEADLINE_ONLY, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const empty = container.querySelector<HTMLElement>('[data-testid="record-list-empty"]')!;
+    expect(empty.querySelector('[data-slot="empty-title"]')?.textContent).toBe("No external MCP servers registered yet.");
+    expect(empty.querySelector('[data-slot="empty-description"]')).toBeNull();
+    expect(empty.querySelectorAll("button").length).toBe(1);
+  });
+
+  it("(d) the per-row delete opens an AlertDialog with Cancel and a destructive confirm; window.confirm is never called", async () => {
+    listFetch([{ id: "r1", title: "Intro call" }]);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const surface = surfaceOf({ fields: [RECORD_LIST_WITH_DETAIL, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const del = container.querySelector<HTMLButtonElement>('button[aria-label="Delete Intro call"]');
+    expect(del).toBeTruthy();
+    await act(async () => {
+      del!.click();
+      await Promise.resolve();
+    });
+    const dialog = document.body.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(dialog).toBeTruthy();
+    // Header rule + the two actions the drawing names.
+    expect(dialog!.querySelector('[data-slot="alert-dialog-header"]')!.className).toMatch(/divider-etched-after/);
+    const cancel = Array.from(dialog!.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Cancel");
+    expect(cancel).toBeTruthy();
+    const confirmBtn = dialog!.querySelector<HTMLButtonElement>('[data-testid="record-list-delete-confirm"]');
+    expect(confirmBtn).toBeTruthy();
+    expect(confirmBtn!.className).toMatch(/destructive/);
+    // Connector-neutral copy: no connector, vendor or row-type name in the dialog.
+    expect(dialog!.textContent).not.toMatch(/Appointment|schedule|Google/i);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("(e) Cancel fires no delete and leaves the row; confirming fires the delete action exactly once", async () => {
+    const seen = listFetch([{ id: "r1", title: "Intro call" }]);
+    const surface = surfaceOf({ fields: [RECORD_LIST_WITH_DETAIL, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const del = () => container.querySelector<HTMLButtonElement>('button[aria-label="Delete Intro call"]')!;
+    await act(async () => {
+      del().click();
+      await Promise.resolve();
+    });
+    const cancel = Array.from(document.body.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Cancel")!;
+    await act(async () => {
+      cancel.click();
+      await Promise.resolve();
+    });
+    expect(seen.filter((u) => u.includes("/actions/deleteItem")).length).toBe(0);
+    expect(container.querySelectorAll('[data-testid="record-list-item"]').length).toBe(1);
+
+    await act(async () => {
+      del().click();
+      await Promise.resolve();
+    });
+    const confirmBtn = document.body.querySelector<HTMLButtonElement>('[data-testid="record-list-delete-confirm"]')!;
+    await act(async () => {
+      confirmBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(seen.filter((u) => u.includes("/actions/deleteItem")).length).toBe(1);
+  });
+
+  it("(f) the field header row renders the label and nothing else — no button on it", async () => {
+    listFetch([{ id: "r1", title: "Intro call" }]);
+    const surface = surfaceOf({ fields: [RECORD_LIST_WITH_DETAIL, ...ADD_FORM] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    await flushList();
+    const header = container.querySelector<HTMLElement>('[data-testid="record-list-header"]');
+    expect(header).toBeTruthy();
+    expect(header!.querySelectorAll("button").length).toBe(0);
+    expect(header!.textContent?.trim()).toBe("Appointment schedules");
+    expect(header!.children.length).toBe(1);
+  });
+
+  it("(d2) a role-less named-action's declared confirm opens an AlertDialog too — Cancel runs nothing, the confirm runs it once, never a bare prompt", async () => {
+    const seen = listFetch([]);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const surface = surfaceOf({
+      fields: [{ kind: "named-action", label: "Rotate key", actionId: "rotateKey", confirm: "Rotate the key now? Clients using the old key stop working." }],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    const trigger = () => [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Rotate key")!;
+    await act(async () => {
+      trigger().click();
+      await Promise.resolve();
+    });
+    const dialog = document.body.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.textContent).toContain("Rotate the key now?");
+    const cancel = Array.from(dialog!.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Cancel")!;
+    await act(async () => {
+      cancel.click();
+      await Promise.resolve();
+    });
+    expect(seen.filter((u) => u.includes("/actions/rotateKey")).length).toBe(0);
+    await act(async () => {
+      trigger().click();
+      await Promise.resolve();
+    });
+    const confirmBtn = document.body.querySelector<HTMLButtonElement>('[data-testid="named-action-confirm"]')!;
+    expect(confirmBtn.textContent?.trim()).toBe("Rotate key");
+    await act(async () => {
+      confirmBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(seen.filter((u) => u.includes("/actions/rotateKey")).length).toBe(1);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("window.confirm no longer appears anywhere in the renderer", () => {
+    const src = readFileSync(
+      path.resolve(__dirname, "..", "schema-config-connector-form.tsx"),
+      "utf8",
+    );
+    expect(src).not.toMatch(/window\.confirm/);
+    expect(src).not.toMatch(/RefreshCwIcon/);
   });
 });

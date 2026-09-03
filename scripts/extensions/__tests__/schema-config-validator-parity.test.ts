@@ -259,6 +259,35 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
     label: "root carrier-key smuggle (unknown root key)",
     raw: { fields: [{ kind: "text", key: "host", label: "Host" }], html: "<script>" },
   },
+  // ---- cinatra#3231 record-list `emptyStateDetail` (valid + each invalid family) ----
+  {
+    label: "record-list: emptyState alone (back-compat)",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail helper + actionLabel",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: { helper: "Paste a link below.", actionLabel: "Add one" }, itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail helper only",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: { helper: "h" }, itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail carrier-key smuggle",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: { helper: "h", onClick: "x" }, itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail non-string value",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: { actionLabel: 7 }, itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail not an object",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: "h", itemTitleKey: "t", itemBadges: [] }] },
+  },
+  {
+    label: "record-list: emptyStateDetail empty object",
+    raw: { fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", emptyStateDetail: {}, itemTitleKey: "t", itemBadges: [] }] },
+  },
 ];
 
 // Direct structural lockstep on the per-kind key allowlists themselves. The
@@ -350,6 +379,41 @@ describe("generator validateConfigSchema ⇄ parseSchemaConfig parity", () => {
         const rawFields = (raw as { fields: unknown[] }).fields;
         expect(parsed.surface.fields).toHaveLength(rawFields.length);
       }
+    });
+  }
+});
+
+// cinatra#3231 — the additive record-list `emptyStateDetail` declaration is
+// admitted and validated in BOTH validators: the two shipped shapes ACCEPT
+// (headline-only back-compat, headline + detail), the malformed families
+// REJECT — asserted as verdicts, not merely as agreement.
+describe("record-list emptyStateDetail — admitted and validated in BOTH validators (cinatra#3231)", () => {
+  const recordList = (extra: Record<string, unknown>) => ({
+    fields: [{ kind: "record-list", label: "L", listActionId: "list", emptyState: "None yet.", itemTitleKey: "t", itemBadges: [], ...extra }],
+  });
+  const ACCEPT: Array<[string, Record<string, unknown>]> = [
+    ["emptyState alone (back-compat)", {}],
+    ["helper + actionLabel", { emptyStateDetail: { helper: "Paste a link below.", actionLabel: "Add one" } }],
+    ["helper only", { emptyStateDetail: { helper: "h" } }],
+    ["actionLabel only", { emptyStateDetail: { actionLabel: "a" } }],
+  ];
+  const REJECT: Array<[string, Record<string, unknown>]> = [
+    ["carrier-key smuggle", { emptyStateDetail: { helper: "h", onClick: "x" } }],
+    ["non-string value", { emptyStateDetail: { actionLabel: 7 } }],
+    ["empty string", { emptyStateDetail: { helper: "" } }],
+    ["not an object", { emptyStateDetail: "h" }],
+    ["empty object", { emptyStateDetail: {} }],
+  ];
+  for (const [label, extra] of ACCEPT) {
+    it(`both validators ACCEPT: ${label}`, () => {
+      expect(validateConfigSchema(recordList(extra))).toEqual([]);
+      expect(parseSchemaConfig(recordList(extra)).ok).toBe(true);
+    });
+  }
+  for (const [label, extra] of REJECT) {
+    it(`both validators REJECT: ${label}`, () => {
+      expect(validateConfigSchema(recordList(extra))).not.toEqual([]);
+      expect(parseSchemaConfig(recordList(extra)).ok).toBe(false);
     });
   }
 });

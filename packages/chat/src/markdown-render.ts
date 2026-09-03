@@ -10,6 +10,7 @@
 import { Marked, type Tokens } from "marked";
 import { getHighlightedSync, type ThemeName } from "./syntax-highlight";
 import { preprocessMath, restoreMath } from "./math-render";
+import { cellPlainText, resolveColumnRightAligned } from "./table-cell-alignment";
 // The chart PAYLOAD schema + validator are host-owned and live in the shared
 // protocol contract (epic #1620 AC2); the `chart` renderable-view COMPONENT is
 // extension-provided (@cinatra-ai/chart-artifact via the generated cinatra.views
@@ -82,11 +83,6 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
         : `<a href="${escapeHtml(safe)}" class="${LINK_CLASSES}">${safeLabel}</a>`;
     appLinks.push({ html, label });
     return `%%APPLINK_${idx}%%`;
-  }
-
-  // Resolve applink placeholders to plain text (for CSV data attributes).
-  function resolveAppLinksAsText(text: string): string {
-    return text.replace(/%%APPLINK_(\d+)%%/g, (_, idx) => appLinks[parseInt(idx)]?.label ?? "");
   }
 
   const md = new Marked({
@@ -206,6 +202,23 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
         const headerCells = token.header.map((cell) => this.parser.parseInline(cell.tokens));
         const bodyRows = token.rows.map((row) => row.map((cell) => this.parser.parseInline(cell.tokens)));
 
+        // Per-column alignment (cinatra#3230) — the ratified drawing's Table:
+        // "never centre body cells; right-align numerics and timestamps". A
+        // column is right-aligned when (a) the delimiter row declares it so,
+        // else (b) every non-empty body cell parses as a number or a timestamp
+        // under the deterministic grammar in ./table-cell-alignment. The
+        // grammar reads the cell's DISPLAYED text (inline markup such as
+        // `**12**`, `` `12` `` or a linked date stripped via its tokens), not
+        // the raw markdown. A centred delimiter is not honoured: no body cell
+        // ever carries a centre class. The header row keeps the renderer's
+        // fixed `text-left` — the sentence governs body cells only.
+        const rightAligned = token.header.map((_, col) =>
+          resolveColumnRightAligned(
+            token.align[col] ?? null,
+            token.rows.map((row) => cellPlainText(row[col]?.tokens ?? [])),
+          ),
+        );
+
         // audit-allow: markdown-content
         const ths = headerCells
           .map((c) => `<th class="border-b border-line bg-surface px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">${c}</th>`)
@@ -217,24 +230,20 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
           .map((cells, rowIndex) => {
             // audit-allow: markdown-content
             const tds = cells
-              .map((c) => `<td class="border-b border-line px-4 py-3 text-sm text-foreground">${c.replace(/([^\n]) • /g, "$1<br>• ")}</td>`)
+              .map((c, col) => `<td class="border-b border-line px-4 py-3 text-sm text-foreground${rightAligned[col] ? " text-right" : ""}">${c.replace(/([^\n]) • /g, "$1<br>• ")}</td>`)
               .join("");
             // audit-allow: markdown-content
             return `<tr data-chat-table-row="${rowIndex}" class="${rowIndex >= pageSize ? "hidden" : ""}">${tds}</tr>`;
           })
           .join("");
 
-        // CSV for download — use raw text from tokens, resolve applinks to plain text.
-        const csvHeaderCells = token.header.map((cell) => cell.text);
-        const csvBodyRows = token.rows.map((row) => row.map((cell) => cell.text));
-        const csvRows = [
-          csvHeaderCells.map((c) => `"${resolveAppLinksAsText(c).replace(/"/g, '""')}"`).join(","),
-          ...csvBodyRows.map((cells) => cells.map((c) => `"${resolveAppLinksAsText(c).replace(/"/g, '""')}"`).join(",")),
-        ];
-        const csvData = csvRows.join("\\n");
-
+        // The frame carries the table's scroll container and, past the page
+        // size, the row-pagination row — nothing else. The drawing's chat
+        // thread gives a table no header bar, and its Table component no copy
+        // or download control (cinatra#3230); the thread's parts "borrow
+        // rather than invent".
         // audit-allow: markdown-content
-        return `<div class="my-3 overflow-hidden rounded-lg border border-line bg-card" data-chat-table-frame><div class="flex items-center justify-end gap-1 border-b border-line px-2 py-1"><button type="button" data-table-id="${tableId}" data-action="copy" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Copy table"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button><button type="button" data-table-id="${tableId}" data-action="download" data-csv="${csvData.replace(/"/g, "&quot;")}" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Download CSV"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div class="overflow-x-auto"><table id="${tableId}" class="min-w-full caption-bottom text-sm"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>${shouldPaginate ? `<div class="flex flex-col gap-2 border-t border-line bg-card px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between" data-chat-table-pagination data-page="0" data-page-size="${pageSize}" data-row-count="${bodyRows.length}"><span data-chat-table-range-label>1-${Math.min(pageSize, bodyRows.length)} of ${bodyRows.length}</span><div class="flex items-center gap-2"><span data-chat-table-page-label>Page 1 of ${pageCount}</span><div class="flex items-center gap-1"><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="previous" disabled>Previous</button><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="next" ${pageCount <= 1 ? "disabled" : ""}>Next</button></div></div></div>` : ""}</div>`;
+        return `<div class="my-3 overflow-hidden rounded-lg border border-line bg-card" data-chat-table-frame><div class="overflow-x-auto"><table id="${tableId}" class="min-w-full caption-bottom text-sm"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>${shouldPaginate ? `<div class="flex flex-col gap-2 border-t border-line bg-card px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between" data-chat-table-pagination data-page="0" data-page-size="${pageSize}" data-row-count="${bodyRows.length}"><span data-chat-table-range-label>1-${Math.min(pageSize, bodyRows.length)} of ${bodyRows.length}</span><div class="flex items-center gap-2"><span data-chat-table-page-label>Page 1 of ${pageCount}</span><div class="flex items-center gap-1"><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="previous" disabled>Previous</button><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="next" ${pageCount <= 1 ? "disabled" : ""}>Next</button></div></div></div>` : ""}</div>`;
       },
       // Suppress default table sub-renderers (we handle everything in table()).
       tablerow() { return ""; },

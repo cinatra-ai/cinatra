@@ -116,7 +116,8 @@ export type ConnectorActionRole = "connect" | "disconnect";
  * `ConnectorActionRole`). PRECEDENCE: for `role:"disconnect"` the renderer's
  * neutral AlertDialog is the sole confirmation path, so a `confirm` string is
  * IGNORED (the two must never stack a prompt on a dialog); a role-less named
- * action keeps its `confirm` window-prompt behavior unchanged.
+ * action's `confirm` text is the body of the renderer's AlertDialog — never a
+ * bare browser prompt (cinatra#3231; connectors surface §II).
  */
 export type NamedActionField = {
   kind: "named-action";
@@ -224,6 +225,13 @@ export type RecordListBadgeVariant =
   | "info"
   | "ghost"
   | "muted";
+export type RecordListEmptyStateDetail = {
+  /** The 12px helper line beneath the headline. */
+  helper?: string;
+  /** The single primary action's label (it moves focus to the add form). */
+  actionLabel?: string;
+};
+
 export type RecordListBadge = {
   /** Row field whose TRUTHY value (boolean true, or a non-empty string) shows this badge. */
   key: string;
@@ -245,7 +253,14 @@ export type RecordListField = {
   listActionId: string;
   /** Host named action the per-row delete button POSTs `{ id }` to (optional). */
   deleteActionId?: string;
+  /** The zero-row headline (the Empty state's 14px headline). */
   emptyState: string;
+  /**
+   * cinatra#3231 — the Empty state's helper line and primary-action label,
+   * separable from the headline. Optional and additive: a field declaring only
+   * `emptyState` renders the headline plus a default-labelled action.
+   */
+  emptyStateDetail?: RecordListEmptyStateDetail;
   /** Row field used as the item title. */
   itemTitleKey: string;
   /** Row field used as the item subtitle (optional). */
@@ -358,6 +373,10 @@ export type ParseResult =
   | { ok: false; errors: string[] };
 
 const KEY_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+// cinatra#3231 — the record-list `emptyStateDetail` object's own allowlist
+// (fail-closed like every nested object: badges, options, variants). Kept in
+// lockstep with the generator's copy in generate-extension-manifest.mjs.
+const RECORD_LIST_EMPTY_STATE_DETAIL_KEYS: ReadonlySet<string> = new Set(["helper", "actionLabel"]);
 const FIELD_KINDS = new Set<SchemaConfigFieldKind>([
   "text",
   "secret",
@@ -396,6 +415,7 @@ export const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<stri
     "listActionId",
     "deleteActionId",
     "emptyState",
+    "emptyStateDetail",
     "itemTitleKey",
     "itemSubtitleKey",
     "itemBadges",
@@ -826,6 +846,32 @@ function validateField(
         errors.push(`${at}: record-list requires "emptyState"`);
         return null;
       }
+      let emptyStateDetail: RecordListEmptyStateDetail | undefined;
+      if (raw.emptyStateDetail !== undefined) {
+        const dAt = `${at}.emptyStateDetail`;
+        const dRaw = raw.emptyStateDetail;
+        if (!isObj(dRaw)) {
+          errors.push(`${dAt}: must be an object`);
+          return null;
+        }
+        if (!rejectUnknownKeys(dRaw, RECORD_LIST_EMPTY_STATE_DETAIL_KEYS, dAt, errors)) return null;
+        if (dRaw.helper !== undefined && !str(dRaw.helper)) {
+          errors.push(`${dAt}: "helper" must be a non-empty string`);
+          return null;
+        }
+        if (dRaw.actionLabel !== undefined && !str(dRaw.actionLabel)) {
+          errors.push(`${dAt}: "actionLabel" must be a non-empty string`);
+          return null;
+        }
+        if (dRaw.helper === undefined && dRaw.actionLabel === undefined) {
+          errors.push(`${dAt}: requires "helper" and/or "actionLabel"`);
+          return null;
+        }
+        emptyStateDetail = {
+          ...(str(dRaw.helper) ? { helper: dRaw.helper } : {}),
+          ...(str(dRaw.actionLabel) ? { actionLabel: dRaw.actionLabel } : {}),
+        };
+      }
       if (!str(raw.itemTitleKey)) {
         errors.push(`${at}: record-list requires "itemTitleKey"`);
         return null;
@@ -871,6 +917,7 @@ function validateField(
         listActionId: raw.listActionId,
         ...(str(raw.deleteActionId) ? { deleteActionId: raw.deleteActionId } : {}),
         emptyState: raw.emptyState,
+        ...(emptyStateDetail ? { emptyStateDetail } : {}),
         itemTitleKey: raw.itemTitleKey,
         ...(str(raw.itemSubtitleKey) ? { itemSubtitleKey: raw.itemSubtitleKey } : {}),
         itemBadges,
