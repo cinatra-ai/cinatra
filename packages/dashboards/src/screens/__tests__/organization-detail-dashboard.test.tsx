@@ -201,6 +201,59 @@ describe("the Dashboards tab body on the organization landing (cinatra#2807 fix 
     expect(html).toContain('href="/organizations/org-1/settings"');
   });
 
+  // CONVERGENCE round. Widening the READ must not also widen the WRITE surface.
+  // `actorMayWriteScope` cannot be relied on to keep Remove suppressed out
+  // here: its FIRST arm is `if (actor.platformRole === "platform_admin") return
+  // true`, ahead of every tenant check, so a platform admin viewing a member
+  // org that is not their active one would get `canRemove` true on every listed
+  // row — an affordance this landing never offered, because the whole panel
+  // used to be withheld. The mount therefore withholds the removal source
+  // itself outside the active tenant: suppression, not a disabled control.
+  test("ACTIVE elsewhere: the mount withholds removal, so no row can offer Remove", async () => {
+    primeSession("u1", "org-2");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    await renderScreen();
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: false,
+    });
+  });
+
+  test("ACTIVE elsewhere as a PLATFORM ADMIN: removal is still withheld", async () => {
+    h.getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    h.getActorContext.mockResolvedValue({
+      principalId: "u1",
+      organizationId: "org-2",
+      // The cross-tenant writer the scope-ratchet convention grants. The read
+      // widens for them like any member; the Remove affordance does not.
+      platformRole: "platform_admin",
+    });
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    const html = await renderScreen();
+    // The drawn read still lands — that is fix leg 5's whole point.
+    expect(html).toContain('data-testid="scope-dashboards-panel"');
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: false,
+    });
+  });
+
+  test("active org matches: removal IS offered (the shipped behaviour is untouched)", async () => {
+    primeSession("u1", "org-1");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    await renderScreen();
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: true,
+    });
+  });
+
   test("active org matches: the §IX.1 add source IS built, for THIS org's scope (cinatra#2474 PR3)", async () => {
     primeSession("u1", "org-1");
     h.isMember.mockResolvedValue(true);

@@ -110,11 +110,20 @@ export async function OrganizationDetailDashboardPage({
   //
   // So the fence now covers exactly the two things that BIND a mutation to the
   // ambient tenant — the §IX.1 add-to-scope source and the installed-catalog
-  // node — and no longer covers the read. Nothing widens: the read is keyed on
-  // the VIEWED org's own id (never the session's active org) and only runs
-  // after `readUserIsOrgMember` above confirmed membership of THIS org, and
-  // `actorMayWriteScope` inside the section is tenant-fenced in its own right,
-  // so Remove stays suppressed here too.
+  // node — and no longer covers the read. The read is keyed on the VIEWED org's
+  // own id (never the session's active org) and only runs after
+  // `readUserIsOrgMember` above confirmed membership of THIS org.
+  //
+  // REMOVE IS FENCED EXPLICITLY, not by assumption (convergence round). An
+  // earlier draft of this comment claimed `actorMayWriteScope` kept Remove
+  // suppressed out here "in its own right". It does not: its first arm is
+  // `if (actor.platformRole === "platform_admin") return true`, ahead of every
+  // tenant check, so a platform admin viewing a member org that is not their
+  // active one would have had `canRemove` true on every listed row — an
+  // affordance this landing never offered before, because the whole panel used
+  // to be withheld. So the mount passes `allowRemoval` and withholds the
+  // removal source outside the active tenant: the READ widens (which is the
+  // drawing's rule), the WRITE surface does not.
   const actor = await getActorContext();
   const actorIsActiveInThisOrg = actor?.organizationId === id;
   const scope = { kind: "organization", scopeId: id, orgId: id } as const;
@@ -207,6 +216,7 @@ export async function OrganizationDetailDashboardPage({
               actor={actor}
               scope={scope}
               entityLabel={scopeLabel}
+              allowRemoval={actorIsActiveInThisOrg}
             />
           </ScopeAddSourcesProvider>
         ) : null}

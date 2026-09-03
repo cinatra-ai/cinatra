@@ -34,6 +34,7 @@ export async function ScopeDashboardsSection({
   actor,
   scope,
   entityLabel,
+  allowRemoval = true,
 }: {
   actor: ActorContext;
   scope: ListingScope;
@@ -41,6 +42,21 @@ export async function ScopeDashboardsSection({
    *  Northwind Analytics", "Project: Q3 Outbound". The hosting page owns the
    *  name (it resolved it behind its own read gate); the tab never reads one. */
   entityLabel: string;
+  /**
+   * May this MOUNT offer Remove at all? (cinatra#2807 fix leg 5, convergence
+   * round.) Default `true` — the landings that only ever render inside the
+   * actor's own tenant keep the shipped behaviour untouched.
+   *
+   * A landing that renders for a viewer OUTSIDE the ambient tenant passes
+   * `false`. `actorMayWriteScope` is NOT sufficient on its own there: its very
+   * first arm is `if (actor.platformRole === "platform_admin") return true`, so
+   * a platform admin's `canRemove` is true across tenants by the deliberate
+   * scope-ratchet convention. That convention is fine where the surface was
+   * already reachable, but a mount that newly renders outside the active tenant
+   * must not ALSO newly offer a cross-tenant Remove it never offered before.
+   * Withholding the source is suppression, not a disabled control (§IX.2).
+   */
+  allowRemoval?: boolean;
 }) {
   // Contain a service failure in the DESIGNED error frame (§IX/§X data-state
   // "error") instead of bubbling an unhandled Next 500 up through the route: the
@@ -65,9 +81,12 @@ export async function ScopeDashboardsSection({
   // Bind the server-derived scope to the action (Next server-action .bind), so
   // the client drives it with no scope argument — it can neither read nor forge
   // the scope.
-  const removal: ScopeListingRemovalSource = {
-    removeListing: scopeRemoveListingAction.bind(null, scopeArg),
-  };
+  // Capability minimization: where the mount withholds removal the client is
+  // handed NO removal handle at all, so no Remove renders on any row. The
+  // server action re-authorizes independently either way.
+  const removal: ScopeListingRemovalSource | undefined = allowRemoval
+    ? { removeListing: scopeRemoveListingAction.bind(null, scopeArg) }
+    : undefined;
   return (
     <ScopeDashboardsTab
       data={data}

@@ -150,7 +150,16 @@ export async function listUserHomedDashboards(input: {
  * The dashboards LISTED in `scope` (the secondary-listing junction join). Each
  * row carries the dashboard's OWN owner axis + entity anchor so the host can
  * render "home: <its canonical home>" in the meta line (§IX) and derive its
- * canonical href. Tenant-fenced by the junction's denormalized org.
+ * canonical href.
+ *
+ * TENANT-FENCED ON BOTH SIDES (cinatra#2807 fix leg 5, convergence round). The
+ * junction's denormalized `organization_id` is filtered, AND the joined
+ * dashboard's own `organization_id` must equal the scope's tenant. The
+ * denormalized column alone is not a boundary: no composite constraint ties it
+ * to `dashboards.organization_id`, so a malformed, migrated or directly
+ * inserted link row would otherwise surface another tenant's dashboard id, name
+ * and canonical path to members of the viewed scope. The homed read has always
+ * filtered `dashboards.organization_id`; this makes the listed read agree.
  */
 export async function listScopeListedDashboards(
   scope: ListingScope,
@@ -176,6 +185,8 @@ export async function listScopeListedDashboards(
         eq(dashboardEntityLinks.entityType, scope.kind),
         eq(dashboardEntityLinks.entityId, scope.scopeId),
         eq(dashboardEntityLinks.organizationId, scope.orgId),
+        // The joined dashboard's OWN tenant must match too — see the header.
+        eq(dashboards.organizationId, scope.orgId),
         NOT_ARCHIVED_LIVE(dashboards),
       ),
     );
