@@ -5,7 +5,7 @@
  *
  * `control-token-parity.test.ts` states the hazard this file finishes: every
  * chrome defect exists TWICE, once in the host token layer at
- * `src/app/globals.css` and once in `@cinatra-ai/design`, the package that
+ * `src/app/globals.css` and once in the `packages/design` package that
  * ships the same layer to portable surfaces — the SDK primitives an extension
  * screen renders outside this app shell. Fix leg 2 moved the dark ramp's action
  * colour onto the one indigo the road names. A recipe in
