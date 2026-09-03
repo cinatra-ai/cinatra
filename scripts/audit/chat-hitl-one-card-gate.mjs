@@ -617,6 +617,35 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // tree) stay off the list: §7.2 as amended 2026-08-23 removes both
       // drawings.
       //
+      // `released` IS REMOVED, AND NOTHING TAKES ITS PLACE (cinatra#3174 fix
+      // leg 2) — the second time this list has retired a field with the reading
+      // that read it, and for the same reason as the first. `released` marks
+      // the side-effect gate OPENING, not the firing. §VI names five readings —
+      // first shown, configured, expired, "Fired, one-off — the schedule was
+      // spent", "Fired, recurring — runs still to come" — and each is keyed on
+      // the phase and on whether the schedule has FIRED; the section carries no
+      // reading for a gate that opened, and forbids one standing in: "No
+      // summary box is ever drawn, no status label, and nothing stands between
+      // the reader and the form — the rows are the reading."
+      //
+      // Fix leg 1 acted on that: the first graded proof round drew the spent
+      // reading over a run whose gate had opened and which then failed without
+      // ever starting, so the election moved to `firedOnce` (carried BESIDE
+      // this body, for the `.strict()` reason recorded in the view module) and
+      // the status label that was this field's last reader was removed. A field
+      // no drawing may read is not an authorized body field, so it leaves the
+      // list — the sentence this row already wrote for `canRelease`, applied to
+      // the field beside it.
+      //
+      // IT STAYS ON THE WIRE, and that is not the same claim. A stale
+      // bundle's own copy of the settled schema declares `released` a REQUIRED
+      // key, and a missing required key fails that parse, so the producer goes
+      // on sending it exactly as it goes on sending `canRelease` — dropping the
+      // emission would blank every settled schedule card on such a tab. Pruning it from the protocol is
+      // the wire change with its own version story this row already names
+      // below, and is deliberately not folded in here. Both halves are pinned
+      // in `scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs`.
+      //
       // `canRelease` IS REMOVED AND `stopped` TAKES ITS PLACE (cinatra#2972).
       // Plan (A) §7.2 as amended 2026-08-25 withdrew the control it authorized:
       // "there is no Run now". A field no drawing may read is not an authorized
@@ -633,7 +662,6 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "restrictedReason",
         "triggerType",
         "timezone",
-        "released",
         "arming",
         "canSave",
         "canCancel",

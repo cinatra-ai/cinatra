@@ -257,11 +257,40 @@ export const triggerScheduleProposalSettledViewSchema = z
     superseded: z.boolean().optional(),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
-    /** True once the gate has been opened. For a ONE-OFF and an IMMEDIATE
-     *  trigger that IS the firing, and the card freezes on it. For a RECURRING
-     *  schedule it says nothing — a tick opens the COPY's gate, never this
-     *  run's — so the recurring readings key off `stopped` and `canCancel`
-     *  instead (cinatra#2972). */
+    /**
+     * True once the side-effect gate has been opened.
+     *
+     * A COMPATIBILITY SHIM, READ BY NOBODY (cinatra#3174 fix leg 2) — the same
+     * standing `canRelease` holds below, reached by the same road.
+     *
+     * IT USED TO BE THE ONE-OFF'S FIRING. §VI names five readings and each is
+     * keyed on the phase and on whether the schedule has FIRED; this field
+     * marks the gate OPENING, which is not the same event. The first graded
+     * proof round of cinatra#3193 drew "Fired, one-off — the schedule was
+     * spent", read-only rows and no floor, over a run whose gate had opened and
+     * which then failed without ever starting. Fix leg 1 moved every reading
+     * onto `firedOnce` — the tick's own stamp for a recurring schedule, the
+     * gate stamp READ TOGETHER WITH THE RUN'S OWN ROW for a one-off — and
+     * removed the status label that was this field's last reader, since §VI
+     * draws none on any reading. No renderer consults this key now, and the
+     * one-card gate's authorized body list no longer names it.
+     *
+     * IT IS STILL EMITTED, as the resolver's honest answer rather than a
+     * constant, because a client still running an older bundle carries its own
+     * copy of this object in which `released` is a REQUIRED key — and a missing
+     * required key fails that parse, `.strict()` or not. (`.strict()` is the
+     * other direction: it is what makes ADDING a key to this object a breaking
+     * change, which is why `firedOnce` travels beside the body instead.)
+     * Dropping the emission would therefore blank every settled schedule card
+     * on such a tab — a wider harm than one unread boolean on the wire. Removable once no bundle predating fix
+     * leg 1 can still be live; the schema entry goes with it. The value stays
+     * live SERVER-side either way — `ProposalResolution.released` is what
+     * refuses a re-save on a spent one-off — so this is a wire retirement, not
+     * a signal's.
+     *
+     * Pinned in `scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs` and
+     * in `trigger-schedule-proposal-card-wire.test.ts`.
+     */
     released: z.boolean(),
     /**
      * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)? NOT HERE - IT IS

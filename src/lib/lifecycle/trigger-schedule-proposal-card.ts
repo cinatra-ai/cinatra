@@ -325,6 +325,17 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // the run's own Trigger tab. It is deliberately empty here rather than
       // wrong: S2 mounts the shared step tree, which reads it authoritatively.
       gatedSteps: [],
+      // READ BY NO RENDERER, AND STILL SENT (cinatra#3174 fix leg 2). Every
+      // §VI reading is keyed on the phase and on whether the schedule has
+      // FIRED, never on this gate stamp — see the field's own note in
+      // `trigger-schedule-proposal-view.ts` for why, and the one-card gate's
+      // contract row for the authorized list it left. The emission stays
+      // because a stale bundle's copy of the settled schema declares this a
+      // REQUIRED key and would fail the parse without it, exactly as for
+      // `canRelease` below.
+      //
+      // `resolved.released` itself is NOT retired: it is what `canSaveInstalled`
+      // refuses a spent one-off's re-save on. Only the wire reading is gone.
       released: resolved.released,
       // OMITTED UNLESS TRUE, for the reason `superseded` is (cinatra#2972).
       ...(resolved.stopped ? { stopped: true as const } : {}),
