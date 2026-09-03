@@ -387,9 +387,11 @@ export function scheduleReadingOf(
   body: TriggerScheduleProposalViewBody,
   /** The fired signal, off the resolve answer's own aside (cinatra#3193) — see
    *  `LifecycleCardAsideByKind` for why it does not travel inside the body.
-   *  Absent, from a server that predates the reading, means "not fired", which
-   *  leaves the one-off family reading exactly off `released` as it always
-   *  did. */
+   *  Absent, from a server that predates the reading, means "not fired": BOTH
+   *  families then draw the configured reading, form intact. It does NOT fall
+   *  back to `released` -- no reading is keyed on the gate stamp any more
+   *  (cinatra#3174 fix leg 2), and a schedule whose run never happened must
+   *  keep its own form rather than take a spent reading it cannot correct. */
   firedOnce: boolean = false,
 ): ScheduleReading {
   if (body.phase === "proposal") return "first-shown";
