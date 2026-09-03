@@ -288,8 +288,13 @@ export async function promoteMatchedArtifactType(input: {
       row?.latestRevision &&
       input.ownType &&
       row.objectType === input.ownType.typeId &&
-      (personAsserted ||
-        (input.confirmed && matcher !== null && matcher.confidence >= matcher.threshold)) &&
+      // BOTH ROADS ANSWER TO THE CONFIRMATION. The plan refuses an unconfirmed
+      // caller on either road, and the completion of an interrupted promotion
+      // can be no cheaper than the promotion it completes; the person's road
+      // read as if it stood on its own here, which is an asymmetry and not a
+      // second rule.
+      input.confirmed &&
+      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
       mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
       const landed = appendPromotionRevision({
