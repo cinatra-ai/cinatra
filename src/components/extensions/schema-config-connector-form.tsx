@@ -1156,10 +1156,22 @@ function RecordListRow({
                   ) : null}
                   <div className="flex flex-wrap gap-1 pt-1">
                     {field.itemBadges
-                      .filter((b) => rowTruthy(row, b.key))
+                      // A showsValue badge is gated on its RENDERED text, not on
+                      // rowTruthy: a whitespace-only value would otherwise draw a
+                      // visually empty badge carrying only its sr-only qualifier.
+                      .filter((b) =>
+                        b.showsValue ? rowText(row, b.key).trim().length > 0 : rowTruthy(row, b.key),
+                      )
                       .map((b) => (
                         <Badge key={b.key} variant={BADGE_VARIANT_MAP[b.variant]}>
-                          {b.label}
+                          {b.showsValue ? (
+                            <>
+                              <span className="sr-only">{`${b.label}: `}</span>
+                              <span data-testid="record-list-badge-value">{rowText(row, b.key)}</span>
+                            </>
+                          ) : (
+                            b.label
+                          )}
                         </Badge>
                       ))}
                   </div>
