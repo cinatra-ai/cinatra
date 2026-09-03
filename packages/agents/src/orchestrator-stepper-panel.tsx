@@ -64,6 +64,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
+import { gateNamingStep } from "./run-stepper-steps";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
@@ -1840,10 +1841,6 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // null-safe: a panel with no template name and no ladder hands the card
   // nothing, and the header draws the word alone rather than an invented line.
   const gateAgentLabel = templateName.trim().length > 0 ? templateName.trim() : null;
-  const gateStep =
-    stepperSteps.length > 0 && currentStepNumber !== null
-      ? { index: toDisplayIndex(currentStepNumber), total: stepperSteps.length }
-      : null;
 
   const activeStep = (() => {
     if (status === "pending_input" || status === "queued") return 1;
@@ -1863,6 +1860,18 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     }
     return 1;
   })();
+
+  // AND WHERE THE GATED STEP SITS (fix leg 7, corrected at convergence). This
+  // read the LIVE interrupt alone, and a completed run has none — the resume
+  // clears it — so the review card a finished run draws lost its step segment
+  // exactly on the reading a reviewer arrives at most often. The ladder is
+  // still there to be read, so the step falls back to the one the rail is
+  // showing, bounded by the ladder's own length. No ladder, no segment.
+  const gateStep = gateNamingStep({
+    ladderLength: stepperSteps.length,
+    currentDisplayIndex: currentStepNumber !== null ? toDisplayIndex(currentStepNumber) : null,
+    activeStep,
+  });
 
   // ---------------------------------------------------------------------------
   // Spinner label — always shows the step the user is currently waiting for.

@@ -98,14 +98,27 @@ type PageProps = {
 async function loadRunStepsContext(
   runId: string,
   reviewTaskId: string,
-): Promise<{ steps: ReviewRunStep[]; activeStep: number; templateId: string | null }> {
+): Promise<{
+  steps: ReviewRunStep[];
+  activeStep: number;
+  templateId: string | null;
+  /** The agent as a person names it, for the gate header's own naming line. */
+  templateName: string | null;
+}> {
   let runSteps: ReviewRunStep[] = [];
   let templateId: string | null = null;
+  let templateName: string | null = null;
   try {
     const run = await readAgentRunById(runId);
     if (run) {
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+      // THE GATE HEADER'S NAMING, ON THIS HOST TOO (cinatra#3080, fix leg 7
+      // convergence). The template this page already reads for the rail IS the
+      // agent the drawing's header names; not handing it down left the review
+      // SCREEN — the surface the drawing grades — drawing the word alone while
+      // the run card beside it drew the full line.
+      templateName = template?.name?.trim() ? template.name.trim() : null;
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
       runSteps = buildRunStepperSteps(policySteps).map((s) => ({ index: s.index, label: s.label }));
     }
@@ -156,12 +169,14 @@ async function loadRunStepsContext(
       steps: [...runSteps, { index: reviewIndex, label: "Review" }],
       activeStep: reviewIndex,
       templateId,
+      templateName,
     };
   }
   return {
     steps: [...runSteps, ...gateSteps],
     activeStep: runSteps.length + 1 + activeOffset,
     templateId,
+    templateName,
   };
 }
 
@@ -267,7 +282,10 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
   // gate is the prompt window at the foot — see below.
 
-  const { steps, activeStep, templateId } = await loadRunStepsContext(runId, reviewTaskId);
+  const { steps, activeStep, templateId, templateName } = await loadRunStepsContext(
+    runId,
+    reviewTaskId,
+  );
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
@@ -411,6 +429,14 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   // exchange with the RUN (cinatra#3141 item 1); the card draws
                   // the window now, so the page names the run and mounts none.
                   runId={runId}
+                  // AND THE HEADER'S NAMING (fix leg 7 convergence). Every
+                  // segment is one THIS page already resolved for the rail on
+                  // its left, so the line and the rail cannot disagree: the
+                  // agent's own name, and where this gate sits in the ladder
+                  // the rail draws. A run whose template cannot be read hands
+                  // down null and the header draws the word alone.
+                  agentLabel={templateName}
+                  step={steps.length > 0 ? { index: activeStep, total: steps.length } : null}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>

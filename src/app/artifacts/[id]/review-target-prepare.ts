@@ -58,6 +58,7 @@ import {
 } from "@/lib/artifacts/artifact-review-preparation";
 
 import {
+  artifactContentCapFor,
   buildArtifactContentProjection,
   type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
@@ -110,21 +111,37 @@ async function readPinnedRevisionText(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<string | null> {
-  const resolved = resolveArtifactVersionForServe({
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-  });
-  if (!resolved) return null;
   try {
+    // THE RESOLUTION READS THE DATABASE, so it belongs INSIDE the guard with
+    // the read it addresses (corrected at convergence). Outside it, a resolver
+    // that threw rejected `buildProps`, and the preparation core has no catch
+    // of its own: one unreadable revision took the WHOLE review surface down
+    // instead of flooring one target, which is the opposite of the channel's
+    // "every failure is a named absence" contract.
+    const resolved = resolveArtifactVersionForServe({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+    });
+    if (!resolved) return null;
     const store = createLocalDiskBlobStore();
     const handle = await store.openByStorageKey({
       orgId: input.orgId,
       storageKey: resolved.storageKey,
     });
+    // AND IT READS ONLY WHAT THE CHANNEL CAN CARRY (corrected at convergence).
+    // The projection is capped; buffering the whole object before the cap is
+    // applied let one authorized multi-megabyte text revision cost the server
+    // its full size for a payload that can never exceed the cap. Reading one
+    // byte PAST the cap keeps the channel's own `truncated` reading true.
+    const budget = artifactContentCapFor("text") + 1;
     const chunks: Buffer[] = [];
+    let read = 0;
     for await (const chunk of handle.stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      chunks.push(buf);
+      read += buf.byteLength;
+      if (read >= budget) break;
     }
     return Buffer.concat(chunks).toString("utf8");
   } catch {
