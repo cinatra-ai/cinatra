@@ -248,13 +248,35 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     expect(SCREEN_SRC).toContain("surface: recommendationCardNode,");
     expect(RUN_SCREEN_SRC.match(/\{recommendationCardNode\}/g) ?? []).toHaveLength(0);
     const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
-    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
+    // WHERE THE DETAIL COLUMN ENDS, now that it is composed BEFORE the rail
+    // (cinatra#3068). The rail's steps are asked whether they can be opened
+    // against the detail they fall back to, so the detail is built first and the
+    // rail's own build is what follows it. The scan is the SAME span it always
+    // was — the detail column and nothing else — read from the statement that
+    // now closes it rather than from the frame's return far below, which under
+    // this ordering would sweep the rail's steps in and stop being a reading of
+    // the column at all.
+    const detailEnd = SCREEN_SRC.indexOf(
+      "const railSteps: RunSurfaceRailStep[] = [];",
+      detailStart,
+    );
     expect(SCREEN_SRC.slice(detailStart, detailEnd)).not.toContain("recommendationCardNode");
   });
 
   it("keeps the run's panels INSIDE the detail slot — never beside the open gate step", () => {
     const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
-    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
+    // WHERE THE DETAIL COLUMN ENDS, now that it is composed BEFORE the rail
+    // (cinatra#3068). The rail's steps are asked whether they can be opened
+    // against the detail they fall back to, so the detail is built first and the
+    // rail's own build is what follows it. The scan is the SAME span it always
+    // was — the detail column and nothing else — read from the statement that
+    // now closes it rather than from the frame's return far below, which under
+    // this ordering would sweep the rail's steps in and stop being a reading of
+    // the column at all.
+    const detailEnd = SCREEN_SRC.indexOf(
+      "const railSteps: RunSurfaceRailStep[] = [];",
+      detailStart,
+    );
     expect(detailStart).toBeGreaterThan(-1);
     expect(detailEnd).toBeGreaterThan(detailStart);
     const detail = SCREEN_SRC.slice(detailStart, detailEnd);

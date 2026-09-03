@@ -103,6 +103,10 @@ type SetupCompletionWatcherProps = {
    * for it, from the run's own park row.
    */
   recommendationDecided?: boolean;
+  /** cinatra#3068 — the page's rail carries the run's input step, so the panel
+   *  draws no "Agentic Run Progress" heading over the form. Forwarded through
+   *  unchanged; see `AgenticRunPanel`'s own prop. */
+  inputStepInRail?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -122,6 +126,7 @@ export function SetupCompletionWatcher({
   runHasExecuted = false,
   triggerConfigured = false,
   initialStreamedText,
+  inputStepInRail = false,
   canRespondInWindow,
   templateId,
   initialHitlContext,
@@ -269,6 +274,7 @@ export function SetupCompletionWatcher({
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
       recommendationDecided={recommendationDecided}
+      inputStepInRail={inputStepInRail}
     />
   );
 }

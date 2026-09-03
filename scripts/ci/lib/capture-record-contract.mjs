@@ -365,6 +365,25 @@ export const CARD_KINDS = {
     // asking for a picture of them would be asking for one that has to be
     // staged.
     capturableHosts: ["chat_thread", "run_card"],
+    // AND WHY EACH ADMITTED HOST IS ADMITTED (cinatra#3068). A refusal has had
+    // to carry its reason since this rule was written; an ADMISSION did not,
+    // and the one cell an operator most needs to find -- where this kind's
+    // pending reading is actually photographed -- was readable only as the
+    // absence of a refusal. Both answers are recorded now, on the same terms.
+    capturableReasons: {
+      chat_thread:
+        "the run's own turn carries the screen inside a conversation, and a run dispatched " +
+        "from the chat reaches `pending_approval` with a person present -- the subject the " +
+        "picture needs.",
+      run_card:
+        "the run page draws this card in its RUN DETAIL, mounted under " +
+        '`LifecycleCardSurfaceProvider host="run_card"` ' +
+        "(packages/agents/src/agentic-run-panel.tsx). Since cinatra#3068 the agent's own " +
+        "input form is the rail's FIRST STEP and this card is that step's screen, so the run " +
+        "page is where the pending reading is photographed -- on the `run_detail` URL class " +
+        "the `run_card` host already declares, beside the `chat` class it shares with the " +
+        "conversation's inline run panel.",
+    },
     compositionOnly: {
       site_widget:
         "a card travels from the run's own turn, and a widget conversation cannot start a " +
@@ -401,8 +420,37 @@ export const CARD_KINDS = {
  */
 export function captureHostAdmissibility(kind, host) {
   const spec = kind ? CARD_KINDS[kind] : null;
+  // A TOKEN THAT NAMES NO HOST IS NOT A COMPOSITION-ONLY CELL (cinatra#3068).
+  //
+  // A recorder driven over the run page's input step asked this about the host
+  // `run_page` and was answered "declared composition-only, with no reason
+  // recorded". Neither half was true. `run_page` is not a host: the four are
+  // the ones above, mirroring `LIFECYCLE_CARD_HOSTS`, and the run page's own
+  // card is `run_card`. So a token OUTSIDE the vocabulary fell through the
+  // default reason and came back reading as a recorded fact about a cell,
+  // naming nothing an operator could act on -- the one shape a refusal must
+  // never take. It is refused as what it is instead, and the reason says which
+  // host the run page's cards actually declare.
+  if (!CAPTURE_HOSTS.includes(host)) {
+    return {
+      capturable: false,
+      reason:
+        `"${host}" is not one of the four names in \`CAPTURE_HOSTS\` ` +
+        `(${CAPTURE_HOSTS.join(", ")}), so nothing is declared about it either way. ` +
+        "The run page's own cards are the `run_card` host -- the run detail mounts every " +
+        'lifecycle card it draws under `LifecycleCardSurfaceProvider host="run_card"` -- ' +
+        "and that host is photographed on the `run_detail` URL class. Record the host the " +
+        "shipped code declares.",
+    };
+  }
   if (!spec || !Array.isArray(spec.capturableHosts)) return { capturable: true, reason: null };
-  if (spec.capturableHosts.includes(host)) return { capturable: true, reason: null };
+  if (spec.capturableHosts.includes(host)) {
+    // The recorded reason where the kind gives one. It is NOT a digest input:
+    // `captureAnchorExpectations` records a reason only where a cell is
+    // refused, and an admitted cell's entry is its anchor set, so recording why
+    // an admitted host is admitted moves no ratified requirement.
+    return { capturable: true, reason: spec.capturableReasons?.[host] ?? null };
+  }
   return {
     capturable: false,
     reason: spec.compositionOnly?.[host] ?? "declared composition-only, with no reason recorded",

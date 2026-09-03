@@ -58,6 +58,11 @@
       "resolvedSha": "a4f3f534c9e8f587e1acbebf5a2a39984cf73f98"
     },
     {
+      "packageName": "@cinatra-ai/blog-image-generator-agent",
+      "repo": "cinatra-ai/blog-image-generator-agent",
+      "resolvedSha": "a763782115d7e70c979be6ce34095a459e3b3ab0"
+    },
+    {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
       "repo": "cinatra-ai/blog-image-matcher-skill",
       "resolvedSha": "3f7b23422450c66b5d1a7dfbe6a0e375b1f227e1"
