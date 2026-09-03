@@ -45,6 +45,7 @@
       "@cinatra-ai/blog-idea-generator-agent": "https://github.com/cinatra-ai/blog-idea-generator-agent.git",
       "@cinatra-ai/blog-idea-matcher-skill": "https://github.com/cinatra-ai/blog-idea-matcher-skill.git",
       "@cinatra-ai/blog-image-artifact": "https://github.com/cinatra-ai/blog-image-artifact.git",
+      "@cinatra-ai/blog-image-generator-agent": "https://github.com/cinatra-ai/blog-image-generator-agent.git",
       "@cinatra-ai/blog-image-matcher-skill": "https://github.com/cinatra-ai/blog-image-matcher-skill.git",
       "@cinatra-ai/blog-image-prompt-agent": "https://github.com/cinatra-ai/blog-image-prompt-agent.git",
       "@cinatra-ai/blog-linkedin-publish-agent": "https://github.com/cinatra-ai/blog-linkedin-publish-agent.git",
