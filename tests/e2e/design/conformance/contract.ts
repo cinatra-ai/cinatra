@@ -3673,6 +3673,12 @@ const AWAITING_RESOLVED_RENDERER =
  * diagnostic and names no package at all.
  */
 function tierRendererDriver(surfaceId: string): SurfaceDriver {
+  const TIER_READING = async (_page: Page, root: Locator): Promise<void> => {
+    await expect(root).toBeVisible();
+    await expect(root).not.toBeEmpty();
+    await expect(root.locator("[data-review-target-floor]")).toHaveCount(0);
+    await expect(root).not.toContainText(/@[a-z0-9-]+\//);
+  };
   return awaitingMount(
     surfaceId,
     {
@@ -3680,6 +3686,10 @@ function tierRendererDriver(surfaceId: string): SurfaceDriver {
       root: harnessRoot(surfaceId),
       present: async (_page, root) => {
         await expect(root).toBeVisible();
+        // §III opens on "A target is never blank", so the FIRST thing a resolved
+        // tier owes is something drawn. Without this, the negative rules below
+        // would be satisfied by a mount that rendered nothing at all.
+        await expect(root).not.toBeEmpty();
         // A resolved renderer never falls to the floor…
         await expect(root.locator("[data-review-target-floor]")).toHaveCount(0);
         // …and says nothing about itself: no package identity anywhere in the
@@ -3688,7 +3698,17 @@ function tierRendererDriver(surfaceId: string): SurfaceDriver {
       },
       fields: {},
       actions: {},
-      states: {},
+      states: {
+        // §III draws its three tiers as ONE illustration group and annotates the
+        // whole group with a single state, so "error" here is the group's mark,
+        // not a second reading: these two examples draw a resolved renderer and
+        // nothing else. The state therefore asserts exactly the tier reading —
+        // the same treatment `state-absent` gives its own single reading above,
+        // and it runs under the same mount guard.
+        error: async (page, root) => {
+          await TIER_READING(page, root);
+        },
+      },
     },
     AWAITING_RESOLVED_RENDERER,
   );
@@ -3725,10 +3745,18 @@ const TIER_METADATA_FLOOR_DRIVER: SurfaceDriver = {
       await expect(floor.getByRole("status")).toHaveText(
         'review target unavailable — package "@acme/support", slot "detail", reason "requires-rebuild"',
       );
-      // "A target is never blank": the generic read-only view of the
-      // representation is drawn beneath the diagnostic.
+      // "A target is never blank": the diagnostic sits ABOVE the generic
+      // read-only view of the representation. The view itself is the host's
+      // node — the bridge takes it from the caller, exactly as the artifact
+      // page hands it its own generic floor — so what is graded here is the
+      // BRIDGE'S doing: that it drew that node at all, and that it drew it
+      // AFTER the diagnostic rather than in place of or above it. The sibling
+      // combinator is the order assertion; a floor that dropped the node, or
+      // one that put it first, fails it.
       await expect(
-        floor.locator('[data-conformance-id="review-target-floor-structured-data"]'),
+        floor.locator(
+          'p[role="status"] ~ [data-conformance-id="review-target-floor-structured-data"]',
+        ),
       ).toBeVisible();
     },
   },
