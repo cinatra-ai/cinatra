@@ -60,7 +60,7 @@ jobs:
   # merge-queue run would go red.
   # ---------------------------------------------------------------------------
   detect:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Fail fast if dorny/paths-filter or the GitHub API hangs — a stuck
     # `detect` would leave the REQUIRED `/agents Playwright smoke` check
     # pending (smoke's guard can only fire after detect resolves).
@@ -131,7 +131,7 @@ jobs:
     # Opt-in larger-runner lever — same mechanism build-image's build/e2e jobs
     # use. Zero-risk no-op (stays ubuntu-latest) until the org/repo variable
     # CI_BUILD_RUNNER is set to a larger label (e.g. ubuntu-latest-4-cores, 16GB).
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Job cap 45 (prod build + standalone server boot + suite). The Playwright
     # run is wrapped in a shell `timeout` (below) sized ABOVE the config's
     # globalTimeout, so a hung suite SIGTERMs Playwright after it has written

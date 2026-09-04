@@ -60,7 +60,7 @@ concurrency:
 jobs:
   changed-paths:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 3
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -171,7 +171,7 @@ jobs:
   contract-schema-lockstep:
     if: github.event_name == 'pull_request' && needs.changed-paths.outputs.contract_schema == 'true'
     needs: changed-paths
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +204,7 @@ jobs:
   uat-gate:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     needs: changed-paths
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 40
     # Conditional service containers (the dashboard-live-verify idiom): an empty
     # `image` string means the service is NOT started. `services:` containers
@@ -517,7 +517,7 @@ jobs:
     # schedule = the 07:00Z nightly; workflow_dispatch = on-demand proof of the
     # full-suite path (cinatra#173). The full suite runs regardless of paths.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 50
     services:
       postgres:
@@ -755,7 +755,7 @@ jobs:
   mask-verify:
     needs: [uat-gate, nightly]
     if: ${{ always() && (contains(fromJSON('["success", "failure"]'), needs.uat-gate.result) || contains(fromJSON('["success", "failure"]'), needs.nightly.result)) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read

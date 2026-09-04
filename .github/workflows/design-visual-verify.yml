@@ -111,7 +111,7 @@ jobs:
     name: /design-fixtures pixel-diff + axe
     # Opt-in larger-runner lever (mirrors build-image's build/e2e jobs). Zero-risk
     # no-op (stays ubuntu-latest) until the org/repo variable CI_BUILD_RUNNER is set.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Post-cutover the build compiles the app + 79 cloned extensions, so the
     # prod build + standalone boot + suite needs more than the old 15 min.
     timeout-minutes: 45

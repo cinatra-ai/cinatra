@@ -78,7 +78,7 @@ jobs:
   # publishes, gates on `release-approval`.
   gate:
     name: Decide whether to mirror
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -161,7 +161,7 @@ jobs:
   mirror:
     name: Mirror GHCR image to Docker Hub
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 15
     # Gate the public Docker Hub mirror publish behind the org-wide
     # `release-approval` Environment. Pushing the image to the public

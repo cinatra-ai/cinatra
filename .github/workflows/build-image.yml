@@ -1,3 +1,13 @@
+# CI runner routing is VARIABLE-DRIVEN: every job in every workflow reads
+# `runs-on: ${{ fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') }}` for one of
+# four classes — POOL (the install-heavy invariant jobs pinned to the dedicated
+# six-runner box), HEAVY (a pnpm install plus node work, no `services:`/`container:`),
+# E2E (declares `services:`/`container:` or drives a browser, Playwright or docker) and
+# GATE (small gate/lint/aggregator jobs) — so routing is changed by setting the
+# repository variable, never by pushing a workflow: each variable holds a JSON string,
+# either a quoted label (`"ubuntu-latest"`) or a label array
+# (`["self-hosted","linux","x64","cinatra-ci"]`), and an unset variable falls back to
+# `ubuntu-latest`. CI_RUNNER_* supersedes the older `vars.CI_BUILD_RUNNER` escape hatch.
 name: Build and publish image
 
 on:
@@ -69,7 +79,7 @@ jobs:
   # ---------------------------------------------------------------------------
   detect:
     name: Detect skip — docs-only or draft (build-image)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -112,7 +122,7 @@ jobs:
     name: Actions SHA-pin gate
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -155,7 +165,7 @@ jobs:
     # the `skip` expression has no value and the gate silently no-ops.
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,7 +223,7 @@ jobs:
     name: Skills unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,7 +266,7 @@ jobs:
     name: A2A protocol unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -317,7 +327,7 @@ jobs:
     name: Execution-plane unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -376,7 +386,7 @@ jobs:
     name: RBAC authz unit tests
     needs: detect
     if: ${{ always() }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - name: Guard — detect must have succeeded
@@ -427,7 +437,7 @@ jobs:
     name: context-resolve route response shape
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -472,7 +482,7 @@ jobs:
     name: Better Auth schema parity
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -542,7 +552,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -604,7 +614,7 @@ jobs:
     name: Extension-anchor lifecycle DB tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 10
     services:
       postgres:
@@ -881,7 +891,7 @@ jobs:
     name: Agents integration — gated set (+ full-tier report)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 20
     services:
       postgres:
@@ -1230,7 +1240,7 @@ jobs:
     # names). Docs-only and draft PRs (`detect` succeeds with `skip: true`)
     # still skip this job.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1319,7 +1329,7 @@ jobs:
     name: Canonical extension invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1404,7 +1414,7 @@ jobs:
     name: Workspace package unit suites
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     # Setup (checkout + clone-extensions + install) is the whole cost here;
@@ -1521,7 +1531,7 @@ jobs:
     name: Hosted-MCP wire gate
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 12
@@ -1566,7 +1576,7 @@ jobs:
     name: devperf invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1612,7 +1622,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
     # same file already declare. Without it this job inherits the WORKFLOW-level
@@ -2665,7 +2675,7 @@ jobs:
     # runs beside the ratchet gates instead of after them; the REQUIRED context
     # is the `perpetual-loops-invariants` fan-in below, which needs both shards.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 12
@@ -2754,7 +2764,7 @@ jobs:
     name: Perpetual system loops invariants
     needs: [detect, perpetual-core, perpetual-extension-suites]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 5
@@ -2779,7 +2789,7 @@ jobs:
     # build off the 2-vCPU/7GB runner — where `pnpm build` (3GB heap) + the
     # job-level postgres/redis sidecars OOM/swap-thrash and the runner gets
     # RECLAIMED mid-build. Rollback is a variable flip, not a code revert.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Dev-mode (Turbopack) compiles each route segment cold on first hit (the
     # permissions page alone took ~60s). With route pre-warming below the suite
     # fits comfortably, but keep generous headroom over the default.
@@ -3078,7 +3088,7 @@ jobs:
     # `ubuntu-latest`. This job runs the DEV runtime rather than a production
     # build, so it never pays `pnpm build`'s memory peak — but Turbopack compiles
     # each route cold on first hit, which is why the budgets below are generous.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # The flow drives two full held turns. The FIRST `POST /api/chat` compiles the
     # chat route graph cold before the pre-router dispatches at all — minutes on a
     # contended runner, with nothing in `agent_runs` while it happens. 50 minutes
@@ -3615,7 +3625,7 @@ jobs:
     # variable flip — not a code revert. There is no in-job fallback for an
     # unavailable runner label (runner selection precedes all steps), hence the
     # probe-first discipline.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
     # for the image build (next build is the dominant pole) plus ~3-5 min for
     # the prod-boot e2e (image load + fresh-DB setup + boot + probes); we've
@@ -3825,7 +3835,7 @@ jobs:
   build:
     needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 5
@@ -3846,7 +3856,7 @@ jobs:
     # tags (handled by the gated release job). A non-tag push to main, a
     # non-v* tag push, or a manual workflow_dispatch publishes here, ungated.
     if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -3930,7 +3940,7 @@ jobs:
     name: Upgrade proof (previous releases to candidate)
     needs: build
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -4038,7 +4048,7 @@ jobs:
     # existing database. On non-tag events the `if:` below is false anyway.
     needs: [build, upgrade-proof]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:
@@ -4147,7 +4157,7 @@ jobs:
     # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
     # lands there.
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 10
     environment: release-approval
     permissions:
@@ -4251,7 +4261,7 @@ jobs:
     name: Presence-degraded build (required-only universe)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     # Same long-pole budget rationale as `build` (next build dominates).
     timeout-minutes: 30
     steps:
@@ -4384,7 +4394,7 @@ jobs:
     name: Create GitHub Release
     needs: publish-release-image
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Gate the public GitHub Release publish behind the org-wide
     # `release-approval` Environment. Creating the Release is a real publish
     # surface, so it must pause for an owner approval before it runs. The

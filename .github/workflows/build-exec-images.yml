@@ -127,7 +127,7 @@ jobs:
   # ---------------------------------------------------------------------------
   changes:
     name: Detect which exec-plane images this event touches
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -182,7 +182,7 @@ jobs:
     name: Build + smoke-test the L0 sandbox image
     needs: changes
     if: ${{ needs.changes.outputs.l0 == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -250,7 +250,7 @@ jobs:
     # contract check. On non-tag events the `if:` below is false anyway.
     needs: build-and-smoke
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:
@@ -380,7 +380,7 @@ jobs:
     # pinned to linux/amd64, and a runner variable that could later name an arm64
     # label would either emulate the whole workspace install or smoke-test an
     # architecture nobody publishes. Native build, native smoke, no drift.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Generous: the build installs the whole pnpm workspace and runs esbuild.
     timeout-minutes: 30
     steps:
@@ -551,7 +551,7 @@ jobs:
     needs: build-and-smoke-worker
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
     # Same default (amd64) runner as the build+smoke job above — see its note.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:

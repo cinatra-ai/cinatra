@@ -91,7 +91,7 @@ jobs:
     # and a workflow_dispatch from any non-main ref must not be able to push
     # that ref's state into the bump branch (the job is skipped instead).
     if: github.repository == 'cinatra-ai/cinatra' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

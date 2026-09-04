@@ -96,7 +96,7 @@ concurrency:
 jobs:
   reverify:
     name: attribution record re-verification (dispatch, verification-only)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Matches the engine job's own budget: the gate-arm verification may wait
     # (bounded) for a context to settle, and a job timeout shorter than that
     # window would surface as a cancelled run, i.e. a false verdict.

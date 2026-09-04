@@ -54,7 +54,7 @@ concurrency:
 jobs:
   live-eval:
     name: Live OpenAI golden-set calibration
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     # Skip cleanly when the secret isn't available (forks, PRs from
     # contributors without write access, repo without the secret
