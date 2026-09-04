@@ -26,6 +26,7 @@ import { NotificationsConformanceFixtures } from "./notifications-conformance-fi
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
 import { LifecycleReviewTargetHeaderFixtures } from "./lifecycle-review-target-header-fixtures";
 import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
+import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -262,6 +263,25 @@ export default function ConformanceHarnessPage() {
                 primary chat box. The harness holds only which open review the
                 reader chose; the shipped resolver decides every reading. */}
             <LifecycleComposerFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation recommendation card (mounts: recommendation-paused,
+              recommendation-empty, recommendation-readings)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3160, epic #3155 W4: the REAL RecommendationHoldCard — the
+                ONE composer of the shipped row — under the REAL chat-thread host
+                declaration, one mount per run. The card resolves the run's
+                authoritative hold state itself, so this route hands it a run and
+                nothing else; on this sessionless dev-only route that resolve
+                answers "no row for this reader" and the card draws nothing, which
+                is its own fail-closed reading. See the module header. */}
+            <LifecycleRecommendationFixtures />
           </CardContent>
         </Card>
       </PageContent>

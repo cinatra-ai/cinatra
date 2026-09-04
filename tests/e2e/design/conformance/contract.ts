@@ -4223,6 +4223,44 @@ for (const surface of Object.keys(COMPOSER_FAMILY_DRIVERS)) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The RECOMMENDATION family (cinatra#3160, epic #3155 W4) — READINESS, NOT A
+// DRIVER MAP.
+// ---------------------------------------------------------------------------
+//
+// The drawing's §V gives ONE row three readings, and thirteen manifest surfaces
+// of app-lifecycle-cards stand on them. This suite drives NONE of them, and the
+// reason is a property of the product rather than a gap in this file.
+//
+// The row has exactly ONE composer, `RecommendationHoldCard` (the one-card
+// gate's rule R2, scripts/audit/chat-hitl-one-card-gate.mjs). That card takes no
+// reading from its host: it RESOLVES the run's authoritative hold state itself
+// and derives the offer, the settled answer and the reader's rights from that
+// answer alone. A first cut of this wave drove these surfaces by mounting the
+// row directly and handing it a reading per mount; that was a second renderer of
+// `recommendation_hold` — the class R2 forbids and the defect its own history
+// records — so the harness now mounts the card, and the card resolves.
+//
+// The conformance harness route is a dev-only PUBLIC path driven with no
+// session, so the card's cookie-bound resolve answers "no row for this reader"
+// there and it draws nothing. That is the shipped card's own fail-closed
+// reading, and it is the same constraint the W0 harness already recorded for the
+// review card ("the card as a whole draws no DOM before an authorised server
+// resolve"). Reaching these readings in a browser needs a real reader and a real
+// held run, which this suite has neither of.
+//
+// So the thirteen surfaces are named as READINESS: their manifest
+// (app-lifecycle-cards) stays UNPINNED — which is this program's mechanism for
+// recording partial coverage without a false green or a permanently red suite —
+// and allowlist.json gains nothing (the ratchet only shrinks). Where the
+// readings ARE proven: tests/e2e/chat-hitl-held-turn/held-turn.spec.ts drives a
+// real held turn with a real session, and
+// src/app/design-fixtures/conformance/__tests__/lifecycle-recommendation-fixture.test.tsx
+// drives all four readings through the shipped card and the shipped row by
+// answering the card's OWN resolve with the authoritative state each run stands
+// for.
+//
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
