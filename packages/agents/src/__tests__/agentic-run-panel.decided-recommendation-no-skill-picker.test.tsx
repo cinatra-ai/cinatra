@@ -21,6 +21,15 @@
  * The row is UNTOUCHED for a run with no recommendation decision — that is a
  * different run in a different state, and this slice does not redraw it.
  *
+ * WHERE THE ANSWER COMES FROM NOW (cinatra#3047). The panel used to resolve this
+ * itself, off a recommendation card it mounted on the run page. That mount was
+ * the row's second placement on that page and it is deleted, so the panel takes
+ * the answer as a prop on EVERY host: the transcript's card supplies it in a
+ * conversation, and the run screen supplies it from the run's own park row —
+ * server-side, before the first paint. That also retires the in-flight window
+ * this file's flicker arm was about: there is no unanswered state here to draw a
+ * pressable list in and withdraw.
+ *
  * Run: cd packages/agents && pnpm exec vitest run \
  *   src/__tests__/agentic-run-panel.decided-recommendation-no-skill-picker.test.tsx
  */
@@ -159,63 +168,13 @@ describe("the run card's skill picker and the recommendation decision", () => {
   );
 
   it(
-    "draws no skill picker for a run whose recommendation was confirmed",
+    "draws no skill picker for a run whose recommendation was decided",
     { timeout: 30_000 },
     async () => {
-      holdState.current = {
-        state: "confirmed",
-        runId: "run-2890",
-        skillNames: ["Blog Writing Skill"],
-        decided: [{ skillId: "s1", name: "Blog Writing Skill", mark: "confirmed" }],
-      };
-      const { container } = await mountPanel();
-      // The settled card resolves first; the picker must never appear beside it.
-      await waitFor(() => {
-        expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull();
-      });
-      expect(screen.queryByRole("button", { name: SKILL_PICKER })).toBeNull();
-      expect(container.querySelector("[data-hitl-skill-picker]")).toBeNull();
-    },
-  );
-
-  it(
-    "draws no skill picker for a run whose recommendation was skipped",
-    { timeout: 30_000 },
-    async () => {
-      holdState.current = {
-        state: "skipped",
-        runId: "run-2890",
-        decided: [{ skillId: "s2", name: "Web Research Skill", mark: "skipped" }],
-      };
-      const { container } = await mountPanel();
-      await waitFor(() => {
-        expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull();
-      });
-      expect(screen.queryByRole("button", { name: SKILL_PICKER })).toBeNull();
-      expect(container.querySelector("[data-hitl-skill-picker]")).toBeNull();
-    },
-  );
-
-  it(
-    "draws no skill picker while the run's recommendation is still being read",
-    { timeout: 30_000 },
-    async () => {
-      // THE FLICKER ARM. The assigned-skills fetch and the recommendation read
-      // are two independent round trips, and the skills one can win. A panel that
-      // treats "not answered yet" as "no decision" then draws a pressable list of
-      // this run's skills and withdraws it when the answer lands — the person saw
-      // a choice they do not have. So the picker waits for the answer.
-      let release = () => {};
-      holdState.gate = new Promise<void>((r) => {
-        release = () => r();
-      });
-      holdState.current = {
-        state: "confirmed",
-        runId: "run-2890",
-        skillNames: ["Blog Writing Skill"],
-        decided: [{ skillId: "s1", name: "Blog Writing Skill", mark: "confirmed" }],
-      };
-      const { container } = await mountPanel();
+      // CONFIRMED or SKIPPED alike: the host that drew the card says the
+      // question was answered, and one pressable list is exactly what may not
+      // appear beside a settled one.
+      const { container } = await mountPanel({ recommendationDecided: true });
       await waitFor(() => {
         expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
       });
@@ -228,16 +187,31 @@ describe("the run card's skill picker and the recommendation decision", () => {
       await act(async () => {
         await new Promise((r) => setTimeout(r, 50));
       });
-      // The picker is NOT there, because the recommendation is still unanswered.
-      // Read BOTH ways — by the row's own name and by its anchor — so this arm
-      // has teeth against a tree where the anchor does not exist yet.
       expect(screen.queryByRole("button", { name: SKILL_PICKER })).toBeNull();
       expect(container.querySelector("[data-hitl-skill-picker]")).toBeNull();
-      release();
+    },
+  );
+
+  it(
+    "draws no recommendation card of its own to read the answer off",
+    { timeout: 30_000 },
+    async () => {
+      // The other half of the same change: the panel does not draw the row, so
+      // it cannot be resolving it either. A run whose hold is LIVE on the wire
+      // still gets no chip row inside this panel.
+      holdState.current = {
+        state: "held",
+        runId: "run-2890",
+        agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
+        promptText: "{}",
+        recommendations: [],
+        holdRef: "hold-ref-3047",
+      };
+      const { container } = await mountPanel();
       await waitFor(() => {
-        expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull();
+        expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
       });
-      expect(container.querySelector("[data-hitl-skill-picker]")).toBeNull();
+      expect(container.querySelector("[data-run-recommendation-chip-row]")).toBeNull();
     },
   );
 

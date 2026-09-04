@@ -53,7 +53,12 @@ describe("the opened settled step's reading", () => {
     const reading = readingFor(briefAnswered());
 
     expect(occurrences(reading.textContent ?? "", "brief")).toBe(1);
-    expect(reading.querySelector("h2")?.textContent).toBe("brief");
+    // THE HEADING IS THE STEP'S NAME (cinatra#3047 fix leg 8). This fixture's
+    // field declares its own KEY in the display-title slot — what the compiler
+    // writes whenever an agent maps no human label — so the heading falls back
+    // to the step name and the key is left to the value's own label. The rule
+    // this case exists for is untouched: the field is named ONCE.
+    expect(reading.querySelector("h2")?.textContent).toBe("Setup");
   });
 
   it("still carries the answer, and its own per-field anchor", () => {
