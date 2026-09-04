@@ -148,6 +148,24 @@ const VENDOR_MANIFEST = [
   },
 ];
 
+// registryDependencies are namespaced (`@cinatra-ai/label`) so a consumer's
+// shadcn CLI resolves them in OUR registry instead of its default one; the item
+// names themselves stay bare, so strip the namespace when walking the closure.
+// STRICT on purpose: a bare or foreign-namespaced entry is exactly the defect
+// this fix removes (a bare name resolves against the CONSUMER's default
+// registry, which is how upstream's `utils` item overwrote ours), so it must
+// fail loudly here rather than resolve to a plausible-looking local item.
+export const localItemName = (dep) => {
+  const match = /^@cinatra-ai\/([A-Za-z0-9._-]+)$/.exec(dep);
+  if (!match) {
+    throw new Error(
+      `registryDependencies entry ${dep} is not namespaced as @cinatra-ai/<item>; ` +
+        "a bare or foreign namespace resolves against the consumer's default registry",
+    );
+  }
+  return match[1];
+};
+
 // Resolve the transitive registry:ui closure of `directItems` from
 // registry.json's registryDependencies (excluding the `utils` lib, which is
 // always vendored separately). A vendored field.tsx imports ./label + ./separator
@@ -163,7 +181,7 @@ function resolveUiClosure(directItems) {
     const name = queue.shift();
     if (name === "utils" || seen.has(name)) continue;
     seen.add(name);
-    for (const dep of regDeps.get(name) ?? []) queue.push(dep);
+    for (const dep of regDeps.get(name) ?? []) queue.push(localItemName(dep));
   }
   return [...seen].sort();
 }
