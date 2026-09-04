@@ -36,7 +36,7 @@ import {
   buildArtifactContentProjection,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
-import { hostArtifactContentChannelPorts } from "@/lib/artifacts/artifact-content-channel-ports";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import {
   buildIslandArtifactByteMinter,
@@ -63,6 +63,18 @@ export type ArtifactContentBuilder = (input: {
   representationRevisionId: string | null;
   form: ArtifactRepresentationForm | null;
   mime: string | null;
+  /**
+   * The bound the CALLER's membership answer was made under. A live reading
+   * never replays a tombstoned pin; the gate-authorized historical reading
+   * (enabler 0.9) may, inside the frozen set the gate pinned. Absent reads as
+   * the safe reading.
+   */
+  liveOnly?: boolean;
+  /**
+   * The pinned configuration record the caller already resolved (enabler 0.10),
+   * so the configuration arm does not read the same row a second time.
+   */
+  carriedConfiguration?: { configuration: unknown; digest: string | null } | null;
 }) => Promise<ArtifactContentProjection>;
 
 /**
@@ -101,8 +113,20 @@ export interface ReviewSurfaceRoads {
  * substance through the same seam.
  */
 export function hostArtifactContentBuilder(): ArtifactContentBuilder {
-  const ports = hostArtifactContentChannelPorts();
-  return (input) => buildArtifactContentProjection(input, ports);
+  // THE CHANNEL'S OWN READ (enabler 0.3, cinatra#3027). Bound PER TARGET rather
+  // than once per surface, because two of its inputs are the target's own: the
+  // bound its membership answer was made under, and the pinned configuration
+  // record that answer already carried. Constructing it here — and never on the
+  // shared preparation path — is what keeps the four locked routes' first-party
+  // module counts where the route-graph ratchet holds them.
+  return (input) =>
+    buildArtifactContentProjection(
+      input,
+      createPinnedSubstanceReader({
+        liveOnly: input.liveOnly !== false,
+        carriedConfiguration: input.carriedConfiguration ?? null,
+      }),
+    );
 }
 
 /**

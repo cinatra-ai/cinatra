@@ -43,16 +43,26 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
+import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+// THE CHANNEL'S OWN READ STAYS THE DEFAULT OF THIS BINDER (enabler 0.3,
+// cinatra#3027 / cinatra#3047). Wave 3 adds a road a surface MAY hand in, and
+// a road that is handed in wins; but a caller that names none must still get
+// the pinned revision's substance, because that is the whole of the defect
+// cinatra#3047 closed: two of this module's own callers (`review-gate-ports`)
+// name no road, and defaulting to the named absence would draw a "nothing is
+// pinned" floor over a revision holding the run's real work.
+//
+// So the channel's builder and its pinned-substance reader are named here as
+// VALUES, the way main wires them, and the route-graph ratchet records what
+// that costs the four locked routes.
 import {
-  absentArtifactContent,
-  buildArtifactRendererProps,
-} from "@/lib/artifacts/artifact-renderer-props";
-// TYPE-ONLY, and that is load-bearing (wave 3). This module is reachable from
-// four routes whose first-party module count the route-graph ratchet locks, and
-// both roads pull real graphs behind them — the content channel's builder and
-// the capability minters. The roads are CONSTRUCTED on the surfaces that choose
-// them (`./review-surface-roads`), none of which is a locked route, and named
-// here by type alone, which the compiler erases.
+  buildArtifactContentProjection,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+// The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
+// that choose them (`./review-surface-roads`), none of which is a locked
+// route, and named here by type alone, which the compiler erases.
 import type {
   ArtifactContentBuilder,
   ArtifactByteUrlMinter,
@@ -171,7 +181,11 @@ export function bindArtifactReviewPorts(ctx: {
       representationRevisionId,
       liveOnly,
     });
-    if (file) return { mime: file.mime, form: "file" };
+    // The bound this answer was made under travels WITH it (see
+    // `RevisionMemberOutcome.historical`), so the content read that follows
+    // resolves the same revision under the same rule rather than guessing.
+    const historical = !liveOnly;
+    if (file) return { mime: file.mime, form: "file", historical };
     const nonFile = resolveNonFileArtifactRevision({
       orgId,
       artifactId,
@@ -184,6 +198,7 @@ export function bindArtifactReviewPorts(ctx: {
       form: nonFile.form,
       configuration: nonFile.configuration,
       configurationDigest: nonFile.configurationDigest,
+      historical,
     };
   };
 
@@ -348,21 +363,47 @@ export function bindArtifactReviewPorts(ctx: {
         ? { road: "session" as const, preview: previewHref, download: downloadHref }
         : undefined;
 
-    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED HERE BY WAVE 3.
-    // Until now this consumer named itself unwired; "the three browser fetchers
-    // — json, cms-snapshot, text — moved onto the content channel" is that name
-    // being replaced by the read it stood in for. A form the channel projects
-    // no class for — every one of the six media forms — still comes back as the
-    // channel's own named absence, because its bytes are the byte road's.
+    // THE READ ITSELF, and the two inputs only this caller knows.
+    //
+    // THE BOUND THE MEMBERSHIP ANSWER WAS MADE UNDER travels with it: a LIVE
+    // reading must not replay a tombstoned pin, while the gate-authorized
+    // historical reading (enabler 0.9) may, inside the frozen set the gate
+    // pinned. And the non-file membership answer already carried the pinned
+    // configuration record and its digest (enabler 0.10), so the channel takes
+    // THAT rather than resolving the same row a second time.
+    const contentInput = {
+      orgId,
+      artifactId: artifact.artifactId,
+      representationRevisionId,
+      form: memberForm(input.member),
+      mime,
+      liveOnly: input.member.historical !== true,
+      carriedConfiguration: fileBacked
+        ? null
+        : {
+            configuration: input.member.configuration ?? null,
+            digest: input.member.configurationDigest ?? null,
+          },
+    };
+
+    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). A surface that named a
+    // road reads through ITS builder — that is what takes "the three browser
+    // fetchers — json, cms-snapshot, text" off a browser fetch that dies inside
+    // a third-party application. A surface that named none reads through the
+    // channel bound to this binder's own pinned read, which is the wiring
+    // cinatra#3047 shipped and which no road may quietly remove. Either way a
+    // form the channel projects no class for — the six media forms among them —
+    // comes back as the channel's own NAMED absence, because those bytes are
+    // the byte road's.
     const content = buildContent
-      ? await buildContent({
-          orgId,
-          artifactId: artifact.artifactId,
-          representationRevisionId,
-          form: input.member.form ?? (fileBacked ? "file" : null),
-          mime,
-        })
-      : absentArtifactContent(representationRevisionId);
+      ? await buildContent(contentInput)
+      : await buildArtifactContentProjection(
+          contentInput,
+          createPinnedSubstanceReader({
+            liveOnly: contentInput.liveOnly,
+            carriedConfiguration: contentInput.carriedConfiguration,
+          }),
+        );
 
     return buildArtifactRendererProps({
       artifact,
@@ -385,6 +426,17 @@ export function bindArtifactReviewPorts(ctx: {
     resolveMount,
     buildProps,
   };
+}
+
+/**
+ * The member's own recorded form, as the content channel names it. An absent
+ * form reads as `file` for the reason `isFileFormMember` gives: that is what
+ * every caller written before enabler 0.10 meant.
+ */
+function memberForm(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactRepresentationForm {
+  return member.form ?? "file";
 }
 
 /**

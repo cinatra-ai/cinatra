@@ -158,7 +158,8 @@ function emptyIsland(scheme: IslandColorScheme | null) {
       data-conformance-id="review-target-island-empty"
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
-    />
+    >
+    </div>
   );
 }
 
