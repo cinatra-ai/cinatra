@@ -242,6 +242,18 @@ export function getConnectorReadinessProbe(
 }
 
 /**
+ * Whether the host has an ACTUAL registered readiness probe for this connector
+ * (cinatra#3214). `getConnectorReadinessProbe` cannot answer this: it fail-softs
+ * to `DEFAULT_PROBE`, which always reads "not connected". The setup page uses it
+ * to decide whether the Connection status card gets a re-check road at all - a
+ * connector with no registered probe gets Check in the drawing's disabled
+ * treatment instead of a control that can only ever repeat "Disconnected".
+ */
+export function hasConnectorReadinessProbe(packageId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(READINESS_PROBES, packageId);
+}
+
+/**
  * The HOST-side connection state + count for a single connector, resolved
  * through the SAME readiness-probe pipeline that feeds the `/connectors` card
  * grid (`packages/connectors/src/pages.tsx`). This is the source of

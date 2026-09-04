@@ -126,7 +126,12 @@ export type SchemaConfigConnectorFormProps = {
    * renders the two-column grid directly; on a tabbed surface the grid becomes
    * the Setup panel's body so the tablist can sit ABOVE both columns at the
    * Wide width (the tablist is page-header chrome, never inside the content
-   * column). Absent → single-column (the probe-less shape).
+   * column). Absent → single-column: a right column with nothing to put in it
+   * would read worse than no column at all. Since cinatra#3214 the HOST passes
+   * this card on EVERY schema-config connector's setup page — the drawing draws
+   * one setup shape and names no probe-less exemption — so no product setup
+   * surface reaches that branch; only a bare mount (a fixture, a unit test)
+   * does.
    */
   aside?: React.ReactNode;
   /**
@@ -401,10 +406,12 @@ export function SchemaConfigConnectorForm({
   const hasTabs = !!surface.tabs && surface.tabs.length > 0;
 
   // The Setup surface body. With a host `aside` the form owns the §II
-  // two-column grid (fields | 236px status card); without one it stays the
-  // single-column probe-less shape. `setupFooter` (e.g. connection sharing)
-  // belongs to the SETUP surface only, so it rides inside this body — never
-  // beneath a custom or Help tab.
+  // two-column grid (fields | 236px status card). The host passes one for
+  // EVERY schema-config connector since cinatra#3214, so the aside-less
+  // single-column branch below is a bare-mount fallback rather than a product
+  // shape — there is no probe-less layout any more. `setupFooter` (e.g.
+  // connection sharing) belongs to the SETUP surface only, so it rides inside
+  // this body — never beneath a custom or Help tab.
   //
   // STATE FORWARDING IS UNCONDITIONAL (#2382 review note 1). It used to be
   // aside-GATED — a probe-less connector could be handed
