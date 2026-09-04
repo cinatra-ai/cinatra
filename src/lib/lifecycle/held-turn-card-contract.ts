@@ -438,25 +438,28 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     alsoTriggeredBy: ["agent_named_start"],
     owner: "RecommendationHoldCard",
     // Read off the SHIPPED component: `RecommendationHoldCard` composes
-    // `RunRecommendationChipRow`, whose root carries the conformance id and
-    // whose decision controls carry these action names.
+    // `RunRecommendationChipRow`, whose root carries this conformance id.
     //
-    // RE-READ AFTER THE §V REDRAW (cinatra#2841). The row used to carry ONE
-    // Confirm/Skip pair for the whole card; the ratified drawing decides PER
-    // CHIP, so the shipped controls are now Confirm / Adjust / Skip on each
-    // skill and the two row-level names this list used to hold are emitted
-    // nowhere. Naming them anyway would have failed the real mount on names the
-    // component never used — the exact defect this field exists to prevent — so
-    // they are replaced by what the component really draws, not dropped.
-    // Same three the capture contract names (`decisionControls` in
-    // `scripts/ci/lib/capture-record-contract.mjs`); the capture suite asserts
-    // the two lists stay in step, so neither can drift alone.
-    ownerAnchors: Object.freeze([
-      '[data-conformance-id="run-chip-row"]',
-      '[data-skill-action="confirm"]',
-      '[data-skill-action="adjust"]',
-      '[data-skill-action="skip"]',
-    ]),
+    // NARROWED TO WHAT THE OWNER DRAWS ON EVERY HOST (cinatra#3047, review
+    // points C and E), which is what this field is for. It also held the three
+    // per-chip action names, and the host-parity observer requires EVERY
+    // selector here inside one declaring root — so the list was an assertion
+    // that the owner draws the same DECISION AFFORDANCES everywhere, which is a
+    // claim about a reading rather than about the owner. It stopped being true
+    // when the review changed the run page's reading: its Skills step decides
+    // with a checkbox per pill and one Continue, while the conversation, the
+    // widget and the review page keep Confirm / Adjust / Skip. Naming the three
+    // here would fail the real run_card mount on controls it no longer draws —
+    // the exact defect this field exists to prevent, and the same reason the
+    // row-level pair was removed from it after the §V redraw (cinatra#2841).
+    //
+    // WHAT STILL PINS THE AFFORDANCES. `decisionControls` below is the CHAT
+    // THREAD's own list and is unchanged, because the conversation's reading is
+    // unchanged; the capture contract's `decisionControls` likewise. The run
+    // page's two controls are pinned in `skills-step-checkbox-pills.test.tsx`
+    // and `skills-step-continue.test.tsx`. Every other kind in this table names
+    // exactly one owner anchor for the same reason this one now does.
+    ownerAnchors: Object.freeze(['[data-conformance-id="run-chip-row"]']),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
     // §V's decision acts, on the shipped `RunRecommendationChipRow` — the SAME
     // three the owner anchors above and the capture contract

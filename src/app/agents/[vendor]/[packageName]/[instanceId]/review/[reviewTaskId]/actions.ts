@@ -60,7 +60,7 @@ import { resolveReviewActorContext } from "./review-actor";
  * the decision core itself, so neither this action nor any other caller can
  * produce one.
  *
- * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f
+ * The LIVE decision-submit binder (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997
  * §IV/§V). The client sends only the disposition + rationale (display + DECIDE
  * only); the server re-resolves the reviewing actor, assembles the WHOLE-gate
  * decision the #1807 core requires for a terminal disposition (every pinned

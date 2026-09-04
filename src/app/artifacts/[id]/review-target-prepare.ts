@@ -43,9 +43,7 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
-import {
-  buildArtifactRendererProps,
-} from "@/lib/artifacts/artifact-renderer-props";
+import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -110,6 +108,7 @@ async function readPinnedRevisionText(input: {
   orgId: string;
   artifactId: string;
   representationRevisionId: string;
+  liveOnly: boolean;
 }): Promise<string | null> {
   try {
     // THE RESOLUTION READS THE DATABASE, so it belongs INSIDE the guard with
@@ -122,6 +121,12 @@ async function readPinnedRevisionText(input: {
       orgId: input.orgId,
       artifactId: input.artifactId,
       representationRevisionId: input.representationRevisionId,
+      // THE READING'S OWN BOUND travels with the read (absorbed from the default
+      // branch at the 2026-09-04 forward). A LIVE review must not resolve a
+      // tombstoned-but-pinned revision; the gate-authorized SETTLED reading
+      // (enabler 0.9) may, bounded instead by the frozen set the gate pinned.
+      // Only the caller knows which reading it is on, so the member says.
+      liveOnly: input.liveOnly,
     });
     if (!resolved) return null;
     const store = createLocalDiskBlobStore();
@@ -157,15 +162,38 @@ async function readPinnedRevisionText(input: {
 export function reviewTargetSubstancePorts(
   member: NonNullable<RevisionMemberOutcome>,
 ): ArtifactContentChannelPorts {
+  const liveOnly = member.historical !== true;
+
   return {
     async readPinnedSubstance(input) {
       if (input.contentClass === "configuration") {
         const configuration = member.configuration;
+        if (configuration === undefined || configuration === null) {
+          // THE MEMBER CARRIED NOTHING, so the row is resolved rather than
+          // answered away (absorbed from the default branch at the 2026-09-04
+          // forward). The membership answer normally CARRIES the pinned record
+          // and its digest and the read takes that — one row, read once, with no
+          // second place for the two answers to disagree. A caller that holds
+          // none still gets a projection instead of a floor.
+          const nonFile = resolveNonFileArtifactRevision({
+            orgId: input.orgId,
+            artifactId: input.artifactId,
+            representationRevisionId: input.representationRevisionId,
+            liveOnly,
+          });
+          if (!nonFile || nonFile.configuration === null || nonFile.configurationDigest === null) {
+            return null;
+          }
+          return {
+            class: "configuration",
+            configuration: nonFile.configuration,
+            digest: nonFile.configurationDigest,
+          };
+        }
         // A configuration with no recorded digest is not a configuration this
         // channel can project: the digest is what a data capability is sealed
         // to, and minting one here would seal it to a value the gate never
         // recorded. It answers an absence, which the display floors on.
-        if (configuration === undefined || configuration === null) return null;
         if (!member.configurationDigest) return null;
         return {
           class: "configuration",
@@ -178,6 +206,7 @@ export function reviewTargetSubstancePorts(
           orgId: input.orgId,
           artifactId: input.artifactId,
           representationRevisionId: input.representationRevisionId,
+          liveOnly,
         });
         return text === null ? null : { class: "text", text };
       }
@@ -271,7 +300,11 @@ export function bindArtifactReviewPorts(ctx: {
       representationRevisionId,
       liveOnly,
     });
-    if (file) return { mime: file.mime, form: "file" };
+    // The bound this answer was made under travels WITH it (see
+    // `RevisionMemberOutcome.historical`), so the content read that follows
+    // resolves the same revision under the same rule rather than guessing.
+    const historical = !liveOnly;
+    if (file) return { mime: file.mime, form: "file", historical };
     const nonFile = resolveNonFileArtifactRevision({
       orgId,
       artifactId,
@@ -284,6 +317,7 @@ export function bindArtifactReviewPorts(ctx: {
       form: nonFile.form,
       configuration: nonFile.configuration,
       configurationDigest: nonFile.configurationDigest,
+      historical,
     };
   };
 
@@ -452,6 +486,17 @@ export function bindArtifactReviewPorts(ctx: {
     resolveMount,
     buildProps,
   };
+}
+
+/**
+ * The member's own recorded form, as the content channel names it. An absent
+ * form reads as `file` for the reason `isFileFormMember` gives: that is what
+ * every caller written before enabler 0.10 meant.
+ */
+function memberForm(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactRepresentationForm {
+  return member.form ?? "file";
 }
 
 /**

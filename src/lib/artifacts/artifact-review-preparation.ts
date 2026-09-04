@@ -166,6 +166,20 @@ export type RevisionMemberOutcome =
       configuration?: unknown;
       /** Its stable digest — what a data capability is sealed to (enabler 0.12). */
       configurationDigest?: string | null;
+      /**
+       * Was this member resolved through the GATE-AUTHORIZED HISTORICAL reader
+       * (enabler 0.9) rather than the live one?
+       *
+       * It exists so a later read of the SAME revision — the content channel's
+       * server read, which runs after this port has answered — is made under the
+       * SAME bound this membership answer was made under, instead of guessing. A
+       * settled card that kept its work must keep its content too; a live
+       * reading must not replay a tombstoned pin to get one.
+       *
+       * Optional, and absent reads as the LIVE bound: that is what every caller
+       * written before the content channel was bound meant.
+       */
+      historical?: boolean;
     }
   | null;
 

@@ -13,7 +13,7 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 
 /**
- * The gate-level BLOCKED state (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §V):
+ * The gate-level BLOCKED state (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997 §V):
  * a single blocked panel naming the reason from the closed set, with a REFRESH
  * back to the live gate. It never lets a stale decision through — the gate is no
  * longer the one the reviewer opened. Distinct from a per-target floor (§III),
