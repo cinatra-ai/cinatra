@@ -135,9 +135,43 @@ function recordsADeclaredAnswer(
   return isPlainJsonObject(value);
 }
 
-function declaredTitle(schema: RunInputFieldSchema | undefined): string | null {
+/**
+ * THE DISPLAY NAME A FIELD ACTUALLY DECLARES — never its own key restated
+ * (cinatra#3047 fix leg 8).
+ *
+ * `oas-compiler.ts` composes every input property as `{ type, title:
+ * displayTitle }` where
+ *
+ *   const displayTitle = startInputTitles[title] ?? title;
+ *
+ * over its own comment, "title is the field identifier (camelCase);
+ * inputTitles maps it to a human-readable label." So an agent that declares no
+ * `metadata.cinatra.inputTitles` entry has its FIELD KEY written into the
+ * display-title slot, and reading that slot back as if a person had written it
+ * is how a machine key came to stand where a step name belongs: the eighth
+ * proof round photographed a rail entry reading `spec`.
+ *
+ * A title identical to the field's own key is a form declaring none, on the
+ * compiler's own reading of it, and the caller then takes
+ * `RUN_INPUT_STEP_FALLBACK_LABEL` — "the name of the tab the run page's setup
+ * already carries, rather than a word invented here". Nothing is humanized or
+ * title-cased: no name is invented here, the machine one is simply refused.
+ */
+function declaredTitle(
+  schema: RunInputFieldSchema | undefined,
+  fieldName?: string,
+): string | null {
   const title = schema?.title;
-  return typeof title === "string" && title.trim().length > 0 ? title : null;
+  if (typeof title !== "string") return null;
+  // NORMALIZED ONCE, then compared and returned (codex convergence, fix leg 8).
+  // A title is surrounding whitespace away from being its own field key —
+  // " spec " — and comparing the raw string let that one through and then wrote
+  // it into the rail entry verbatim. The name a step is drawn under is the
+  // trimmed one either way, so there is one reading of the title here.
+  const name = title.trim();
+  if (name.length === 0) return null;
+  if (fieldName !== undefined && name === fieldName.trim()) return null;
+  return name;
 }
 
 /**
@@ -335,7 +369,7 @@ export function buildRunInputSteps(params: {
       answered && recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]);
     return {
       key: `input:${index}` as RunInputStepKey,
-      label: declaredTitle(properties[fieldName]) ?? RUN_INPUT_STEP_FALLBACK_LABEL,
+      label: declaredTitle(properties[fieldName], fieldName) ?? RUN_INPUT_STEP_FALLBACK_LABEL,
       fields: [fieldName],
       answered,
       open,

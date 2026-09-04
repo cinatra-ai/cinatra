@@ -50,6 +50,13 @@ vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => ({
   readRunRecommendationOfferedSet: (...a: unknown[]) => readRunRecommendationOfferedSet(...a),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
   writeRunRecommendationSkip: (...a: unknown[]) => writeRunRecommendationSkip(...a),
+  // The pre-start selection clear (cinatra#3047) is a STORE write, so it is
+  // stubbed like the rest of them even though the surrounding spread keeps
+  // the module's pure exports real.
+  clearRunSelectedSkillRevisionsBeforeStart: vi.fn(() => 0),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: vi.fn(() => true),
   SKIP_RECOMMENDATION_SOURCE: "user_skipped",
 }));
 vi.mock("../store", () => ({
@@ -352,6 +359,12 @@ describe("the settled reading — one mark per skill, derived from the run's own
     const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
     expect(state).toEqual({
       state: "skipped",
+      // The three fields a settled answer carries so the selection is not frozen
+      // (cinatra#3047): the hold a re-decision binds to, whether the run has
+      // started, and this reader's own standing.
+      holdRef: "ref-park-1",
+      runStarted: false,
+      canDecide: true,
       decided: [
         // No name resolves for either id here, so each keeps its id as its
         // label — the truest one available (cinatra#2841).
