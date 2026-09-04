@@ -493,12 +493,12 @@ export type CreateAgentRunInput = {
 // ---------------------------------------------------------------------------
 // Template row serialization helpers
 // ---------------------------------------------------------------------------
-// Extracted to ./agent-template-row-codec (cinatra#3208 file-size ratchet) —
-// the row <-> record mapping is a pure leaf with no db handle, the same shape
-// ./run-status and ./agent-run-serde already have. Re-exported here (grouped
-// with the other seam re-exports per the SSR export-hoisting note above) so
-// `./store` importers of deserializeTemplate are unchanged.
-import { serializeTemplate, deserializeTemplate } from "./agent-template-row-codec";
+// Lives in ./store-template-versions (cinatra#3208 ratchets) — the row <->
+// record mapping is a pure leaf with no db handle, folded in beside the other
+// agent_templates row work rather than given a module of its own, which would
+// add a node to every locked route graph. Re-exported here (grouped with the
+// other seam re-exports above) so every ./store importer stays unchanged.
+import { serializeTemplate, deserializeTemplate } from "./store-template-versions";
 export { deserializeTemplate };
 // ---------------------------------------------------------------------------
 // CRUD — agent_templates

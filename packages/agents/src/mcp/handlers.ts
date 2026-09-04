@@ -100,7 +100,6 @@ import {
   detectCredentialPattern,
 } from "../validate-agent-json";
 import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
-import { syncCompiledTemplateToDb } from "./agent-source-compile-template-sync";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
@@ -143,7 +142,7 @@ import {
   isBlockedEnvFile,
 } from "../scan-package-siblings";
 import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio/client";
-import { installAgentFromPackage } from "../install-from-package";
+import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -3958,7 +3957,7 @@ async function handleAgentBuilderGitCompileAndWrite(
   try {
     // Re-project the compiled result onto the agent_templates row. The
     // version-pairing rule this write encodes lives with it, in
-    // ./agent-source-compile-template-sync (cinatra#3208 file-size ratchet).
+    // ../install-from-package (cinatra#3208 ratchets: off the route graph).
     await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled);
 
     // skills dir lives next to the agent root (handles both new
