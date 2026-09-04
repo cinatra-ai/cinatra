@@ -14,6 +14,13 @@ export type AgentInstanceNavProps = {
    * the agent workspace is Setup / Trigger / Permissions.
    */
   /**
+   * AND `"none"`, WHICH LIGHTS NOTHING (cinatra#3068 fix leg 3). The ratified
+   * drawing, on a step drawn inside this frame: "A step shown inside the frame
+   * selects nothing ... no tab is drawn selected." No trigger in the strip
+   * carries that value, so the strip keeps every tab it has and draws none of
+   * them selected -- the strip stays a pure function of `showTriggerTab`, and
+   * this member changes only what is lit, never what is present.
+ *
    * `"none"` NAMES NO TRIGGER THE STRIP CARRIES (cinatra#3182 item 8, and with
    * it cinatra#3168's dangling reference).
    *
