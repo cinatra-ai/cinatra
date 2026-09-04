@@ -8,6 +8,11 @@ import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reu
 import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
+// The SELECTION only — never the frame module that provides it. This row is
+// reachable from four LOCKED routes, so importing the frame here to read the
+// selection put the whole two-column frame on all four of their graphs
+// (`__tests__/run-surface-rail-selection-narrowness.test.ts`).
+import { useRunStepSelection } from "./run-surface-rail-selection";
 
 // ---------------------------------------------------------------------------
 // THE RUN PAGE'S RAIL VOCABULARY, IN ONE PLACE (cinatra#3188, forward + fix
@@ -115,6 +120,7 @@ export function RailExtraEntry({
   entry,
   reviewHrefBase,
   displayStep,
+  current = false,
 }: {
   entry: RunStepRailEntry;
   reviewHrefBase: string;
@@ -122,11 +128,31 @@ export function RailExtraEntry({
    *  the only `kind: "step"` entry that ever reaches this component). Gates,
    *  verifications and lifecycle decisions draw an icon instead. */
   displayStep?: number;
+  /** Is this the rail's CURRENT entry — the one the reader is standing on
+   *  (cinatra#3149 item 3)? Answered by the rail that draws the row, because
+   *  only the rail holds the anchor: "one entry is highlighted at a time"
+   *  (the ratified drawing, §I.3). A row that opens the record's own page
+   *  answers it for itself below and is never handed `true` at the same time —
+   *  the rail scopes this to the detail being what is open. */
+  current?: boolean;
 }) {
   const isGate = entry.kind === "gate";
   const isVerification = entry.kind === "verification";
   // cinatra#2047 D-5: a lifecycle POLICY decision that opened no gate.
   const isLifecycle = entry.kind === "lifecycleDecision";
+  // THE RUN'S OWN RECORD IS A STEP THAT OPENS (the conformance-fix leg). The
+  // ratified drawing: "Selecting a step opens it on the right ... the page
+  // carries the ONE CARD of the step it belongs to." This row is the rail's last
+  // entry, and pressing it opens the record's page in the run detail. Outside
+  // the run-surface frame there is no selection to make and the row stays the
+  // inert row it always was — `useRunStepSelection` answers `null` there.
+  const isRunMade = entry.kind === "runMade";
+  const selection = useRunStepSelection();
+  // "Selecting a step opens it on the right." A row is a CONTROL only where the
+  // frame actually carries the step it would open — never merely because a
+  // frame is present (the convergence leg).
+  const runMadeOpens = isRunMade && Boolean(selection?.canSelect("runMade"));
+  const runMadeSelected = isRunMade && selection?.selected === "runMade";
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
@@ -193,6 +219,8 @@ export function RailExtraEntry({
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
       data-rail-verification={isVerification ? "true" : undefined}
       data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
+      data-rail-run-made={isRunMade ? "true" : undefined}
+      data-run-surface-rail-selected={isRunMade ? (runMadeSelected ? "true" : "false") : undefined}
       data-rail-lifecycle-decision={isLifecycle ? lifecycleOutcome : undefined}
       data-rail-lifecycle-decided-by={
         isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined
@@ -208,6 +236,10 @@ export function RailExtraEntry({
           href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
           className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-rail-gate-link={entry.gate.reviewTaskId}
+          // The current-position marker sits on the ROW, whatever element the
+          // row is (cinatra#3149 item 3) — a pending review is as often the
+          // entry the reader is standing on as a work step is.
+          aria-current={current ? "step" : undefined}
         >
           {indicatorNode}
           {titleNode}
@@ -219,6 +251,7 @@ export function RailExtraEntry({
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-rail-verification-link={entry.verification.reviewTaskId}
+          aria-current={current ? "step" : undefined}
         >
           {indicatorNode}
           {titleNode}
@@ -244,7 +277,34 @@ export function RailExtraEntry({
             // alignment the wrapper above states.
             isLifecycle && "items-start"
           )}
-          tabIndex={-1}
+          // The record's row is the one row here a reader PRESSES, so it is the
+          // one row that keeps its place in the tab order — an EXPLICIT 0, not
+          // `undefined`. `StepperTrigger` reads `undefined` as "not selected by
+          // the stepper" and emits `-1`, and a finished rail has no internally
+          // selected row at all, so `undefined` took every row out of the tab
+          // order and no keyboard could reach this one (the convergence leg).
+          tabIndex={runMadeOpens ? 0 : -1}
+          aria-current={runMadeSelected || current ? "step" : undefined}
+          // `StepperTrigger` renders `role="tab"` and would otherwise announce
+          // `aria-selected="false"` on the very row `aria-current` calls open.
+          aria-selected={runMadeOpens ? runMadeSelected : undefined}
+          data-action={runMadeOpens ? "open-run-made-step -> step-detail" : undefined}
+          onClick={runMadeOpens ? () => selection?.select("runMade") : undefined}
+          // ENTER AND SPACE, on KEY-UP. `StepperTrigger`'s own key handler calls
+          // `preventDefault()` on Enter and Space, which suppresses the native
+          // click a button would otherwise synthesise — so `onClick` alone left
+          // this row mouse-only. `onKeyUp` is a prop the trigger does not set,
+          // so it reaches the button without displacing the arrow-key roving
+          // focus the trigger's `onKeyDown` provides.
+          onKeyUp={
+            runMadeOpens
+              ? (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  selection?.select("runMade");
+                }
+              : undefined
+          }
         >
           {indicatorNode}
           {titleNode}

@@ -48,6 +48,7 @@ import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
+import { buildReviewTargetContentProjection } from "@/app/artifacts/[id]/review-target-content";
 import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
@@ -188,7 +189,12 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     );
   }
 
-  const surface = await loadReviewGateSurface({ runId, reviewTaskId, actorCtx });
+  const surface = await loadReviewGateSurface({
+    runId,
+    reviewTaskId,
+    actorCtx,
+    buildContent: buildReviewTargetContentProjection,
+  });
 
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;

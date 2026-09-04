@@ -191,7 +191,12 @@ describe("recommendationRailEntry — a decided gate stays on the rail as histor
 describe("the screen composes THROUGH the frame, not beside it", () => {
   it("hands the rail and the run detail to the frame, with the first paint it derived", () => {
     expect(SCREEN_SRC).toMatch(/<RunSurfaceRail\b/);
-    expect(SCREEN_SRC).toMatch(/steps=\{railSteps\}/);
+    // `frameSteps`, not `railSteps`: the steps that HEAD the rail plus the
+    // run's own record, whose row is the rail's last entry and whose page the
+    // frame opens (the conformance-fix leg). `railSteps` is still what the rail
+    // below renumbers by, which the next test pins.
+    expect(SCREEN_SRC).toMatch(/steps=\{frameSteps\}/);
+    expect(SCREEN_SRC).toMatch(/const frameSteps: RunSurfaceRailStep\[\] = runMadeStep/);
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
     expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
     expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);

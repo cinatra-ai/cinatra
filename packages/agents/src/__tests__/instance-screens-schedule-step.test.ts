@@ -142,7 +142,7 @@ describe("the screen composes THROUGH the step, not beside it", () => {
 
   it("puts the run's panels INSIDE the detail slot — never beside the schedule step", () => {
     const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
-    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
+    const detailEnd = SCREEN_SRC.indexOf("if (frameSteps.length > 0) {");
     expect(detailStart).toBeGreaterThan(-1);
     expect(detailEnd).toBeGreaterThan(detailStart);
     const detail = SCREEN_SRC.slice(detailStart, detailEnd);

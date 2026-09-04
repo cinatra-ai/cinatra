@@ -27,6 +27,16 @@ import {
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
+import { RunMadePanel } from "./run-made-panel";
+import {
+  runMadeReading,
+  runMadePlacement,
+  runMadeSaysSomething as runMadeReadingSaysSomething,
+} from "./run-artifact-list";
+import {
+  isRunOutputCaptureSettled,
+  readRunArtifactRecords,
+} from "@/lib/artifacts/run-artifact-records";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 // WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
 // that owns the answer — the same ladder the settled card is drawn from — and
@@ -727,6 +737,9 @@ export function runDetailInitialStep(params: {
   recommendationHeld: boolean;
   hasScheduleStep: boolean;
   hasExecution: boolean;
+  /** Does this run carry its OWN RECORD as the rail's last step? A finished run
+   *  does; a run still working does not. */
+  hasRunMadeStep?: boolean;
   /**
    * THE RUN'S OWN INPUT FORM, WHERE ONE IS BEING ASKED (cinatra#3068).
    *
@@ -755,6 +768,13 @@ export function runDetailInitialStep(params: {
   ) {
     return "schedule";
   }
+  // A FINISHED RUN OPENS ON ITS OWN RECORD. It is LAST in the ladder because a
+  // live hold is the step the run is paused on and the drawing highlights that
+  // one; a run that has ended is paused on nothing, and the drawing's reading of
+  // the last step draws that step ACTIVE on the rail with its page open beside
+  // it. It is also the only way the record has a page of its own to be opened
+  // on, now that it is no longer stacked into the run detail.
+  if (params.hasRunMadeStep) return "runMade";
   return "detail";
 }
 
@@ -1122,6 +1142,51 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  // THE RUN'S OWN RECORD (cinatra#3029, epic #3023 W5; §6 step 6, and the
+  // ratified drawing's section on the run's last step). "A finished run says
+  // what it made": the rail's last entry and its panel exist only for a run that
+  // has FINISHED, and an EMPTY list is a READING ("this run wrote no artifact and
+  // used none"), not an absent entry.
+  //
+  // The read is the materialization ledger's finalized rows plus the run's
+  // context selections, so a row appears because the work REACHED AN ARTIFACT —
+  // on any road, not only the default one.
+  //
+  // A FAILED READ IS NOT AN EMPTY LIST (cinatra#3029, forward + fix leg 1). The
+  // ratified drawing, section I.2: "a reader who sees the empty reading knows
+  // the run kept nothing — NOT THAT THE PAGE FAILED TO LOAD IT." The read used
+  // to be `.catch(() => [])`, which turns any failure — a pool exhaustion, a
+  // schema still initialising, a transient network fault — into the definitive
+  // reading that the run made nothing. `null` is the third answer the conformance
+  // id already declares (`data-state="empty loading error kind:artifact"`): the
+  // read did not answer, so the step and its panel stand down and the page says
+  // nothing about what the run made, rather than saying something false.
+  const runMadeRecords =
+    run && isTerminalRunStatus(run.status)
+      ? await readRunArtifactRecords({ orgId: run.orgId, runId: run.id }).catch(() => null)
+      : [];
+  // The terminal transition commits BEFORE the pickup has typed and written, so
+  // a page served inside that window would read the empty list as the definitive
+  // "this run made nothing" (cinatra#3029, convergence). The entry and its panel
+  // therefore wait for the capture to settle — unless the run already has rows,
+  // which answer the question by themselves.
+  // The reading is decided by the PURE seam in `./run-artifact-list`
+  // (`runMadeReading`), pinned in `__tests__/run-artifact-list.test.ts`, so the
+  // rule this screen obeys is the rule the suite reads — not a second copy of it.
+  const runMadeCaptureSettled =
+    run != null && isTerminalRunStatus(run.status) && runMadeRecords !== null
+      ? runMadeRecords.length > 0 ||
+        (await isRunOutputCaptureSettled({ orgId: run.orgId, runId: run.id }))
+      : false;
+  const runMadeSaysSomething =
+    run != null &&
+    runMadeReadingSaysSomething(
+      runMadeReading({
+        runIsTerminal: isTerminalRunStatus(run.status),
+        records: runMadeRecords,
+        captureSettled: runMadeCaptureSettled,
+      }),
+    );
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -1179,6 +1244,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             reviewTaskId: gateTaskById.get(v.gateId)!,
             outcome: v.outcome,
           })),
+        runMade:
+          run && runMadeSaysSomething && runMadeRecords !== null
+            ? { runId: run.id, artifactCount: runMadeRecords.length }
+            : null,
         lifecycleDecisions: railLifecycleDecisions.map((d) => ({
           eventId: d.eventId,
           artifactId: d.artifactId,
@@ -1317,6 +1386,45 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   });
   const hasRecommendationStep = recommendationEntry !== "none";
 
+  // CAN THE RECORD BE A STEP ON THIS BRANCH AT ALL? (the convergence leg.)
+  //
+  // The record's ROW is the rail's own last entry, drawn by `RunStepRailPanel`
+  // among the run's other rows, which is where the drawing puts it ("the rail's
+  // LAST entry is the run's own record"). So the record can only open as a step
+  // of its own where that rail is drawn BESIDE the frame.
+  //
+  // On the flow branch it is not: `screenHostsStepRail` hands the rail to the
+  // LIVE column inside `OrchestratorStepperPanel`, and that panel is part of the
+  // run detail. Opening a step page there swaps the run detail out and takes the
+  // whole rail with it — the record's own row included — leaving a reader on a
+  // page with no rail, no history and no way back. So on that branch the record
+  // stays inside the run detail exactly as it was, and this leg's page-per-step
+  // reading applies where the rail can actually stand beside it.
+  const runMadeRailAvailable = screenDrawsPageRail({
+    runStatus: run?.status ?? null,
+    railEntryCount: rail?.entries.length ?? 0,
+    // The steps that HEAD the rail, counted the same way the rail counts them
+    // below: the recommendation step and the schedule step, and only those.
+    gateStepCount: (hasRecommendationStep ? 1 : 0) + (scheduleRailRef !== null ? 1 : 0),
+    panel: runDetailPanel,
+    stepperStepCount: stepperSteps.length,
+  });
+  // ONE ANSWER, READ TWICE (cinatra#3149 item 2). The record's place is decided
+  // by the pure seam `runMadePlacement` and read below both where the record
+  // becomes a step and where it survives inside the run detail — so the two
+  // mounts cannot both fire and stack the record on the gate's own card, which
+  // "two cards are never stacked in one detail" rules out.
+  const runMadeWhere = runMadePlacement({
+    saysSomething: run != null && runMadeSaysSomething,
+    railAvailable: runMadeRailAvailable,
+    // The branch with no step pages draws the gate's own review card into THIS
+    // detail, so while that gate is undecided the record would be stacked on it
+    // — the instant cinatra#3149 item 2 measured. The screen already knows the
+    // answer server-side (`initialReviewGate.awaiting`, read once above), so it
+    // hands it to the seam rather than letting the detail find out by drawing.
+    detailHoldsPendingGateCard: Boolean(initialReviewGate?.awaiting),
+  });
+  const runMadeIsAStep = runMadeWhere === "step-page";
   /**
    * IS THE TWO-COLUMN RUN FRAME DRAWN BESIDE THE DETAIL COLUMN?
    * (cinatra#3047 fix leg 8.)
@@ -1430,6 +1538,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     recommendationHeld,
     hasScheduleStep: scheduleRailRef !== null,
     hasExecution: runHasExecution,
+    hasRunMadeStep: runMadeIsAStep,
   });
 
   // The scheduling step's duration banner, computed ONLY on the branch that
@@ -1547,6 +1656,18 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // nothing from them, so the move is an ordering only.
               const detailNode = (
                 <>
+              {/* "What this run made" IS NORMALLY NOT DRAWN HERE. It is the
+                  rail's LAST STEP and it has a page of its own — see
+                  `runMadeStep` above. Stacking it into this fragment put it in
+                  the same detail as the review gate's card, which the drawing
+                  rules out: "two cards are never stacked in one detail".
+                  It survives here on the ONE branch where the record cannot be a
+                  step — the flow branch, whose rail lives inside this very
+                  detail (`runMadeIsAStep`), and where opening a page of its own
+                  would leave the reader with no rail at all. */}
+              {runMadeWhere === "in-run-detail" ? (
+                <RunMadePanel records={runMadeRecords ?? []} runStatus={run.status} />
+              ) : null}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the
                   SAME component the chat transcript and the review page mount.
@@ -1897,6 +2018,49 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
                 />
               ) : null;
+              // THE RUN'S OWN RECORD IS A STEP, AND ITS PAGE CARRIES ONE CARD.
+              //
+              // The ratified drawing: "One page per gate — the step's own card,
+              // and nothing else. Selecting a step opens THAT STEP'S PAGE in the
+              // run detail, and the page carries the ONE CARD of the step it
+              // belongs to ... two cards are never stacked in one detail." And,
+              // for this step in particular: "The rail's LAST entry is the run's
+              // own record, and its page lists the run's work."
+              //
+              // The record used to be composed into `detailNode` beside the
+              // recommendation card, the audit cards and the stepper panel — and
+              // the stepper panel is where a review gate's own card opens. So a
+              // finished run whose last gate had been reviewed drew both cards
+              // stacked in one detail. It is a STEP now: the rail's last row
+              // selects it (`RailExtraEntry`), and the frame swaps the detail for
+              // this one card, exactly as it does for every other step.
+              //
+              // ITS ROW IS `null` HERE because the row already exists — the
+              // rail's own last entry, drawn by `RunStepRailPanel` among the
+              // run's other rows, where the drawing puts it. A row drawn here
+              // would be a second one, at the TOP of the rail, where the steps
+              // that head the rail are drawn.
+              const runMadeStep: RunSurfaceRailStep | null =
+                run && runMadeIsAStep
+                  ? {
+                      key: "runMade",
+                      row: null,
+                      // The run has ended, so the entry is history the same way a
+                      // resolved gate's entry is.
+                      settled: true,
+                      surface: (
+                        <RunMadePanel records={runMadeRecords ?? []} runStatus={run.status} />
+                      ),
+                    }
+                  : null;
+              // The steps the FRAME resolves a selection over. `railSteps` stays
+              // the steps that HEAD the rail — it is what renumbers the rail
+              // below them (`stepOffset`) and what `screenDrawsPageRail` counts —
+              // and the record, whose row is already down there, is added only
+              // here.
+              const frameSteps: RunSurfaceRailStep[] = runMadeStep
+                ? [...railSteps, runMadeStep]
+                : railSteps;
               // THE TWO COLUMNS. With a gate step, the frame owns them: the
               // steps head the rail and they open ON THE RIGHT, in the run
               // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,
@@ -1904,10 +2068,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // — "a gate step opens the gate's own surface in place … right here
               // in the run detail, under the same rail"). Without one, the
               // surface is what it always was.
-              if (railSteps.length > 0) {
+              if (frameSteps.length > 0) {
                 return (
                   <RunSurfaceRail
-                    steps={railSteps}
+                    steps={frameSteps}
                     rail={railNode}
                     detail={detailNode}
                     initialSelection={initialStep}

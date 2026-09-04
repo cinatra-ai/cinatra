@@ -67,6 +67,8 @@
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
     "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",
+    "./run-artifact-list": "./src/run-artifact-list.ts",
+    "./end-node-output-pickup": "./src/end-node-output-pickup.ts",
     "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
     "./lifecycle-verification-read-store": "./src/lifecycle-verification-read-store.ts",
     "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",

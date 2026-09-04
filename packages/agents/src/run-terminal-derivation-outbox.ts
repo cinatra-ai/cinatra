@@ -20,26 +20,38 @@ import type { GuardedRunTx } from "./org-write-run-seam";
 // capture path here (its `derivationOutbox` option is unchanged for callers).
 //
 // The transaction-local facts a WayFlow terminal-success transition captures so
-// the post-terminal derivation job can type the run's final output against the
-// agent's validated `produces` WITHOUT re-reading run history. Deliberately
-// carries NO registry read (produces/binding discovery is the job's concern) —
-// it is written from purely transaction-local values inside the terminal tx.
+// the post-terminal pickup can run the default road WITHOUT re-reading run
+// history. Deliberately carries NO registry read (produces/binding discovery is
+// the pickup's concern) — it is written from purely transaction-local values
+// inside the terminal tx.
+//
+// cinatra#3029 (item 0.17). What is captured changed: not the run's final
+// RESPONSE TEXT, which is not an output and takes no road, but the FAMILY of
+// end-node outputs at or above the one-kilobyte document floor that no binding
+// named — each with its serialised value, its reserved ledger id and its hash.
+// `selectEndNodeOutputPickupItems` (./end-node-output-pickup) builds it; this
+// type is what the terminal transaction persists.
+export type EndNodeOutputCapture = {
+  outputId: string;
+  outputName: string;
+  source: "end_node_output" | "file";
+  content: string;
+  contentIsJson: boolean;
+  contentHash: string;
+  byteLength: number;
+};
+
 export type DerivationOutboxCapture = {
   orgId: string;
   templateId: string;
-  /** The run's pinned semver (null for a draft/dist-tag run — the job then
+  /** The run's pinned semver (null for a draft/dist-tag run — the pickup then
    *  resolves the current default manifest). */
   packageVersion: string | null;
-  /** The run's runBy principal — the derived artifact's createdBy + the advisory
-   *  notification recipient. */
+  /** The run's runBy principal — the written artifacts' createdBy. */
   createdBy: string | null;
-  /** The captured final-output snapshot (last-agent-message text, or its JSON
-   *  serialization). */
-  content: string;
-  /** Whether `content` parsed as JSON (drives the derived artifact's MIME). */
-  contentIsJson: boolean;
-  /** sha256(content) — the `derived_output` ledger dedupe component. */
-  contentHash: string;
+  /** The default road's item family. Empty ⇒ the run made no document; the
+   *  pickup settles the row without writing anything. */
+  items: EndNodeOutputCapture[];
 };
 
 /**
@@ -94,9 +106,12 @@ async function commitTerminalTransitionWithOutbox(
       templateId: outbox.templateId,
       packageVersion: outbox.packageVersion,
       createdBy: outbox.createdBy,
-      content: outbox.content,
-      contentIsJson: outbox.contentIsJson,
-      contentHash: outbox.contentHash,
+      // The RETIRED response-text columns stay NULL (cinatra#3029): a row
+      // captured after this slice carries `items` and nothing else.
+      content: null,
+      contentIsJson: false,
+      contentHash: null,
+      items: outbox.items,
       status: "pending",
     })
     .onConflictDoNothing();

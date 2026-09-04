@@ -186,6 +186,10 @@ export type CreateSemanticArtifactInput = {
    * today's fail-soft. Unset ⇒ existing whole-`produces` behavior.
    */
   producerAssertionExtension?: string;
+  /** The PINNED version of `producerAssertionExtension`, recorded beside the
+   *  run on the produced event (cinatra#3029, plan §8.2). Omitted ⇒ the event
+   *  records NULL rather than a guessed version. */
+  producerAssertionExtensionVersion?: string | null;
   /**
    * The declared type's accepted file MIME forms, when the caller already
    * resolved them (epic #1785, wave A3). The writer enforces the persisted
@@ -1103,6 +1107,11 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
             originKind,
             producerRunId: persistedRunId,
             producerAgentId: null,
+            // cinatra#3029 (plan §8.2): the producing extension and its pinned
+            // version, beside the run. The producer assertion already names the
+            // extension this write is scoped to; the caller supplies the pin.
+            producingExtension: input.producerAssertionExtension ?? null,
+            producingExtensionVersion: input.producerAssertionExtensionVersion ?? null,
           });
           return op ? [op] : [];
         })(),

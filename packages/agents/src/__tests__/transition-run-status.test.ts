@@ -180,9 +180,17 @@ function derivationCapture() {
     templateId: "tmpl-1",
     packageVersion: null,
     createdBy: "user-1",
-    content: "final output",
-    contentIsJson: false,
-    contentHash: "abc123",
+    items: [
+      {
+        outputId: "cinatra:run-output:draft",
+        outputName: "draft",
+        source: "end_node_output" as const,
+        content: "final output",
+        contentIsJson: false,
+        contentHash: "0".repeat(64),
+        byteLength: 1024,
+      },
+    ],
   };
 }
 

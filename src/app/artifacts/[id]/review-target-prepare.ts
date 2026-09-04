@@ -43,12 +43,10 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
-import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 import {
-  buildArtifactContentProjection,
-  type ArtifactRepresentationForm,
-} from "@/lib/artifacts/artifact-content-channel";
-import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+  absentArtifactContent,
+  buildArtifactRendererProps,
+} from "@/lib/artifacts/artifact-renderer-props";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -59,6 +57,8 @@ import {
   type RevisionMemberOutcome,
   isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
+
+import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 
 import { pickArtifactRenderer } from "./renderer-dispatch";
 import {
@@ -74,10 +74,31 @@ export type ReviewRunGatePorts = Pick<
   "verifyRunAccess" | "readGatePinnedTargets"
 >;
 
+/**
+ * THE CONTENT ROAD, SUPPLIED BY THE SURFACE THAT DRAWS IT
+ * (cinatra#3029, epic #3023 W5).
+ *
+ * The projection itself is built by `review-target-content.ts`; the binder only
+ * calls what it is handed. That is what keeps the channel, its contract module
+ * and the digest module off the four locked routes that reach this binder
+ * without ever running a preparation — see that module's header for the
+ * measurement, and `review-target-content-narrowness.test.ts` for the guard.
+ */
+export type ReviewTargetContentPort = (input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  mime: string;
+  member: NonNullable<RevisionMemberOutcome>;
+}) => Promise<ArtifactContentProjection>;
+
 /** Build the artifact-side ports bound to the reviewing actor + org. */
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
+  /** The content road. A binder handed none draws the channel's own named
+   *  absence, which is what every caller that never draws a target wants. */
+  buildContent?: ReviewTargetContentPort;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -299,41 +320,19 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED.
-      //
-      // It used to pass the named absence here, and the consequence was the
-      // whole of the defect: a display that draws from `props.content` — the
-      // build-map renderer a text artifact resolves to — was handed "nothing is
-      // pinned" for a revision holding a real draft, and drew its own floor over
-      // it. The slot read as empty on a run whose work was right there.
-      //
-      // The read is the channel's own: the class comes from the FORM the
-      // substrate recorded (never from a caller claim), the caps are the
-      // channel's, and every failure comes back as a NAMED absence the display
-      // can tell apart from "too large to carry". Under the SAME bound the
-      // membership answer was made under, so a settled card keeps its work and a
-      // live reading never replays a tombstoned pin.
-      content: await buildArtifactContentProjection(
-        {
-          orgId,
-          artifactId: artifact.artifactId,
-          representationRevisionId,
-          form: memberForm(input.member),
-          mime,
-        },
-        createPinnedSubstanceReader({
-          liveOnly: input.member.historical !== true,
-          // The non-file membership answer already carried the pinned
-          // configuration record and its digest; the channel takes THAT rather
-          // than resolving the same row a second time.
-          carriedConfiguration: fileBacked
-            ? null
-            : {
-                configuration: input.member.configuration ?? null,
-                digest: input.member.configurationDigest ?? null,
-              },
-        }),
-      ),
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED (fix leg 7),
+      // through the port the drawing surface supplies. See
+      // `review-target-content.ts` for what each class reads, which one still
+      // answers an honest absence, and why the road lives there.
+      content: ctx.buildContent
+        ? await ctx.buildContent({
+            orgId: ctx.orgId,
+            artifactId: artifact.artifactId,
+            representationRevisionId,
+            mime,
+            member: input.member,
+          })
+        : absentArtifactContent(representationRevisionId),
     });
   };
 
@@ -345,17 +344,6 @@ export function bindArtifactReviewPorts(ctx: {
     resolveMount,
     buildProps,
   };
-}
-
-/**
- * The member's own recorded form, as the content channel names it. An absent
- * form reads as `file` for the reason `isFileFormMember` gives: that is what
- * every caller written before enabler 0.10 meant.
- */
-function memberForm(
-  member: NonNullable<RevisionMemberOutcome>,
-): ArtifactRepresentationForm {
-  return member.form ?? "file";
 }
 
 /**
@@ -372,7 +360,12 @@ export async function prepareArtifactReviewTargets(args: {
   orgId: string;
   actor: ActorContext;
   runGatePorts: ReviewRunGatePorts;
+  buildContent?: ReviewTargetContentPort;
 }): Promise<PrepareReviewResult> {
-  const artifactPorts = bindArtifactReviewPorts({ orgId: args.orgId, actor: args.actor });
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    buildContent: args.buildContent,
+  });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

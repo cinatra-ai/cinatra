@@ -80,6 +80,7 @@ import {
 import {
   bindArtifactReviewPorts,
   prepareArtifactReviewTargets,
+  type ReviewTargetContentPort,
   type ReviewRunGatePorts,
 } from "./review-target-prepare";
 
@@ -120,6 +121,11 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
 export async function prepareReviewTargets(args: {
   input: PrepareReviewInput;
   actorCtx: ReviewActorContext;
+  /** The content road, from the surface that draws these targets. REQUIRED
+   *  here: every caller prepares targets a surface DRAWS, so an omitted road
+   *  would be a silent fall to the channel's named absence. The port stays
+   *  optional only on the lower-level binder, which decision-only paths use. */
+  buildContent: ReviewTargetContentPort;
 }): Promise<PrepareReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
@@ -132,6 +138,7 @@ export async function prepareReviewTargets(args: {
     orgId: actorCtx.orgId,
     actor: kernelActor,
     runGatePorts: bindReviewRunGatePorts(actorCtx),
+    buildContent: args.buildContent,
   });
 }
 
@@ -354,6 +361,11 @@ export async function loadReviewGateSurface(args: {
   runId: string;
   reviewTaskId: string;
   actorCtx: ReviewActorContext;
+  /** The content road, from the surface that draws these targets. REQUIRED:
+   *  a loader answers a surface that DRAWS, so it may not fall silently to the
+   *  channel's named absence — see `review-target-content.ts` for why the road
+   *  is a port and not an import. */
+  buildContent: ReviewTargetContentPort;
 }): Promise<ReviewSurfaceModel> {
   const { runId, reviewTaskId, actorCtx } = args;
 
@@ -407,6 +419,7 @@ export async function loadReviewGateSurface(args: {
     const history = await prepareReviewTargets({
       input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
       actorCtx,
+      buildContent: args.buildContent,
     });
     if (!history.ok) {
       return history.error.kind === "run-access-denied"
@@ -434,6 +447,7 @@ export async function loadReviewGateSurface(args: {
   const prepared = await prepareReviewTargets({
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
+    buildContent: args.buildContent,
   });
   if (!prepared.ok) {
     switch (prepared.error.kind) {

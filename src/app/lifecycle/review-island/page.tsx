@@ -101,6 +101,7 @@ import { redirect } from "next/navigation";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.server";
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
+import { buildReviewTargetContentProjection } from "@/app/artifacts/[id]/review-target-content";
 import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
@@ -235,6 +236,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     runId,
     reviewTaskId,
     actorCtx,
+    buildContent: buildReviewTargetContentProjection,
   });
   // `not-authorized` and `blocked` draw nothing here — see the header. It is one
   // empty document either way, so a reader still cannot tell WHY it is empty.

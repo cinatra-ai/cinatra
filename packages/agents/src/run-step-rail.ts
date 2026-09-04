@@ -66,7 +66,11 @@ export type RailSource =
   | "stepResult"
   | "gate"
   | "verification"
-  | "lifecycleDecision";
+  | "lifecycleDecision"
+  // cinatra#3029 (epic #3023 W5) — the run's OWN RECORD: the rail's last entry,
+  // whose page lists what the run made. It is not a step the run executed, so it
+  // dedupes with nothing and always trails.
+  | "runMade";
 
 /** A rail entry's lifecycle state, derived purely from the merged evidence.
  * `skipped` is a TERMINAL, non-blocking state: the lifecycle policy deliberately
@@ -74,17 +78,39 @@ export type RailSource =
  * more will happen) and not "completed" (no work was done). */
 export type RailStatus = "completed" | "pending" | "resolved" | "upcoming" | "skipped";
 
+/**
+ * The rail statuses that are TERMINAL — an entry the reader owes nothing on.
+ * `completed` (the step ran), `resolved` (the gate/record was settled) and
+ * `skipped` (the policy decided not to fire) all say "this one is behind you".
+ *
+ * There is exactly ONE definition because the rail must read ONE way: the
+ * "you are here" anchor below and the run's own record above both ask this
+ * same question, and the second capture measured what happens when two places
+ * answer it differently — a resolved "Done" under a pending "Review".
+ */
+export const TERMINAL_RAIL_STATUSES: ReadonlySet<RailStatus> = new Set<RailStatus>([
+  "completed",
+  "resolved",
+  "skipped",
+]);
+
 /** One merged rail entry. */
 export interface RunStepRailEntry {
   /** Stable identity — dedup key AND React key. */
   key: string;
   /** Sort position (see ORDERING). */
   ordinal: number;
-  kind: "step" | "gate" | "verification" | "lifecycleDecision";
+  kind: "step" | "gate" | "verification" | "lifecycleDecision" | "runMade";
   label: string;
   status: RailStatus;
   /** The union of contributing sources (sorted, stable). */
   sources: RailSource[];
+  /** Present iff kind==="runMade" (cinatra#3029): the run's own record — how many
+   * artifacts its page will list. Zero is a READING ("this run wrote no artifact
+   * and used none"), never an absent entry. */
+  runMade?: {
+    artifactCount: number;
+  };
   /** Present iff kind==="gate": the linkage the rail entry deep-links into the
    * relocated review surface with, plus the read-only-history discriminator. */
   gate?: {
@@ -199,6 +225,9 @@ export interface BuildRunStepRailInput {
    * SKIPPED / PENDING one — and a fired one whose gate is missing — becomes its
    * own entry carrying the lattice reason. */
   lifecycleDecisions?: readonly RailLifecycleDecision[];
+  /** The run's OWN RECORD, for the rail's LAST entry (cinatra#3029). Absent on a
+   * run that has not finished — "a finished run says what it made". */
+  runMade?: RailRunMadeMarker | null;
 }
 
 export interface RunStepRail {
@@ -232,12 +261,22 @@ function gateTime(v: string | number | Date): number {
  * Merge the three step sources + the run's gates into ONE ordered rail per the
  * contract documented at the top of this file. Pure and deterministic.
  */
+/** The run's own record, for the rail's LAST entry (cinatra#3029). Present on a
+ *  run that has FINISHED — the drawing's reading is "a finished run says what it
+ *  made", so an in-flight run has no such entry. `artifactCount` is 0 for the
+ *  empty reading, which is a reading and not an absence. */
+export type RailRunMadeMarker = {
+  runId: string;
+  artifactCount: number;
+};
+
 export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   const templateSteps = input.templateSteps ?? [];
   const submissions = input.submissions ?? [];
   const messages = input.messages ?? [];
   const stepResults = input.stepResults ?? [];
   const gates = input.gates ?? [];
+  const runMade = input.runMade ?? null;
 
   // key → { entry, sources set } accumulator so dedup is order-independent.
   const byKey = new Map<string, { entry: RunStepRailEntry; sources: Set<RailSource> }>();
@@ -482,6 +521,48 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
     });
   }
 
+  // (+) THE RUN'S OWN RECORD (cinatra#3029, epic #3023 W5). "A finished run says
+  //     what it made. The rail's last entry is the run's own record, and its page
+  //     lists the run's work." It carries no gate, no submission and no step
+  //     result, so it dedupes with nothing; it takes the ordinal AFTER everything
+  //     already on the rail, which is what makes it the LAST entry however the
+  //     spine was merged.
+  //
+  //     ITS STATUS IS NOT UNCONDITIONALLY `resolved`. A run reaches its terminal
+  //     status on its own, and the default road's pickup opens the review gate
+  //     that follows AFTERWARDS — so a finished run legitimately coexists with an
+  //     open gate. That is real product state, not a data fault. What is NOT
+  //     legitimate is the rail reading two ways at once about it: the second
+  //     capture measured "Done" resolved sitting under a "Review" entry that was
+  //     still pending, on a page that also said "Awaiting your decision". The
+  //     rail is ORDERED — once an entry is open, nothing after it may read as
+  //     finished. So the run's record is `resolved` only when every entry before
+  //     it is terminal, and `upcoming` (the rail's own "not reached yet") while
+  //     any of them is still open. Either way it is never the "you are here"
+  //     anchor: `activeOrdinal` takes the FIRST open entry, which is the gate
+  //     that is actually waiting on the reader.
+  if (runMade) {
+    let maxOrdinal = 0;
+    let openEntryBefore = false;
+    for (const { entry } of byKey.values()) {
+      maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
+      if (!TERMINAL_RAIL_STATUSES.has(entry.status)) openEntryBefore = true;
+    }
+    const key = `runMade:${runMade.runId}`;
+    upsert(
+      key,
+      () => ({
+        key,
+        ordinal: maxOrdinal + 1,
+        kind: "runMade" as const,
+        label: "Done",
+        status: (openEntryBefore ? "upcoming" : "resolved") as RailStatus,
+        runMade: { artifactCount: runMade.artifactCount },
+      }),
+      "runMade",
+    );
+  }
+
   // Finalize: attach sorted source unions, then total-order sort.
   const entries: RunStepRailEntry[] = [];
   for (const { entry, sources } of byKey.values()) {
@@ -490,10 +571,8 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   }
   entries.sort((a, b) => (a.ordinal !== b.ordinal ? a.ordinal - b.ordinal : a.key.localeCompare(b.key)));
 
-  // `skipped` is TERMINAL (the policy decided not to fire) — like completed and
-  // resolved it can never be the "you are here" anchor.
-  const active = entries.find(
-    (e) => e.status !== "completed" && e.status !== "resolved" && e.status !== "skipped",
-  );
+  // The "you are here" anchor is the FIRST entry that is not terminal — read
+  // through `TERMINAL_RAIL_STATUSES`, the same set the run's own record asks.
+  const active = entries.find((e) => !TERMINAL_RAIL_STATUSES.has(e.status));
   return { entries, activeOrdinal: active ? active.ordinal : null };
 }

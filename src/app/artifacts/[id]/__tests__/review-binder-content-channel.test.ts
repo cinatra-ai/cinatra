@@ -37,6 +37,12 @@ vi.mock("@/lib/artifacts/local-disk-blob-store", () => ({
 }));
 
 const { bindArtifactReviewPorts } = await import("../review-target-prepare");
+// THE ROAD IS THE PORT THE DRAWING SURFACE SUPPLIES (cinatra#3029 W5): the
+// binder is reached statically by four locked routes that never prepare a
+// review, so the content channel lives in its own module and arrives here the
+// way every drawing surface hands it over. What is pinned below is unchanged --
+// the props a reviewed target is built with carry the revision's own substance.
+const { buildReviewTargetContentProjection } = await import("../review-target-content");
 
 const actor = { actorType: "human", userId: "u" } as unknown as ActorContext;
 
@@ -79,7 +85,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
     });
     openByStorageKey.mockResolvedValue(bytes(DRAFT));
 
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
     const props = await ports.buildProps({
       artifact,
       representationRevisionId: "rev-1",
@@ -107,7 +117,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
     resolveArtifactVersionForServe.mockReturnValue(null);
     resolveNonFileArtifactRevision.mockReturnValue(null);
 
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
     const props = await ports.buildProps({
       artifact,
       representationRevisionId: "rev-1",
@@ -125,7 +139,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
   });
 
   it("a NON-text file form says `unsupported-form` — never a text-shaped absence", async () => {
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
     const props = await ports.buildProps({
       artifact,
       representationRevisionId: "rev-1",
@@ -140,7 +158,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
   });
 
   it("a dashboard revision carries its PINNED configuration, and no byte address", async () => {
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
     const props = await ports.buildProps({
       artifact,
       representationRevisionId: "rev-1",
@@ -161,7 +183,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
   it("the content read takes the SAME bound the membership answer was made under", async () => {
     resolveArtifactVersionForServe.mockReturnValue(null);
     resolveNonFileArtifactRevision.mockReturnValue(null);
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
 
     await ports.buildProps({
       artifact,
@@ -196,7 +222,11 @@ describe("the review binder — the props it builds CARRY the pinned revision's 
       sizeBytes: 1,
       originKind: "upload",
     });
-    const ports = bindArtifactReviewPorts({ orgId: "org_3047", actor });
+    const ports = bindArtifactReviewPorts({
+      orgId: "org_3047",
+      actor,
+      buildContent: buildReviewTargetContentProjection,
+    });
     // Without the stamp the two readings are indistinguishable by the time the
     // props builder runs, and the settled card silently loses its content.
     expect(ports.revisionMember("art-1", "rev-1")).toMatchObject({ historical: false });

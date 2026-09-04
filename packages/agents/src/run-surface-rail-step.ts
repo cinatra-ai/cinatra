@@ -45,6 +45,13 @@ export type RunInputStepKey = `input:${number}`;
 export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
+  // THE RUN'S OWN RECORD, as a step with its own page. The ratified drawing:
+  // "The rail's LAST entry is the run's own record, and its page lists the run's
+  // work" -- and "one page per gate: the step's own card, and nothing else ...
+  // two cards are never stacked in one detail". So the record is selected like
+  // any other step and opens ALONE, instead of riding inside the run detail
+  // beneath whatever else that detail was already drawing.
+  | "runMade"
   | "detail";
 
 /** A step that HEADS the rail — every selection but the run's own detail. */

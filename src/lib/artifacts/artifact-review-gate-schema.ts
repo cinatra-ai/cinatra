@@ -238,6 +238,13 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   -- Processing status of the produced-event handoff to S1 orchestration.
   status                     text NOT NULL DEFAULT 'pending'
                                CHECK (status IN ('pending','processed','reconciled')),
+  -- The producing extension and its PINNED version, beside the run
+  -- (cinatra#3029, plan §8.2: "gains the producing extension and its pinned
+  -- version beside the run, for a mid-run write made by an embedded agent: the
+  -- datum the repair road of the sibling plan reads"). Nullable — an emitter
+  -- that cannot name one records NULL rather than a guess.
+  producing_extension          text,
+  producing_extension_version  text,
   created_at                 timestamptz NOT NULL DEFAULT now(),
   processed_at               timestamptz,
   CONSTRAINT artifact_produced_outbox_revision_uniq UNIQUE (artifact_id, representation_revision_id, event_kind)
@@ -1072,5 +1079,84 @@ export function runRecommendationOfferedSetSchemaQueries(schemaName: string): Qu
       text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_OFFERED_SET_RUN_INDEX}
   ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (run_id)`,
     },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// `artifact_materializations` — the artifact-materialization idempotency ledger
+// (cinatra#923) — and `artifact_detection_settings`, the detection ladder's
+// per-organisation switch (cinatra#3029, epic #3023 W5).
+//
+// CO-LOCATED HERE, not in a leaf of their own, for the reason this file already
+// states about the lifecycle-interceptions family: this module is ALREADY
+// route-reachable, so folding DDL into it adds no route-graph node, while
+// `src/lib/drizzle-store.ts` is a baselined file-size-ratchet bottleneck at its
+// ceiling and a ceiling may only ever shrink. A slice that must ADD a column to
+// the ledger therefore moves the table out rather than growing that file.
+//
+// TWINS: migrations/core/core__0071 (the `derived_output` path value) and
+// migrations/core/core__0100 (the `default_road` path value, the two verdict
+// columns, and the settings table). The DDLs MUST stay identical.
+// ---------------------------------------------------------------------------
+export function materializationLedgerSchemaQueries(
+  schemaName: string,
+): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    // ---- artifact_materializations idempotency ledger (cinatra#923) ----
+
+    // Claim-then-write-then-finalize journal for declarative artifact
+    // materialization (the install-op-journal shape). One row per attempted
+    // materialization; the 4-part unique key is the RETRY-idempotency
+    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
+    // hits the same key, reads the finalized row's refs and returns them
+    // instead of writing a second artifact. `phase` transitions
+    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
+    // artifact write — no window in which a committed artifact is invisible
+    // to the ledger). An unfinalized (crashed) claim is re-used by the next
+    // re-drive.
+    //
+    // `output_id` identity per path: the EndNode output name for
+    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
+    // the authoring step id for `llm_emit` provenance rows (unique per emit,
+    // so legitimately distinct same-byte emits never collide on the key).
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_materializations" (
+  id                          text PRIMARY KEY,
+  org_id                      text NOT NULL,
+  run_id                      text NOT NULL,
+  output_id                   text NOT NULL,
+  node_id                     text,
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output','default_road')),
+  extension                   text NOT NULL,
+  content_hash                text NOT NULL,
+  artifact_id                 text,
+  representation_revision_id  text,
+  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
+  -- The default road's verdict (cinatra#3029, plan §8.2). NULL on every row the
+  -- four declarative paths write — no ladder ran on those.
+  decided_rung                text,
+  decided_verdict             jsonb,
+  created_at                  timestamptz NOT NULL DEFAULT now()
+)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${q}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
+    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
+    // declarative rows of one run by extension + content hash.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${q}"."artifact_materializations" (run_id, extension, content_hash)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${q}"."artifact_materializations" (org_id, run_id)` },
+    // ---- artifact_detection_settings (cinatra#3029, epic #3023 W5) ----
+    //
+    // The detection ladder's model rung is switchable PER ORGANISATION (item
+    // 0.18: "a per-organisation switch that turns the rung off and yields plain
+    // text"). ABSENT ROW means ON, so a fresh instance and an upgraded one
+    // behave identically and nothing has to be backfilled; a row with
+    // `model_rung_enabled = false` turns the rung off for that organisation and
+    // the ladder yields plain text without reaching a runtime at all. It lives
+    // beside the ledger because the ledger row is where its effect is READ: the
+    // rung the switch turns off is the one whose verdict that row records.
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_detection_settings" (
+  org_id             text PRIMARY KEY,
+  model_rung_enabled boolean NOT NULL DEFAULT true,
+  updated_at         timestamptz NOT NULL DEFAULT now()
+)` },
   ];
 }
