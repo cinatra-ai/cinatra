@@ -376,7 +376,7 @@ jobs:
     name: RBAC authz unit tests
     needs: detect
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     timeout-minutes: 5
     steps:
       - name: Guard — detect must have succeeded
@@ -427,7 +427,7 @@ jobs:
     name: context-resolve route response shape
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -472,7 +472,7 @@ jobs:
     name: Better Auth schema parity
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1319,7 +1319,7 @@ jobs:
     name: Canonical extension invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1566,7 +1566,7 @@ jobs:
     name: devperf invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1612,7 +1612,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
     # same file already declare. Without it this job inherits the WORKFLOW-level
