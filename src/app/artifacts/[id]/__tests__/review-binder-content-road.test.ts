@@ -18,12 +18,21 @@
  * `buildArtifactContentProjection` directly would pass even with the hardcoded
  * absence still in place, so it could never have caught the defect this leg
  * exists to fix.
+ *
+ * The read port itself is STUBBED at the module the binder binds — the pinned
+ * substance reader — because what is pinned here is the BINDER's road, not the
+ * reader's own matrix, which carries its own suite.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
-import { artifactTextChannelPorts } from "@/lib/artifacts/artifact-pinned-text";
+
+const { readPinnedSubstance } = vi.hoisted(() => ({ readPinnedSubstance: vi.fn() }));
+
+vi.mock("@/lib/artifacts/artifact-content-substance-reader", () => ({
+  createPinnedSubstanceReader: () => ({ readPinnedSubstance }),
+}));
 
 import { bindArtifactReviewPorts } from "../review-target-prepare";
 
@@ -53,15 +62,20 @@ function build() {
   });
 }
 
+beforeEach(() => {
+  readPinnedSubstance.mockReset();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("the review binder's content road", () => {
   it("carries the PINNED revision's text into the card's props", async () => {
-    const read = vi
-      .spyOn(artifactTextChannelPorts, "readPinnedSubstance")
-      .mockResolvedValue({ class: "text", text: "# Pinned\n\nthe approved words" });
+    const read = readPinnedSubstance.mockResolvedValue({
+      class: "text",
+      text: "# Pinned\n\nthe approved words",
+    });
 
     const props = await build();
 
@@ -81,9 +95,7 @@ describe("the review binder's content road", () => {
   });
 
   it("degrades a FAILED read to the named absence instead of rejecting", async () => {
-    vi.spyOn(artifactTextChannelPorts, "readPinnedSubstance").mockRejectedValue(
-      new Error("blob store unavailable"),
-    );
+    readPinnedSubstance.mockRejectedValue(new Error("blob store unavailable"));
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const props = await build();
@@ -98,9 +110,7 @@ describe("the review binder's content road", () => {
   });
 
   it("does not let a failed read reach the preparation core as a rejection", async () => {
-    vi.spyOn(artifactTextChannelPorts, "readPinnedSubstance").mockRejectedValue(
-      new Error("blob store unavailable"),
-    );
+    readPinnedSubstance.mockRejectedValue(new Error("blob store unavailable"));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     // A rejection here would escape `prepareOneTarget` and blank EVERY target on
@@ -109,14 +119,11 @@ describe("the review binder's content road", () => {
   });
 
   it("stays read-only by construction whichever way the read went", async () => {
-    vi.spyOn(artifactTextChannelPorts, "readPinnedSubstance").mockRejectedValue(new Error("x"));
+    readPinnedSubstance.mockRejectedValue(new Error("x"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const failed = await build();
 
-    vi.spyOn(artifactTextChannelPorts, "readPinnedSubstance").mockResolvedValue({
-      class: "text",
-      text: "ok",
-    });
+    readPinnedSubstance.mockResolvedValue({ class: "text", text: "ok" });
     const read = await build();
 
     for (const props of [failed, read]) {

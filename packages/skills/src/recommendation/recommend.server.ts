@@ -18,7 +18,11 @@ import "server-only";
 import { readSkillMatchesByAgent } from "../llm-matching/skill-matches-store";
 import type { SkillMatchRow } from "../llm-matching/types";
 import { listInstalledSkills, type SkillManifest } from "../skills-registry";
-import { buildSkillIdDisplayNames, scanSkillExtensions } from "../extension-skill-resolver";
+import {
+  buildSkillIdDisplayNames,
+  buildSkillIdVendorNames,
+  scanSkillExtensions,
+} from "../extension-skill-resolver";
 import { readSkillActiveRevisionFromDatabase } from "@/lib/skill-lifecycle-store";
 import {
   scoreSkillRecommendations,
@@ -67,7 +71,7 @@ function resolvePinnedRevision(skillId: string): string {
 export async function buildRecommendationCandidatesForAgent(
   input: RecommendSkillsForAgentInput,
 ): Promise<RecommendationCandidate[]> {
-  const [matches, skills, declaredDisplayNames] = await Promise.all([
+  const [matches, skills, labels] = await Promise.all([
     readSkillMatchesByAgent(input.agentId).catch((): SkillMatchRow[] => []),
     listInstalledSkills().catch((): SkillManifest[] => []),
     // THE LABEL EVERY SURFACE PRINTS (cinatra#2841). A catalog row's `name` is
@@ -79,10 +83,25 @@ export async function buildRecommendationCandidatesForAgent(
     //
     // BEST-EFFORT: a failed scan costs LABELS, never candidates. Every skill
     // then falls back to its catalog name, which is exactly what shipped before.
+    //
+    // THE VENDOR RIDES THE SAME SCAN (cinatra#3047). The Skills step's pill
+    // reads "<Skill name> by <vendor>", and both halves come from the owning
+    // extension's manifest — so they are read from ONE scan, joined here, and
+    // can never be resolved from two different packages. The vendor half is
+    // resolved by the platform's own vendor resolver; a package that declares
+    // no vendor gets none, and the pill prints the name alone.
     scanSkillExtensions()
-      .then(buildSkillIdDisplayNames)
-      .catch((): Map<string, string> => new Map()),
+      .then((descriptors) => ({
+        displayNames: buildSkillIdDisplayNames(descriptors),
+        vendorNames: buildSkillIdVendorNames(descriptors),
+      }))
+      .catch(() => ({
+        displayNames: new Map<string, string>(),
+        vendorNames: new Map<string, string>(),
+      })),
   ]);
+  const declaredDisplayNames = labels.displayNames;
+  const declaredVendorNames = labels.vendorNames;
 
   const matchBySkill = new Map<string, SkillMatchRow>(
     matches.map((m) => [m.skillId, m] as const),
@@ -111,6 +130,9 @@ export async function buildRecommendationCandidatesForAgent(
       // manifest at all — a user-authored custom skill): the scorer's own
       // fallback then keeps `name` as the label. Never a guess, never a map.
       displayName: declaredDisplayNames.get(skill.id),
+      // Undefined when the owning extension declares no vendor identity and no
+      // npm author — the pill then prints the skill's name with no "by".
+      vendorName: declaredVendorNames.get(skill.id),
       description: skill.description ?? "",
       cueText: (skill.content ?? "").slice(0, CUE_CHARS),
       level: skill.level as string | undefined,
