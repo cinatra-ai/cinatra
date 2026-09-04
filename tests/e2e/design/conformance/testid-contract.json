@@ -51,6 +51,23 @@
     "schedule-card-fired": { "$ref": "schedule-card" },
     "schedule-card-fired-recurring": { "$ref": "schedule-card" },
     "schedule-card-fired-recurring-floor": { "$ref": "schedule-card" },
+    "run-step-rail": {
+      "manifest": "app-artifact-review",
+      "selector": "[data-conformance-id=\"run-step-rail\"] (the run detail's left step rail, mounted on the conformance harness under [data-surface-id=\"run-step-rail\"]). Rows: [data-slot=\"stepper-item\"], each carrying data-state=completed|active|inactive — what makes \"the step the run is paused on is highlighted; steps already passed sit above it, steps still to come below\" readable off the DOM. The rail declares what selecting a step does on its own root (data-action).",
+      "requires": [
+        {
+          "file": "packages/agents/src/run-step-rail-panel.tsx",
+          "literals": [
+            "data-conformance-id=\"run-step-rail\"",
+            "data-action=\"open-run-step -> step-detail\""
+          ]
+        },
+        {
+          "file": "src/components/reui/stepper.tsx",
+          "literals": ["data-slot=\"stepper-item\"", "data-state={state}"]
+        }
+      ]
+    },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",

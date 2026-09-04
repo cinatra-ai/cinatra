@@ -79,6 +79,24 @@ import {
   type LifecycleScheduleCardFixture,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-schedule-card-fixture-data";
 import {
+  RUN_STEP_RAIL_ROWS,
+  SHIPPED_RAIL_ACTION,
+  type RunStepKind,
+  type RunStepRailRow,
+  type RunStepState,
+} from "./run-step-rail-family";
+import {
+  RUN_STEP_RAIL_CONFORMANCE_GATE_POSITIONS,
+  RUN_STEP_RAIL_CONFORMANCE_LABELS,
+  RUN_STEP_RAIL_CONFORMANCE_PASSED_POSITIONS,
+  RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION,
+  RUN_STEP_RAIL_CONFORMANCE_ROW_KINDS,
+  RUN_STEP_RAIL_CONFORMANCE_ROW_STATUSES,
+  RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION,
+  RUN_STEP_RAIL_CONFORMANCE_SETTLED_POSITION,
+  RUN_STEP_RAIL_CONFORMANCE_UPCOMING_POSITIONS,
+} from "../../../../src/app/design-fixtures/conformance/run-step-rail-conformance-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -2872,6 +2890,540 @@ const ARTIFACT_KIND_DISPLAY_DRIVERS: Record<string, SurfaceDriver> = Object.from
   }),
 );
 
+// ---------------------------------------------------------------------------
+// The RUN STEP-RAIL FAMILY (cinatra#3162, epic #3155 W6)
+// ---------------------------------------------------------------------------
+//
+// The fourteen surfaces of the artifact-review drawing's run family: the run
+// surface itself, the rail down its left, and the steps that stand on that rail
+// — Skills, the schedule, the stored-ideas list, the run's last step, and the
+// review, each in the readings the drawing gives it.
+//
+// ONE FACTORY, TWO AXES. cinatra#3162 asks for "a new run-step-family factory,
+// parameterized by step kind (skills/schedule/idea/review) and step state
+// (open/running/fired/placeholder)", and that is exactly the shape below: a
+// family shape every surface of the run page owes the drawing, then ONE
+// assertion per step KIND and ONE per step STATE. Both maps are TOTAL Records
+// over their union, so a new kind or a new state is a compile error rather than
+// a surface that quietly rides the family shape alone.
+//
+// ONE LIST, ONE MAP. The rows live in run-step-rail-family.ts, keyed by the
+// manifest surface id, and the map below is built FROM them: being listed is
+// being mapped, so there is no second place a surface could be forgotten.
+//
+// WHAT IS ON THE BRANCH, AND WHAT IS NOT. Grounded by reading the shipped tree,
+// never assumed. The rail IS shipped and IS mounted by this wave
+// (src/app/design-fixtures/conformance/run-step-rail-conformance-fixtures.tsx
+// mounts the real `RunStepRailPanel`), so its whole battery runs for real. Of
+// the family's declared action-and-outcome pairs, exactly ONE is a literal
+// anywhere in src/ or packages/ — `open-run-step -> step-detail`, carried on the
+// rail root — and even that root does not act on it: the component that turns a
+// row press into an open step in the right column is the two-column frame, which
+// no core route may import. So every other surface here is guarded by
+// `awaitingMount` — the same guard, and the same fail-closed harness anchor, the
+// Workspace surfaces have used since cinatra#3152 — and names in its skip reason
+// exactly what it is waiting for. Nothing stands in for a surface: every
+// assertion is written in full against the drawing's own declarations and runs
+// unchanged, for real, the moment a mount exists.
+
+/** The mount of one run-step-rail-family surface. */
+function runStepMount(surface: string): string {
+  return `[data-surface-id="${surface}"]`;
+}
+
+/** One state variant's own mount, drawing the same surface in that reading. */
+function runStepVariantMount(surface: string, variant: string): string {
+  return `[data-surface-id="${surface}"][data-variant="${variant}"]`;
+}
+
+/** The surface itself, inside its mount. It carries the surface anchor. */
+function runStepPanel(root: Locator, surface: string): Locator {
+  return root.locator(`[data-conformance-id="${surface}"]`);
+}
+
+type RunStepAssert = (page: Page, root: Locator) => Promise<void>;
+
+/**
+ * WHAT EVERY SURFACE OF THIS FAMILY OWES THE DRAWING, whichever kind it is.
+ *
+ * Section I: "Selecting a step opens that step's page in the run detail, and the
+ * page carries the one card of the step it belongs to ... an answered Skills row
+ * is never drawn above the HITL card, the review card, the schedule card or any
+ * other card, and two cards are never stacked in one detail."
+ */
+function runStepFamilyPresent(row: RunStepRailRow): RunStepAssert {
+  return async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel).toBeVisible();
+    // ONE PAGE PER GATE: never two cards stacked in one detail.
+    expect(
+      await panel.locator("[data-lifecycle-card]").count(),
+      `${row.surface}: one page per gate — the page carries the ONE card of the step it belongs to, and two cards are never stacked in one detail`,
+    ).toBeLessThanOrEqual(1);
+    // "Nothing about the run lives on a separate page": a step reads in the run,
+    // never as a standalone document lifted out of it.
+    await expect(panel.locator('[role="dialog"]')).toHaveCount(0);
+  };
+}
+
+/** The rail row at a 1-based position, as the rail draws it. */
+function railRow(root: Locator, position: number): Locator {
+  return root.locator('[data-slot="stepper-item"]').nth(position - 1);
+}
+
+/**
+ * THE STEP KIND axis. One entry per kind, total over the union — a new kind
+ * cannot be added without saying what the drawing owes it.
+ */
+const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStepAssert> = {
+  // Section I — "The surface is a two-column frame: a step rail down the left
+  // names the run's ordered steps, and the run detail on the right shows the
+  // selected step", and "a gate step opens the gate's own surface in place ...
+  // right here in the run detail, under the same rail, never as a standalone
+  // document".
+  frame: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-conformance-id="run-step-rail-column"]')).toBeVisible();
+    const detail = panel.locator('[data-conformance-id="run-detail-column"]');
+    await expect(detail).toBeVisible();
+    // The gate reads IN PLACE, in the detail column — not beside the rail as a
+    // second frame, and not lifted out of the run.
+    expect(await detail.locator("[data-lifecycle-card]").count()).toBeLessThanOrEqual(1);
+  },
+
+  // Section I — the rail's own four claims, asserted on the REAL shipped rail
+  // this wave mounts: the rows in the run's order with the gates woven in at the
+  // point the run reached them; the step the run is paused on highlighted; what
+  // is passed above it and what is still to come below; and a resolved gate
+  // keeping its place as read-only history that records how it was settled.
+  rail: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    // The rail declares, on itself, what selecting a step does.
+    await expect(panel).toHaveAttribute(
+      "data-action",
+      `${SHIPPED_RAIL_ACTION.name} -> ${SHIPPED_RAIL_ACTION.outcome}`,
+    );
+
+    const rows = panel.locator('[data-slot="stepper-item"]');
+    await expect(rows).toHaveCount(RUN_STEP_RAIL_CONFORMANCE_LABELS.length);
+    // "The rail lists the run's steps in order" — in the rail's own DOM order.
+    // The expected labels are the wave's own statement of the reading, written
+    // out beside the fixture rather than derived from it, so a rail that echoed
+    // its input in any order could not satisfy them.
+    for (const [index, label] of RUN_STEP_RAIL_CONFORMANCE_LABELS.entries()) {
+      await expect(rows.nth(index)).toContainText(label);
+    }
+    // "merged so that a gate is not a page outside the run but a step in the
+    // run": each entry sits INLINE, in its place, and says WHICH it is on
+    // itself — the shipped rail publishes `data-rail-kind` and
+    // `data-rail-status` on every row, so gate identity is read from the
+    // product rather than guessed from a label a work step could also carry.
+    for (const [index, kind] of RUN_STEP_RAIL_CONFORMANCE_ROW_KINDS.entries()) {
+      await expect(railRow(panel, index + 1).locator("[data-rail-kind]")).toHaveAttribute(
+        "data-rail-kind",
+        kind,
+      );
+    }
+    for (const [index, status] of RUN_STEP_RAIL_CONFORMANCE_ROW_STATUSES.entries()) {
+      await expect(railRow(panel, index + 1).locator("[data-rail-status]")).toHaveAttribute(
+        "data-rail-status",
+        status,
+      );
+    }
+    for (const position of RUN_STEP_RAIL_CONFORMANCE_GATE_POSITIONS) {
+      await expect(
+        railRow(panel, position).locator('[data-rail-kind="gate"]'),
+      ).toHaveCount(1);
+    }
+
+    // "The step the run is paused on is highlighted" — and exactly one is.
+    await expect(
+      railRow(panel, RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION),
+    ).toHaveAttribute("data-state", "active");
+    await expect(panel.locator('[data-slot="stepper-item"][data-state="active"]')).toHaveCount(1);
+
+    // "steps already passed sit above it, steps still to come below".
+    for (const position of RUN_STEP_RAIL_CONFORMANCE_PASSED_POSITIONS) {
+      expect(position).toBeLessThan(RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION);
+      await expect(railRow(panel, position)).toHaveAttribute("data-state", "completed");
+    }
+    for (const position of RUN_STEP_RAIL_CONFORMANCE_UPCOMING_POSITIONS) {
+      expect(position).toBeGreaterThan(RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION);
+      await expect(railRow(panel, position)).toHaveAttribute("data-state", "inactive");
+    }
+
+    // "A resolved gate stays on the rail as read-only history — its entry keeps
+    // its place and records how it was settled."
+    const settled = railRow(panel, RUN_STEP_RAIL_CONFORMANCE_SETTLED_POSITION);
+    await expect(settled).toHaveAttribute("data-state", "completed");
+    // Read-only HISTORY, said by the row itself — the shipped gate row marks a
+    // resolved gate `data-rail-gate-history` and an unanswered one
+    // `data-rail-gate-pending`, so "kept as history" is evidence the product
+    // publishes rather than a status word this file infers.
+    await expect(settled.locator('[data-rail-gate-history="true"]')).toHaveCount(1);
+    await expect(settled.locator('[data-rail-gate-pending="true"]')).toHaveCount(0);
+    await expect(settled).toContainText(RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION);
+    // The gate the run is paused on is the pending one, and it is the only one.
+    await expect(
+      railRow(panel, RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION).locator(
+        '[data-rail-gate-pending="true"]',
+      ),
+    ).toHaveCount(1);
+    await expect(panel.locator('[data-rail-gate-pending="true"]')).toHaveCount(1);
+  },
+
+  // Section I — the arrival: "It happens on its own: there is nothing for the
+  // reader to open or press to bring it."
+  notification: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator("button")).toHaveCount(0);
+    await expect(panel.locator("a[href]")).toHaveCount(0);
+  },
+
+  // Section II — the Skills page carries the chip row and nothing else: "one
+  // pill per skill, each carrying a checkbox in front of its label ... and one
+  // Continue beneath the list", and "the scheduling form is never drawn on the
+  // Skills page".
+  skills: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    const pills = panel.locator('[data-conformance-id="suggestion-chips"], [data-skill-pill]');
+    expect(await pills.count()).toBeGreaterThan(0);
+    await expect(panel.locator('[data-conformance-id="run-schedule-tab"]')).toHaveCount(0);
+    await expect(panel.locator('[data-conformance-id="review-target"]')).toHaveCount(0);
+  },
+
+  // Section I — "the card frame, and a spinning icon ... It names no status,
+  // reports no result and draws nothing to press."
+  progress: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-slot="spinner"]')).toBeVisible();
+    await expect(panel.locator('[data-slot="status-pill"]')).toHaveCount(0);
+    await expect(panel.locator("button")).toHaveCount(0);
+  },
+
+  // Section I — "the standard scheduling step ... the same heading, the same
+  // three option rows, the same estimated duration — with no summary panel above
+  // it, no status label, no held-steps list and no Adjust to press first",
+  // "There is no Run now", and "the Skills row is never drawn on the schedule
+  // page".
+  schedule: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-conformance-id="schedule-option-rows"]')).toBeVisible();
+    await expect(panel.locator('[data-conformance-id="schedule-duration"]')).toBeVisible();
+    for (const forbidden of [
+      "schedule-armed-summary",
+      "schedule-gated-steps",
+      "run-chip-row",
+    ]) {
+      await expect(panel.locator(`[data-conformance-id="${forbidden}"]`)).toHaveCount(0);
+    }
+    for (const name of ["Adjust", "Run now"]) {
+      await expect(panel.getByRole("button", { name, exact: true })).toHaveCount(0);
+    }
+  },
+
+  // Section I.1 — "one row per stored idea no draft has used ... the idea's
+  // first line as its title over the idea's own text", with "Generate new ideas"
+  // and the primary Continue over a hairline floor, and "Nothing is selected for
+  // them".
+  idea: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    const rows = panel.locator('[data-conformance-id="run-idea-row"]');
+    expect(await rows.count()).toBeGreaterThan(0);
+    await expect(panel.locator('[data-conformance-id="run-idea-row"][aria-selected="true"]')).toHaveCount(0);
+    await expect(
+      panel.locator('[data-action="generate-ideas -> ideas-stored"]'),
+    ).toBeVisible();
+  },
+
+  // Section I.2 — "Every row carries the artifact's title, the type that owns
+  // it, the revision the run filed or read, and the control that opens it on its
+  // own page", and "Rows are not ranked or graded".
+  outputs: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    const first = panel.locator('[data-conformance-id="run-output-row"]').first();
+    await expect(first).toBeVisible();
+    for (const part of ["title", "type", "revision"]) {
+      await expect(first.locator(`[data-conformance-id="run-output-${part}"]`)).toBeVisible();
+    }
+    await expect(first.locator('[data-action="open-output -> artifact-page"]')).toBeVisible();
+    // "a file that could only be typed as bytes is listed like any other row ...
+    // never marked as a failure".
+    await expect(panel.locator('[data-conformance-id="run-output-failed"]')).toHaveCount(0);
+  },
+
+  // Section I.3 — "the same gate header, target, decision bar and prompt window
+  // the gate draws anywhere else", and "Both readings end in the same floor —
+  // Comment, Regenerate, Continue, over the one Note field".
+  review: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-conformance-id="review-target"]')).toBeVisible();
+    await expect(panel.locator('[data-conformance-id="review-decision-bar"]')).toBeVisible();
+    await expect(panel.locator('[data-conformance-id="review-prompt-window"]')).toBeVisible();
+  },
+};
+
+/**
+ * THE STEP STATE axis. One entry per state, total over the union — the reading
+ * the drawing draws, on top of whatever its kind already owes.
+ */
+const RUN_STEP_STATE_ASSERT: Record<RunStepState, (row: RunStepRailRow) => RunStepAssert> = {
+  // The reading a reader is on and may still act in: never the read-only one,
+  // and never a blank plate.
+  open: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel).not.toHaveAttribute("data-read-only", "true");
+    await expect(panel).not.toHaveText(/^\s*$/);
+  },
+
+  // Section I — opened once the run has started: "the same pills read-only,
+  // with no Continue".
+  running: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.getByRole("button", { name: "Continue", exact: true })).toHaveCount(0);
+  },
+
+  // Section I — "It names no status, reports no result and draws nothing to
+  // press."
+  placeholder: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator("button")).toHaveCount(0);
+  },
+
+  // Section I — a spent schedule: "opening it shows the form read-only, with no
+  // controls at all".
+  fired: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator("button")).toHaveCount(0);
+    await expect(panel.locator("input:not([disabled]), select:not([disabled])")).toHaveCount(0);
+  },
+
+  // Section I — a recurring schedule is not spent: "the same editable rows, the
+  // same Save changes and the same Cancel schedule as before the fire".
+  "fired-recurring": (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-action="save-schedule -> rearmed"]')).toBeVisible();
+    await expect(panel.locator('[data-action="cancel-schedule -> stopped"]')).toBeVisible();
+  },
+
+  // Section I.3 — on the post's review "what that display renders is the post
+  // itself: its title and its body text. The picture is not in it."
+  post: (row) => async (_page, root) => {
+    const target = runStepPanel(root, row.surface).locator(
+      '[data-conformance-id="review-target"]',
+    );
+    await expect(target.locator('[data-conformance-id="markdown-display-tabs"]')).toBeVisible();
+    await expect(target.locator("img")).toHaveCount(0);
+  },
+
+  // Section I.3 — on the featured image's review "the target is the picture
+  // drawn by the image display and nothing else — the display carries no
+  // Regenerate of its own".
+  picture: (row) => async (_page, root) => {
+    const target = runStepPanel(root, row.surface).locator(
+      '[data-conformance-id="review-target"]',
+    );
+    await expect(target.locator("img")).toHaveCount(1);
+    await expect(
+      target.locator('[data-action="regenerate-review -> successor-gate-opened"]'),
+    ).toHaveCount(0);
+  },
+
+  // Section II — "the Skills entry at the head of the rail".
+  placement: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    const rail = root.locator('[data-conformance-id="run-step-rail-column"]');
+    await expect(rail.locator("> *").first()).toContainText("Skills");
+    await expect(panel).toBeVisible();
+  },
+
+  // Section I.2 — "where the run consumed an artifact to make them — that
+  // artifact too, marked used".
+  listing: (row) => async (_page, root) => {
+    const panel = runStepPanel(root, row.surface);
+    await expect(panel.locator('[data-conformance-id="run-output-used"]')).toBeVisible();
+  },
+};
+
+/**
+ * A drawn state variant: its own mount, drawing the same surface in that
+ * reading. `kind:*` is read off the surface's own declaration, the same way the
+ * extension listing card carries its catalog kind.
+ */
+/**
+ * The SEMANTIC treatment a drawn state owes, beyond carrying its own name.
+ *
+ * A variant mount that only publishes `data-variant="error"` proves the harness
+ * labelled itself, not that the surface draws an error. The three states every
+ * drawing in this system declares have a drawn treatment with a slot of its own,
+ * and W0's own `variantSlotState` already holds the scope surfaces to exactly
+ * these slots — this family is held to the same floor.
+ */
+const RUN_STEP_STATE_SLOT: Readonly<Record<string, string>> = {
+  empty: "empty",
+  error: "alert",
+  loading: "skeleton",
+};
+
+function runStepStateVariant(surface: string, variant: string): StateAssert {
+  const slot = RUN_STEP_STATE_SLOT[variant];
+  return async (page) => {
+    const mount = page.locator(runStepVariantMount(surface, variant));
+    await expect(mount).toHaveCount(1);
+    const panel = runStepPanel(mount, surface);
+    await expect(panel).toBeVisible();
+    if (slot === undefined) return;
+    await expect(
+      panel.locator(`[data-slot="${slot}"]`),
+      `${surface}: the "${variant}" reading must draw its own treatment (a [data-slot="${slot}"] element), not populated content wearing a data-variant label`,
+    ).toBeVisible();
+  };
+}
+
+function runStepKindState(surface: string, kind: string): StateAssert {
+  return async (_page, root) => {
+    const panel = runStepPanel(root, surface);
+    await expect(panel).toHaveAttribute("data-kind", kind);
+    // One kind, declared once: a surface that publishes a second, different
+    // `data-kind` beneath itself is drawing two readings at once, and the
+    // attribute above would no longer say which one the reader sees.
+    await expect(panel.locator(`[data-kind]:not([data-kind="${kind}"])`)).toHaveCount(0);
+    await expect(panel).not.toHaveText(/^\s*$/);
+  };
+}
+
+/**
+ * THE FAMILY FACTORY, parameterized by step kind and step state.
+ *
+ *   - the family shape every surface of the run page owes the drawing,
+ *   - the assertion its KIND owes,
+ *   - the assertion its STATE owes,
+ *   - each field the manifest binds, addressed through the binding the surface
+ *     names on itself (`data-field="<name>=<source>"`, the convention the
+ *     shipped review target already carries), so a surface bound to the wrong
+ *     source cannot resolve the locator at all,
+ *   - each action the manifest declares, pressed on the control that declares
+ *     exactly that action AND that outcome (`declaredAction`), so a driver
+ *     cannot press one control and report another one's outcome,
+ *   - every state variant the manifest declares.
+ *
+ * An aspect this wave names on the row's `unshippedAspects` is left OUT of the
+ * driver rather than approximated through something else; the row's readiness
+ * sentence says why, and the wave's own test refuses an unshipped aspect that
+ * carries no reason.
+ */
+function runStepRailFamilyDriver(row: RunStepRailRow): SurfaceDriver {
+  const unshipped = new Set(row.unshippedAspects);
+  const driver: SurfaceDriver = {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(runStepMount(row.surface)),
+    present: async (page, root) => {
+      await runStepFamilyPresent(row)(page, root);
+      await RUN_STEP_KIND_ASSERT[row.kind](row)(page, root);
+      await RUN_STEP_STATE_ASSERT[row.state](row)(page, root);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  };
+
+  for (const field of row.fields) {
+    const aspect = `field:${field.name}`;
+    driver.fields[field.name] = {
+      source: field.source,
+      assert: unshipped.has(aspect)
+        ? async () => {
+            test.skip(true, runStepAspectReadiness(row, aspect));
+          }
+        : async (_page, root) => {
+            const panel = runStepPanel(root, row.surface);
+            // Exactly ONE element claims this field name, and it claims the
+            // source the drawing binds. A surface that annotates the name
+            // against a second source, or against the wrong one, fails one half
+            // or the other — the pair is what makes the binding checkable.
+            await expect(
+              panel.locator(`[data-field^="${field.name}="]`),
+              `${row.surface}: "${field.name}" must be bound exactly once, and to ${field.source}`,
+            ).toHaveCount(1);
+            const bound = panel.locator(`[data-field="${field.name}=${field.source}"]`);
+            await expect(bound).toHaveCount(1);
+            await expect(bound).toBeVisible();
+            // A binding that draws nothing is not a reading.
+            await expect(bound).not.toHaveText(/^\s*$/);
+            // Where the mount publishes the source's own value — the convention
+            // the W0 scope-page driver established, so an assertion names a
+            // source of truth rather than whatever the page rendered — the drawn
+            // reading must BE that value.
+            const published = await panel.getAttribute(`data-field-value-${field.name}`);
+            if (published !== null) await expect(bound).toHaveText(published);
+          },
+    };
+  }
+
+  for (const action of row.actions) {
+    const aspect = `action:${action.name}`;
+    driver.actions[action.name] = unshipped.has(aspect)
+      ? {
+          outcome: action.outcome,
+          run: async () => {
+            test.skip(true, runStepAspectReadiness(row, aspect));
+          },
+        }
+      : declaredAction(action.name, action.outcome);
+  }
+
+  for (const state of row.states) {
+    const aspect = `state:${state}`;
+    driver.states[state] = unshipped.has(aspect)
+      ? async () => {
+          test.skip(true, runStepAspectReadiness(row, aspect));
+        }
+      : state.startsWith("kind:")
+        ? runStepKindState(row.surface, state.slice("kind:".length))
+        : runStepStateVariant(row.surface, state);
+  }
+
+  return driver;
+}
+
+/**
+ * Why ONE aspect of a surface this wave DOES mount is not asserted.
+ *
+ * An aspect the default branch does not ship is never dropped from the driver
+ * map: an unpinned manifest generates no test for an aspect with no driver, so a
+ * silent omission would read as coverage that was never claimed and never
+ * skipped. It is registered instead, and SKIPS with this reason — visible in the
+ * run, named, and gone the moment the product ships the aspect.
+ */
+function runStepAspectReadiness(row: RunStepRailRow, aspect: string): string {
+  return (
+    `${row.surface}: the drawing declares ${aspect}, and the default branch does not ` +
+    `ship it — ${row.readiness}. The assertion is written and runs unchanged the ` +
+    `moment the product declares the aspect.`
+  );
+}
+
+/** Why a run-step-rail-family driver skips, named on every skipped test. */
+function runStepRailReadiness(row: RunStepRailRow): string {
+  return (
+    `the surface drawn in section ${row.section} of the artifact-review drawing is not ` +
+    `on the default branch yet — ${row.readiness}. Every assertion in this driver is ` +
+    `written against the drawing's own declarations and runs unchanged the moment the ` +
+    `mount exists.`
+  );
+}
+
+/** The fourteen drivers, built from the one row list. */
+const RUN_STEP_RAIL_FAMILY_DRIVERS: Record<string, SurfaceDriver> = Object.fromEntries(
+  RUN_STEP_RAIL_ROWS.map((row) => {
+    const driver = runStepRailFamilyDriver(row);
+    return [
+      row.surface,
+      row.mounted ? driver : awaitingMount(row.surface, driver, runStepRailReadiness(row)),
+    ];
+  }),
+);
+
 const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
   root: harnessRoot("notifications-list"),
@@ -4657,6 +5209,11 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   // being mapped; each SKIPS with the reason its display is waiting for until the
   // harness mounts it.
   ...ARTIFACT_KIND_DISPLAY_DRIVERS,
+  // The run step-rail family of the artifact-review drawing (cinatra#3162, epic
+  // #3155 W6). Built from ONE row list, so being listed is being mapped; the rail
+  // itself is mounted and runs for real, and every other surface SKIPS with the
+  // reason it is waiting for until the harness mounts it.
+  ...RUN_STEP_RAIL_FAMILY_DRIVERS,
   // The in-conversation suggestion chips (cinatra#3156, epic #3155). One family
   // factory over one fixture list — the later waves add rows, not drivers.
   ...Object.fromEntries(
