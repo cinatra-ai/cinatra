@@ -351,7 +351,16 @@ describe("the mount the suppression leans on", () => {
   it("does not decide the slot's ref by host — the host travels to the card", () => {
     const src = read("packages/agents/src/agentic-run-panel.tsx");
     const from = src.indexOf("const markedReviewGate");
-    const to = src.indexOf("const recommendationCardNode");
+    // THE END ANCHOR IS THE MOUNT, and it moved (cinatra#3051, fix leg 9). It
+    // used to be the recommendation-card mount, which the panel no longer draws
+    // at all ("this panel no longer mounts the recommendation card anywhere"),
+    // so the read silently found nothing and the pin stopped measuring the thing
+    // it exists for. The honest end of the DECISION is where the MOUNT begins —
+    // `reviewCardOnWidget`, the nested provider's re-declaration of the ambient
+    // host — which is also the one place in this region a host name is allowed
+    // to appear, and the reason the region is bounded here rather than further
+    // down.
+    const to = src.indexOf("const reviewCardOnWidget");
     expect(from, "the panel's review-slot decision moved").toBeGreaterThan(-1);
     expect(to, "the panel's card mounts moved").toBeGreaterThan(from);
     const decision = src

@@ -300,7 +300,20 @@ export function reviewRelativeInstant(value: string, now: Date = new Date()): st
  *   `preview-loading`      — the frame has not painted yet.
  *   `preview-unavailable`  — the frame's bound was reached.
  */
-export type ReviewPreviewFloorReason = "preview-loading" | "preview-unavailable";
+export type ReviewPreviewFloorReason =
+  | "preview-loading"
+  | "preview-unavailable"
+  // THE TWO READINGS OF A FRAME THAT ARRIVED AND IS NOT SHOWING THE WORK
+  // (cinatra#3051, fix leg 9). §V owes its one line "whenever a target does not
+  // resolve to a type renderer", and a frame that failed to ARRIVE is only one
+  // of the ways that happens. These two are the others, and they are separate
+  // because they are different facts: the host resolved no renderer at all and
+  // drew its own floor over the generic read-only view, or a renderer resolved
+  // and answered with its own named floor instead of the representation. Both
+  // are closed members of this set, sanitized by construction like the two above
+  // — a reason, never an error, a value or a manifest string.
+  | "renderer-unresolved"
+  | "representation-unavailable";
 
 /**
  * The §V diagnostic, in the drawing's own shape: `package · slot · reason`, and

@@ -348,10 +348,10 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
  * on screen" from "the preview is not on screen", never WHY — the card says the
  * same sentence for every reason a frame did not paint.
  */
-function islandPainted(frame: HTMLIFrameElement): boolean {
+function islandReading(frame: HTMLIFrameElement): IslandReading {
   try {
     const doc = frame.contentDocument;
-    if (!doc) return false;
+    if (!doc) return "unpainted";
     // Read the anchors OFF the framed document rather than composing an
     // attribute-VALUE selector here: the review surface's conformance gate scans
     // this file's text for conformance-id attributes carrying a literal value
@@ -363,9 +363,29 @@ function islandPainted(frame: HTMLIFrameElement): boolean {
         el.getAttribute("data-conformance-id"),
       ),
     );
-    return ids.has(ISLAND_BODY_ANCHOR);
+    if (!ids.has(ISLAND_BODY_ANCHOR)) return "unpainted";
+    // THE HOST'S OWN FLOOR, FIRST. Where the host resolved no usable renderer it
+    // draws the floor region itself, over the generic read-only structured-data
+    // view of the representation. That is a resolution the host made and can
+    // report; the card only has to stop calling it a painted target.
+    if (ids.has(ISLAND_FLOOR_ANCHOR)) return "host-floor";
+    // THEN THE DISPLAY'S OWN. A renderer that resolved and could not draw the
+    // work answers with its own named floor in the representation slot — the
+    // shape `data-floor` already carries on every shipped display and in the
+    // SDK's own shell. The card reads that and forks nothing: it neither words
+    // the display's sentence nor changes it, it only owes §V's own line above
+    // the generic view the display is drawing.
+    const slots = Array.from(doc.querySelectorAll("[data-review-representation-slot]"));
+    // NO SLOT IS NOT A FLOOR. A painted body this reader cannot find a slot in
+    // is the reading the card has always taken as painted, and the fail-safe
+    // direction is unchanged: the card does not invent a diagnostic for a frame
+    // that may well be showing the work in a shape this rule cannot see.
+    if (slots.length === 0) return "representation";
+    return slots.every((slot) => slot.querySelector("[data-floor]") !== null)
+      ? "display-floor"
+      : "representation";
   } catch {
-    return false;
+    return "unpainted";
   }
 }
 
@@ -383,6 +403,24 @@ function islandPainted(frame: HTMLIFrameElement): boolean {
  */
 export const ISLAND_BODY_ANCHOR = "review-target-island-body";
 export const ISLAND_EMPTY_ANCHOR = "review-target-island-empty";
+/** The island's OWN §V floor region, drawn by the review target panel where the
+ *  host resolved no usable renderer (`reviewProvenanceConformanceId`). Read here
+ *  so the card can tell a painted target that is showing the WORK from one that
+ *  is showing a floor. */
+export const ISLAND_FLOOR_ANCHOR = "review-target-floor";
+
+/**
+ * WHAT A FRAME IS SHOWING (cinatra#3051, fix leg 9) — three answers, because
+ * "painted" and "resolved" turned out to be two different questions and the card
+ * was only asking the first.
+ *
+ * The ninth proof round read the island as loaded and, in the same reading, the
+ * island's own document saying that no markdown was available for the revision
+ * being viewed: a resolved display drawing its own named floor where the work
+ * should be. The card called that a painted target and drew no §V line, so the
+ * one frame that most needed the diagnostic was the one frame without it.
+ */
+type IslandReading = "representation" | "display-floor" | "host-floor" | "unpainted";
 
 const ISLAND_HEIGHT_CLAMPED = 380;
 
@@ -398,7 +436,7 @@ const ISLAND_HEIGHT_CLAMPED = 380;
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out";
+type IslandLoadState = "loading" | "loaded" | "floor" | "timed-out";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -1658,25 +1696,45 @@ function ReviewTargetIsland({
   // fields because a CREDENTIALED address must not be remounted (cinatra#3051):
   // its grant is worth one paint and is already spent, so re-presenting it is a
   // guaranteed empty island. See the retry below.
-  const [load, setLoad] = useState({
+  const [load, setLoad] = useState<{
+    src: string;
+    attempt: number;
+    wait: number;
+    loaded: boolean;
+    timedOut: boolean;
+    empty: boolean;
+    floorReason: ReviewPreviewFloorReason | null;
+  }>({
     src,
     attempt: 0,
     wait: 0,
     loaded: false,
     timedOut: false,
     empty: false,
+    floorReason: null,
   });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, wait: 0, loaded: false, timedOut: false, empty: false });
+    setLoad({
+      src,
+      attempt: 0,
+      wait: 0,
+      loaded: false,
+      timedOut: false,
+      empty: false,
+      floorReason: null,
+    });
   }
 
   useEffect(() => {
-    if (load.loaded || load.empty) return;
+    // A FRAME SHOWING A FLOOR HAS ARRIVED. Its bound is spent for the same
+    // reason a painted one's is: the round trip finished, and telling the reader
+    // minutes later that the preview did not load would be false.
+    if (load.loaded || load.empty || load.floorReason !== null) return;
     const timer = setTimeout(() => {
       setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
     }, ISLAND_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.wait, load.loaded, load.empty]);
+  }, [load.src, load.attempt, load.wait, load.loaded, load.empty, load.floorReason]);
 
   // A FRAME THAT LOADED IS NOT NECESSARILY A FRAME THAT PAINTED (cinatra#3051).
   // An island that refused — a spent or expired address, a reader who may not
@@ -1684,11 +1742,28 @@ function ReviewTargetIsland({
   // an empty document fires `load` exactly like a full one. Treating that as
   // "loaded" is what put the reader back in front of a blank box with nothing
   // to press, which is the defect this slice is closing.
-  const state: IslandLoadState =
-    load.loaded ? "loaded" : load.timedOut || load.empty ? "timed-out" : "loading";
+  const state: IslandLoadState = load.loaded
+    ? "loaded"
+    : load.floorReason !== null
+      ? "floor"
+      : load.timedOut || load.empty
+        ? "timed-out"
+        : "loading";
+  // §V's line is owed on every reading that is not the work on screen. The frame
+  // itself stays visible under it wherever it arrived — "its diagnostic sits
+  // above the generic read-only structured-data view of that representation".
+  const arrived = state === "loaded" || state === "floor";
   const height = ISLAND_HEIGHT_CLAMPED;
 
   return (
+    <>
+      {/* §V — "its diagnostic sits ABOVE the generic read-only structured-data
+          view of that representation". A frame that arrived and is showing a
+          floor rather than the work keeps that view on screen underneath; the
+          one line goes over it, outside the clamped box so it never covers the
+          reading it is about. The loading and did-not-arrive readings draw the
+          same line inside their own overlays, where the box has nothing in it. */}
+      {load.floorReason !== null ? <ReviewTargetFloorLine reason={load.floorReason} /> : null}
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
@@ -1714,13 +1789,25 @@ function ReviewTargetIsland({
         // several of these off screen without fetching them all.
         loading={credentialed ? "eager" : "lazy"}
         className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-          load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+          arrived ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
         onLoad={(event) => {
-          const painted = islandPainted(event.currentTarget);
+          const reading = islandReading(event.currentTarget);
           setLoad((current) =>
-            current.src === src ? { ...current, loaded: painted, empty: !painted } : current,
+            current.src === src
+              ? {
+                  ...current,
+                  loaded: reading === "representation",
+                  empty: reading === "unpainted",
+                  floorReason:
+                    reading === "host-floor"
+                      ? "renderer-unresolved"
+                      : reading === "display-floor"
+                        ? "representation-unavailable"
+                        : null,
+                }
+              : current,
           );
         }}
       />
@@ -1729,7 +1816,7 @@ function ReviewTargetIsland({
           iframe stays mounted underneath while timed out: a late `onLoad`
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
-      {state !== "loaded" ? (
+      {!arrived ? (
         <div className="absolute inset-x-0 top-0" style={{ height }}>
           {state === "loading" ? (
             <IslandLoadingSkeleton />
@@ -1770,6 +1857,7 @@ function ReviewTargetIsland({
         </div>
       ) : null}
     </div>
+    </>
   );
 }
 
