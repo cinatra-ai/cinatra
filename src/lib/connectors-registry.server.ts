@@ -168,9 +168,15 @@ export async function isConnectorInstalledForActor(
     // Canonical-store OUTAGE: treat as no addressable row — never invent one. A
     // runtime-only connector (no bundled entry) fails closed; a bundled connector
     // survives via the static manifest fallback in the pure predicate.
+    // The packageId is a user-provided value, so it reaches console as DATA
+    // behind a CONSTANT format string - never interpolated into the format
+    // argument itself, where a slug carrying %s would consume the argument
+    // that follows it (CWE-134). The error stays a TRAILING argument with no
+    // placeholder of its own, so console renders it exactly as before.
     console.warn(
-      `[connectors-registry] canonical install-row read failed for "${packageId}" ` +
-        `(treating as no addressable row; bundled fallback still applies):`,
+      "[connectors-registry] canonical install-row read failed for \"%s\" " +
+        "(treating as no addressable row; bundled fallback still applies):",
+      packageId,
       err instanceof Error ? err.message : err,
     );
     hasAddressableLiveCanonicalRowForActor = false;
@@ -278,9 +284,12 @@ export async function resolveConnectorBadgeState(
   try {
     return await getConnectorReadinessProbe(packageId)(ctx);
   } catch (err) {
+    // Same rule as the canonical-store read above: the user-provided
+    // packageId is a positional argument, never part of the format string.
     console.warn(
-      `[connectors-registry] setup-page readiness probe failed for "${packageId}" ` +
-        `(rendering the badge as not connected):`,
+      "[connectors-registry] setup-page readiness probe failed for \"%s\" " +
+        "(rendering the badge as not connected):",
+      packageId,
       err instanceof Error ? err.message : err,
     );
     return { connected: false };
