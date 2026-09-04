@@ -6,15 +6,15 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "379e7673771e6f582626057201425e325cf684d578b5bfdc9e7d4e5511e6a215",
-      "specContentHash": "sha256:3d63418e9c8cef191a1a7a4c1ef43b842fe2ec5ef4db288fb616e4e436d5eb13"
+      "manifestSha256": "e3e59dfd5b832f408bcba30649234f1bd0fb4f5774531347a0c8fad19fc77ddc",
+      "specContentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168"
     },
     {
       "id": "app-components",
       "file": "app-components.json",
       "source": "repo",
-      "manifestSha256": "b26135882216c0eeb7004bd74ea4017cfd0ea775b13785e7e60e754d87b20fb3",
-      "specContentHash": "sha256:b99de5a3c18442333c51bf0a6ee583c6dab55ec4a0646052d5d36ce7aad9090c"
+      "manifestSha256": "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
+      "specContentHash": "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add"
     },
     {
       "id": "app-extensions",
