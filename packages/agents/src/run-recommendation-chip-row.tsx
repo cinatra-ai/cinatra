@@ -41,6 +41,8 @@ import {
   type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
 import {
+  forgetDrawnRecommendationReading,
+  hydrateDrawnRecommendationReadingFromStorage,
   recallDrawnRecommendationReading,
   rememberDrawnRecommendationReading,
 } from "./run-recommendation-reading-register";
@@ -190,6 +192,36 @@ const SKILLS_CHECKLIST_HOSTS = new Set([
 
 export function chipRowDrawsSkillChecklist(host: string | null): boolean {
   return host !== null && SKILLS_CHECKLIST_HOSTS.has(host);
+}
+
+/**
+ * THE HOSTS WHOSE TRANSCRIPT RE-CREATES ITS TURNS (cinatra#3062, fix leg 3).
+ *
+ * Section V says a row the reader did see "keeps its place IN THE TURN". The
+ * turn is a conversation's own unit, and the reason the row needs a memory
+ * beside the component is a property only a conversation has: the page replaces
+ * its whole message array whenever the server's copy of the thread grows, so the
+ * card is REMOUNTED with no memory of the row it had just drawn, and its own
+ * client round trip draws no DOM at all until it lands.
+ *
+ * The other two hosts have neither half. They resolve this run SERVER-SIDE and
+ * hand the reading to the card (`initialState`), and their mounts are not
+ * re-created underneath the reader — that was cinatra#3047's defect, fixed there
+ * and fixed differently, because a page CAN hand over a reading and a
+ * conversation cannot. On those hosts a remembered reading buys nothing and
+ * costs the one thing a card must not do: draw a reading the authority has
+ * already moved past. It was measured costing exactly that — the run page's own
+ * suite reading `held` off an earlier mount's memory while its own answer was
+ * still in flight.
+ *
+ * So the memory is read and written HERE and nowhere else. It is a predicate on
+ * the same host declaration everything else on this card reads, so a host added
+ * tomorrow states its reading rather than inheriting one by silence.
+ */
+const TRANSCRIPT_REMOUNTING_HOSTS = new Set(["chat_thread", "site_widget"]);
+
+export function cardKeepsItsPlaceInTheTurn(host: string | null): boolean {
+  return host !== null && TRANSCRIPT_REMOUNTING_HOSTS.has(host);
 }
 
 /** What one chip recorded — the three marks §V draws on a settled chip. */
@@ -2414,18 +2446,54 @@ export function RecommendationHoldCard({
    * and reading it as "take the row away" is precisely how "the question, the
    * answer and the fact that nothing was applied" leave the transcript together.
    */
-  const remembered = recallDrawnRecommendationReading(present ? runId : "");
-  const state =
-    authoritative !== null && authoritative.state !== "none"
-      ? authoritative
-      : (remembered ?? authoritative);
+  // …AND ONLY WHERE A TURN IS RE-CREATED UNDERNEATH THE READER. The memory is a
+  // conversation's substitute for the server-side reading the other two hosts
+  // hand over; on a host that hands one over it would only ever be the staler of
+  // two answers about the same run.
+  const keepsItsPlace = present && cardKeepsItsPlaceInTheTurn(host);
+  // THE RELOAD HALF ARRIVES AFTER MOUNT (convergence, fix leg 3). The in-memory
+  // half is read during render and is empty on the server, so the server render
+  // and the first client render agree; the `sessionStorage` mirror — a
+  // browser-only read that also promotes what it finds into the module's map —
+  // is asked for from an effect, so a render React discards leaves nothing
+  // behind and a hydrating page cannot draw a row its own markup did not carry.
+  const [mirrored, setMirrored] = useState<RunRecommendationHoldState | null>(null);
+  useEffect(() => {
+    if (!keepsItsPlace) return;
+    const fromReload = hydrateDrawnRecommendationReadingFromStorage(runId);
+    if (fromReload !== null) setMirrored(fromReload);
+  }, [keepsItsPlace, runId]);
+  const remembered = keepsItsPlace
+    ? (recallDrawnRecommendationReading(runId) ?? mirrored)
+    : null;
+  /**
+   * AND THE AUTHORITY'S OWN `none` STILL WITHDRAWS THE ROW (convergence round on
+   * this leg).
+   *
+   * The window the boot measured is the one where the authority has said
+   * NOTHING YET — the read in flight on a remount, and the read in flight after
+   * a reload. `{ state: "none" }` is not that window: it is an ANSWER, and the
+   * cookie entry's own contract gives it for "no run", for "a reader who may not
+   * see the run" and — `sessionActor()` returning nothing — for a browser with
+   * NO SESSION AT ALL. Treating it as "cannot tell" would have kept a prompt, a
+   * skill list and a live Continue on screen for a reader the authority has just
+   * refused, and put them back on the next remount. So `none` withdraws the row
+   * and ERASES the memory of it, which is exactly the reading this card had
+   * before this leg; what the leg adds is the silence, and only the silence.
+   */
+  const authoritySaysNone = authoritative !== null && authoritative.state === "none";
+  const state = authoritySaysNone ? null : (authoritative ?? remembered);
   // Written from what is DRAWN, never from what merely arrived: the register
   // ignores `none` and anything it cannot classify, so the memory can only hold
   // a row that was on screen.
   useEffect(() => {
-    if (!present) return;
+    if (!keepsItsPlace) return;
+    if (authoritySaysNone) {
+      forgetDrawnRecommendationReading(runId);
+      return;
+    }
     rememberDrawnRecommendationReading(runId, state);
-  }, [present, runId, state]);
+  }, [keepsItsPlace, runId, state, authoritySaysNone]);
 
   // A surface with NO declared host never asks, so its reading is not "waiting"
   // — nothing is coming. Saying so is what stops a host that withholds on

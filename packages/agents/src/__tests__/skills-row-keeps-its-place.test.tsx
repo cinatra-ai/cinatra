@@ -21,11 +21,16 @@
  * and a reload drew no row for twenty seconds. Neither window is §IV's Absent
  * reading; both are a row the reader was shown, withdrawn.
  *
- * Three arms, and the third is the bound:
+ * The arms, and the last two are the bound:
  *
  *   1. A REMOUNT whose read has not answered redraws the row already shown.
- *   2. A `{ state: "none" }` answer arriving afterwards does not empty the turn.
- *   3. A run this reader has NEVER been shown still draws nothing at all — §IV's
+ *   2. A RELOAD of the same conversation redraws it too, from the session
+ *      mirror, while the fresh read is still in flight.
+ *   3. An AUTHORITATIVE `{ state: "none" }` still withdraws the row AND erases
+ *      what was remembered of it — the cookie entry answers `none` for a browser
+ *      with no session and for a reader who may not see the run, so the silence
+ *      this file closes is the authority's silence and never its refusal.
+ *   4. A run this reader has NEVER been shown still draws nothing at all — §IV's
  *      Absent reading is untouched, and this file may not be read as licence to
  *      paint a card out of silence.
  *
@@ -204,18 +209,57 @@ describe("the row the reader did see keeps its place in the turn", () => {
     expect(rowOf(second)!.getAttribute("data-run-recommendation-settled")).toBe("true");
   });
 
-  it("does not empty the turn when a later answer says `none`", async () => {
+  it("redraws the settled row after a RELOAD, from the session mirror", async () => {
+    // A reload is a fresh page session with the SAME `sessionStorage`: the
+    // in-memory half is gone and the mirror is what is left. The boot measured
+    // twenty seconds of no row at all here, so the mirror is asked for from an
+    // effect and the row is drawn before the fresh read lands.
+    const first = mount();
+    await waitFor(() => expect(rowOf(first)).not.toBeNull());
+    first.unmount();
+    const mirror = window.sessionStorage.getItem(
+      `cinatra.recommendation-row-seen.${RUN_ID}`,
+    );
+    expect(mirror, "the drawn reading is mirrored for the reload").not.toBeNull();
+
+    // The new page session: nothing in memory, the mirror intact.
+    resetDrawnRecommendationReadings();
+    window.sessionStorage.setItem(`cinatra.recommendation-row-seen.${RUN_ID}`, mirror!);
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const reloaded = mount();
+    await waitFor(() => expect(rowOf(reloaded)).not.toBeNull());
+    expect(pillsOf(reloaded)).toHaveLength(1);
+    expect(rowOf(reloaded)!.getAttribute("data-lifecycle-card-state")).toBe("decided");
+  });
+
+  it("withdraws the row, and FORGETS it, when the authority answers `none`", async () => {
+    // `none` is an ANSWER, not the silence this file closes. The cookie entry's
+    // own contract gives it for "no run", for "a reader who may not see the run"
+    // and — no session actor at all — for a signed-out browser. A memory that
+    // outlived it would keep a prompt, a skill list and a live Continue on
+    // screen for a reader the authority has just refused.
     const view = mount();
     await waitFor(() => expect(rowOf(view)).not.toBeNull());
-
-    // The resolver's `none` is its single indistinguishable "never held / not
-    // yours / cannot tell". It is not a statement that the row was never there.
-    authority.answer = { state: "none" };
     view.unmount();
-    const again = mount();
+
+    authority.answer = { state: "none" };
+    const refused = mount();
     await waitFor(() => expect(authority.calls).toBeGreaterThan(1));
-    expect(rowOf(again), "the question and its answer stay in the transcript").not.toBeNull();
-    expect(pillsOf(again)).toHaveLength(1);
+    await waitFor(() =>
+      expect(rowOf(refused), "the refused reader is shown no row").toBeNull(),
+    );
+    expect(
+      window.sessionStorage.getItem(`cinatra.recommendation-row-seen.${RUN_ID}`),
+      "and nothing is left for the next mount to redraw",
+    ).toBeNull();
+    refused.unmount();
+
+    // The next mount's read has not landed: with the memory erased there is
+    // nothing to resurrect, so the refusal holds instead of flickering back.
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const after = mount();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rowOf(after)).toBeNull();
   });
 
   it("still draws NOTHING for a run this reader has never been shown", async () => {
@@ -284,4 +328,63 @@ describe("the settled reading's read-only boundary is the run's own start", () =
       }
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// THE MEMORY BELONGS TO THE TRANSCRIPT, NOT TO EVERY HOST (cinatra#3062, fix
+// leg 3, round 2 — the regression the verify round caught).
+// ---------------------------------------------------------------------------
+// What the register exists for is stated in one clause of section V: a row the
+// reader did see "keeps its place IN THE TURN". The turn is the conversation's
+// own unit, and the reason the memory has to live beside the component is a
+// property only a conversation has — a transcript that RE-CREATES its turns
+// whenever the server's copy of the thread grows, remounting the card with no
+// memory of the row it had just drawn.
+//
+// The run page has neither half of that. Its host resolves this run SERVER-SIDE
+// and hands the reading over (`initialState`), and its mount is not re-created
+// underneath the reader — the defect cinatra#3047 fixed, and fixed there. So a
+// remembered reading on that host buys nothing and costs the one thing a card
+// must never do: draw a reading the authority has already moved past. Measured
+// on this head before the scope was drawn — the run page's own suite went red
+// once in five runs on "shows the settled pills, read-only", reading `held` off
+// a memory left by an earlier mount while its own answer was still in flight.
+//
+// So the memory is read and written on the conversation hosts and on no other.
+describe("the memory belongs to the transcript, not to every host", () => {
+  const runPageRow = (r: RenderResult) =>
+    r.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+
+  function mountRunPage(runId = RUN_ID): RenderResult {
+    return render(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <RecommendationHoldCard runId={runId} wireRef={null} />
+      </LifecycleCardSurfaceProvider>,
+    );
+  }
+
+  it("draws no remembered row on the run page while its own read is in flight", async () => {
+    const first = mountRunPage();
+    await waitFor(() => expect(runPageRow(first)).not.toBeNull());
+    first.unmount();
+
+    // The same run, mounted again on the same host, with its own round trip not
+    // landed. The run page waits for an authority — its host's server-side
+    // reading, or its own answer — and draws nothing out of a memory.
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const second = mountRunPage();
+    await waitFor(() => expect(authority.calls).toBeGreaterThan(1));
+    expect(runPageRow(second)).toBeNull();
+  });
+
+  it("writes nothing a conversation could later read off the run page", async () => {
+    const page = mountRunPage();
+    await waitFor(() => expect(runPageRow(page)).not.toBeNull());
+    page.unmount();
+
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const thread = mount();
+    await waitFor(() => expect(authority.calls).toBeGreaterThan(1));
+    expect(rowOf(thread)).toBeNull();
+  });
 });

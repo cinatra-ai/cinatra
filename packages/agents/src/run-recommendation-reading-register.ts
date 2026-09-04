@@ -41,9 +41,14 @@
  *   · it grants no decision. Every press still goes to the decision path, which
  *     re-authorizes from scratch and refuses a decision the run has moved past —
  *     said on screen through the row's own refusal line;
- *   · `{ state: "none" }` is never remembered. That answer is the resolver's
- *     single indistinguishable "never held / not yours / cannot tell", and §IV's
- *     Absent reading belongs to the reader who never saw the row at all.
+ *   · `{ state: "none" }` is never remembered, and — since the convergence round
+ *     on this leg — it ERASES what was remembered. The cookie entry's own
+ *     contract answers `none` for a reader with no session and for "a reader who
+ *     may not see the run", so an answer this memory outlived would hold a
+ *     prompt, a skill list and a live Continue on screen for a browser the
+ *     authority has just refused. §IV's Absent reading is the authority's to
+ *     give, and this module never overrides it: it closes the window where the
+ *     authority has said NOTHING YET, which is the window the boot measured.
  *
  * WHERE IT LIVES. An in-memory map for the page session, mirrored best-effort
  * into `sessionStorage` so a RELOAD of the same conversation in the same browser
@@ -64,8 +69,19 @@ const drawn = new Map<string, RunRecommendationHoldState>();
  *  bundle cannot classify — a remembered reading must be one the card can draw. */
 function drawsARow(state: unknown): state is RunRecommendationHoldState {
   if (state === null || typeof state !== "object") return false;
-  const kind = (state as { state?: unknown }).state;
-  return kind === "held" || kind === "confirmed" || kind === "skipped";
+  const shape = state as { state?: unknown; recommendations?: unknown; decided?: unknown };
+  // THE DISCRIMINATOR IS NOT ENOUGH FOR A PAYLOAD THAT CROSSED A RELOAD
+  // (convergence, fix leg 3). The mirror is parsed back out of storage, where a
+  // bundle from a previous deploy — or anything else that wrote this key — may
+  // have left a shape this card cannot draw. A `held` reading missing its
+  // candidate array, or a settled one missing `decided`, reaches array
+  // operations the row performs unguarded, so an incompatible entry is refused
+  // here and the card behaves exactly as it does with no memory at all.
+  if (shape.state === "held") return Array.isArray(shape.recommendations);
+  if (shape.state === "confirmed" || shape.state === "skipped") {
+    return Array.isArray(shape.decided);
+  }
+  return false;
 }
 
 function storage(): Storage | null {
@@ -111,6 +127,27 @@ export function recallDrawnRecommendationReading(
   runId: string,
 ): RunRecommendationHoldState | null {
   if (!runId) return null;
+  return drawn.get(runId) ?? null;
+}
+
+/**
+ * The reading the storage MIRROR holds for `runId`, promoted into the page
+ * session's map, or `null` when it holds none.
+ *
+ * SEPARATE FROM THE RECALL ABOVE, AND ONLY EVER CALLED AFTER MOUNT
+ * (convergence, fix leg 3). Reading `sessionStorage` is a browser-only lookup
+ * that also MUTATES this module's map when it promotes what it found. Doing
+ * that inside a render made the first client render able to draw a row the
+ * server render could not — a hydration divergence — and gave a render React is
+ * free to discard an effect on the module. The card now recalls the in-memory
+ * half during render (empty on the server, so both renders agree) and asks for
+ * the mirror from an effect, which costs the reload one extra frame and nothing
+ * else.
+ */
+export function hydrateDrawnRecommendationReadingFromStorage(
+  runId: string,
+): RunRecommendationHoldState | null {
+  if (!runId) return null;
   const live = drawn.get(runId);
   if (live !== undefined) return live;
   const store = storage();
@@ -125,6 +162,30 @@ export function recallDrawnRecommendationReading(
     return parsed;
   } catch {
     return null;
+  }
+}
+
+/**
+ * FORGET the reading remembered for `runId` — both halves.
+ *
+ * THE AUTHORITY'S OWN `none` IS WHAT CALLS THIS (convergence, fix leg 3). The
+ * cookie entry answers `{ state: "none" }` for a reader with NO SESSION at all
+ * and for "a reader who may not see the run" as well as for "no hold" — its own
+ * contract says so. A memory that outlived that answer would keep a prompt, a
+ * skill list and a live Continue on screen for a browser the authority has just
+ * refused, and would put them back on the next remount. So a `none` answer both
+ * withdraws the row and erases what was remembered about it; §IV's Absent
+ * reading is the authority's, and this module never overrides it.
+ */
+export function forgetDrawnRecommendationReading(runId: string): void {
+  if (!runId) return;
+  drawn.delete(runId);
+  const store = storage();
+  if (store === null) return;
+  try {
+    store.removeItem(`${STORAGE_PREFIX}${runId}`);
+  } catch {
+    // Nothing to clear that this process can reach.
   }
 }
 
