@@ -1,9 +1,12 @@
 import "server-only";
 
+import { recommendationRunHasStarted } from "./run-status";
 import {
   SKIP_RECOMMENDATION_SOURCE,
+  clearRunSelectedSkillRevisionsBeforeStart,
   decidedSkillsFromEvidence,
   hasRunRecommendationSkip,
+  hasRunSelectedSkillRevisions,
   readRunRejectedRecommendations,
   readRunSelectedSkillRevisions,
   readRunRecommendationOfferedSet,
@@ -25,6 +28,8 @@ import {
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
   RECOMMENDATION_OFFER_STALE_CODE,
+  RECOMMENDATION_RUN_STARTED_REFUSAL,
+  RECOMMENDATION_RUN_STARTED_CODE,
   RECOMMENDATION_OFFER_STALE_REFUSAL,
   RECOMMENDATION_OFFER_UNREADABLE_CODE,
   RECOMMENDATION_OFFER_UNREADABLE_REFUSAL,
@@ -109,6 +114,22 @@ export type RunRecommendationSettledCandidate = {
   skillId: string;
   /** The manifest displayName the held chip carried, or the id when unresolvable. */
   name: string;
+  /**
+   * THE VENDOR BESIDE THE NAME (cinatra#3047, review point 3) — the owning
+   * package's byline as the platform names vendors everywhere else, resolved
+   * server-side by the one vendor resolver. `null` where the package declares
+   * none, and the pill then prints the name alone.
+   */
+  vendorName: string | null;
+  /**
+   * THE REVISION THE OFFER PINNED, and the offer's own recommended flag
+   * (cinatra#3047, review point 1). A settled step whose run has not started is
+   * still EDITABLE, and a re-decision rides the same decision path as the first
+   * one — which needs exactly what the held row needed: the revision to pin for
+   * a kept skill the scorer did not recommend, and whether it recommended it.
+   */
+  skillRevisionId: string;
+  recommended: boolean;
 };
 
 /** What the card may draw right now, for THIS reader. */
@@ -143,6 +164,10 @@ export type RunRecommendationHoldState =
       state: "confirmed";
       skillNames: string[];
       decided: RunRecommendationDecidedSkill[];
+      /** See `RunRecommendationSettledSelection` — the same three fields on both settled arms. */
+      holdRef: string;
+      runStarted: boolean;
+      canDecide: boolean;
       /**
        * THE HOLD'S OWN OFFER — one entry per skill this reader was asked about,
        * so the settled row can state an outcome for each of them. Absent only
@@ -156,7 +181,51 @@ export type RunRecommendationHoldState =
       decided: RunRecommendationDecidedSkill[];
       /** The same offer, for the same reason — see the `confirmed` arm above. */
       candidates?: RunRecommendationSettledCandidate[];
+      /** See `RunRecommendationSettledSelection` — the same three fields on both settled arms. */
+      holdRef: string;
+      runStarted: boolean;
+      canDecide: boolean;
     };
+
+/**
+ * THE THREE FIELDS A SETTLED ANSWER CARRIES SO THE SELECTION IS NOT FROZEN
+ * (cinatra#3047, review point 1).
+ *
+ * "Continue records the selection and releases the hold, but the selection is
+ * not frozen." Until the run STARTS, the reader who opens the completed Skills
+ * step sees the same pills with their boxes editable and one control to save a
+ * changed selection; once it has started the same page is read-only with no
+ * control at all. Three facts decide that, and all three are the resolver's to
+ * answer rather than the screen's:
+ *
+ *   holdRef    — the SAME opaque handle the held reading carried, so a saved
+ *                change is bound to the hold it belongs to and rides the SAME
+ *                decision path. `resolveDecisionHold` accepts it: a ref naming a
+ *                hold that is now RELEASED is still this run's hold, which is
+ *                exactly the idempotent-retry case it already admits, and only a
+ *                ref naming a hold the run has moved past is refused.
+ *   runStarted — HAS THE RUN'S EXECUTION BEGUN? The boundary is the platform's
+ *                own `PRE_EXECUTION_RUN_STATUSES` — `pending_input`,
+ *                `pending_trigger`, `armed`, the statuses a run holds before it
+ *                has ever run. Anything else is started, and the first status
+ *                outside that set is `queued`: the dispatch CAS. One set, read
+ *                by the screen, by the store's own guarded DELETE and by the
+ *                suite that pins the boundary.
+ *   canDecide  — the same presentation-only reading of this reader's standing
+ *                the held branch publishes, resolved by the same function. A
+ *                reader who may not shape the run is not handed a live box.
+ */
+export type RunRecommendationSettledSelection = {
+  holdRef: string;
+  runStarted: boolean;
+  canDecide: boolean;
+};
+
+// The boundary itself lives on the pure run-status leaf beside
+// `PRE_EXECUTION_RUN_STATUSES` — see `recommendationRunHasStarted` there. It is
+// read here, and by the screen, and by the suite that pins it, so there is one
+// definition rather than three.
+export { recommendationRunHasStarted };
 
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
@@ -240,12 +309,18 @@ async function readerMayDecide(
  *
  * BEST-EFFORT BY CONTRACT: a failure costs labels, never the card.
  */
-async function resolveDecidedSkillNames(run: AgentRunRecord): Promise<Map<string, string>> {
+async function resolveDecidedSkillNames(
+  run: AgentRunRecord,
+): Promise<{ names: Map<string, string>; vendors: Map<string, string> }> {
   const names = new Map<string, string>();
+  // THE OTHER HALF OF THE PILL'S LABEL (cinatra#3047). Resolved from the SAME
+  // scored read as the name, so the two halves of "<Skill name> by <vendor>"
+  // can never come from two different resolutions of the same skill.
+  const vendors = new Map<string, string>();
   try {
     const template = await readAgentTemplateById(run.templateId).catch(() => null);
     const packageName = template?.packageName;
-    if (!packageName) return names;
+    if (!packageName) return { names, vendors };
     const candidateSkillIds = await resolveRecommendationCandidateSkillIds({ run, packageName });
     let promptText = "";
     try {
@@ -260,11 +335,12 @@ async function resolveDecidedSkillNames(run: AgentRunRecord): Promise<Map<string
     });
     for (const r of recs) {
       if (r.skillId && r.displayName) names.set(r.skillId, r.displayName);
+      if (r.skillId && r.vendorName) vendors.set(r.skillId, r.vendorName);
     }
   } catch {
     /* labels only — an unresolvable name never costs the settled card */
   }
-  return names;
+  return { names, vendors };
 }
 
 /**
@@ -289,8 +365,9 @@ async function resolveSettledCandidates(input: {
   holdId: string;
   who: RecommendationHoldActor;
   nameBySkillId: ReadonlyMap<string, string>;
+  vendorBySkillId: ReadonlyMap<string, string>;
 }): Promise<RunRecommendationSettledCandidate[]> {
-  const { run, holdId, who, nameBySkillId } = input;
+  const { run, holdId, who, nameBySkillId, vendorBySkillId } = input;
   try {
     const offered = await readRunRecommendationOfferedSet(holdId);
     if (offered.length === 0) return [];
@@ -306,7 +383,16 @@ async function resolveSettledCandidates(input: {
     );
     return offered
       .filter((o) => entitled.has(o.skillId))
-      .map((o) => ({ skillId: o.skillId, name: nameBySkillId.get(o.skillId) ?? o.skillId }));
+      .map((o) => ({
+        skillId: o.skillId,
+        name: nameBySkillId.get(o.skillId) ?? o.skillId,
+        vendorName: vendorBySkillId.get(o.skillId) ?? null,
+        // THE OFFER'S OWN decisive fields, read back from the claim rather than
+        // re-scored, so a pre-start re-decision pins exactly what the first draw
+        // put on the card (cinatra#3047, review point 1).
+        skillRevisionId: o.skillRevisionId,
+        recommended: o.recommended,
+      }));
   } catch {
     return [];
   }
@@ -325,6 +411,55 @@ async function resolveSettledCandidates(input: {
  * Every denial answers `{ state: "none" }` — indistinguishable from a run that
  * was never held, which is the same posture the lifecycle resolve holds.
  */
+/**
+ * WAS THIS RUN'S RECOMMENDATION ANSWERED? — the RUN's own reading of the
+ * question the card resolves for a viewer (cinatra#3047).
+ *
+ * WHO ASKS, AND WHY IT IS NOT THE CARD. The run page draws no skill picker
+ * inside its run-progress panel for a run whose skills were decided on the card
+ * ("The agentic run progress card appears once the skills are decided; no skill
+ * inside it can be selected"). The panel used to answer that from a
+ * recommendation card of its own; that mount is deleted — the row has one owner
+ * and one place — so the screen answers it server-side, before the first paint,
+ * and hands the panel a boolean.
+ *
+ * WHY IT LIVES HERE, beside the resolver rather than in the screen. "Decided"
+ * has exactly one definition, and it is the one the ladder below applies to a
+ * terminal park: a selection set on file means CONFIRMED, a skip record means
+ * SKIPPED, and neither means the question was never answered. A screen that
+ * re-expressed that from the park's status alone would be a second definition —
+ * and a wrong one, because the park's status and the decision's evidence are not
+ * written atomically: a confirm or a skip that races the TTL sweeper leaves a
+ * `policy_unresolved` park with real evidence behind it, which the card reads as
+ * decided and a status-only test would call undecided, putting the forbidden
+ * picker back on the page.
+ *
+ * NOT ACTOR-SCOPED, deliberately, and it is not a viewer's answer: the decided
+ * reading is not viewer-filtered in the ladder below either, and the only caller
+ * has already cleared the run's own access door before it asks.
+ *
+ * FAILS TOWARD THE PICKER. An unreadable store answers "not decided", which
+ * leaves the panel exactly as it was before this rule existed — the same posture
+ * the rule has always taken for a read that gives up.
+ */
+export function recommendationDecidedForRun(input: {
+  runId: string;
+  /** The run's `recommendation_hold` park status, or null when it never held. */
+  parkStatus: string | null | undefined;
+}): boolean {
+  const { runId, parkStatus } = input;
+  if (!runId) return false;
+  // A live hold is the question still open, and no park at all is a run that was
+  // never asked. Only a TERMINAL park can carry a decision.
+  if (parkStatus == null || parkStatus === "parked") return false;
+  try {
+    if (hasRunSelectedSkillRevisions(runId)) return true;
+    return hasRunRecommendationSkip(runId);
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveRecommendationHoldStateForActor(input: {
   runId: string;
   who: RecommendationHoldActor;
@@ -343,6 +478,11 @@ export async function resolveRecommendationHoldStateForActor(input: {
   if (park.status !== "parked") {
     // DECIDED summary. Deliberately NOT viewer-filtered — see
     // `resolveDecidedSkillNames`.
+    //
+    // THIS LADDER IS THE DEFINITION OF "DECIDED" (cinatra#3047): a selection set
+    // means confirmed, a skip record means skipped, neither means nobody
+    // answered. `recommendationDecidedForRun` above is the same ladder as a
+    // boolean, for the run page's server-side read; change one and change both.
     const selected = readRunSelectedSkillRevisions(runId);
     let rejected: RunRejectedRecommendation[] = [];
     try {
@@ -350,7 +490,8 @@ export async function resolveRecommendationHoldStateForActor(input: {
     } catch {
       rejected = [];
     }
-    const nameBySkillId = await resolveDecidedSkillNames(run);
+    const { names: nameBySkillId, vendors: vendorBySkillId } =
+      await resolveDecidedSkillNames(run);
     const decided = decidedSkillsFromEvidence(selected, rejected, nameBySkillId);
     // THE OFFER RIDES BOTH SETTLED ANSWERS, and therefore BOTH TRANSPORTS: the
     // cookie action and the broker read route each return this state verbatim,
@@ -361,16 +502,28 @@ export async function resolveRecommendationHoldStateForActor(input: {
       holdId: park.id,
       who,
       nameBySkillId,
+      vendorBySkillId,
     });
+    // THE SELECTION IS NOT FROZEN UNTIL THE RUN STARTS (cinatra#3047, review
+    // point 1) — see `RunRecommendationSettledSelection` for what each of these
+    // three answers and why the resolver is the one that answers it.
+    const settledSelection: RunRecommendationSettledSelection = {
+      holdRef: encodeRecommendationHoldRef({ runId, holdId: park.id }) ?? "",
+      runStarted: recommendationRunHasStarted(run.status),
+      canDecide: await readerMayDecide(run, who),
+    };
     if (selected.length > 0) {
       return {
         state: "confirmed",
         skillNames: selected.map((s) => nameBySkillId.get(s.skillId) ?? s.skillId),
         decided,
         candidates,
+        ...settledSelection,
       };
     }
-    if (hasRunRecommendationSkip(runId)) return { state: "skipped", decided, candidates };
+    if (hasRunRecommendationSkip(runId)) {
+      return { state: "skipped", decided, candidates, ...settledSelection };
+    }
     return { state: "none" };
   }
 
@@ -448,20 +601,54 @@ export async function resolveRecommendationHoldStateForActor(input: {
   // all, because the hold's offer is settled. With no claim to read, the live
   // scoring is the row, exactly as before #2906.
   const presentation = new Map(recs.map((r) => [r.skillId, r] as const));
+  // WHAT DECIDES MEMBERSHIP, AND WHAT ONLY LABELS IT (cinatra#3047, the ninth
+  // proof round's settlement finding).
+  //
+  // WHAT WAS WRONG. The claim above settles WHICH skills this hold offered, and
+  // the reader's own entitled candidate set settles which of them THIS reader
+  // may see. The live re-scoring settles neither — it is the label, the score
+  // and the feature citation. Gating membership on it made the row's existence
+  // depend on a pass that is explicitly allowed to fail: `recs` is read through
+  // a `.catch(() => [])` a few lines above, so a re-open whose scoring did not
+  // answer dropped EVERY offered entry and published a HELD state offering
+  // nothing. The step then drew no pills over a live Continue, and that press is
+  // `release`'s SKIP branch — no selected-revision row written at all, the hold
+  // released and the run advanced. That is the two graded walks of the ninth
+  // round exactly: a two-row offered set, zero selected revisions, the run at
+  // its next gate. It also breaks the sentence this step is built to: a reader
+  // "may come back and change the selection, and Continue keeps it", and
+  // "Continue keeps the whole row in one act". A row that is not drawn cannot be
+  // kept.
+  //
+  // THE RULE, and it is the SETTLED reading's rule — `resolveSettledCandidates`
+  // has always gated the offer on `entitled` and joined names as labels only.
+  // The live reading now reads the same way, so one hold reads one way whichever
+  // side of its decision it is read from. The viewer intersection is not
+  // loosened by a hair: it moves from the scoring result to `assignedSkillIds`,
+  // which is the SAME viewer-scoped resolve (`viewerScopeForHoldActor(who)`) the
+  // scoring was itself restricted to — computed independently of it, so a
+  // narrower reader still never learns a wider one's scoped skill names, and a
+  // scoring pass that fails can no longer widen or empty what they see.
+  const entitled = new Set(assignedSkillIds);
   const chips =
     offered.length > 0
       ? offered.flatMap((o) => {
+          if (!entitled.has(o.skillId)) return [];
           const live = presentation.get(o.skillId);
-          if (!live) return [];
           return [
             {
               skillId: o.skillId,
               skillRevisionId: o.skillRevisionId,
-              name: live.displayName,
-              score: live.score,
+              // Labels, and only labels: an offered skill this reader is
+              // entitled to but the pass could not describe prints its own id
+              // rather than vanishing — the same fallback the settled reading
+              // takes (`nameBySkillId.get(o.skillId) ?? o.skillId`).
+              name: live?.displayName ?? o.skillId,
+              vendorName: live?.vendorName ?? null,
+              score: live?.score ?? 0,
               rank: o.rank,
               recommended: o.recommended,
-              scoredFeatures: live.scoredFeatures,
+              scoredFeatures: live?.scoredFeatures ?? [],
             },
           ];
         })
@@ -469,6 +656,7 @@ export async function resolveRecommendationHoldStateForActor(input: {
           skillId: r.skillId,
           skillRevisionId: r.skillRevisionId,
           name: r.displayName,
+          vendorName: r.vendorName,
           score: r.score,
           rank: r.rank,
           recommended: r.recommended,
@@ -805,6 +993,41 @@ export async function skipRecommendationForActor(input: {
     // is durably there. A write that quietly did nothing is therefore not
     // mistaken for a decision on record: the release below is gated on the
     // verified fact, not on the absence of an exception.
+    // AN ALL-CLEAR ROW IS A SKIP, AND IT MUST READ BACK AS ONE (cinatra#3047,
+    // review point 2). With checkboxes there is no skip ACTION: clearing every
+    // box and pressing Continue is what skips, and on a run whose Skills step was
+    // already decided that means selection rows from the earlier answer are on
+    // file. Left there, the resolver's selection-first ladder would read the run
+    // back as CONFIRMED while every box on the reader's screen was clear.
+    //
+    // THE SCOPE IS THE HOLD'S OWN OFFER, NOT THE FRESH SCORING (convergence
+    // finding 4). `rejectedRows` is derived from a scoring taken NOW, and a skill
+    // that was selected earlier can be absent from it — unassigned since,
+    // uninstalled, or displaced past the candidate cap. Clearing only what the
+    // new scoring returned would leave exactly that skill selected, and the
+    // reader would see an all-clear row read back as confirmed. The claimed
+    // offer is the durable record of what this hold asked about, so it is what
+    // the clear is bounded by; the scored ids are unioned in so a hold with no
+    // readable claim still clears what it can.
+    //
+    // The store's own guard is the other half: the DELETE tests the run's status
+    // in the statement, so a started run's materialized ledger is untouched
+    // whatever this call asks for.
+    const clearedSkillIds = new Set(rejectedRows.map((r) => r.skillId));
+    if (bound.holdId) {
+      try {
+        for (const offer of await readRunRecommendationOfferedSet(bound.holdId)) {
+          clearedSkillIds.add(offer.skillId);
+        }
+      } catch {
+        /* an unreadable claim costs SCOPE, never the skip — the scored ids stand */
+      }
+    }
+    clearRunSelectedSkillRevisionsBeforeStart({
+      runId: input.runId,
+      skillIds: [...clearedSkillIds],
+    });
+
     const recorded = writeRunRecommendationSkip({
       runId: input.runId,
       skippedBy: userId,
@@ -997,6 +1220,18 @@ export async function writeRunSkillSelectionForActor(input: {
       // the reader can act on instead of the generic denial, and the two reasons
       // stay distinguishable: an offer that no longer holds asks the reader to
       // change their selection, one that could not be READ asks them to retry.
+      // THREE REASONS NOW, AND THEY STAY DISTINGUISHABLE (cinatra#3047). An
+      // offer that no longer holds asks the reader to change their selection;
+      // one that could not be READ asks them to retry; and a run that has
+      // already started tells them the selection is settled, because no retry
+      // will make that write land.
+      if (result.refusal.reason === "run_already_started") {
+        return {
+          ...empty,
+          refusal: RECOMMENDATION_RUN_STARTED_REFUSAL,
+          refusalCode: RECOMMENDATION_RUN_STARTED_CODE,
+        };
+      }
       const unreadable = result.refusal.reason === "offered_set_unreadable";
       return {
         ...empty,

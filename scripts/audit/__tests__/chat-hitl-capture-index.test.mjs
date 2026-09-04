@@ -1067,12 +1067,24 @@ describe("the manifest to capture-index binding", () => {
   });
 
   it("keeps the capture requirements in step with the held-turn contract", () => {
-    // One authority for what an operable hold card looks like. The contract's
-    // owner anchors drive the transcript gate; these drive the capture gate.
+    // One authority for what an operable hold card looks like, and it is the
+    // contract's DECISION CONTROLS (cinatra#3047). It used to be the owner
+    // anchors, which held the same three names — but the two fields answer
+    // different questions, and the review's point C separated them: an owner
+    // anchor says "this owner drew here", on EVERY host, and the run page's
+    // Skills step now decides with a checkbox and a Continue instead of the
+    // three per-chip affordances. `decisionControls` is the list of the
+    // decision acts on the hosts that draw §V's controls — the conversation,
+    // the widget and the review page — which is exactly what a PENDING capture
+    // of this kind is required to show, so it is the field the capture gate
+    // must stay in step with.
     const row = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "recommendation_hold");
     for (const action of KIND_REQUIRED_ACTIONS.recommendation_hold) {
-      expect(row.ownerAnchors).toContain(action);
+      expect(row.decisionControls).toContain(action);
     }
+    // …and the owner anchor is still asserted, as the thing it actually is:
+    // the one anchor the owner draws wherever it draws.
+    expect(row.ownerAnchors).toEqual(['[data-conformance-id="run-chip-row"]']);
   });
 });
 

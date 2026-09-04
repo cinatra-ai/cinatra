@@ -62,6 +62,44 @@ export const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunS
   "armed",
 ]);
 
+
+/**
+ * HAS THIS RUN STARTED RUNNING? (cinatra#3047, review point 1.)
+ *
+ * The ONE place the boundary is expressed, so the resolver that publishes it,
+ * the screen that reads it, the store's own guarded write and the suite that
+ * pins it cannot answer it four ways. A run in one of the pre-execution statuses
+ * above has not begun executing — it is at its setup, at its schedule, or at any
+ * other pre-start moment — and every other status means it has. The FIRST status
+ * on the far side is `queued`, which is the dispatch CAS itself
+ * (`pending_input->queued`, `armed->queued`).
+ *
+ * `pending_trigger` IS PRE-START ON BOTH OF ITS ENTRY EDGES, and the objection is
+ * worth answering rather than leaving to be discovered. The state is reached from
+ * `pending_input` (the reader opened the trigger form) AND from `queued`
+ * (`execution.ts`: setup finished with no trigger chosen yet), so a
+ * `pending_trigger` run may have been `queued` before. It still has not
+ * EXECUTED: it leaves this state for execution through `pending_trigger->queued`
+ * ("the user chose Run right after setup"), and the work itself begins at the
+ * `queued->running` dispatch CAS after that. The trigger step is therefore a
+ * pre-start moment however it was reached, which is exactly what this set has
+ * always claimed of it - "none of them can carry an execution record".
+ *
+ * AN UNKNOWN OR ABSENT STATUS READS AS NOT STARTED, which is the decidable side.
+ * That is deliberate and it is the same direction the rest of this reading takes:
+ * the resolver's own `canDecide` derives FAIL-OPEN, and the authority that
+ * actually decides is the decision path. Withholding an editable box from a
+ * reader who may in fact still edit is a regression; showing one to a reader
+ * whose run has moved on costs one honest refusal - and that refusal is real
+ * rather than assumed: the selection write tests the run's status INSIDE its own
+ * transaction and refuses a started run outright, so the screen being wrong
+ * about the moment can never make the STORE wrong about it.
+ */
+export function recommendationRunHasStarted(status: string | null | undefined): boolean {
+  if (typeof status !== "string" || status.length === 0) return false;
+  return !PRE_EXECUTION_RUN_STATUSES.has(status);
+}
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.
