@@ -125,7 +125,7 @@ import { fileURLToPath } from "node:url";
 //             Every field is compared EXACTLY, and an omitted numeric field
 //             reads as 0 — so an entry cannot tolerate more than it wrote down.
 //
-// ALL SIX entries below are the same transient shape: the suite is repaired at
+// EVERY entry below is the same transient shape: the suite is repaired at
 // the companion repo's main, and the committed dev-lock pin still predates the
 // repair. Wiring knowingly-red pins instead would make this gate red on arrival
 // and teach everyone to ignore it — and the brief for this slice says so
