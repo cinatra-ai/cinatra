@@ -46,7 +46,7 @@ import {
   StepperTrigger,
 } from "@/components/reui/stepper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { StatusPill } from "@/components/ui/status-pill";
 import {
   Tooltip,
   TooltipContent,
@@ -110,7 +110,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { runStatusBadgeLabel, statusBadgeVariant } from "./run-surface-status";
+import { runStatusBadgeLabel, runStatusPillStatus } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -138,7 +138,7 @@ const EMPTY_SUBMISSION_ENTRIES: SubmissionMapEntries = [];
 // every render would be a new prop identity each time.
 const EMPTY_RAIL_EXTRAS: readonly RunStepRailEntry[] = [];
 
-// statusBadgeVariant is shared with AgenticRunPanel — see ./run-surface-status.
+// runStatusPillStatus is shared with AgenticRunPanel — see ./run-surface-status.
 
 // `pickLegacyResumeText` / `applyAttachmentEnvelope` live in the leaf module
 // `./attachment-envelope-payload` so the precedence rules can be unit-tested
@@ -2193,9 +2193,14 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
           {/* A setup-field INPUT pause must not read as "pending approval" —
               the discriminator is the interrupt itself, never the status. */}
-          <Badge variant={statusBadgeVariant(status)}>
+          {/* The design system's status-pill family, with the dot the ratified
+              drawing draws on the run detail (cinatra#3002, fix leg 3). This is
+              the SAME header AgenticRunPanel draws on the other run-detail
+              branch, so it takes the same shared mapping — two run-detail hosts
+              can never drift into two pill families again. */}
+          <StatusPill status={runStatusPillStatus(status)} glyph="dot">
             {runStatusBadgeLabel(status, effectiveInterruptContext)}
-          </Badge>
+          </StatusPill>
         </div>
         {status === "pending_approval" && effectiveInterruptContext !== null && (
           <Separator />
