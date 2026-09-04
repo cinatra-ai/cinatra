@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildReviewTargetContentProjection } from "../review-target-prepare";
+import { buildReviewTargetContentProjection } from "../review-target-content";
 
 const ARGS = {
   orgId: "org_1",

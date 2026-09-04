@@ -139,6 +139,11 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       runId: "run-1",
       reviewTaskId: "task-1",
       actorCtx: ACTOR,
+      // The island DRAWS its targets, so it is one of the two surfaces that
+      // supply the content road (cinatra#3029: the binder takes it as a port,
+      // which is what keeps the channel off the four locked routes). A surface
+      // that dropped it would draw the content-absent floor over readable work.
+      buildContent: expect.any(Function),
     });
   });
 
@@ -372,6 +377,11 @@ describe("a frame that presents an island credential", () => {
       runId: "run-1",
       reviewTaskId: "task-1",
       actorCtx: ACTOR,
+      // The island DRAWS its targets, so it is one of the two surfaces that
+      // supply the content road (cinatra#3029: the binder takes it as a port,
+      // which is what keeps the channel off the four locked routes). A surface
+      // that dropped it would draw the content-absent floor over readable work.
+      buildContent: expect.any(Function),
     });
     expect(isEmptyIsland(el)).toBe(false);
   });

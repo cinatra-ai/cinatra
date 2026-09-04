@@ -32,6 +32,7 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 
 import { bindArtifactReviewPorts } from "../review-target-prepare";
+import { buildReviewTargetContentProjection } from "../review-target-content";
 
 const ARTIFACT = {
   artifactId: "art_1",
@@ -58,7 +59,14 @@ const ARTIFACT = {
 } as unknown as ArtifactSummary;
 
 const ports = () =>
-  bindArtifactReviewPorts({ orgId: "org_1", actor: {} as ActorContext });
+  bindArtifactReviewPorts({
+    orgId: "org_1",
+    actor: {} as ActorContext,
+    // The content road is the drawing surface's, handed in — exactly as the
+    // two review pages hand it in (cinatra#3029: it stays out of the binder so
+    // the four locked routes that reach the binder do not carry the channel).
+    buildContent: buildReviewTargetContentProjection,
+  });
 
 const buildFor = (stream: AsyncIterable<Buffer>) => {
   resolveVersion.mockReturnValue({ storageKey: "key_1", mime: "text/markdown" });
@@ -115,6 +123,29 @@ describe("the shipped review-target binder", () => {
     });
 
     expect(props.content).toMatchObject({ kind: "none", reason: "absent" });
+  });
+
+  it("draws the channel's OWN named absence when no content road is supplied", async () => {
+    // A caller that never draws a target (every locked route that reaches this
+    // binder statically) supplies no port and pays no channel — and what it
+    // gets back is the contract's absence, never an undefined content field.
+    const props = await bindArtifactReviewPorts({
+      orgId: "org_1",
+      actor: {} as ActorContext,
+    }).buildProps({
+      artifact: ARTIFACT,
+      representationRevisionId: "rev_4c21aa",
+      mime: "text/markdown",
+      propsApiVersion: 1,
+      member: { mime: "text/markdown", form: "file" },
+    });
+
+    expect(props.content).toMatchObject({
+      kind: "none",
+      reason: "absent",
+      representationRevisionId: "rev_4c21aa",
+    });
+    expect(resolveVersion).not.toHaveBeenCalled();
   });
 
   it("reads only as far as the cap the projection is bounded by", async () => {

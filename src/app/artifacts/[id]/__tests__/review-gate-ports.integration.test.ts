@@ -33,6 +33,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
+import { buildReviewTargetContentProjection } from "../review-target-content";
+
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
   ARTIFACT_REVIEW_DECISION_API_VERSION,
@@ -152,6 +154,7 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       runId,
       reviewTaskId,
       actorCtx: actorCtxFor("user-foreign"),
+      buildContent: buildReviewTargetContentProjection,
     });
     expect(surface.kind).toBe("not-authorized");
   });
@@ -172,6 +175,7 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       runId,
       reviewTaskId,
       actorCtx: actorCtxFor(OWNER_ID),
+      buildContent: buildReviewTargetContentProjection,
     });
     // It carries THE REVIEWED TARGETS, read-only: "A resolved gate opens
     // read-only: what was decided, and the reviewed target(s), kept for the run's
@@ -194,6 +198,7 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       // answers `unavailable`, and an unavailable gate is not a decided review.
       reviewTaskId: `lifecycle-review:${randomUUID()}`,
       actorCtx: actorCtxFor(OWNER_ID),
+      buildContent: buildReviewTargetContentProjection,
     });
     expect(surface).toEqual({ kind: "blocked", reason: "no-longer-pending" });
   });
@@ -208,6 +213,7 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       runId,
       reviewTaskId,
       actorCtx: actorCtxFor("user-foreign"),
+      buildContent: buildReviewTargetContentProjection,
     });
     expect(surface.kind).toBe("not-authorized");
   });

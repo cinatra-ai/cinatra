@@ -33,7 +33,7 @@ import { describe, expect, it } from "vitest";
 
 import { artifactContentCapFor } from "@/lib/artifacts/artifact-content-channel";
 
-import { buildReviewTargetContentProjection } from "../review-target-prepare";
+import { buildReviewTargetContentProjection } from "../review-target-content";
 
 const ARGS = {
   orgId: "org_1",
