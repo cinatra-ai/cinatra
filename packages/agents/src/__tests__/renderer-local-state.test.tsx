@@ -32,6 +32,11 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 // (Same shape as schema-field-renderer-hide-submit.test.tsx.)
 // ---------------------------------------------------------------------------
 vi.mock("lucide-react", () => ({
+  // The gate's control floor draws the arrow glyph after the word
+  // (cinatra#3047 fix leg 8): the drawing's floor is "the primary
+  // Continue, right-aligned over a hairline floor".
+  ArrowRight: ({ className }: { className?: string }) =>
+    React.createElement("span", { "data-icon": "arrow-right", className }),
   ChevronDown: ({ className }: { className?: string }) =>
     React.createElement("span", { "data-icon": "chevron-down", className }),
   ChevronUp: ({ className }: { className?: string }) =>

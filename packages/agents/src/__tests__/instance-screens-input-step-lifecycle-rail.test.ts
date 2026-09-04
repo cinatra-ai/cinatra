@@ -43,14 +43,21 @@ const TRIGGER_SCREEN = SCREEN_SRC.slice(
 );
 
 describe("the rail draws the steps still to come below the highlighted step", () => {
-  it("names Schedule, Recommendation and Review as the steps the run has not reached", () => {
+  it("names Skills, Schedule and Review as the steps the run has not reached", () => {
     expect(SETUP_SCREEN).toContain("upcomingRailStepKeys");
     // THE THREE WORDS MOVED, AND ONLY MOVED (cinatra#3068 fix leg 3): they are a
     // named answer of the screen's own now, so the settled first step keeps them
     // too. `instance-screens-settled-input-keeps-the-rail.test.tsx` reads the
     // rows that come out of it.
+    //
+    // THEIR ORDER CORRECTED BY cinatra#3047 FIX LEG 8. An upcoming row is drawn
+    // where its step will stand, and the ratified drawing stands the Skills
+    // entry at the head of the rail — "the first entry on the step rail ...
+    // ahead of the work steps it would authorize" — so it heads these too.
+    // Listing the schedule first drew the Skills entry third on a run that also
+    // carried an input form, which the eighth proof round photographed.
     expect(SCREEN_SRC).toMatch(
-      /const UPCOMING_RUN_RAIL_STEP_KEYS[\s\S]{0,120}"schedule"[\s\S]{0,40}"recommendation"[\s\S]{0,40}"review"/,
+      /const UPCOMING_RUN_RAIL_STEP_KEYS[\s\S]{0,120}"recommendation"[\s\S]{0,40}"schedule"[\s\S]{0,40}"review"/,
     );
   });
 
