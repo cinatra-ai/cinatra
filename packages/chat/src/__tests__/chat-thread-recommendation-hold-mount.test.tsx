@@ -265,6 +265,62 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
+  it("KEEPS TODAY'S DRAWING while the run page changes (cinatra#3047, review point E)", async () => {
+    // The review changed the RUN PAGE's reading of this card: its Skills step
+    // draws a checkbox in front of each skill name and one Continue beneath the
+    // list, and no per-chip Confirm / Adjust / Skip. Point E asks for a separate
+    // issue to bring the same two changes to the chat and the widget — so until
+    // that issue lands, the conversation must keep drawing exactly what it draws
+    // today. This is the pin for that: the three affordances are present, and
+    // NEITHER of the run page's two new controls has leaked onto this host.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    await waitFor(() => {
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
+      }
+    });
+
+    expect(wrapper?.querySelectorAll('[data-skill-action="confirm"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="adjust"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="skip"]').length).toBeGreaterThan(0);
+    // The run page's Skills-step reading, absent here.
+    expect(wrapper?.querySelector("[data-skills-step-checkbox]")).toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-continue]")).toBeNull();
+    expect(wrapper?.querySelector('[role="checkbox"]')).toBeNull();
+    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBeNull();
+    // …and the host that decided which reading is drawn is this one.
+    expect(wrapper?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("keeps it while the run page's THREE REFINEMENTS land too (cinatra#3047, points 1-4)", async () => {
+    // The second round of the same review refined the run page further: its
+    // boxes stay editable until the run starts, its settled all-clear reading
+    // drops the skip outcome panel, every pill prints "<Skill name> by
+    // <vendor>", and the row sits in the detail with no card around it. Point E
+    // still governs this host, so NONE of those four has reached it — stated as
+    // four absences rather than left to be inferred from the arm above.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    await waitFor(() => {
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
+      }
+    });
+
+    // 1. no editable-until-started reading, and nothing that states one.
+    expect(wrapper?.getAttribute("data-skills-step-editable")).toBeNull();
+    expect(wrapper?.getAttribute("data-skills-step-submitted")).toBeNull();
+    // 2. the conversation's own chips, not the run page's pills.
+    expect(wrapper?.querySelector("[data-skills-step-pill]")).toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-list]")).toBeNull();
+    // 3. no vendor byline on this host's chips.
+    expect(wrapper?.querySelector("[data-skills-step-vendor]")).toBeNull();
+    // 4. and the card root is the row itself, exactly as it is today.
+    expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+    expect(wrapper?.getAttribute("data-lifecycle-card-state")).toBe("held");
+  });
+
   it("keeps the card OUTSIDE the inline run panel's subtree", async () => {
     // The panel is the `run_card` host and mounts its own copy of the same
     // component. A card nested inside it would be that host's card, not this
@@ -474,9 +530,12 @@ describe("the turn shows exactly one recommendation card", () => {
     expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
   });
 
-  it("leaves the panel's own copy alone where no chat host owns the card", async () => {
-    // The run page: no outer lifecycle host, so the panel keeps its copy. The
-    // rule is a function, so this is the same call the panel makes.
+  it("reads the ambient-host rule the panel still holds its HITL screen to", async () => {
+    // The recommendation card is no longer one of the panel's mounts at all
+    // (cinatra#3047) — the run page draws the row in one place, its own rail
+    // step. The RULE survives for the kind that still has two possible hosts in
+    // one turn (the HITL screen card), and it is the same function this
+    // transcript's mount is written against, so the values stay pinned here.
     expect(runCardOwnsLifecycleCopy(null)).toBe(true);
     expect(runCardOwnsLifecycleCopy("run_card")).toBe(true);
     expect(runCardOwnsLifecycleCopy("chat_thread")).toBe(false);

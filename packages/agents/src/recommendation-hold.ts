@@ -175,6 +175,25 @@ export const RECOMMENDATION_OFFER_STALE_REFUSAL =
 export const RECOMMENDATION_OFFER_STALE_CODE = "recommendation_offer_stale";
 
 /**
+ * THE RUN-ALREADY-STARTED REFUSAL (cinatra#3047).
+ *
+ * The Skills step keeps its boxes editable while the run has not begun
+ * executing, and a saved change rides the same decision path the first one did.
+ * Once the run HAS started, its selection set is the ledger execution
+ * materialized from, and the write is refused in the store's own transaction
+ * rather than partially applied. This is the sentence for that — and it is
+ * deliberately NOT a "try again" line, because no retry will make it land: the
+ * reader is told the selection is settled, which is the true and actionable
+ * thing to say. It is reachable at all only from a screen that was open across
+ * the moment the run started.
+ */
+export const RECOMMENDATION_RUN_STARTED_REFUSAL =
+  "This run has already started, so its skill selection is settled. Nothing was changed.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_RUN_STARTED_CODE = "recommendation_run_started";
+
+/**
  * THE UNREADABLE-OFFER REFUSAL (cinatra#2906).
  *
  * A hold that OWNS no offer is decided the pre-#2906 way, so this is NOT that
