@@ -508,8 +508,7 @@ export function AgenticRunPanel({
   // Accumulates renderer-produced values (e.g. campaignId from recipients renderer)
   // so the Continue button can include them in the resume payload.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
-  // Sticky bottom-of-page AI-assist prompt state.
-  // portalTarget is set in an effect because document.querySelector is browser-only.
+  // The AI-assist prompt window's state.
   // aiSuggestions is the stable suggestion payload threaded into renderers — it
   // changes only when the user submits a prompt, NOT on every poll tick (unlike
   // `value` which is rebuilt as an inline literal on each render).
@@ -532,9 +531,6 @@ export function AgenticRunPanel({
   // take the fill away before its replacement exists.
   const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
   const convIdRef = useRef(0);
-  useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
-  }, []);
   // Parent-side apply handler — merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
   // suggestion values override matching user edits intentionally —
@@ -1511,11 +1507,17 @@ export function AgenticRunPanel({
   // own `visible` rule is untouched: it is off in a conversation, off for a
   // marked review gate, and off unless a gate with fields is open — which is
   // why the two readings above render it without ever showing it.
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses. A ref callback rather than an
+  // effect, so the mount is known in the commit that draws it.
   const hitlConversationPanelNode: ReactNode = (
-    <>
-    {/* Sticky bottom-of-page AI-assist
-        conversation panel. Rendered via createPortal into <main> by the shared
-        component HitlConversationPanel. resetSignal={currentXRenderer}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
+    {/* The AI-assist conversation panel, drawn into the mount above — under the
+        step's own work, in the same column. resetSignal={currentXRenderer}
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
@@ -1558,7 +1560,7 @@ export function AgenticRunPanel({
         !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
       }
     />
-    </>
+    </div>
   );
 
   // -------------------------------------------------------------------------
@@ -2005,7 +2007,13 @@ export function AgenticRunPanel({
               the xRenderer gate above, for the same ruling: a decided run offers
               nothing selectable inside its own card. */}
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
-          <div className="rounded-control border border-line bg-surface-muted px-4 py-3 flex flex-col gap-2">
+          {/* NO BOX AROUND THE STEP'S OWN CONTENT (cinatra#3188 item 4). The
+              ratified drawing, §I: "One page per gate — the step's own card,
+              and nothing else … the page carries the one card of the step it
+              belongs to." The card is the section this content sits in; a
+              border, a ground and an inset of its own made a second card
+              inside the first. The content and its decision are unchanged. */}
+          <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm text-muted-foreground">
                 Run paused — awaiting human approval before continuing.
@@ -2088,7 +2096,10 @@ export function AgenticRunPanel({
       ) : null}
 
       {error && status === "failed" && (
-        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
+        // The error reads inside the step's one card too (cinatra#3188 item
+        // 4) — no second box around it. The width constraint stays: it is what
+        // keeps a long unbreakable token from widening the card.
+        <div className="max-w-full overflow-hidden">
           <div className="text-xs font-medium text-muted-foreground mb-1">Error</div>
           {/* Long unbreakable tokens (e.g. masked sk-proj-… keys) overflowed the
               panel; constrain the container (max-w-full overflow-hidden) and keep
