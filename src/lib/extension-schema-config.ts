@@ -229,6 +229,15 @@ export type RecordListBadge = {
   key: string;
   label: string;
   variant: RecordListBadgeVariant;
+  /**
+   * Opt-in (cinatra#2368): render the ROW's own value at `key` as the badge's
+   * visible text instead of the static `label` — a badge that NAMES the thing
+   * (the calendar an appointment schedule belongs to) rather than repeating a
+   * schema word. `label` stays required and becomes the badge's accessible
+   * qualifier. Omitted (the default) keeps the flag-style static-label
+   * rendering every existing declaration relies on.
+   */
+  showsValue?: boolean;
 };
 /**
  * A LIVE list of existing rows (distinct from the create-time `repeatable-list`).
@@ -844,7 +853,7 @@ function validateField(
           badgeOk = false;
           return;
         }
-        if (!rejectUnknownKeys(bRaw, new Set(["key", "label", "variant"]), bAt, errors)) {
+        if (!rejectUnknownKeys(bRaw, new Set(["key", "label", "variant", "showsValue"]), bAt, errors)) {
           badgeOk = false;
           return;
         }
@@ -858,10 +867,16 @@ function validateField(
           badgeOk = false;
           return;
         }
+        if (bRaw.showsValue !== undefined && typeof bRaw.showsValue !== "boolean") {
+          errors.push(`${bAt}: "showsValue" must be a boolean`);
+          badgeOk = false;
+          return;
+        }
         itemBadges.push({
           key: bRaw.key,
           label: bRaw.label,
           variant: bRaw.variant as RecordListBadgeVariant,
+          ...(bRaw.showsValue === true ? { showsValue: true } : {}),
         });
       });
       if (!badgeOk) return null;
