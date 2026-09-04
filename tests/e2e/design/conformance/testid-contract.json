@@ -79,6 +79,95 @@
     "state-absent": { "$ref": "review-gate-state" },
     "suggestion-floor": { "$ref": "review-decision-floor" },
     "tier-metadata-floor": { "$ref": "review-target-metadata-floor" },
+    "review-target-in-thread": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"review-target-in-thread\"][data-variant=\"populated\"] [data-conformance-id=\"review-target-header\"] — the REAL inert target header the review card draws above the island, mounted on the conformance harness route inside a chat-thread host declaration. The `name` field is the TYPE's display label, carried both as the value of [data-review-target-type] and as that element's text; the artifact's own title and type id are published on the harness root as data-review-target-title / data-review-target-object-type so the driver names a source of truth rather than whatever the header rendered, and the fixture's title and type label share no token. The two other readings are their own variants: data-variant=\"loading\" draws the shipped [data-conformance-id=\"review-gate-loading\"] skeleton, and data-variant=\"error\" draws §IV's \"no longer open\" panel [data-conformance-id=\"review-gate-blocked\"][data-blocked-reason] with its refresh back to the live gate.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-target-header\"",
+            "data-review-target-type={header.typeLabel}",
+            "data-review-target-revision={revision.full}"
+          ]
+        },
+        {
+          "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
+          "literals": [
+            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        }
+      ]
+    },
+    "review-states-outside-chat": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"review-states-outside-chat\"][data-variant=\"populated\"] — the SAME review readings as review-target-in-thread, mounted inside a page-gate-region host declaration instead of a chat-thread one, which is §XIII.1's whole claim (nothing moves but the frame). state kind:artifact is read off the header's mono line: the artifact's own type id plus the revision the gate PINNED, carried as [data-review-target-revision], with the pinned marker on it. The manifest's continue-review action is on this wave's surface-readiness list (cinatra#3100).",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-target-header\"",
+            "data-review-target-type={header.typeLabel}",
+            "data-review-target-revision={revision.full}"
+          ]
+        },
+        {
+          "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
+          "literals": [
+            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        }
+      ]
+    },
+    "run-progress-placeholder-in-thread": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"run-progress-placeholder-in-thread\"][data-variant=\"populated\"] [data-conformance-id=\"review-gate-placeholder\"] — the REAL placeholder the run card draws before the output has been generated. It has one reading and that reading IS the loading one: role=\"status\", aria-busy, the card's own fixed name and the design system's spinning arc. The driver grades the absences the drawing fixes as hard as the presences — no status word, no result, and nothing to press.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-placeholder\"",
+            "aria-busy=\"true\"",
+            "Agentic Run Progress",
+            "<LoadingSpinner className=\"size-4\" />"
+          ]
+        }
+      ]
+    },
+    "reader-state-matrix": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"reader-state-matrix\"][data-variant=\"populated\"] [data-reader-state] — §IX's two MOUNTED reader readings, produced by handing the shipped chip row the two different inputs the review card itself hands it (`onToggleMark` exactly when the reader may decide): a mark handler (live, a real press target) and no mark handler (read-only — plain elements with no press target and the component's own reason sentence). Restricted is never drawn as a disabled card. The matrix's third row — a reader who may not read the target — is on the wave's surface-readiness list: that absence is decided inside the review card behind an authorized resolve, and an empty suggestion set is not a stand-in for it.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"suggestion-chips\"",
+            "data-suggestion-chips-mode={recorded ? \"recorded\" : interactive ? \"live\" : \"read-only\"}",
+            "conformanceId: \"suggestion-accepted\"",
+            "onToggleMark={state.canDecide ? onToggleMark : undefined}",
+            "Deciding these needs approve access on this run."
+          ]
+        }
+      ]
+    },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",

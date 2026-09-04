@@ -110,6 +110,13 @@ import {
   type LifecycleResolveFixture,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-resolve-fixture-data";
 import {
+  LIFECYCLE_PRESENCE_HOSTS,
+  LIFECYCLE_READER_STATES,
+  LIFECYCLE_REVIEW_BLOCKED_REASON,
+  LIFECYCLE_REVIEW_TARGET_FIXTURE,
+  LIFECYCLE_REVIEW_TARGET_TYPE_LABEL,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-one-off-fixture-data";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -2241,10 +2248,22 @@ function awaitingMount(
    *  wait above; another wave naming its own reason passes it here. */
   reason: string = AWAITING_PER_SCOPE_SURFACES,
 ): SurfaceDriver {
+function awaitingMount(
+  surfaceId: string,
+  driver: SurfaceDriver,
+  /**
+   * Why this surface is not on the harness yet. Defaults to the per-scope
+   * reason this helper was introduced for; a later wave whose surfaces await a
+   * DIFFERENT landing (cinatra#3165, epic #3155 W9) passes its own, so the
+   * reason a skipped test prints always names what that surface is waiting on.
+   */
+  reason: string = AWAITING_PER_SCOPE_SURFACES,
+): SurfaceDriver {
   const guard = async (page: Page): Promise<void> => {
     await expect(
       page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
       `the conformance harness itself did not render — this is a real failure, never a surface whose mount has not landed yet`,
+      `the conformance harness itself did not render — this is a real failure, never a surface awaiting its own landing`,
     ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
 
     let mounted = true;
@@ -6165,6 +6184,653 @@ const TIER_METADATA_FLOOR_DRIVER: SurfaceDriver = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// W9 — the remaining ONE-OFF surfaces of the in-conversation lifecycle drawing
+// (cinatra#3165, epic #3155)
+// ---------------------------------------------------------------------------
+//
+// Twelve surfaces with no family to share: each stands for one thing the
+// drawing says once. There is deliberately no factory here — a factory over
+// twelve unlike shapes would be a parameter list pretending to be a pattern.
+//
+// FOUR ARE DRIVEN FOR REAL, from the components that SHIP them: the review
+// target's header and its two other readings (§II / §IV), the run-progress
+// placeholder (§II), the same review states outside a conversation (§XIII.1),
+// and §IX's READER matrix — the two readings the review card itself produces by
+// handing the chip row a mark handler exactly when the reader may decide, drawn
+// with the one card piece a harness may mount as the product mounts it.
+//
+// EIGHT ARE ON THE SURFACE-READINESS LIST below, written in full against the
+// manifest's own field sources, action outcomes and state variants, and guarded
+// by the harness mount itself. While nothing on the harness carries the surface
+// id the whole battery SKIPS with the reason; the moment a mount does, every
+// assertion runs for real. Nothing here stands in for a surface, and no aspect
+// is asserted at half strength through a different control.
+//
+// NO ALLOWLIST ENTRY IS ADDED, and none could be — but the gate that would
+// refuse one is the ACCEPTANCE SUITE, not the static checker. The static checker
+// (scripts/design/check-conformance-testids.mjs) deliberately admits the
+// surfaces of a committed-but-unpinned manifest, so an entry naming one passes
+// there; functional-acceptance.spec.ts builds its `allSurfaceIds` from the
+// PINNED manifests only, so the same entry reds its "allowlist entries reference
+// real manifest surfaces/aspects" test while this drawing is unpinned. The
+// readiness list below is the only truthful route for an unaddressable aspect,
+// and it names what will land it.
+
+/** The shipped anchor of the reviewed target's inert header (§IV). */
+const REVIEW_TARGET_HEADER_SEL = '[data-conformance-id="review-target-header"]';
+
+/** One non-populated reading of a W9 mount. */
+function oneOffVariant(surfaceId: string, variant: string): (page: Page) => Locator {
+  return (page) => page.locator(`[data-surface-id="${surfaceId}"][data-variant="${variant}"]`);
+}
+
+/**
+ * `name = type.displayName` — the TYPE's short display label, never the
+ * artifact's own title.
+ *
+ * The drawing puts both on the same line, which is exactly why this is worth
+ * grading: a driver that read the title and reported the type binding would
+ * pass on a card that had drifted. The mount publishes its raw sources on the
+ * surface root, so the assertion names a source of truth rather than whatever
+ * the header rendered, and the fixture's title and type label share no token.
+ */
+function reviewTargetNameField(): {
+  source: string;
+  assert: (page: Page, root: Locator) => Promise<void>;
+} {
+  return {
+    source: "type.displayName",
+    assert: async (_page, root) => {
+      const header = root.locator(REVIEW_TARGET_HEADER_SEL);
+      const title = await root.getAttribute("data-review-target-title");
+      expect(
+        title,
+        "the harness mount must publish the artifact title as data-review-target-title, so this assertion names a source of truth rather than whatever the header rendered",
+      ).toBeTruthy();
+      // The type tag carries the derived label as its own value AND as its text
+      // — the header's two readings of one fact cannot disagree.
+      const typeTag = header.locator("[data-review-target-type]");
+      await expect(typeTag).toHaveAttribute(
+        "data-review-target-type",
+        LIFECYCLE_REVIEW_TARGET_TYPE_LABEL,
+      );
+      await expect(typeTag).toHaveText(LIFECYCLE_REVIEW_TARGET_TYPE_LABEL);
+      // Bound to the TYPE, not to the title: the label is not the title, and
+      // the title is still drawn beside it (a header that dropped the title
+      // would otherwise satisfy a bare "is not the title" check).
+      await expect(typeTag).not.toContainText(title!);
+      await expect(header).toContainText(title!);
+    },
+  };
+}
+
+/**
+ * The gate's LOADING reading, drawn in the target slot while the host prepares
+ * the target (§IV). It is the shipped skeleton — and it is NOT the header: a
+ * loading state that quietly kept the previous header would be reporting a
+ * target it has not resolved.
+ */
+function reviewGateLoadingState(surfaceId: string): StateAssert {
+  return async (page) => {
+    const slot = oneOffVariant(surfaceId, "loading")(page);
+    const skeleton = slot.locator('[data-conformance-id="review-gate-loading"]');
+    await expect(skeleton).toBeVisible();
+    await expect(skeleton).toHaveAttribute("aria-busy", "true");
+    await expect(slot.locator(REVIEW_TARGET_HEADER_SEL)).toHaveCount(0);
+  };
+}
+
+/**
+ * §IV's "no longer open" — the state this drawing's conformance vocabulary
+ * calls `error` (the spec's own `state-no-longer-open` carries
+ * `data-state="error"`). The shipped panel names the reason from the closed set
+ * and offers a refresh back to the live gate rather than letting a stale
+ * decision through.
+ */
+function reviewGateBlockedState(surfaceId: string): StateAssert {
+  return async (page) => {
+    const slot = oneOffVariant(surfaceId, "error")(page);
+    const panel = slot.locator('[data-conformance-id="review-gate-blocked"]');
+    await expect(panel).toBeVisible();
+    await expect(panel).toHaveAttribute("data-blocked-reason", LIFECYCLE_REVIEW_BLOCKED_REASON);
+    await expect(panel).toContainText("This review is no longer open");
+    await expect(panel.locator('[data-action="refresh-gate -> live-gate"]')).toBeVisible();
+  };
+}
+
+/**
+ * review-target-in-thread — the target panel of the review card, in the
+ * assistant's turn (§II). One field and two states, all three shipped.
+ */
+const REVIEW_TARGET_IN_THREAD_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("review-target-in-thread"),
+  present: async (_page, root) => {
+    const header = root.locator(REVIEW_TARGET_HEADER_SEL);
+    await expect(header).toBeVisible();
+    // §IV: the header is INERT — it exposes no edit control and no revision
+    // picker, because the target is versioned and frozen.
+    await expect(header.getByRole("button")).toHaveCount(0);
+    await expect(header.getByRole("combobox")).toHaveCount(0);
+    await expect(header.getByRole("link")).toHaveCount(0);
+  },
+  fields: { name: reviewTargetNameField() },
+  actions: {},
+  states: {
+    loading: reviewGateLoadingState("review-target-in-thread"),
+    error: reviewGateBlockedState("review-target-in-thread"),
+  },
+};
+
+/**
+ * run-progress-placeholder-in-thread — what the assistant's turn carries BEFORE
+ * the output has been generated (§II).
+ *
+ * It has exactly one reading, and that reading IS the loading one: the card's
+ * own fixed name, the arc, and nothing else. The drawing's rule is what makes
+ * this worth asserting — the placeholder "names no status, reports no result and
+ * draws nothing to press" — so the driver grades the absence as hard as the
+ * presence.
+ */
+const RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("run-progress-placeholder-in-thread"),
+  present: async (_page, root) => {
+    const placeholder = root.locator('[data-conformance-id="review-gate-placeholder"]');
+    await expect(placeholder).toBeVisible();
+    // The card's own fixed name is the WHOLE of the words on it. Asserted as the
+    // placeholder's entire text rather than as a substring, because the drawing's
+    // rule here is an absence: a status word ("Running"), a progress line or any
+    // early reading of the result would be drawn beside the name and a
+    // contains-check would pass with it there.
+    await expect(placeholder).toHaveText("Agentic Run Progress");
+    // Nothing to press, and nothing to follow.
+    await expect(placeholder.getByRole("button")).toHaveCount(0);
+    await expect(placeholder.getByRole("link")).toHaveCount(0);
+    // ONE arc, and nothing else drawn: a second graphic in this band is a second
+    // reading of the same wait.
+    await expect(placeholder.locator("svg")).toHaveCount(1);
+  },
+  fields: {},
+  actions: {},
+  states: {
+    loading: async (_page, root) => {
+      const placeholder = root.locator('[data-conformance-id="review-gate-placeholder"]');
+      // A busy REGION, named for a reader who cannot see the spin.
+      await expect(placeholder).toHaveAttribute("role", "status");
+      await expect(placeholder).toHaveAttribute("aria-busy", "true");
+      // The arc itself — the design system's spinner, not a second one.
+      await expect(placeholder.locator("svg.animate-spin")).toBeVisible();
+    },
+  },
+};
+
+/**
+ * review-states-outside-chat — the SAME review states outside a conversation,
+ * in the run page's own gate region (§XIII.1).
+ *
+ * The section's claim is that nothing moves but the frame, so this driver holds
+ * the same assertions as the in-thread target above, on a mount whose only
+ * difference is the host declaration. Its `continue-review` action is on the
+ * readiness list: the ratified terminal control arrives with cinatra#3100.
+ */
+const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("review-states-outside-chat"),
+  present: async (_page, root) => {
+    const header = root.locator(REVIEW_TARGET_HEADER_SEL);
+    await expect(header).toBeVisible();
+    await expect(header.getByRole("button")).toHaveCount(0);
+  },
+  fields: {},
+  // The manifest declares `continue-review -> resolved` for this surface, and an
+  // aspect a driver does not name at all is dropped SILENTLY by the acceptance
+  // generator while the drawing is unpinned — no test, no skip, no record. So the
+  // action is declared here and skips with its own readiness reason: the ratified
+  // terminal control arrives with open pull request cinatra#3100, and the floor
+  // may be composed only by the review card itself.
+  actions: {
+    "continue-review": {
+      outcome: "resolved",
+      run: async () => {
+        test.skip(true, `review-states-outside-chat: ${AWAITING_RATIFIED_REVIEW_FLOOR}`);
+      },
+    },
+  },
+  states: {
+    loading: reviewGateLoadingState("review-states-outside-chat"),
+    error: reviewGateBlockedState("review-states-outside-chat"),
+    // kind:artifact — what is under review is an ARTIFACT at a pinned
+    // representation revision, which is what the header says in its mono line:
+    // the type id the artifact declares, the revision the gate pinned, and the
+    // pinned marker on it. A target drawn without the pin would be a target the
+    // reader could not hold a decision to.
+    "kind:artifact": async (_page, root) => {
+      const header = root.locator(REVIEW_TARGET_HEADER_SEL);
+      const objectType = await root.getAttribute("data-review-target-object-type");
+      expect(
+        objectType,
+        "the harness mount must publish the artifact type id as data-review-target-object-type",
+      ).toBeTruthy();
+      await expect(header).toContainText(objectType!);
+      const revision = header.locator("[data-review-target-revision]");
+      await expect(revision).toHaveAttribute(
+        "data-review-target-revision",
+        LIFECYCLE_REVIEW_TARGET_FIXTURE.revisionId,
+      );
+      await expect(header).toContainText("pinned");
+    },
+  },
+};
+
+/** The chip row a §IX matrix cell draws. */
+function matrixChipRow(cell: Locator): Locator {
+  return cell.locator('[data-conformance-id="suggestion-chips"]');
+}
+
+/**
+ * presence-matrix — §IX: "Every card appears on every host, and it is the same
+ * card wherever it appears … Only the frame changes."
+ *
+ * ON THE READINESS LIST, and the reason is the claim itself. The matrix is about
+ * what the HOST DECLARATION does to a card, so the only mount that can grade it
+ * is a card that READS that declaration — every shipped one does it the same
+ * way (`useLifecycleCardHost`, then `data-lifecycle-card-host` and the host
+ * frame), and every shipped one resolves its body through the lifecycle-card
+ * transport before it draws anything at all. A harness may not stand a transport
+ * up, and the one piece it can mount props-only — the suggestion chip row — does
+ * not read the host: dropped into four providers it draws four identical rows
+ * whatever the declaration says, so a matrix built from it would stay green
+ * through a card that had stopped rendering on a host entirely. That is coverage
+ * of the harness, not of the drawing, so nothing is mounted for this surface.
+ *
+ * The assertions below are written against what a host-aware mount publishes:
+ * one cell per host, each drawing the card ITSELF and naming the host it was
+ * declared under. They run unchanged the moment such a mount exists.
+ */
+const PRESENCE_MATRIX_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("presence-matrix"),
+  present: async (_page, root) => {
+    await expect(root.locator("[data-presence-host]")).toHaveCount(
+      LIFECYCLE_PRESENCE_HOSTS.length,
+    );
+    // "It is the SAME card wherever it appears": the kind and the drawn state
+    // are read off the first cell and then required of every other one, so a
+    // per-host variant of the card is a red rather than a cell that happens to
+    // hold something.
+    const first = root.locator("[data-lifecycle-card]").first();
+    const kind = await first.getAttribute("data-lifecycle-card");
+    const drawnState = await first.getAttribute("data-lifecycle-card-state");
+    for (const host of LIFECYCLE_PRESENCE_HOSTS) {
+      const cell = root.locator(`[data-presence-host="${host}"]`);
+      // The card the cell drew, and the host IT read — not the host the harness
+      // wrote on the cell. A card that stopped drawing under a declaration, or
+      // one that read a different one, fails its own cell.
+      const card = cell.locator("[data-lifecycle-card]");
+      await expect(
+        card,
+        `§IX: every card appears on every host — nothing is drawn on "${host}"`,
+      ).toBeVisible();
+      await expect(card).toHaveAttribute("data-lifecycle-card-host", host);
+      await expect(card).toHaveAttribute("data-lifecycle-card", kind ?? "");
+      await expect(card).toHaveAttribute("data-lifecycle-card-state", drawnState ?? "");
+    }
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
+/**
+ * reader-state-matrix — §IX: "What holds a card back is the reader, not the
+ * host", and the three readings are never drawn for each other.
+ *
+ * Each row is a different INPUT to the shipped component, never a different
+ * presentation chosen by the harness, and the two inputs are the product's own:
+ * the review card passes `onToggleMark` exactly when the reader `canDecide`
+ * (packages/agents/src/review-gate-card.tsx), so a mark handler and no mark
+ * handler ARE the two readings, and the mode, the press target and the reason
+ * sentence are all computed from them by the shipped component.
+ *
+ * THE THIRD READING IS ON THE READINESS LIST, deliberately. "May not read the
+ * target" is not an empty suggestion set — an empty set only proves that a row
+ * with nothing in it draws nothing. The real absence is decided inside
+ * `ReviewGateCard`, which withholds ALL card DOM before an authorized resolve
+ * and again when the reader may not read the target, and reaching either needs
+ * the transport this harness may not stand up. Drawing the withheld reading here
+ * from an empty list would have graded the harness's own input, so the row is
+ * not mounted and is recorded below instead.
+ */
+const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("reader-state-matrix"),
+  present: async (_page, root) => {
+    await expect(root.locator("[data-reader-state]")).toHaveCount(LIFECYCLE_READER_STATES.length);
+
+    // May view and act — the card whole, with its action LIVE (a real press
+    // target, not a disabled one).
+    const acts = root.locator('[data-reader-state="may-view-and-act"]');
+    await expect(matrixChipRow(acts)).toHaveAttribute("data-suggestion-chips-mode", "live");
+    await expect(matrixChipRow(acts).getByRole("button")).toHaveCount(1);
+
+    // May view, not act — the card is DRAWN IN FULL and its affordance is gone
+    // as a press target, with the reason on screen. Read-only is a different
+    // element, never a disabled button: a disabled button would read as "you
+    // could do this, later", and this reader could not.
+    const views = root.locator('[data-reader-state="may-view-not-act"]');
+    const viewRow = matrixChipRow(views);
+    await expect(viewRow).toHaveAttribute("data-suggestion-chips-mode", "read-only");
+    await expect(viewRow.getByRole("button")).toHaveCount(0);
+    await expect(viewRow.locator('[data-conformance-id="suggestion-accepted"]')).toBeVisible();
+    await expect(viewRow).toContainText("Deciding these needs approve access on this run.");
+
+    // The two readings are never drawn for each other: read-only is a plain
+    // element, and there is no disabled press target anywhere in the matrix.
+    await expect(root.locator("button:disabled")).toHaveCount(0);
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
+// ---------------------------------------------------------------------------
+// The wave's SURFACE-READINESS LIST
+// ---------------------------------------------------------------------------
+//
+// Every W9 surface whose declared behaviour is not addressable on the default
+// branch today, with what makes it so and what will land it. Each reason is the
+// text a skipped test prints, so the list and the skip cannot drift apart.
+
+/** Awaiting the ratified review floor — open pull request cinatra#3100. */
+const AWAITING_RATIFIED_REVIEW_FLOOR =
+  "the ratified Comment / Regenerate / Continue floor is not on the default " +
+  "branch yet — it arrives with open pull request cinatra#3100, which also has " +
+  "to reconcile the manifest's `regenerate-review -> successor-gate-opened` " +
+  "with the control that pull request ships — and the floor may be composed " +
+  "only by the review card itself (the repository's one-card gate forbids a " +
+  "page-direct decision composition, and a conformance harness is such a page), " +
+  "so the harness mounts no such surface. Every assertion in this driver is " +
+  "written and runs unchanged the moment the mount exists.";
+
+/**
+ * Awaiting a card mount that READS the host declaration (§IX presence), and the
+ * withheld reader reading that goes with it.
+ */
+const AWAITING_HOST_AWARE_CARD_MOUNT =
+  "§IX is a claim about what the HOST DECLARATION does to a card, and every " +
+  "shipped card that reads it (`useLifecycleCardHost`) resolves its body " +
+  "through the lifecycle-card transport before drawing anything — which a " +
+  "conformance harness may not stand up. The one piece mountable props-only, " +
+  "the suggestion chip row, does not read the host at all, so a matrix built " +
+  "from it would grade the harness rather than the drawing. Nothing is mounted " +
+  "for this surface. Every assertion in this driver is written and runs " +
+  "unchanged the moment a host-aware mount exists.";
+
+/** Awaiting stable anchors on the shipped conversation column. */
+const AWAITING_CONVERSATION_ANCHORS =
+  "the conversation column ships (packages/chat/src/conversation-column.tsx) " +
+  "but carries no stable conformance anchor for this surface, and it mounts " +
+  "only against a host's own chat-view component registry — handing it a " +
+  "stand-in registry would be the transport substitution this harness forbids. " +
+  "No open pull request read for this wave adds those anchors. Every assertion " +
+  "in this driver is written and runs unchanged the moment the mount exists.";
+
+/** Awaiting the relayed refusal as a surface of its own. */
+const AWAITING_RELAYED_REFUSAL_TURN =
+  "the platform's own sentence ships inside the review card's composer row and " +
+  "is drawn only by that card; the ANSWER IN THE TURN that relays it is not a " +
+  "shipped surface, so the harness mounts nothing carrying this id. No open " +
+  "pull request read for this wave adds it. Every assertion in this driver is " +
+  "written and runs unchanged the moment the mount exists.";
+
+/** Awaiting the tool-less sentence inside a conversation. */
+const AWAITING_TOOLLESS_IN_CONVERSATION =
+  "the platform's tool-less sentence ships for the RUN WINDOW only " +
+  "(RUN_WINDOW_TOOL_LESS_NOTICE, src/lib/lifecycle/run-window-turn.ts); the " +
+  "conversation's own relay of it, and the composer row that states the limit " +
+  "where the binding would have been, are not shipped. No open pull request " +
+  "read for this wave adds them. Every assertion in this driver is written and " +
+  "runs unchanged the moment the mount exists.";
+
+/**
+ * chat-thread — the frame a lifecycle card is met in (§I): the stream, the two
+ * turn shapes, and the composer beneath them.
+ */
+const CHAT_THREAD_DRIVER: SurfaceDriver = awaitingMount(
+  "chat-thread",
+  {
+    path: HARNESS_PATH,
+    root: harnessRoot("chat-thread"),
+    present: async (_page, root) => {
+      const thread = root.locator('[data-conformance-id="chat-thread"]');
+      await expect(thread).toBeVisible();
+      // §I: two turn shapes — a person's turn and the assistant's — and a card
+      // takes the assistant turn's content slot, where prose would sit.
+      await expect(thread.locator('[data-turn-shape="person"]')).toBeVisible();
+      await expect(thread.locator('[data-turn-shape="assistant"]')).toBeVisible();
+      // The composer is part of the frame, drawn beneath the stream.
+      await expect(thread.locator('[data-conformance-id="chat-composer"]')).toBeVisible();
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  },
+  AWAITING_CONVERSATION_ANCHORS,
+);
+
+/**
+ * chat-composer — the conversation's ONE primary input (§I), the box every
+ * other place to type in this drawing is subordinate to.
+ */
+const CHAT_COMPOSER_DRIVER: SurfaceDriver = awaitingMount(
+  "chat-composer",
+  {
+    path: HARNESS_PATH,
+    root: harnessRoot("chat-composer"),
+    present: async (_page, root) => {
+      const composer = root.locator('[data-conformance-id="chat-composer"]');
+      await expect(composer).toBeVisible();
+      // The primary input, and the send affordance that makes it primary.
+      await expect(composer.getByRole("textbox")).toBeVisible();
+      await expect(composer.getByRole("button", { name: /send/i })).toBeVisible();
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  },
+  AWAITING_CONVERSATION_ANCHORS,
+);
+
+/** The floor's three controls, addressed by the MANIFEST'S own names. */
+function floorControl(root: Locator, action: string, outcome: string): Locator {
+  return root
+    .locator('[data-conformance-id="review-decision-bar"]')
+    .locator(`[data-action="${action} -> ${outcome}"]`);
+}
+
+/**
+ * The ratified floor's three actions, written once and shared by the two
+ * surfaces that draw the same floor (§II in the turn, §XII beneath a row that
+ * states the conversation's limit).
+ *
+ * Each is located by the manifest's own action-and-outcome pair, so a driver
+ * cannot press one control and report another one's outcome.
+ */
+function ratifiedFloorActions(): SurfaceDriver["actions"] {
+  return {
+    // Comment is NON-TERMINAL: it annotates and leaves the card pending, so the
+    // floor is still drawn beneath it and the thread simply continues.
+    "comment-review": {
+      outcome: "annotated",
+      run: async (_page, root) => {
+        await floorControl(root, "comment-review", "annotated").click();
+        await expect(root.locator('[data-review-outcome="annotated"]')).toBeVisible();
+        await expect(root.locator('[data-conformance-id="review-decision-bar"]')).toBeVisible();
+        await expect(root.locator('[data-review-outcome="decided"]')).toHaveCount(0);
+      },
+    },
+    // Regenerate opens the SUCCESSOR gate: the reviewed work is turned back and
+    // the held effect stays held until the successor is decided.
+    "regenerate-review": {
+      outcome: "successor-gate-opened",
+      run: async (_page, root) => {
+        await floorControl(root, "regenerate-review", "successor-gate-opened").click();
+        await expect(
+          root.locator('[data-review-outcome="successor-gate-opened"]'),
+        ).toBeVisible();
+      },
+    },
+    // Continue is TERMINAL: the gate resolves and the run is released.
+    "continue-review": {
+      outcome: "resolved",
+      run: async (_page, root) => {
+        await floorControl(root, "continue-review", "resolved").click();
+        const decided = root.locator('[data-review-outcome="decided"]');
+        await expect(decided).toBeVisible();
+        // Continued is the only settled reading — there is no second status
+        // after it, and no floor beneath it.
+        await expect(floorControl(root, "continue-review", "resolved")).toHaveCount(0);
+      },
+    },
+  };
+}
+
+/**
+ * review-decision-floor-in-thread — the floor that governs the target, drawn in
+ * the assistant's turn (§II).
+ */
+const REVIEW_DECISION_FLOOR_IN_THREAD_DRIVER: SurfaceDriver = awaitingMount(
+  "review-decision-floor-in-thread",
+  {
+    path: HARNESS_PATH,
+    root: harnessRoot("review-decision-floor-in-thread"),
+    present: async (_page, root) => {
+      const floor = root.locator('[data-conformance-id="review-decision-bar"]');
+      await expect(floor).toBeVisible();
+      // §I's input hierarchy: the note field is SUBORDINATE to the chat box —
+      // present, never a second primary input.
+      await expect(
+        floor.locator('[data-conformance-id="review-note-field-subordinate"]'),
+      ).toBeVisible();
+      for (const [action, outcome] of [
+        ["comment-review", "annotated"],
+        ["regenerate-review", "successor-gate-opened"],
+        ["continue-review", "resolved"],
+      ] as const) {
+        await expect(floorControl(root, action, outcome)).toBeVisible();
+      }
+    },
+    fields: {},
+    actions: ratifiedFloorActions(),
+    states: {},
+  },
+  AWAITING_RATIFIED_REVIEW_FLOOR,
+);
+
+/**
+ * decision-floor-live-under-limit — §XII: a conversation whose model cannot use
+ * tools cannot work a card by typing, and the card keeps EVERY affordance live.
+ * What is closed is the typed road, and only that.
+ */
+const DECISION_FLOOR_LIVE_UNDER_LIMIT_DRIVER: SurfaceDriver = awaitingMount(
+  "decision-floor-live-under-limit",
+  {
+    path: HARNESS_PATH,
+    root: harnessRoot("decision-floor-live-under-limit"),
+    present: async (_page, root) => {
+      // The limit is stated where the binding would have been, with the row's
+      // own toggle disabled — there is no binding to take or give back.
+      const row = root.locator('[data-conformance-id="composer-cannot-act"]');
+      await expect(row).toBeVisible();
+      await expect(row.locator('[data-action="focus-review-composer -> bound"]')).toBeDisabled();
+      await expect(
+        row.locator('[data-conformance-id="composer-cannot-act-reason"]'),
+      ).toBeVisible();
+      // And the floor beneath it stays LIVE: nothing on the card is disabled.
+      for (const [action, outcome] of [
+        ["comment-review", "annotated"],
+        ["regenerate-review", "successor-gate-opened"],
+        ["continue-review", "resolved"],
+      ] as const) {
+        await expect(floorControl(root, action, outcome)).toBeEnabled();
+      }
+    },
+    fields: {},
+    actions: ratifiedFloorActions(),
+    states: {},
+  },
+  AWAITING_RATIFIED_REVIEW_FLOOR,
+);
+
+/**
+ * The two relayed refusals (§XI). A refusal is the platform's own sentence, said
+ * back — never softened, never re-worded, and never replaced by an act. So both
+ * drivers assert the SAME WORDS the composer row carries, in the turn.
+ */
+function relayedRefusalDriver(surfaceId: string, sentence: RegExp): SurfaceDriver {
+  return awaitingMount(
+    surfaceId,
+    {
+      path: HARNESS_PATH,
+      root: harnessRoot(surfaceId),
+      present: async (_page, root) => {
+        const turn = root.locator(`[data-conformance-id="${surfaceId}"]`);
+        await expect(turn).toBeVisible();
+        // The sentence, unchanged — one wording, not three readings of one
+        // situation.
+        await expect(turn).toContainText(sentence);
+        // The message is answered, and nothing is lent: the turn carries no
+        // control of its own.
+        await expect(turn.getByRole("button")).toHaveCount(0);
+      },
+      fields: {},
+      actions: {},
+      states: {},
+    },
+    AWAITING_RELAYED_REFUSAL_TURN,
+  );
+}
+
+/** relayed-refusal-ambiguous — more than one review is waiting, so nothing routes. */
+const RELAYED_REFUSAL_AMBIGUOUS_DRIVER: SurfaceDriver = relayedRefusalDriver(
+  "relayed-refusal-ambiguous",
+  /More than one review is waiting/,
+);
+
+/** relayed-refusal-restricted — the reader may read the card but not decide it. */
+const RELAYED_REFUSAL_RESTRICTED_DRIVER: SurfaceDriver = relayedRefusalDriver(
+  "relayed-refusal-restricted",
+  /needs approve access on the run/,
+);
+
+/**
+ * toolless-said-in-turn — §XII: asked to act, the answer states the limit
+ * plainly, and says the card's own control is live. Never a silent no-op.
+ */
+const TOOLLESS_SAID_IN_TURN_DRIVER: SurfaceDriver = awaitingMount(
+  "toolless-said-in-turn",
+  {
+    path: HARNESS_PATH,
+    root: harnessRoot("toolless-said-in-turn"),
+    present: async (_page, root) => {
+      const turn = root.locator('[data-conformance-id="toolless-said-in-turn"]');
+      await expect(turn).toBeVisible();
+      // The limit is the CONVERSATION'S MODEL, and the answer says so.
+      await expect(turn).toContainText(/cannot use tools/);
+      // And it says the card's own control still works, because it does.
+      await expect(turn).toContainText(/Continue/);
+      // The turn lends nothing: it states the limit, it does not act.
+      await expect(turn.getByRole("button")).toHaveCount(0);
+    },
+    fields: {},
+    actions: {},
+    states: {},
+  },
+  AWAITING_TOOLLESS_IN_CONVERSATION,
+);
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -6277,4 +6943,24 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
         : reviewCardStateDriver(fixture),
     ]),
   ),
+  // The drawing's ONE-OFF surfaces (cinatra#3165, epic #3155 W9). Five are
+  // driven from the shipped components on the harness; seven are written in
+  // full and SKIP with the reason on this wave's surface-readiness list until
+  // the mount they name exists.
+  "review-target-in-thread": REVIEW_TARGET_IN_THREAD_DRIVER,
+  "run-progress-placeholder-in-thread": RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER,
+  "review-states-outside-chat": REVIEW_STATES_OUTSIDE_CHAT_DRIVER,
+  "presence-matrix": awaitingMount(
+    "presence-matrix",
+    PRESENCE_MATRIX_DRIVER,
+    AWAITING_HOST_AWARE_CARD_MOUNT,
+  ),
+  "reader-state-matrix": READER_STATE_MATRIX_DRIVER,
+  "chat-thread": CHAT_THREAD_DRIVER,
+  "chat-composer": CHAT_COMPOSER_DRIVER,
+  "review-decision-floor-in-thread": REVIEW_DECISION_FLOOR_IN_THREAD_DRIVER,
+  "decision-floor-live-under-limit": DECISION_FLOOR_LIVE_UNDER_LIMIT_DRIVER,
+  "relayed-refusal-ambiguous": RELAYED_REFUSAL_AMBIGUOUS_DRIVER,
+  "relayed-refusal-restricted": RELAYED_REFUSAL_RESTRICTED_DRIVER,
+  "toolless-said-in-turn": TOOLLESS_SAID_IN_TURN_DRIVER,
 };

@@ -32,6 +32,7 @@ import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtu
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
+import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -361,6 +362,24 @@ export default function ConformanceHarnessPage() {
                 sanitized one-line diagnostic above the host's generic read-only
                 view, which is why a floored target is never blank. */}
             <LifecycleTierFloorFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation lifecycle drawing — one-off surfaces (surfaces:
+              review-target-in-thread, run-progress-placeholder-in-thread,
+              review-states-outside-chat, presence-matrix, reader-state-matrix)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3165, epic #3155 W9: the REAL review-target header, the
+                REAL gate loading and "no longer open" readings, the REAL run
+                progress placeholder, and the two §IX matrices drawn by handing
+                the shipped chip row the four host declarations and the three
+                reader readings. No transport substitution anywhere. */}
+            <LifecycleOneOffFixtures />
           </CardContent>
         </Card>
       </PageContent>
