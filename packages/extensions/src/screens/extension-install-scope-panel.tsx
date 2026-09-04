@@ -282,7 +282,16 @@ export function ExtensionInstallScopePanel({
           onValueChange={setValue}
           pickerId={pickerId}
           subjectName={name}
-          testId="extension-install-panel-picker"
+          // Stable picker hook on a wrapper (the shared AccessCombobox owns its
+          // own prop contract and does not spread unknown attributes). This
+          // panel is a CONFORMANCE-COVERED surface, so the attribute is written
+          // here, in the covered file, rather than passed to the shared field
+          // as a string: the contract check reads this file for it verbatim.
+          // The wrapper reaches only the picker — the two empty states stay
+          // exactly the bare nodes they have always been.
+          wrapPicker={(picker) => (
+            <div data-testid="extension-install-panel-picker">{picker}</div>
+          )}
         />
       </div>
 

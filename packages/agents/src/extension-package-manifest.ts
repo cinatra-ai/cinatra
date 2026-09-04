@@ -52,7 +52,33 @@ const KIND_NAME_SUFFIXES: Record<string, UploadableExtensionKind> = {
   skills: "skill",
 };
 
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$/;
+// The version a package.json declares, as SemVer 2.0.0 spells it. This is the
+// published grammar verbatim: three numeric parts that carry NO leading zero,
+// then at most one prerelease part introduced by a single `-` and at most one
+// build part introduced by a single `+`, each a run of dot-separated
+// identifiers, where a purely numeric prerelease identifier also carries no
+// leading zero.
+//
+// THE ACCEPTANCE SET MUST EQUAL `semver.valid()`. A version admitted here is
+// stored and then compared by the product's own semver layer — the update
+// check in screens.tsx and the orchestrator's range check both run it through
+// `semver` — and that layer rejects a leading-zero version outright. Admitting
+// a version those comparisons cannot read would install an extension that is
+// permanently uncomparable: no update is ever offered for it and its version
+// silently satisfies no range. So the rule is not "close enough to SemVer",
+// it is the same rule, and the suite pins the two against each other.
+//
+// THE SHAPE IS ALSO LOAD-BEARING, because these are bytes an operator
+// supplied and the decision has to come back in bounded time. Nothing here
+// nests an unbounded quantifier inside another, and `.` — the identifier
+// separator — is excluded from every identifier class, so each identifier's
+// boundaries are fixed before its contents are read and the repeated groups
+// cannot trade characters with one another. An earlier shape opened one
+// repeated group on `[-+]` while `-` was also a member of the unbounded class
+// inside it, so every separator could be read two ways and a refused version
+// made of many `--` pairs cost exponential backtracking (js/redos).
+const SEMVER_RE =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export type ExtensionPackageIdentity = {
   kind: UploadableExtensionKind;

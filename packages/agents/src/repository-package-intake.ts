@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// github-package-intake.ts — the GitHub road's intake (cinatra#3204,
+// repository-package-intake.ts — the GitHub road's intake (cinatra#3204,
 // acceptance criteria 6-10).
 //
 // The GitHub tab was not an extension road. It took a repository URL and
@@ -28,6 +28,12 @@
 //   4. THE TAB STATES ITS PRECONDITION (criteria 9, 10). Two different failures
 //      used to reach the operator as one unexplained refusal, and the copy
 //      promised something the road did not enforce.
+//
+// The module is named for the MECHANISM (a package taken from a source
+// repository), not for the host it is reached through: core owns integration
+// mechanism and never spells a vendor name in a path or an import edge
+// (cinatra#978). The host semantics stay stated in the prose and the copy,
+// which is where they belong.
 //
 // PURE (no IO, no server-only), so every rule above is directly unit-testable
 // and the client form can import the copy without pulling a server module.

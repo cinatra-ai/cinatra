@@ -18,6 +18,8 @@
 // changes: this file is where its inner region moved to, not a rewrite of it.
 // ---------------------------------------------------------------------------
 
+import type { ReactNode } from "react";
+
 import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
@@ -131,8 +133,19 @@ export type InstallScopePickerBodyProps = {
   pickerId: string;
   /** Names the thing being installed, for the two empty states. */
   subjectName: string;
-  /** Test hook on the picker wrapper; the marketplace panel keeps its own. */
+  /** Test hook on the DEFAULT picker wrapper. Ignored when `wrapPicker` is given. */
   testId?: string;
+  /**
+   * Wraps the combobox — and ONLY the combobox, never the two empty states.
+   *
+   * The wrapper is caller-owned because a covered surface's stable test id is a
+   * CONTRACT ATTRIBUTE: the conformance check reads the covered component's own
+   * source for the attribute verbatim, so an id that a shared module spells on
+   * the caller's behalf is an id the contract can no longer see. The derivation
+   * below stays shared; only the one line that carries the id belongs to the
+   * surface that the contract pins.
+   */
+  wrapPicker?: (picker: ReactNode) => ReactNode;
   disabled?: boolean;
 };
 
@@ -147,6 +160,7 @@ export function InstallScopePickerBody({
   pickerId,
   subjectName,
   testId = "install-scope-picker",
+  wrapPicker,
   disabled,
 }: InstallScopePickerBodyProps) {
   const { availability } = context;
@@ -170,22 +184,22 @@ export function InstallScopePickerBody({
     );
   }
   const props = deriveInstallScopePickerProps(context);
-  return (
-    <div data-testid={testId}>
-      <AccessCombobox
-        id={pickerId}
-        value={value}
-        onValueChange={onValueChange}
-        availableScopes={props.availableScopes}
-        isAdmin={false}
-        disabledScopes={props.disabledScopes}
-        disabledReasons={props.disabledReasons}
-        // Hide the "owner" row (not an install target). The two workspace
-        // AUDIENCE rows are offered with their server-decided state.
-        installMode
-        installWorkspaceScopes={props.installWorkspaceScopes}
-        {...(disabled ? { disabled: true } : {})}
-      />
-    </div>
+  const picker = (
+    <AccessCombobox
+      id={pickerId}
+      value={value}
+      onValueChange={onValueChange}
+      availableScopes={props.availableScopes}
+      isAdmin={false}
+      disabledScopes={props.disabledScopes}
+      disabledReasons={props.disabledReasons}
+      // Hide the "owner" row (not an install target). The two workspace
+      // AUDIENCE rows are offered with their server-decided state.
+      installMode
+      installWorkspaceScopes={props.installWorkspaceScopes}
+      {...(disabled ? { disabled: true } : {})}
+    />
   );
+  if (wrapPicker) return <>{wrapPicker(picker)}</>;
+  return <div data-testid={testId}>{picker}</div>;
 }

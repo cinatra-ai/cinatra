@@ -30,7 +30,7 @@ import {
   type PermissionsFormDraftValue,
 } from "@/components/permissions-form-draft";
 import type { AvailableScopes } from "@/components/access-combobox";
-import { GITHUB_ROAD_VISIBILITY_COPY } from "./github-package-intake";
+import { GITHUB_ROAD_VISIBILITY_COPY } from "./repository-package-intake";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 // "Latest code from the default branch" is represented as an empty ref so it

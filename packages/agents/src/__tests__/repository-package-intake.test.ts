@@ -12,7 +12,7 @@
  *
  * This suite is the contract for each of those.
  *
- * Run: cd packages/agents && pnpm exec vitest run src/__tests__/github-package-intake.test.ts
+ * Run: cd packages/agents && pnpm exec vitest run src/__tests__/repository-package-intake.test.ts
  */
 import { describe, expect, it } from "vitest";
 
@@ -25,7 +25,7 @@ import {
   describeGitHubPrecondition,
   parseGitHubPackageReference,
   readGitHubPackageKind,
-} from "../github-package-intake";
+} from "../repository-package-intake";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
