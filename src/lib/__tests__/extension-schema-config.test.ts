@@ -198,6 +198,54 @@ describe("parseSchemaConfig — extended DSL (#658)", () => {
     if (r.ok) expect(collectActionIds(r.surface).sort()).toEqual(["deleteServer", "listServers"]);
   });
 
+  // cinatra#2368: a record-list badge may NAME the row's own value (the
+  // calendar's name) instead of repeating a static schema word. Opt-in, so
+  // every existing flag-style badge keeps rendering its static label.
+  it("parses a record-list badge that shows the row's own value (showsValue)", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        {
+          kind: "record-list",
+          label: "Appointment schedules",
+          listActionId: "listAppointmentSchedules",
+          emptyState: "None yet.",
+          itemTitleKey: "title",
+          itemBadges: [
+            { key: "calendarSummary", label: "Calendar", variant: "outline", showsValue: true },
+            { key: "disabled", label: "Disabled", variant: "secondary" },
+          ],
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const field = r.surface.fields[0];
+      expect(field.kind).toBe("record-list");
+      if (field.kind === "record-list") {
+        expect(field.itemBadges[0].showsValue).toBe(true);
+        // Omitted stays omitted — the static-label default is untouched.
+        expect(field.itemBadges[1].showsValue).toBeUndefined();
+      }
+    }
+  });
+
+  it("rejects a non-boolean showsValue on a badge", () => {
+    expect(
+      parseSchemaConfig({
+        fields: [
+          {
+            kind: "record-list",
+            label: "L",
+            listActionId: "list",
+            emptyState: "e",
+            itemTitleKey: "t",
+            itemBadges: [{ key: "k", label: "L", variant: "outline", showsValue: "yes" }],
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects an unknown badge variant", () => {
     expect(
       parseSchemaConfig({

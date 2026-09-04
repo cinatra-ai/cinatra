@@ -106,6 +106,43 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
   { label: "number step<=0", raw: { fields: [{ kind: "number", key: "n", label: "N", step: 0 }] } },
   { label: "free-list missing key", raw: { fields: [{ kind: "free-list", label: "L" }] } },
   { label: "expansion carrier-key smuggle", raw: { fields: [{ kind: "boolean", key: "b", label: "B", onClick: "x" }] } },
+  // ---- cinatra#2368 value-naming badge: `showsValue` makes a record-list badge
+  // render the ROW's value at `key` instead of the static schema label. Both
+  // validators must admit the opt-in and refuse a non-boolean. ----
+  {
+    label: "record-list badge with showsValue (names the row's value)",
+    raw: {
+      fields: [
+        {
+          kind: "record-list",
+          label: "Appointment schedules",
+          listActionId: "listAppointmentSchedules",
+          deleteActionId: "deleteAppointmentSchedule",
+          emptyState: "None yet.",
+          itemTitleKey: "title",
+          itemBadges: [
+            { key: "calendarSummary", label: "Calendar", variant: "outline", showsValue: true },
+            { key: "disabled", label: "Disabled", variant: "secondary" },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    label: "record-list badge with a non-boolean showsValue",
+    raw: {
+      fields: [
+        {
+          kind: "record-list",
+          label: "L",
+          listActionId: "list",
+          emptyState: "e",
+          itemTitleKey: "t",
+          itemBadges: [{ key: "k", label: "L", variant: "outline", showsValue: "yes" }],
+        },
+      ],
+    },
+  },
   // ---- cinatra#1239 tab groups (valid + each invalid family) — locks the
   // generator's `tabs` grammar to parseTabs in extension-schema-config.ts so the
   // third grammar copy can never silently drift from the authoritative parser ----

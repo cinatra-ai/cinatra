@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { renderMarkdown } from "../markdown-render";
-import { cellPlainText, isNumericCellText, isTimestampCellText } from "../table-cell-alignment";
+import { cellPlainText, isNumericCellText, isTimestampCellText } from "../markdown-render";
 
 const noWidgets = () => [];
 function frameOf(md: string): HTMLElement {

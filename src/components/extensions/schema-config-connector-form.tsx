@@ -63,6 +63,7 @@ import {
 } from "@/components/ui/input-group";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
@@ -167,16 +168,45 @@ export type SchemaConfigConnectorFormProps = {
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
 
+/**
+ * How long this surface waits for a named action before it stops waiting and
+ * says so. Set ABOVE the host dispatch's own bound, so the server's own
+ * give-up message normally wins and this is only the backstop for a request
+ * that never comes back at all (a dropped connection, a wedged server). Before
+ * this bound existed, a press on an action whose handler stopped left the
+ * button greyed out forever with no spinner, no message and no way to tell
+ * whether anything had happened.
+ */
+const ACTION_RESPONSE_TIMEOUT_MS = 45_000;
+
+/** The bound as a signal, where the browser supports one. */
+function actionTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") return undefined;
+  return AbortSignal.timeout(ACTION_RESPONSE_TIMEOUT_MS);
+}
+
 async function invokeAction(installId: string, actionId: string, input: unknown): Promise<ActionResult> {
   try {
     const res = await fetch(`/api/extensions/${encodeURIComponent(installId)}/actions/${encodeURIComponent(actionId)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input ?? {}),
+      signal: actionTimeoutSignal(),
     });
     const body = (await res.json().catch(() => ({}))) as { result?: unknown; error?: string };
     return res.ok ? { ok: true, result: body.result } : { ok: false, error: body.error ?? `Request failed (${res.status}).` };
   } catch (e) {
+    // An abort is the bound above, never a server answer: say what happened in
+    // words the person can act on rather than surfacing "signal is aborted".
+    const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      return {
+        ok: false,
+        error:
+          "This action did not respond in time and was given up on. It may not have completed — " +
+          "reload the page before you try again.",
+      };
+    }
     return { ok: false, error: e instanceof Error ? e.message : "Request failed." };
   }
 }
@@ -697,8 +727,17 @@ function NamedActionRow({
     return (
       <Field>
         <FieldContent>
-          <Button type="button" className="self-start" onClick={(e) => void run(e.currentTarget)} disabled={pending}>
+          {/* While the action is in flight the button carries the SPINNER the rest
+              of the app uses for a pending press (the instance save button, the
+              setup Continue button). A greyed-out button alone is not feedback: it reads
+              exactly like a button that refused the press. */}
+          <Button type="button" className="self-start" onClick={(e) => void run(e.currentTarget)} disabled={pending} aria-busy={pending}>
             {field.label}
+            {/* The spinner sits on the primary ground, where the Spinner's own
+                text-primary stroke would be the same colour as the button: take
+                the colour override the component documents for exactly this
+                case, or the wait is invisible. */}
+            {pending ? <Spinner className="text-primary-foreground" /> : null}
           </Button>
           {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
         </FieldContent>
@@ -715,7 +754,7 @@ function NamedActionRow({
       <FieldContent>
         <AlertDialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
           <AlertDialogTrigger asChild>
-            <Button ref={triggerRef} type="button" className="self-start" disabled={pending}>
+            <Button ref={triggerRef} type="button" className="self-start" disabled={pending} aria-busy={pending}>
               {field.label}
             </Button>
           </AlertDialogTrigger>
@@ -730,6 +769,7 @@ function NamedActionRow({
                 data-testid="named-action-confirm"
                 className={buttonVariants({ variant: "default" })}
                 disabled={pending}
+                aria-busy={pending}
                 onClick={(e) => {
                   // Keep the dialog mounted through the async action; `run`
                   // closes it once the request resolves.
@@ -738,6 +778,7 @@ function NamedActionRow({
                 }}
               >
                 {field.label}
+                {pending ? <Spinner className="text-primary-foreground" /> : null}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -1217,10 +1258,22 @@ function RecordListRow({
                   ) : null}
                   <div className="flex flex-wrap gap-1 pt-1">
                     {field.itemBadges
-                      .filter((b) => rowTruthy(row, b.key))
+                      // A showsValue badge is gated on its RENDERED text, not on
+                      // rowTruthy: a whitespace-only value would otherwise draw a
+                      // visually empty badge carrying only its sr-only qualifier.
+                      .filter((b) =>
+                        b.showsValue ? rowText(row, b.key).trim().length > 0 : rowTruthy(row, b.key),
+                      )
                       .map((b) => (
                         <Badge key={b.key} variant={BADGE_VARIANT_MAP[b.variant]}>
-                          {b.label}
+                          {b.showsValue ? (
+                            <>
+                              <span className="sr-only">{`${b.label}: `}</span>
+                              <span data-testid="record-list-badge-value">{rowText(row, b.key)}</span>
+                            </>
+                          ) : (
+                            b.label
+                          )}
                         </Badge>
                       ))}
                   </div>

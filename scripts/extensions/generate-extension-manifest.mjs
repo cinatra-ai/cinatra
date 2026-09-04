@@ -1344,12 +1344,21 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
     } else {
       badges.forEach((b, j) => {
         const bAt = `${at}.itemBadges[${j}]`;
-        if (!isObj(b) || !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant"]), bAt, errors)) {
+        // cinatra#2368: `showsValue` is the opt-in that makes a badge render the
+        // ROW's own value at `key` instead of the static `label` — mirrors the
+        // authoritative parser in src/lib/extension-schema-config.ts.
+        if (
+          !isObj(b) ||
+          !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant", "showsValue"]), bAt, errors)
+        ) {
           if (isObj(b)) return;
           errors.push(`${bAt}: must be an object`);
           return;
         }
         if (!nonEmptyStr(b.key) || !nonEmptyStr(b.label)) errors.push(`${bAt}: requires "key" and "label"`);
+        if (b.showsValue !== undefined && typeof b.showsValue !== "boolean") {
+          errors.push(`${bAt}: "showsValue" must be a boolean`);
+        }
         if (!nonEmptyStr(b.variant) || !SCHEMA_CONFIG_BADGE_VARIANTS.has(b.variant)) {
           errors.push(`${bAt}: invalid badge variant ${JSON.stringify(b.variant)}`);
         }
