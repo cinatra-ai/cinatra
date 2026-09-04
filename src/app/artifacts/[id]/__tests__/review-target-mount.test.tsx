@@ -26,6 +26,7 @@ const ORG = "org_mount_test";
 function props(): ArtifactRendererProps {
   return {
     propsApiVersion: 1,
+    edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     artifact: {
       id: "art_1",
       title: "t",
@@ -59,6 +60,7 @@ function descriptor(): SerializedRuntimeRendererDescriptor {
       digest: "d".repeat(64),
       entry: "client/detail.js",
       propsApiVersion: 1,
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
       sdkAbiRange: "^2.4.0",
       reactPeerRange: "^19.0.0",
       reactDomPeerRange: "^19.0.0",
