@@ -4,7 +4,7 @@
   "title": "Input",
   "description": "Cinatra design-system input.",
   "registryDependencies": [
-    "utils"
+    "@cinatra-ai/utils"
   ],
   "files": [
     {

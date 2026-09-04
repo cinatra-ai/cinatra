@@ -62,6 +62,44 @@ export const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunS
   "armed",
 ]);
 
+
+/**
+ * HAS THIS RUN STARTED RUNNING? (cinatra#3047, review point 1.)
+ *
+ * The ONE place the boundary is expressed, so the resolver that publishes it,
+ * the screen that reads it, the store's own guarded write and the suite that
+ * pins it cannot answer it four ways. A run in one of the pre-execution statuses
+ * above has not begun executing — it is at its setup, at its schedule, or at any
+ * other pre-start moment — and every other status means it has. The FIRST status
+ * on the far side is `queued`, which is the dispatch CAS itself
+ * (`pending_input->queued`, `armed->queued`).
+ *
+ * `pending_trigger` IS PRE-START ON BOTH OF ITS ENTRY EDGES, and the objection is
+ * worth answering rather than leaving to be discovered. The state is reached from
+ * `pending_input` (the reader opened the trigger form) AND from `queued`
+ * (`execution.ts`: setup finished with no trigger chosen yet), so a
+ * `pending_trigger` run may have been `queued` before. It still has not
+ * EXECUTED: it leaves this state for execution through `pending_trigger->queued`
+ * ("the user chose Run right after setup"), and the work itself begins at the
+ * `queued->running` dispatch CAS after that. The trigger step is therefore a
+ * pre-start moment however it was reached, which is exactly what this set has
+ * always claimed of it - "none of them can carry an execution record".
+ *
+ * AN UNKNOWN OR ABSENT STATUS READS AS NOT STARTED, which is the decidable side.
+ * That is deliberate and it is the same direction the rest of this reading takes:
+ * the resolver's own `canDecide` derives FAIL-OPEN, and the authority that
+ * actually decides is the decision path. Withholding an editable box from a
+ * reader who may in fact still edit is a regression; showing one to a reader
+ * whose run has moved on costs one honest refusal - and that refusal is real
+ * rather than assumed: the selection write tests the run's status INSIDE its own
+ * transaction and refuses a started run outright, so the screen being wrong
+ * about the moment can never make the STORE wrong about it.
+ */
+export function recommendationRunHasStarted(status: string | null | undefined): boolean {
+  if (typeof status !== "string" || status.length === 0) return false;
+  return !PRE_EXECUTION_RUN_STATUSES.has(status);
+}
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.
@@ -205,6 +243,42 @@ export class RunTransitionError extends Error {
     this.runId = args.runId;
     this.from = args.from;
     this.to = args.to;
+  }
+}
+
+/**
+ * The HITL gate is no longer pending (cinatra#3219).
+ *
+ * `approveReviewTaskInternal` refuses an approval whose run has already left
+ * `pending_approval` by the time the status is read. That refusal is an
+ * EXPECTED race — someone pressed Continue in the small window where the run
+ * had already moved on — and the run surface draws a ratified blocked state
+ * for it, so it has to reach the caller as something the caller can act on.
+ *
+ * The carrier is `code` (and the observed `currentStatus`), never the message:
+ * an ordinary error thrown by a Server Action crosses the App Router boundary
+ * in production as a generic masked error carrying an opaque digest, so the
+ * original text is not there to read. The boundary maps this class to a
+ * returned discriminated result BEFORE the mask is applied.
+ *
+ * `message` is preserved verbatim from the throw site for logs and for the
+ * non-Server-Action caller (the A2A resume route) that still reads it.
+ */
+export class GateNotPendingError extends Error {
+  readonly code = "gate_not_pending" as const;
+  readonly runId: string;
+  /** The status the run was actually in when the guard read it. */
+  readonly currentStatus: string;
+
+  constructor(args: {
+    runId: string;
+    currentStatus: string;
+    message: string;
+  }) {
+    super(args.message);
+    this.name = "GateNotPendingError";
+    this.runId = args.runId;
+    this.currentStatus = args.currentStatus;
   }
 }
 

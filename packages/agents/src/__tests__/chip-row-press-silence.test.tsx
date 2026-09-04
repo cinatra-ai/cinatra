@@ -33,6 +33,13 @@
  * Run:
  *   cd packages/agents && npx vitest run src/__tests__/chip-row-press-silence.test.tsx
  */
+// THE §V CHIP-ROW IS THE CONVERSATION'S READING (cinatra#3047, review points C
+// and E). The run page's own Skills step draws a checkbox per pill and one
+// Continue beneath the list — pinned in `skills-step-checkbox-pills.test.tsx`
+// and `skills-step-continue.test.tsx` — and the chat, the widget and the review
+// page keep the three per-chip affordances this file is about until point E's
+// own issue lands. So this suite is driven on `chat_thread`, which is where the
+// drawing it asserts actually lives; nothing else about it changed.
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -86,16 +93,16 @@ afterEach(() => {
 });
 
 const THREE_SKILLS: RecommendedSkillForChip[] = [
-  { skillId: "skill-enrich", skillRevisionId: "rev-1", recommended: true, rank: 1, score: 0.9, scoredFeatures: [], name: "Enrich contacts" },
-  { skillId: "skill-draft", skillRevisionId: "rev-2", recommended: true, rank: 2, score: 0.8, scoredFeatures: [], name: "Draft email" },
-  { skillId: "skill-send", skillRevisionId: "rev-3", recommended: true, rank: 3, score: 0.7, scoredFeatures: [], name: "Schedule send" },
+  { skillId: "skill-enrich", skillRevisionId: "rev-1", recommended: true, rank: 1, score: 0.9, scoredFeatures: [], name: "Enrich contacts", vendorName: "Northstar" },
+  { skillId: "skill-draft", skillRevisionId: "rev-2", recommended: true, rank: 2, score: 0.8, scoredFeatures: [], name: "Draft email", vendorName: "Northstar" },
+  { skillId: "skill-send", skillRevisionId: "rev-3", recommended: true, rank: 3, score: 0.7, scoredFeatures: [], name: "Schedule send", vendorName: null },
 ];
 
 async function mountRow() {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   const out = render(
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host="chat_thread">
       <RunRecommendationChipRow
         runId="run-2905"
         agentPackageName="@cinatra-test/hold-fixture-agent"

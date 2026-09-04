@@ -8,11 +8,15 @@
 // the source COPIED, imports were rewritten to the consumer's own `@/` alias,
 // and the declared npm deps were written to package.json.
 //
-// HARD CONSTRAINT proven by this smoke: consumers MUST add every primitive
-// EXPLICITLY. `shadcn add` installs the npm deps of explicitly-requested items
-// (+ the cn lib) but NOT the deps of TRANSITIVELY-pulled registry:ui items —
-// so `add field` alone does NOT install radix-ui (pulled via label/separator).
-// The extraction flow lists every primitive a connector uses explicitly.
+// CONSTRAINT proven by this smoke: every `registryDependencies` entry names its
+// registry (`@cinatra-ai/utils`, never a bare `utils`). A bare name resolves
+// against the CONSUMER's default shadcn registry, so the consumer silently got
+// the upstream style's item of that name instead of ours — which is how the
+// upstream `radix-nova` style switching its own `utils` item to the `cn` npm
+// package (2026-09-03) started overwriting our `src/lib/utils.ts` and dropping
+// clsx + tailwind-merge from the consumer's package.json. With the namespace in
+// place the closure stays inside `@cinatra-ai`, so `add field` alone pulls our
+// utils/label/separator AND installs their declared npm deps (incl. radix-ui).
 //
 // With --full it also `pnpm install`s + `tsc --noEmit`s the copied source,
 // proving the declared deps install and the copied code typechecks (slow:
@@ -148,20 +152,33 @@ async function main() {
     const deps = depsOf(dir);
     for (const d of EXPECTED_DEPS) assert(deps[d], `expected dep ${d} not written to package.json`);
 
-    // --- NEGATIVE: PROVE the explicit-add constraint ---
-    // `add field` ALONE must NOT install radix-ui — radix-ui is declared by the
-    // transitively-pulled label/separator, not by field. If it appears here, the
-    // transitive closure IS installing registry:ui npm deps, so the explicit-item
-    // requirement is moot (or the registry changed) and the docs must be re-derived.
-    const negDir = mkConsumer();
-    addItems(negDir, ["field"]);
-    const negDeps = depsOf(negDir);
+    // --- CLOSURE: PROVE the namespaced registryDependencies resolve to OURS ---
+    // `add field` ALONE must pull field's own `@cinatra-ai` closure — our
+    // utils/label/separator — and install THEIR declared npm deps. radix-ui is
+    // declared by label/separator, not by field, so its presence proves the
+    // transitive closure resolved inside our registry. A bare `utils` in
+    // registryDependencies resolves against the consumer's DEFAULT registry
+    // instead, which is exactly the regression this asserts against.
+    const oneDir = mkConsumer();
+    addItems(oneDir, ["field"]);
+    const oneDeps = depsOf(oneDir);
+    assert(existsSync(join(oneDir, "src/lib/utils.ts")), "transitive utils.ts not copied by `add field`");
+    const oneUtils = readFileSync(join(oneDir, "src/lib/utils.ts"), "utf8");
     assert(
-      !negDeps["radix-ui"],
-      "explicit-add constraint NOT demonstrated: `add field` alone installed radix-ui — " +
-        "transitive registry:ui deps ARE being installed; re-derive the explicit-add rule.",
+      /from ["']clsx["']/.test(oneUtils) && /from ["']tailwind-merge["']/.test(oneUtils),
+      "transitively-pulled utils.ts is NOT ours — a bare registryDependencies name resolved " +
+        "against the consumer's default registry and overwrote our lib.",
     );
-    assert(negDeps["class-variance-authority"], "negative-case sanity: field's own cva dep should still install");
+    for (const item of ["label", "separator"]) {
+      assert(existsSync(join(oneDir, `src/components/ui/${item}.tsx`)), `transitive ${item}.tsx not copied`);
+    }
+    assert(
+      oneDeps["radix-ui"],
+      "transitive closure did NOT install radix-ui — `add field` did not resolve our " +
+        "label/separator through @cinatra-ai; check the registryDependencies namespace.",
+    );
+    assert(oneDeps["clsx"] && oneDeps["tailwind-merge"], "transitive utils deps (clsx + tailwind-merge) not written");
+    assert(oneDeps["class-variance-authority"], "field's own cva dep should install");
 
     if (full) {
       run("corepack", ["pnpm", "add", "-D", "typescript@5.9.2", "@types/react@^19", "@types/react-dom@^19"], dir);
@@ -170,12 +187,12 @@ async function main() {
       run("corepack", ["pnpm", "exec", "tsc", "--noEmit"], dir);
       console.log(
         "[registry-consumer-smoke] OK (--full) — explicit add copies + rewrites + deps install + " +
-          "transitive-only add omits radix-ui (constraint proven) + copied source typechecks.",
+          "namespaced closure resolves to our items (constraint proven) + copied source typechecks.",
       );
     } else {
       console.log(
         "[registry-consumer-smoke] OK — explicit add copies + rewrites + writes deps (incl. radix-ui); " +
-          "transitive-only add omits radix-ui (constraint proven).",
+          "namespaced closure resolves to our items (constraint proven).",
       );
     }
   } finally {
