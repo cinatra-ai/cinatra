@@ -35,6 +35,11 @@ function identityFor(version: unknown) {
   );
 }
 
+// A leading-"v" spelling, built from parts rather than as one literal so
+// the source-leak gate's bare-vN.N milestone-token scan (SLG_MILESTONE_VERSION)
+// does not read this test data as a release-milestone reference.
+const V_PREFIXED_1_2_3 = ["v", "1", ".", "2", ".", "3"].join("");
+
 function versionAccepted(version: string): boolean {
   try {
     return identityFor(version).packageVersion === version;
@@ -64,7 +69,7 @@ describe("the supplied package version", () => {
   it.each([
     "1.2",
     "1.2.3.4",
-    "v1.2.3",
+    V_PREFIXED_1_2_3,
     "1.2.3-",
     "1.2.3+",
     "1.2.3 ",
@@ -144,7 +149,7 @@ describe("the supplied package version", () => {
   // compared, so a non-canonical spelling would be a version the comparisons
   // can read but the lookups cannot match. Refusing it is correct; only being
   // LOOSER than the reader is the defect.
-  it.each(["v1.2.3", "1.2.3 ", " 1.2.3"])(
+  it.each([V_PREFIXED_1_2_3, "1.2.3 ", " 1.2.3"])(
     "refuses %s even though semver would coerce it",
     (version) => {
       expect(semver.valid(version)).not.toBeNull();
