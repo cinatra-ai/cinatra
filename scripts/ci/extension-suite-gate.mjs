@@ -136,26 +136,6 @@ import { fileURLToPath } from "node:url";
 // ---------------------------------------------------------------------------
 export const CARVE_OUTS = [
   {
-    id: "cinatra-ai/a2a-server-connector",
-    sha: "d1e342c7bf1167c1a3e2eab371d48b2c445008a9",
-    expect: {
-      exitCode: 1, totalTests: 63, failedTests: 6, pendingTests: 0,
-      failedTestNames: [
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?error=invalid-url fires an error toast with the static message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?notice=added fires a success toast with the static 'added' message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?notice=removed fires a warning toast with the static 'removed' message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render a crafted/unknown error code is ignored — never toasted (codes-only protocol)",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render fires no toast when the URL carries no flash code",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render renders nothing visible (island is a null-rendering effect component)",
-      ],
-      uncollected: [],
-    },
-    reason:
-      "6 of 63 tests red at the pinned sha: vitest.config.ts aliased its vendored next/navigation + sonner stubs ONLY when the real specifier failed to resolve, so inside the monorepo the real modules won and useRouter() threw outside a mounted App Router.",
-    upstream: "cinatra-ai/a2a-server-connector#52 (merged 2026-07-31) — stubs aliased unconditionally; 63/63 green",
-    retiresWhen: "the dev-lock pin moves to e64d99e0f47e or later",
-  },
-  {
     id: "cinatra-ai/email-artifacts",
     sha: "86c3ad126832613a45e8bc36bcabd90fdc6e5a93",
     expect: {
@@ -237,19 +217,6 @@ export const CARVE_OUTS = [
       'identical to blog-idea-artifact: a real test file, a declared "vitest run" script, no package-local config at the pinned sha, and therefore "No test files found" under the inherited host-root include.',
     upstream: "cinatra-ai/blog-post-artifact#41 (merged 2026-07-31) — package-local vitest.config.ts; 5 tests collect and pass",
     retiresWhen: "the dev-lock pin moves to e779e2baaf0f or later",
-  },
-  {
-    // Found BY THIS GATE, on its first run — not by the cinatra#2288 survey,
-    // which counted packages and never compared per-package file sets. Note the
-    // recorded shape: exitCode 0. The suite is GREEN. Every count-based look at
-    // this package says healthy, which is exactly why it survived.
-    id: "cinatra-ai/wordpress-assistant-connector",
-    sha: "e00830bb26300a0ff71d8b4c9da4720bfedca184",
-    expect: { exitCode: 0, totalTests: 10, failedTests: 0, pendingTests: 0, failedTestNames: [], uncollected: ["tests/contracts/wp-drupal/contract-v1.test.ts"] },
-    reason:
-      "GREEN but INCOMPLETE at the pinned sha: 1 of its 3 test files — the canonical wp-drupal-assistant v1 wire-contract conformance suite (schemas + golden fixtures) — is outside the inherited host-root include and has been collected by NOTHING since it landed in that repo's #4. Its own CI skips tests (host-internal peers), so those 13 assertions have never executed anywhere. Verified: under a package-local config the package runs 3 files / 23 tests, all green, vs 2 files / 10 tests today.",
-    upstream: "cinatra-ai/wordpress-assistant-connector#47 — package-local vitest.config.ts so all three files collect",
-    retiresWhen: "the dev-lock pin moves past that repair",
   },
 ];
 
