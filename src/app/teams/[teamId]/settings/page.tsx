@@ -187,6 +187,10 @@ export default async function TeamSettingsPage({
             scope's BARE landing route — not a `/dashboards` sibling. */}
         <EntityScopeTabs
           dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}
+          assistantsHref={`/teams/${encodeURIComponent(team.id)}/assistants`}
+          agentsHref={`/teams/${encodeURIComponent(team.id)}/agents`}
+          artifactsHref={`/teams/${encodeURIComponent(team.id)}/artifacts`}
+          skillsHref={`/teams/${encodeURIComponent(team.id)}/skills`}
           settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
           active="settings"
         />
