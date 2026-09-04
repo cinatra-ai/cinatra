@@ -1533,6 +1533,15 @@ END $$`,
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS trigger_mode text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS gated_steps text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS has_artifact_bindings boolean` },
+    // artifact_bindings (cinatra#3208): the EXECUTED artifact-binding declaration
+    // as JSON-as-text — the normalized bindings the compile that produced this
+    // template version found plus the typed produces refs they were validated
+    // against. The run-completion materializer reads it INSTEAD of re-reading the
+    // package registry, so a run is never materialized against a declaration it
+    // did not execute. NULLABLE, three-valued like has_artifact_bindings: null =
+    // unknown (legacy row / no readable sibling manifest) and falls through to the
+    // pre-#3208 registry read. Operator-upgrade twin in migrations/core/core__0101.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS artifact_bindings text` },
     // external_mcp_servers table for the external MCP server registry
     // scope values: 'global' | 'org' | 'team' | 'user'
     // API keys stored in Nango; nango_connection_id references the Nango connection per row

@@ -100,6 +100,7 @@ import {
   detectCredentialPattern,
 } from "../validate-agent-json";
 import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
+import { serializeArtifactBindingDeclaration } from "../artifact-binding";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
@@ -4001,6 +4002,17 @@ async function handleAgentBuilderGitCompileAndWrite(
             // exactly as the last version-paired write set it.
             packageVersion: agentPackageVersion ?? undefined,
             hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
+            // cinatra#3208 — the executed declaration re-projects on the SAME
+            // version-paired terms as the presence flag above: a source edit
+            // that changes a binding must move the persisted declaration the
+            // materializer resolves against, and with no version to confirm
+            // against, BOTH are omitted and the column keeps whatever the last
+            // version-paired write set.
+            artifactBindings: agentPackageVersion
+              ? compiled.artifactBindings
+                ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
+                : null
+              : undefined,
           });
         }
       } catch (versionSyncErr) {

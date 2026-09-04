@@ -245,6 +245,14 @@ export type AgentTemplateRecord = {
   // OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture objects in
   // tests remain valid; `deserializeTemplate` always populates it.
   hasArtifactBindings?: boolean | null;
+  // The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208) —
+  // the normalized bindings the compile that produced this template version
+  // found, plus the typed produces refs they were validated against. null =
+  // unknown (legacy row, or a compile without a readable sibling manifest), and
+  // the run-completion materializer then falls back to its pre-#3208 registry
+  // read. OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture
+  // objects in tests remain valid; `deserializeTemplate` always populates it.
+  artifactBindings?: string | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -386,6 +394,9 @@ export type CreateAgentTemplateInput = {
   // The locally-persisted binding-presence authority (cinatra#2498). null
   // clears it back to "unknown"; omit to leave the column unchanged.
   hasArtifactBindings?: boolean | null;
+  // The executed artifact-binding declaration as JSON-as-text (cinatra#3208).
+  // null clears it back to "unknown"; omit to leave the column unchanged.
+  artifactBindings?: string | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -541,6 +552,10 @@ function serializeTemplate(input: CreateAgentTemplateInput) {
     // fixture) — treated as "unknown", the same fail-closed posture every row
     // had before this column existed.
     hasArtifactBindings: input.hasArtifactBindings ?? null,
+    // The executed artifact-binding declaration (cinatra#3208), already
+    // JSON-as-text from the install seed. null on create when the caller does
+    // not derive it from a compile — "unknown", the pre-#3208 fallback.
+    artifactBindings: input.artifactBindings ?? null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
@@ -616,6 +631,10 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // The locally-persisted binding-presence authority (cinatra#2498). Native
     // boolean column; null (unknown) passes through unchanged.
     hasArtifactBindings: row.hasArtifactBindings ?? null,
+    // The executed artifact-binding declaration (cinatra#3208) stays
+    // JSON-as-text on the record; the materializer parses it fail-closed
+    // through the single grammar (parseArtifactBindingDeclaration).
+    artifactBindings: row.artifactBindings ?? null,
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
@@ -1090,6 +1109,11 @@ export async function _runAgentTemplateUpdate(
   // lifecycleConfig does. Omit to leave the column unchanged.
   if (patch.hasArtifactBindings !== undefined)
     updates.hasArtifactBindings = patch.hasArtifactBindings ?? null;
+  // cinatra#3208 — the executed declaration rides the SAME patch guard, so a
+  // re-install/recompile re-projects it (or clears it) exactly as the
+  // presence flag does, in one statement with package_version.
+  if (patch.artifactBindings !== undefined)
+    updates.artifactBindings = patch.artifactBindings ?? null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the

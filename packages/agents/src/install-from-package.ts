@@ -562,6 +562,10 @@ async function _installAgentFromPackageImpl(
       lifecycleConfig: seed.lifecycleConfig,
       // cinatra#2498 — same parity for the binding-presence authority.
       hasArtifactBindings: seed.hasArtifactBindings,
+      // cinatra#3208 — and for the executed declaration itself, so the
+      // run-completion materializer resolves a run's bindings from the template
+      // version it executed instead of re-reading the package registry.
+      artifactBindings: seed.artifactBindings,
       status: input.status ?? "draft",
     };
 
@@ -620,6 +624,13 @@ async function _installAgentFromPackageImpl(
             // concurrently-completing run of the OLD version see a package_version
             // match paired with the NEW version's (wrong) flag.
             hasArtifactBindings: seed.hasArtifactBindings,
+            // cinatra#3208: the executed declaration re-projects on every
+            // (re)install for the same reason and under the same atomicity
+            // rule — it rides THIS update, alongside packageVersion, never a
+            // separate write, so a concurrently-completing run of the OLD
+            // version can never see a matching package_version paired with the
+            // NEW version's bindings.
+            artifactBindings: seed.artifactBindings,
             packageVersion: extracted.packageVersion,
             agentDependencies:
               Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
