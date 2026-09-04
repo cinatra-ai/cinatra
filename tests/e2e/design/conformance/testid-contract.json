@@ -68,6 +68,17 @@
         }
       ]
     },
+    "suggestion-dismissed": { "$ref": "suggestion-chip" },
+    "verification-verified": { "$ref": "verification-card" },
+    "verification-drift": { "$ref": "verification-card" },
+    "verification-findings-not-met": { "$ref": "verification-card" },
+    "verification-in-thread": { "$ref": "verification-card" },
+    "state-loading": { "$ref": "review-gate-state" },
+    "state-restricted": { "$ref": "review-gate-state" },
+    "state-no-longer-open": { "$ref": "review-gate-state" },
+    "state-absent": { "$ref": "review-gate-state" },
+    "suggestion-floor": { "$ref": "review-decision-floor" },
+    "tier-metadata-floor": { "$ref": "review-target-metadata-floor" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -676,6 +687,92 @@
         {
           "file": "src/components/ui/button.tsx",
           "literals": ["data-slot=\"button\""]
+        }
+      ]
+    },
+    "verification-card": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"verification-card\"] — the REAL VerificationSummaryCard, mounted on the conformance harness route inside a host declaration and drawn from an authorized resolve answer the suite seeds at the card's own seam (the card draws no DOM before one). The card carries data-lifecycle-card-state (advisory) and data-lifecycle-card-host; the outcome pill is the shipped StatusPill carrying data-verification-outcome; the two pinned revisions sit in [data-verification-revisions]; the before/after table is [data-verification-field-diff], one row per inspected field carrying data-diff-field and the SERVER's own data-diff-in-scope mark; the reading's provenance is a service comment in [data-verification-advisory] keyed by data-advisory-author-kind. §VII gives the card no floor at all, so the drivers assert that nothing on it is pressable.",
+      "requires": [
+        {
+          "file": "packages/agents/src/verification-summary-card.tsx",
+          "literals": [
+            "data-conformance-id=\"verification-card\"",
+            "data-lifecycle-card-state={state.state}",
+            "data-lifecycle-card-host={host}",
+            "data-verification-outcome={body.outcome}",
+            "data-verification-revisions=\"\"",
+            "data-verification-field-diff=\"\"",
+            "data-diff-field={row.field}",
+            "data-diff-in-scope={inScope ? \"true\" : \"false\"}",
+            "data-verification-advisory=\"\"",
+            "data-advisory-author-kind={comment.authorKind}"
+          ]
+        }
+      ]
+    },
+    "review-gate-state": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"review-gate-card\"][data-lifecycle-card-state] — the REAL ReviewGateCard on §IV's state ladder, drawn from an authorized resolve answer the suite seeds at the card's own seam. The rungs are the shipped components: [data-conformance-id=\"review-gate-loading\"] (loading), the decision bar [data-conformance-id=\"review-decision-bar\"] with its terminal controls disabled and [data-conformance-id=\"review-decision-disabled\"] shown (restricted), [data-conformance-id=\"review-gate-blocked\"][data-blocked-reason] offering [data-action=\"refresh-gate -> live-gate\"] (no longer open), and NO card DOM at all for absent — proved against a sibling mount that drew under the same seeded seam.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-card\"",
+            "data-lifecycle-card-state={state.state}",
+            "data-lifecycle-card-host={host}"
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-decision-bar.tsx",
+          "literals": [
+            "data-conformance-id=\"review-decision-bar\"",
+            "data-conformance-id=\"review-decision-disabled\"",
+            "data-action=\"comment-review -> annotated\"",
+            "data-action=\"approve-review -> resolved\"",
+            "data-action=\"reject-review -> resolved\""
+          ]
+        }
+      ]
+    },
+    "review-decision-floor": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"suggestion-floor\"] [data-conformance-id=\"review-decision-bar\"] — the ONE decision floor the suggestion chips ride on (§VIII: the chips carry no submit of their own), drawn by the review card beneath [data-conformance-id=\"suggestion-chips\"]. The marks the floor would carry are stated by [data-conformance-id=\"suggestion-accepted-count\"]. The floor may not be composed outside the card, so this surface is driven through the card exactly as a host draws it.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-decision-bar.tsx",
+          "literals": [
+            "data-conformance-id=\"review-decision-bar\"",
+            "data-conformance-id=\"suggestion-accepted-count\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": ["data-conformance-id=\"suggestion-chips\"", "<ReviewDecisionBar"]
+        }
+      ]
+    },
+    "review-target-metadata-floor": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"tier-metadata-floor\"] [data-review-target-floor] — the shipped review-target bridge's FLOOR arm (§III: where no renderer resolves, the target falls to the metadata floor, which says so). The element carries the reason plus data-review-floor-package / data-review-floor-slot, and the sanitized one-line diagnostic is the role=status paragraph composed by reviewTargetFloorDiagnostic; the host's generic read-only view is drawn beneath it, which is why a floored target is never blank.",
+      "requires": [
+        {
+          "file": "src/app/artifacts/[id]/review-target-mount.tsx",
+          "literals": [
+            "data-review-target-floor={reason}",
+            "data-review-floor-package={packageName ?? \"\"}",
+            "data-review-floor-slot={slot}",
+            "review target unavailable — ${pkg}slot"
+          ]
         }
       ]
     },
