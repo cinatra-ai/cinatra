@@ -10,7 +10,7 @@
  *
  * ONE type-agnostic screen on which a human reviews an artifact produced inside an
  * agent run and approves, rejects, or comments on it. Ratified design spec
- * `specs/app-artifact-review.html` @ design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f (owner-approved) — build
+ * `specs/app-artifact-review.html` @ design@0c484154b069c6369a33c1375056126289888997 (owner-approved) — build
  * EXACTLY to §I–VI, no invented affordances.
  *
  * The surface reads as a review DOCUMENT (§I): a gate header (what is under
@@ -57,9 +57,14 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
-import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
+import { recommendationDecidedForRun } from "@cinatra-ai/agents/run-recommendation-core";
+import {
+  recommendationRailEntry,
+  recommendationRailStepOpens,
+} from "@cinatra-ai/agents/recommendation-rail-entry";
 import {
   encodeLifecycleGateRef,
   encodeScheduleRunRef,
@@ -69,7 +74,7 @@ import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
-import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
+import { ReviewRunSurface } from "./review-run-surface";
 import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
@@ -280,6 +285,50 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     ? encodeScheduleRunRef({ runId })
     : null;
 
+  // §V's card AS THE SKILLS STEP IN THE RAIL (cinatra#3047, the re-shoot's
+  // first and second defects).
+  //
+  // NEVER ABOVE THE REVIEW CARD. The change request: "Every HITL shows on its
+  // own dedicated page. Do not show skills on top of a HITL card. Do not show
+  // the skills on top of the review card or the schedule card or any other card
+  // either." The ratified drawing at the capture contract's pin puts it as one
+  // page per gate, and draws this page's own rail with the Skills entry first,
+  // settled, above the run's steps. The card was mounted straight into the gate
+  // region here — above the review card, in the reading point C retired — while
+  // the rail carried no Skills entry at all, and this route is a second
+  // composition of the run surface that the run page's own fix never reached.
+  //
+  // THE PARK ROW IS THE WHOLE READING, and it is the SAME read the run page and
+  // the setup run page make (`recommendation-rail-entry.ts`): a run that never
+  // held has no entry at all, a live hold is the step the run is paused on, a
+  // decided one is the rail's read-only history row, and a park the TTL sweeper
+  // left terminal-but-unanswered opens onto nothing and so is closed and muted.
+  // Nothing is prefetched, no candidates are resolved and no decision state is
+  // derived here — the card owns the interaction (cinatra#2573); this asks only
+  // whether the question was ever asked. It is a plain run-scoped read behind
+  // the access door `loadReviewGateSurface` cleared above.
+  const recommendationPark = await readRecommendationParkForRun(runId).catch(() => null);
+  const recommendationEntry = recommendationRailEntry({
+    hasPark: recommendationPark !== null,
+    held: recommendationPark?.status === "parked",
+  });
+  const recommendationStepOpens = recommendationRailStepOpens({
+    entry: recommendationEntry,
+    parkStatus: recommendationPark?.status,
+    // A DECISION THAT RACED THE TTL SWEEPER IS STILL A DECISION (cinatra#3047,
+    // convergence). The park's status and the decision's evidence are not
+    // written atomically, so a confirm or a skip that lands as the sweeper fires
+    // leaves `policy_unresolved` behind with the answer on file — and the card
+    // draws that run's settled row. Reading the status alone would leave this
+    // page's Skills row settled on the rail and closed, with the run's own
+    // answer reachable nowhere, while the run page opens the same card. One
+    // definition of "decided" (`recommendationDecidedForRun`), asked by both.
+    decided: recommendationDecidedForRun({
+      runId,
+      parkStatus: recommendationPark?.status,
+    }),
+  });
+
   return (
     <ReviewShell>
       <div className="flex items-start gap-6" data-run-detail-contract="">
@@ -304,27 +353,20 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
           configuration fault to fix, not a reason to fork the surface. */
           const detailNode = (
             <LifecycleCardSurfaceProvider host="page_gate_region">
-              {/* THE RUN-START SKILLS QUESTION, at its plan-designated position
-                  (cinatra#2790, epic #2784 S9f; plan §6.4 "the same row appears on
-                  the run page, ahead of the steps it would authorize, and on the
-                  review page, where it is mostly seen in its decided form", and §9
-                  "review page — keyed by the run").
+              {/* THE GATE REGION CARRIES THE REVIEW CARD AND THE RUN'S OWN
+                  PARKED QUESTION — AND NOT THE SKILLS ROW (cinatra#3047, the
+                  re-shoot's first defect).
 
-                  ABOVE the gate card, and that ordering is the design's, not a
-                  layout choice: the recommendation is the decision taken BEFORE
-                  the run produced anything, and the review is the decision taken
-                  after. Reading down the gate region is reading the run in order.
-
-                  ONE RENDERER, NO FORK. This is the same `RecommendationHoldCard`
-                  the run panel and the widget mount — the card owns whether it
-                  draws, which state it is in, and when it re-reads — so it is
-                  keyed by the run and nothing else, and it renders NOTHING when
-                  the run never held or the reader may not see it. On this page
-                  that is usually its settled reading, which is exactly what §9
-                  says is mostly seen here. The host declaration is the one on the
-                  root of this region: a card is a `page_gate_region` mount because
-                  THIS provider says so, per the anchor contract. */}
-              <RecommendationHoldCard runId={runId} />
+                  §V's card stood HERE, above the gate card, and the ordering was
+                  argued as the design's: "the recommendation is the decision
+                  taken BEFORE the run produced anything, and the review is the
+                  decision taken after". The drawing at the capture contract's
+                  pin has since ruled the other way and the change request says
+                  so in its own words — one page per gate, and "do not show the
+                  skills on top of the review card". So the Skills question is a
+                  STEP on this page's rail now, and its row opens in the run
+                  detail in place of what is here, never stacked over it. The
+                  mount moved to `review-run-surface.tsx`; the HOST did not. */}
               {/* THE QUESTION THE RUN IS PARKED ON, on the same host and by the
                   same rule (cinatra#2930, lifecycle-b W3). Section IX's "every
                   card appears on every host" is the epic's structural thesis,
@@ -352,23 +394,20 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
               ) : null}
             </LifecycleCardSurfaceProvider>
           );
-          if (scheduleCardRef) {
-            return (
-              <ScheduleRailStep
-                host="page_gate_region"
-                cardRef={scheduleCardRef}
-                displayStep={1}
-                rail={railNode}
-                detail={detailNode}
-                initialSelection="detail"
-              />
-            );
-          }
+          // THE TWO COLUMNS, AND THE GATE STEPS THAT HEAD THEM. Which steps
+          // this run has, which numeral each carries and which of them can be
+          // opened are the rail's own rules rather than this page's — see
+          // `review-run-surface.tsx`, which is the one place they are applied
+          // for this route.
           return (
-            <>
-              {railNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
-            </>
+            <ReviewRunSurface
+              runId={runId}
+              recommendationEntry={recommendationEntry}
+              recommendationStepOpens={recommendationStepOpens}
+              scheduleCardRef={scheduleCardRef}
+              rail={railNode}
+              detail={detailNode}
+            />
           );
         })()}
       </div>

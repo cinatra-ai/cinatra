@@ -233,6 +233,26 @@ const CORE_EXACT = {
   dashboards_cube_validate: "read",
   dashboards_cube_load: "read",
   dashboards_cube_chart: "read",
+
+  // The assistant add flow for appointment schedules (cinatra#2368 acceptance
+  // item 3). The core registers ONE bridge under this name because the flow
+  // needs the invoking-user identity the host holds; without a declaration
+  // here the evaluator refuses it as "undeclared", so the primitive is
+  // registered, dispatchable, and yet never offered to the model at all. The
+  // live acceptance round caught exactly that: asked to use the tool, the
+  // assistant answered from guesswork, contradicting itself across turns,
+  // because the tool was absent from its surface.
+  //
+  // `dispatch` is the honest class of the three on offer: the primitive hands
+  // work to a path that runs under the invoking person's OWN Google
+  // credential — it resolves a FRESH account-scoped calendar list and refuses
+  // a calendarId absent from it — and then persists per-user state, rather
+  // than returning data (`read`) or enumerating a catalog (`discovery`).
+  //
+  // It belongs in CORE_EXACT, not the override literal: `add` is not a denied
+  // verb token, so this name needs no bypass of the destructive-verb backstop.
+  // Neither the calendar name nor the user id is ever taken from agent input.
+  appointment_schedule_add: "dispatch",
 } as const;
 
 const CORE_PROPOSAL_OVERRIDE = {

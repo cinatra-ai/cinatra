@@ -63,6 +63,7 @@ import { PageContent } from "@/components/page-content";
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
 import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
+import { CrumbContributions } from "@/components/crumb-contributions";
 
 /**
  * The connector's declared `status-probe` action id, if any. Model-A lifts that
@@ -241,6 +242,44 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // connector declares `only:"user"` (never shareable).
   const sharingSection = <ConnectionSharingSection packageId={packageId} />;
 
+  // THE TRAIL'S OWN NAMES (cinatra#3215). The ratified components drawing wants
+  // the crumb for an entity to read that entity's display name at every
+  // position, and wants the name to come from the owning page's server render,
+  // after its access checks, never from a client fetch after paint. This is that
+  // render: every gate above has already returned normally (the catalog policy
+  // decision, the vendor / subroute match, and — on the runtime-only path — the
+  // full trust gate), so the two names below are ones this actor is authorized
+  // to read. `displayName` is the SAME string the page header writes on every
+  // branch beneath.
+  //
+  // The vendor entry is published only when the connector DECLARED a vendor
+  // display name (`cinatra.vendor`, carried through the registry as
+  // `vendorIdentity`); a runtime-only install declares none, and rather than
+  // invent one the crumb is left to the composer's verbatim-slug floor
+  // (`connectorNameCrumbFallbackLabel`) — one fallback, stated in one place.
+  //
+  // Rendered on EVERY surviving branch of this route, so no reading of a
+  // connector page draws the raw slugs.
+  const vendorDisplayName = catalogEntry?.vendorIdentity?.name ?? null;
+  const crumbTrail = (
+    <CrumbContributions
+      entries={[
+        ...(vendorDisplayName
+          ? [
+              {
+                prefix: `/connectors/${encodeURIComponent(vendor)}`,
+                label: vendorDisplayName,
+              },
+            ]
+          : []),
+        {
+          prefix: `/connectors/${encodeURIComponent(vendor)}/${encodeURIComponent(slug)}`,
+          label: displayName,
+        },
+      ]}
+    />
+  );
+
   if (render.kind === "schema-config") {
     // Resolve the addressable install id so named actions / status probes can
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
@@ -325,6 +364,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           divider={headerDivider}
           className="flex flex-col gap-6 pb-8"
         >
+          {crumbTrail}
           {installId ? (
             <SchemaConfigConnectorForm
               installId={installId}
@@ -369,6 +409,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         divider={headerDivider}
         className="flex flex-col gap-6 pb-8"
       >
+        {crumbTrail}
         <Suspense fallback={null}>
           <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
         </Suspense>
@@ -410,6 +451,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
+          {crumbTrail}
           <ConnectorSetupColumns
             conformanceId="connector-setup"
             state="error"
@@ -439,6 +481,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
+          {crumbTrail}
           <ConnectorSetupColumns
             conformanceId="connector-setup"
             state="error"
@@ -488,6 +531,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
+          {crumbTrail}
           <ConnectorSetupColumns
             conformanceId="connector-setup"
             state="error"
@@ -543,6 +587,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     const installId = await resolveActiveInstallIdForActor(packageId, actor);
     return (
       <div className="relative">
+        {crumbTrail}
         <ConnectorSetupColumns
           conformanceId="connector-setup"
           fields={setupPage}
@@ -563,6 +608,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
 
   return (
     <div className="relative">
+      {crumbTrail}
       {setupPage}
       {sharingSection}
     </div>
