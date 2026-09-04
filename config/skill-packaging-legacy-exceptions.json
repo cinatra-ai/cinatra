@@ -3,7 +3,6 @@
   "schemaVersion": 1,
   "exceptions": [],
   "embeddedSkills": [
-    "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
-    "@cinatra-ai/screenshot-artifact :: skills/screenshot-matcher/SKILL.md"
+    "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md"
   ]
 }

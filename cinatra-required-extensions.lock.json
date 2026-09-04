@@ -110,9 +110,9 @@
     {
       "packageName": "@cinatra-ai/json-artifact",
       "repo": "cinatra-ai/json-artifact",
-      "resolvedSha": "31e09ae91836ab9be2bbfccadc32270069368d0a",
+      "resolvedSha": "f54f31f85a8cde3511be221b77e829bc5f7ce83e",
       "packageVersion": "0.1.0",
-      "treeSha256": "09e8dba21bc09adf7a2a00b9750ba30255ec96bc20c234d749deed37d6f50ffb"
+      "treeSha256": "b578f511de79733aa421d3514fb48aba7dddfa4ba11194639b6c6545c77b910a"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -145,9 +145,9 @@
     {
       "packageName": "@cinatra-ai/pdf-artifact",
       "repo": "cinatra-ai/pdf-artifact",
-      "resolvedSha": "9e6e8ee7779f608660d245d23b20e31bb7ccb59d",
+      "resolvedSha": "bca854520e2e1797d165db8d163739a0d2e0a2f8",
       "packageVersion": "0.1.1",
-      "treeSha256": "c8609b527b2c74a9c40fe6b018a73cc6d4f88f938eb6eee0b134bffefd05f9ec"
+      "treeSha256": "5967315fdedc3078fdd739ec24057b756b0fe527dd92616b524995a4d0373ff2"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
