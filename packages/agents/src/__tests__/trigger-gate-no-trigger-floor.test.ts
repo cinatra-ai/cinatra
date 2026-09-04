@@ -108,6 +108,7 @@ import {
   TriggerGateClosedError,
   GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR,
 } from "../execution";
+import { RunTransitionError } from "../store";
 
 const GATED_STEP = {
   stepId: "send-1",
@@ -192,9 +193,82 @@ afterEach(() => {
 const failTransitions = () =>
   hoisted.transitionRunStatus.mock.calls.filter((c) => c[1] === "queued" && c[2] === "failed");
 
-describe("the gate's no-trigger floor", () => {
-  it("keeps parking while the backoff sequence still has room to run", async () => {
+const handOffs = () =>
+  hoisted.transitionRunStatus.mock.calls.filter(
+    (c) => c[1] === "queued" && c[2] === "pending_trigger",
+  );
+
+const staleError = () =>
+  new RunTransitionError({
+    code: "stale_from_status",
+    runId: "run-test-1",
+    from: "queued",
+    to: "pending_trigger",
+  });
+
+describe("a gated run with no trigger of its own", () => {
+  it("is handed to its trigger step on the FIRST closed fire, so it leaves queued at once", async () => {
     hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+
+    await expect(
+      runAgentBuilderExecutionJob({ runId: "run-test-1", gateAttempt: 0 }, "job-1"),
+    ).resolves.toBeUndefined();
+
+    // THE INVARIANT: the run does not sit on the backoff waiting for a row that
+    // no road on this dispatch will ever mint — it goes to the state that
+    // legitimately awaits the person's choice.
+    expect(handOffs().length).toBe(1);
+    expect(failTransitions().length).toBe(0);
+    expect(hoisted.sendTask).not.toHaveBeenCalled();
+  });
+
+  it("stands down when another writer took the run during the hand-off", async () => {
+    hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+    hoisted.transitionRunStatus.mockImplementation(async (_id: string, from: string, to: string) => {
+      if (from === "queued" && to === "pending_trigger") throw staleError();
+      return undefined;
+    });
+
+    await expect(
+      runAgentBuilderExecutionJob({ runId: "run-test-1", gateAttempt: 0 }, "job-1"),
+    ).resolves.toBeUndefined();
+
+    expect(failTransitions().length).toBe(0);
+    expect(hoisted.sendTask).not.toHaveBeenCalled();
+  });
+
+  it("keeps parking indefinitely when a trigger row EXISTS but is unreleased — that is a person still deciding", async () => {
+    hoisted.readRunTriggerByRunId.mockResolvedValue({ runId: "run-test-1", releasedAt: null });
+    await expect(
+      runAgentBuilderExecutionJob(
+        { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR + 40 },
+        "job-1",
+      ),
+    ).rejects.toBeInstanceOf(TriggerGateClosedError);
+    expect(handOffs().length).toBe(0);
+    expect(failTransitions().length).toBe(0);
+  });
+
+  it("never consults the gate at all for an ungated template", async () => {
+    hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
+    hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+    await runAgentBuilderExecutionJob(
+      { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR + 1 },
+      "job-1",
+    ).catch(() => undefined);
+    expect(hoisted.isTriggerReleased).not.toHaveBeenCalled();
+    expect(hoisted.readRunTriggerByRunId).not.toHaveBeenCalled();
+  });
+});
+
+describe("the floor under a hand-off that cannot land", () => {
+  it("keeps the run on the backoff while the sequence still has room", async () => {
+    hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+    hoisted.transitionRunStatus.mockImplementation(async (_id: string, from: string, to: string) => {
+      if (from === "queued" && to === "pending_trigger") throw new Error("db down");
+      return undefined;
+    });
+
     await expect(
       runAgentBuilderExecutionJob(
         { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR - 1 },
@@ -204,8 +278,12 @@ describe("the gate's no-trigger floor", () => {
     expect(failTransitions().length).toBe(0);
   });
 
-  it("lands the run terminal, with one line, once the whole backoff ran and no trigger was ever minted", async () => {
+  it("lands the run terminal, with one line, once the whole backoff ran", async () => {
     hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+    hoisted.transitionRunStatus.mockImplementation(async (_id: string, from: string, to: string) => {
+      if (from === "queued" && to === "pending_trigger") throw new Error("db down");
+      return undefined;
+    });
 
     await expect(
       runAgentBuilderExecutionJob(
@@ -224,32 +302,23 @@ describe("the gate's no-trigger floor", () => {
     expect(line).not.toContain("run-test-1");
     expect(line).not.toContain("queued");
     expect(line).not.toContain("gatedSteps");
-    // And it never dispatched.
     expect(hoisted.sendTask).not.toHaveBeenCalled();
   });
 
-  it("keeps parking indefinitely when a trigger row EXISTS but is unreleased — that is a person still deciding", async () => {
-    hoisted.readRunTriggerByRunId.mockResolvedValue({ runId: "run-test-1", releasedAt: null });
+  it("keeps the job alive when the terminal write itself cannot land, instead of completing it and stranding the run", async () => {
+    // Convergence review: returning after a STRANDED terminal write would
+    // complete the BullMQ job and remove the last thing holding this run —
+    // exactly the queued row with no job behind it the floor exists to end.
+    hoisted.readRunTriggerByRunId.mockResolvedValue(null);
+    hoisted.transitionRunStatus.mockRejectedValue(new Error("db down"));
+
     await expect(
       runAgentBuilderExecutionJob(
-        { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR + 40 },
+        { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR },
         "job-1",
       ),
     ).rejects.toBeInstanceOf(TriggerGateClosedError);
-    expect(failTransitions().length).toBe(0);
-  });
 
-  it("never consults the floor for an ungated template — the gate is off entirely", async () => {
-    hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
-    hoisted.readRunTriggerByRunId.mockResolvedValue(null);
-    // What happens AFTER the gate (the dispatch itself) is another suite's
-    // subject; this one asserts only that the gate — and therefore the floor —
-    // was never entered for a template that gates nothing.
-    await runAgentBuilderExecutionJob(
-      { runId: "run-test-1", gateAttempt: GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR + 1 },
-      "job-1",
-    ).catch(() => undefined);
-    expect(hoisted.isTriggerReleased).not.toHaveBeenCalled();
-    expect(hoisted.readRunTriggerByRunId).not.toHaveBeenCalled();
+    expect(failTransitions().length).toBe(1);
   });
 });

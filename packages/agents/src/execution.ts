@@ -432,6 +432,81 @@ export async function failRunWithNoTriggerEverMinted(
   }
 }
 
+/**
+ * HAND A GATED RUN TO ITS TRIGGER STEP, so it leaves `queued` at once
+ * (cinatra#3033, convergence review).
+ *
+ * THE INVARIANT THE FLOOR ALONE DID NOT REPAIR. Bounding the park stops a run
+ * sitting blank forever, but it does not let the run happen: a person who
+ * presses Run on an agent that gates its side effects would have waited out the
+ * whole backoff and then read that nothing could start. The gate is not the only
+ * seam here — the LAUNCH is, and every immediate-dispatch road (the run-start
+ * page's create-and-trigger, an agent-as-tool call, an A2A send) reaches the gate
+ * with no trigger row because nothing on those roads mints one: the row is minted
+ * by the person's own trigger choice, which only ever runs against a run PARKED
+ * at `pending_trigger`.
+ *
+ * So park it there, which is the state that legitimately awaits that choice and
+ * is already drawn, already rendered by the run panel and the schedule card,
+ * already covered by bulk-stop and the kernel's lease accounting. This is the
+ * SAME hand-off the setup-success leg performs; it was keyed on `resumedFromSetup`
+ * and therefore never reached a run that was dispatched straight to the queue.
+ *
+ * The trigger read after the transition is the correctness boundary, exactly as
+ * it is on the setup leg: a trigger configured in the window is honoured rather
+ * than handed back the step it has just answered.
+ */
+export async function handOffGatedRunToTriggerChoice(
+  run: { id: string; orgId: string },
+  authority: OrgWriteAuthority | undefined,
+): Promise<"parked" | "moved_on" | "kept"> {
+  try {
+    await transitionRunStatus(run.id, "queued", "pending_trigger", undefined, authority);
+  } catch (err) {
+    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+      // Another writer moved the run off `queued` — a stop, a cancel, a worker
+      // that took it. That writer owns it and there is nothing to hand off.
+      return "moved_on";
+    }
+    // The hand-off could not land. NOT terminal on its own: the run keeps its
+    // place on the gate backoff, and the floor below is what ends it if nothing
+    // ever comes.
+    console.warn(
+      "[trigger-gate] a gated run could not be handed to its trigger step — it stays on the gate backoff:",
+      run.id,
+      err instanceof Error ? err.message : String(err),
+    );
+    return "kept";
+  }
+
+  const configuredInTheWindow = await readRunTriggerByRunId(run.id).catch(() => null);
+  if (configuredInTheWindow === null) {
+    // THE RUN IS AT ITS SCHEDULE MOMENT, and now it says so — the same record the
+    // setup leg states, with the same run-scoped card reference.
+    await stateRunScheduleMoment({
+      run,
+      cardRef: encodeScheduleRunRef({ runId: run.id, fromScheduleStep: true }),
+      authority,
+    });
+    return "parked";
+  }
+
+  // A trigger landed while we were handing off. Honour WHICH choice it was: a
+  // schedule is armed for its own fire (the release job owns the run from there,
+  // so this job stands down); an immediate choice goes back to `queued` and the
+  // next gate fire reads the release the choice wrote.
+  const back = configuredInTheWindow.triggerType === "immediate" ? "queued" : "armed";
+  try {
+    await transitionRunStatus(run.id, "pending_trigger", back, undefined, authority);
+  } catch (err) {
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+    return "moved_on";
+  }
+  return back === "armed" ? "moved_on" : "kept";
+}
+
 // ---------------------------------------------------------------------------
 // cinatra#1940 P3 (Decision 1, worker-start row) — dispatch freeze at
 // worker-start.
@@ -3285,11 +3360,31 @@ async function runAgentBuilderExecutionJobInner(
         // all can never start — and the drawn floor says a run that can
         // never start must say so in one line, never sit blank.
         // ---------------------------------------------------------------
-        if (nextAttempt > GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR) {
-          const trigger = await readRunTriggerByRunId(runId);
-          if (!trigger) {
-            await failRunWithNoTriggerEverMinted(runId, executionAuthority);
+        const trigger = await readRunTriggerByRunId(runId);
+        if (!trigger) {
+          // NOTHING WILL EVER MINT ONE ON THIS ROAD, so the run does not wait on
+          // the backoff for it: hand it to the trigger step, where the choice
+          // that releases this gate is actually made. It leaves `queued` on the
+          // first closed fire and says what it is waiting at.
+          const handed = await handOffGatedRunToTriggerChoice(
+            { id: runId, orgId: run.orgId },
+            executionAuthority,
+          );
+          if (handed === "parked" || handed === "moved_on") {
             return;
+          }
+          // THE HAND-OFF ITSELF COULD NOT LAND. The floor is the backstop under
+          // it, and only after the whole backoff has run.
+          if (nextAttempt > GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR) {
+            const landed = await failRunWithNoTriggerEverMinted(runId, executionAuthority);
+            if (landed !== "stranded") {
+              return;
+            }
+            // STRANDED — the terminal write did not land either (convergence
+            // review). Returning here would complete the BullMQ job and remove
+            // the last thing holding this run, leaving exactly the queued row
+            // with no job behind it that this floor exists to end. Fall through
+            // instead: the job stays delayed and tries the whole road again.
           }
         }
         throw new TriggerGateClosedError({
