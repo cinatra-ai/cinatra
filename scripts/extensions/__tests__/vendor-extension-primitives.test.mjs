@@ -6,6 +6,7 @@ import {
   rewriteUiImports,
   plannedFiles,
   resolveUiClosure,
+  localItemName,
   findOrphans,
   VENDOR_MANIFEST,
 } from "../vendor-extension-primitives.mjs";
@@ -73,6 +74,32 @@ describe("resolveUiClosure", () => {
 
   it("a cn-only primitive resolves to just itself", () => {
     expect(resolveUiClosure(["card"])).toEqual(["card"]);
+  });
+});
+
+describe("localItemName - the namespace rule the registry closure depends on", () => {
+  it("strips our namespace", () => {
+    expect(localItemName("@cinatra-ai/label")).toBe("label");
+  });
+
+  // Regression guard for the 2026-09-04 break: a BARE entry resolves against the
+  // consumer's default registry, which is how upstream's like-named utils item
+  // overwrote ours and dropped clsx + tailwind-merge.
+  it("rejects a bare entry", () => {
+    expect(() => localItemName("label")).toThrow(/not namespaced/);
+  });
+
+  it("rejects a foreign namespace", () => {
+    expect(() => localItemName("@acme/label")).toThrow(/not namespaced/);
+  });
+
+  it("every registryDependencies entry in registry.json is namespaced", () => {
+    const registry = JSON.parse(readFileSync(join(REPO_ROOT, "registry.json"), "utf8"));
+    for (const item of registry.items) {
+      for (const dep of item.registryDependencies ?? []) {
+        expect(() => localItemName(dep)).not.toThrow();
+      }
+    }
   });
 });
 
