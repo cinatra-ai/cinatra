@@ -35,6 +35,13 @@
     "review-card-dashboard": { "$ref": "review-target-header" },
     "review-card-portlet": { "$ref": "review-target-header" },
     "review-card-cms-page": { "$ref": "review-target-header" },
+    "review-composer-focus": { "$ref": "review-composer-row" },
+    "review-composer-bound": { "$ref": "review-composer-row" },
+    "review-composer-ambiguous": { "$ref": "review-composer-row" },
+    "review-composer-unbound": { "$ref": "review-composer-row" },
+    "review-composer-unbound-card": { "$ref": "review-composer-row" },
+    "composer-bound-acting": { "$ref": "review-composer-row" },
+    "chat-composer-primary": { "$ref": "chat-composer-field" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -545,6 +552,45 @@
             "data-conformance-id=\"review-target-header\"",
             "data-review-target-type={header.typeLabel}",
             "data-review-target-revision={revision.full}"
+          ]
+        }
+      ]
+    },
+    "review-composer-row": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={mount}] [data-conformance-id=\"review-composer-focus\"] \u2014 the REAL ComposerFocusRow, the shipped row above the review floor, mounted on the conformance harness route inside a chat-thread host declaration and fed by the shipped useComposerFocusBinding inside the shipped LifecycleComposerFocusProvider. The row carries its reading on itself as data-composer-bound and data-composer-ambiguous, and draws exactly one sentence per reading: [data-conformance-id=\"review-composer-bound\"] / \"review-composer-ambiguous\" / \"review-composer-unbound\". Its ONE control carries the MANIFEST'S OWN action name as data-action, written as the action-and-outcome pair and moving with the reading (\"release-review-composer -> unbound\" while bound, \"focus-review-composer -> bound\" while not), so a driver cannot press the control in one reading and report the other reading's outcome. The harness holds only WHICH open review the reader chose; resolveComposerTarget decides the reading, and the shipped row decides the sentence, the control and its name.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-composer-focus\"",
+            "data-composer-bound={binding.bound ? \"true\" : \"false\"}",
+            "data-composer-ambiguous={binding.ambiguous ? \"true\" : \"false\"}",
+            "\"release-review-composer -> unbound\"",
+            "\"focus-review-composer -> bound\"",
+            "data-conformance-id=\"review-composer-bound\"",
+            "data-conformance-id=\"review-composer-ambiguous\"",
+            "data-conformance-id=\"review-composer-unbound\""
+          ]
+        }
+      ]
+    },
+    "chat-composer-field": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"chat-composer-primary-field\"] [data-conformance-id=\"chat-composer-primary\"] \u2014 the REAL PromptField, the one component the conversation column and the embedded widget both mount as the conversation's chat box, carrying the two declarations the column makes on it: `primary`, which is what gives it the heavier `border-line-strong` edge a card's subordinate note field never takes, and the conformance id naming the role it plays. The surface declares no field, action or state: \u00a7I's contract here is the input's STANDING, not what it sends.",
+      "requires": [
+        {
+          "file": "packages/sdk-ui/src/prompt-field.tsx",
+          "literals": [
+            "conformanceId?: string;",
+            "primary ? \"border-line-strong\" : \"border-line\""
+          ]
+        },
+        {
+          "file": "packages/chat/src/conversation-column.tsx",
+          "literals": [
+            "conformanceId=\"chat-composer-primary\"",
+            "primary"
           ]
         }
       ]
