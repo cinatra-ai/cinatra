@@ -285,8 +285,16 @@ export function ScheduleStepSurface({
 /**
  * The ONE-STEP surface: the frame with the schedule as its only gate step.
  *
- * This is what the review page mounts, and what a run page carrying a schedule
- * and no recommendation mounts. Props and DOM are unchanged by the frame's move.
+ * NO PRODUCTION CALLER SINCE cinatra#3047, and that is stated rather than left
+ * to be discovered. It was what the review page mounted while the schedule was
+ * that page's only gate step; the page grew a second — the Skills question, at
+ * the head of its rail, where the drawing puts it — so it composes the shared
+ * `RunSurfaceRail` with both steps' rows and surfaces, exactly as the run page
+ * does. What remains here is the one-step convenience and the two pieces the
+ * frames actually use (`ScheduleRailStepRow` and `ScheduleStepSurface`, both of
+ * which every caller reaches directly); it is kept, not deleted, because three
+ * suites drive it as a one-step frame and re-aiming them is a change nobody
+ * asked for on a fix leg. Its props and DOM are unchanged.
  */
 export function ScheduleRailStep({
   host,
