@@ -49,9 +49,10 @@ const edges = (agent: string): string[] =>
 const produces = (agent: string): Array<{ extension: string; objectTypeId?: string }> =>
   manifest(agent).cinatra.produces ?? [];
 
-// The table of section 5.3.2, minus the image agent, which arrives with its own
-// package. Each row is an agent, what it produces (typed), and every artifact
-// kind it declares an edge to — written, read, or both.
+// The table of section 5.3.2, whole: the image agent's own package has arrived,
+// so every row of the plan's table is here. Each row is an agent, what it
+// produces (typed), and every artifact kind it declares an edge to — written,
+// read, or both.
 const TABLE: Array<{
   agent: string;
   produces: Array<{ extension: string; objectTypeId: string }>;
@@ -66,6 +67,19 @@ const TABLE: Array<{
     agent: "blog-draft-writer-agent",
     produces: [{ extension: POST, objectTypeId: POST_TYPE }],
     edges: [IDEA, POST].sort(),
+  },
+  {
+    agent: "blog-image-generator-agent",
+    // The picture it settles has no write road an agent can take: the three
+    // roads the fleet's blocking adoption gate recognises — an EndNode output
+    // binding, an `artifact_materialize` node, an `artifact_authoring_emit`
+    // claim — are each scoped to text-authorable MIMEs, and the gate refuses a
+    // produces entry no recognised road reaches. (The host does file picture
+    // bytes on its own campaigns road; that road is neither recognised by the
+    // gate nor reachable from an agent.) Its entry waits with the pipeline's
+    // two. BOTH EDGES stay: they say what the run touches, which is true today.
+    produces: [],
+    edges: [IMAGE, POST].sort(),
   },
   {
     agent: "blog-linkedin-writer-agent",
@@ -111,16 +125,17 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares the dependency edges section 5.3.2 counts, for the agents that exist", () => {
-    // Twelve of the fourteen. The remaining two are the image agent's, which
-    // arrives with its own package.
+  it("declares the fourteen dependency edges section 5.3.2 counts", () => {
+    // All fourteen. The last two arrived with the image agent's own package,
+    // which replaces the retired prompt writer.
     const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
-    expect(total).toBe(12);
+    expect(total).toBe(14);
   });
 
   it("declares six of the nine typed produces entries", () => {
-    // Nine after the prototype. The image agent's one arrives with its package;
-    // the pipeline's idea and picture entries arrive with their write roads.
+    // Nine after the prototype. Three wait for their write roads, not for their
+    // packages: the image agent's own entry and the pipeline's idea and picture
+    // entries. No road an agent can take reaches a picture today.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
     expect(total).toBe(6);
     for (const row of TABLE) {

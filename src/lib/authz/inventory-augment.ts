@@ -354,6 +354,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // Renamed with the extraction (cinatra#2367): the tool moved off
   // google-calendar-connector to its own connector, and the primitive it
   // registers is `appointment_schedule_list` — one name, one owner.
+  appointment_schedule_add:  { resourceType: "connector_instance", action: "execute", status: "enforced" },
   appointment_schedule_list: { resourceType: "connector_instance", action: "execute", status: "enforced" },
 
   // ───── linkedin (connector_instance) ─────

@@ -58,6 +58,11 @@
       "resolvedSha": "a4f3f534c9e8f587e1acbebf5a2a39984cf73f98"
     },
     {
+      "packageName": "@cinatra-ai/blog-image-generator-agent",
+      "repo": "cinatra-ai/blog-image-generator-agent",
+      "resolvedSha": "a763782115d7e70c979be6ce34095a459e3b3ab0"
+    },
+    {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
       "repo": "cinatra-ai/blog-image-matcher-skill",
       "resolvedSha": "f202c230d58a0a62a6650be5dec2531918d521c3"
@@ -245,7 +250,7 @@
     {
       "packageName": "@cinatra-ai/google-appointment-schedules-connector",
       "repo": "cinatra-ai/google-appointment-schedules-connector",
-      "resolvedSha": "00d15367805e205cbd7a72f372ea94ee8627e9a1"
+      "resolvedSha": "90a0724dc84909dab985f9f618f8782422e05004"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
