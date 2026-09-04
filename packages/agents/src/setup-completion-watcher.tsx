@@ -93,10 +93,27 @@ type SetupCompletionWatcherProps = {
    *  mounts this watcher and threaded straight through to the panel, so the run
    *  page's FIRST paint of a run that already has a review draws that review. */
   initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  /**
+   * WAS THIS RUN'S SKILL SET DECIDED ON THE RECOMMENDATION CARD?
+   *
+   * Forwarded to the panel unchanged, exactly like `canRespondInWindow` and
+   * `initialReviewGate`: no fallback and no second read. The panel draws no
+   * recommendation card of its own any more (cinatra#3047) — the run page's rail
+   * step is the row's one place — so the screen that owns that step answers this
+   * for it, from the run's own park row.
+   */
+  recommendationDecided?: boolean;
   /** cinatra#3068 — the page's rail carries the run's input step, so the panel
    *  draws no "Agentic Run Progress" heading over the form. Forwarded through
    *  unchanged; see `AgenticRunPanel`'s own prop. */
   inputStepInRail?: boolean;
+  /**
+   * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
+   * the run page's two-column frame is drawn beside this column, so the gate's
+   * own card is the whole page and no section plate is stacked around it
+   * (cinatra#3047 fix leg 8).
+   */
+  railDrawsTheFrame?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -117,10 +134,12 @@ export function SetupCompletionWatcher({
   triggerConfigured = false,
   initialStreamedText,
   inputStepInRail = false,
+  railDrawsTheFrame = false,
   canRespondInWindow,
   templateId,
   initialHitlContext,
   initialReviewGate,
+  recommendationDecided,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -279,7 +298,9 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
+      recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
+      railDrawsTheFrame={railDrawsTheFrame}
     />
   );
 }

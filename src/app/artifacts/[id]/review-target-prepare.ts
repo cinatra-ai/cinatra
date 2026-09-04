@@ -44,11 +44,11 @@ import {
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
 import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
-import { buildArtifactContentProjection } from "@/lib/artifacts/artifact-content-channel";
 import {
-  createArtifactContentChannelServerPorts,
-  type PinnedFileBytesLocation,
-} from "@/lib/artifacts/artifact-content-channel-server";
+  buildArtifactContentProjection,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -123,15 +123,13 @@ export function bindArtifactReviewPorts(ctx: {
    * The file arm is tried first and stays byte-identical: nothing about a
    * file-backed review moved.
    */
-  // WHERE THE AUTHORIZED BYTES ARE (lifecycle-c W9, cinatra#3033). The member
-  // resolution above is the ONLY place this binder decides which pinned
-  // revision's bytes a reader may see — live for the ordinary reading, tombstone
-  // tolerant only for the gate-authorized settled one. So the storage location
-  // it resolved is recorded HERE and read back by `buildProps`, rather than
-  // re-resolved there: a second resolver call would have to guess the
-  // live/historical arm all over again, and guessing wrong is precisely how a
-  // read surface widens without anyone noticing.
-  const authorizedFileBytes = new Map<string, PinnedFileBytesLocation>();
+  // WHICH PINNED REVISION'S BYTES A READER MAY SEE (lifecycle-c W9,
+  // cinatra#3033) is decided in the member resolution above — live for the
+  // ordinary reading, tombstone tolerant only for the gate-authorized settled
+  // one. That decision travels forward on the answer itself
+  // (`RevisionMemberOutcome.historical`) and `buildProps` hands it to the
+  // substance reader as its `liveOnly` bound, so the content read resolves the
+  // same revision under the same rule and cannot widen it by guessing.
 
   const memberFor = (
     artifactId: string,
@@ -144,13 +142,11 @@ export function bindArtifactReviewPorts(ctx: {
       representationRevisionId,
       liveOnly,
     });
-    if (file) {
-      authorizedFileBytes.set(representationRevisionId, {
-        storageKey: file.storageKey,
-        sizeBytes: file.sizeBytes,
-      });
-      return { mime: file.mime, form: "file" };
-    }
+    // The bound this answer was made under travels WITH it (see
+    // `RevisionMemberOutcome.historical`), so the content read that follows
+    // resolves the same revision under the same rule rather than guessing.
+    const historical = !liveOnly;
+    if (file) return { mime: file.mime, form: "file", historical };
     const nonFile = resolveNonFileArtifactRevision({
       orgId,
       artifactId,
@@ -163,6 +159,7 @@ export function bindArtifactReviewPorts(ctx: {
       form: nonFile.form,
       configuration: nonFile.configuration,
       configurationDigest: nonFile.configurationDigest,
+      historical,
     };
   };
 
@@ -310,30 +307,42 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), NOW WIRED (lifecycle-c
-      // W9, cinatra#3033). The ratified drawing, §I.3 verbatim: "what that
-      // display renders is the post itself: its title and its body text." This
-      // consumer passed `absentArtifactContent(...)` by construction, so a
-      // run-produced post whose markdown was on disk reached its display as a
-      // named absence and drew a content-absent floor over the work the reviewer
-      // was deciding on. The class resolution, the read and the cap all stay
-      // where they already were: the channel decides what is a text form, the
-      // server port reads only the bytes the member resolution above authorized,
-      // and the channel alone applies the cap.
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED.
+      //
+      // The ratified drawing, §I.3 verbatim: "what that display renders is
+      // the post itself: its title and its body text."
+      //
+      // It used to pass the named absence here, and the consequence was the
+      // whole of the defect: a display that draws from `props.content` — the
+      // build-map renderer a text artifact resolves to — was handed "nothing is
+      // pinned" for a revision holding a real draft, and drew its own floor over
+      // it. The slot read as empty on a run whose work was right there.
+      //
+      // The read is the channel's own: the class comes from the FORM the
+      // substrate recorded (never from a caller claim), the caps are the
+      // channel's, and every failure comes back as a NAMED absence the display
+      // can tell apart from "too large to carry". Under the SAME bound the
+      // membership answer was made under, so a settled card keeps its work and a
+      // live reading never replays a tombstoned pin.
       content: await buildArtifactContentProjection(
         {
           orgId,
           artifactId: artifact.artifactId,
           representationRevisionId,
-          // "An absent form reads as file" — the core's own rule, applied here
-          // rather than re-decided: the channel must be told the substrate's
-          // form, never a caller claim.
-          form: input.member.form ?? "file",
+          form: memberForm(input.member),
           mime,
         },
-        createArtifactContentChannelServerPorts({
-          orgId,
-          locateFile: (revisionId) => authorizedFileBytes.get(revisionId) ?? null,
+        createPinnedSubstanceReader({
+          liveOnly: input.member.historical !== true,
+          // The non-file membership answer already carried the pinned
+          // configuration record and its digest; the channel takes THAT rather
+          // than resolving the same row a second time.
+          carriedConfiguration: fileBacked
+            ? null
+            : {
+                configuration: input.member.configuration ?? null,
+                digest: input.member.configurationDigest ?? null,
+              },
         }),
       ),
     });
@@ -347,6 +356,17 @@ export function bindArtifactReviewPorts(ctx: {
     resolveMount,
     buildProps,
   };
+}
+
+/**
+ * The member's own recorded form, as the content channel names it. An absent
+ * form reads as `file` for the reason `isFileFormMember` gives: that is what
+ * every caller written before enabler 0.10 meant.
+ */
+function memberForm(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactRepresentationForm {
+  return member.form ?? "file";
 }
 
 /**

@@ -13,7 +13,7 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 
 /**
- * ONE review target panel (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §II/§III):
+ * ONE review target panel (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997 §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
  * the REPRESENTATION SLOT into which the artifact's type renderer mounts (fed
