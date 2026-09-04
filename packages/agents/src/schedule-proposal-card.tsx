@@ -170,7 +170,6 @@ import type {
 // The recurring reading a read-only row draws is the SAME renderer the
 // settled card's own plain-language line comes from (cinatra#3174 fix leg
 // 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
-import { durationLineValue } from "./duration-copy";
 import { describeRecurrence } from "./trigger-recurrence";
 
 import { Button } from "@/components/ui/button";
@@ -193,6 +192,34 @@ import {
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS } from "./trigger-recurrence";
+
+/**
+ * THE EMPTY READING'S WORD, KEPT WHERE THE ONE SURFACE THAT DRAWS IT LIVES
+ * (cinatra#3174 fix leg 4).
+ *
+ * The estimated-duration SENTENCE is drawn by two surfaces - the run page's
+ * scheduling step and this card — so it stays in `duration-copy`, the pure leaf
+ * both of them read, and cannot come to two roundings. The word for a reading
+ * with NO estimate is not shared: the scheduling step draws its line only where
+ * there IS a duration to draw, and this card draws the line in EVERY reading
+ * (fix leg 3, after the second graded proof round). One drawer, so one home —
+ * here, beside the paragraph that draws it, which also keeps the card off a
+ * cross-module edge the conversation route's graph does not need to carry.
+ *
+ * WHERE THE WORD COMES FROM, said plainly because it is not the drawing's. The
+ * ratified drawing gives exactly one value anywhere — "About 45s - 3.4 hr." —
+ * and no wording for a reading with no estimate; neither does Components'
+ * "Standard scheduling step", which section VI reproduces. So the empty
+ * reading's word is the one this leg's task names, and it is deliberately not
+ * an invented duration either: a made-up band over a template with no history
+ * would be a worse answer than saying there is none.
+ */
+export const DURATION_LINE_NO_ESTIMATE = "Unavailable.";
+
+/** The duration line's value: the estimate's own sentence, or the word above. */
+function durationLineValue(copy: string | null | undefined): string {
+  return copy ?? DURATION_LINE_NO_ESTIMATE;
+}
 
 /** The one decision entry — the SAME endpoint the review card's floor posts to
  *  (`src/app/api/lifecycle-views/decide/route.ts`), branched by kind. §VI's card
@@ -1450,7 +1477,7 @@ function ScheduleOptionRows({
           null by drawing nothing at all. A line the drawing draws in every
           picture may not go missing because the estimator had nothing to say,
           so the line stands and its VALUE carries the empty reading — the one
-          word this pipeline keeps in `duration-copy`, which is where the note
+          word this card keeps beside the line, which is where the note
           on whose word it is lives. */}
       <div className="flex flex-col gap-1 pt-1">
         <p className="text-sm font-medium text-foreground">Estimated run duration</p>

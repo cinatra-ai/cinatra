@@ -41,9 +41,11 @@ import type {
   TriggerScheduleProposalViewBody,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
-import { DURATION_LINE_NO_ESTIMATE } from "../duration-copy";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { ScheduleProposalCard } from "../schedule-proposal-card";
+import {
+  DURATION_LINE_NO_ESTIMATE,
+  ScheduleProposalCard,
+} from "../schedule-proposal-card";
 
 afterEach(() => {
   cleanup();

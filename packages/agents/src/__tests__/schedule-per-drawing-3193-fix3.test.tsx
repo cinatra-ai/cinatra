@@ -48,9 +48,11 @@ import {
   ScheduleReadingReport,
   type ScheduleCardReading,
 } from "../lifecycle-card-runtime";
-import { ScheduleProposalCard } from "../schedule-proposal-card";
+import {
+  DURATION_LINE_NO_ESTIMATE,
+  ScheduleProposalCard,
+} from "../schedule-proposal-card";
 import { scheduleFiredOnce } from "../trigger-schedule-proposal-service";
-import { DURATION_LINE_NO_ESTIMATE } from "../duration-copy";
 import {
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
