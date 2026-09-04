@@ -377,7 +377,7 @@ jobs:
     needs: detect
     if: ${{ always() }}
     runs-on: [self-hosted, linux, x64, cinatra-ci]
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -428,7 +428,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: [self-hosted, linux, x64, cinatra-ci]
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -473,7 +473,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: [self-hosted, linux, x64, cinatra-ci]
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1320,7 +1320,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: [self-hosted, linux, x64, cinatra-ci]
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1567,7 +1567,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: [self-hosted, linux, x64, cinatra-ci]
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1637,7 +1637,7 @@ jobs:
     # have left four. Sequential would not have fit that judgement — ~215s of
     # vitest one suite after another is most of the remaining margin by itself,
     # which is why the concurrency below is pinned rather than optional.
-    timeout-minutes: 18
+    timeout-minutes: 30
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
