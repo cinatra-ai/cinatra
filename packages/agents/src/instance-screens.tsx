@@ -525,14 +525,26 @@ export function runHasExecutionRecord(params: {
  * execution record its later rows are its REAL ones, drawn by their own steps;
  * appending "not reached yet" placeholders beside them would draw a run steps it
  * has already taken another way, or will never take at all.
+ *
+ * AND THE GATE STEP CARRIES THEM THE SAME WAY (cinatra#3184 item 1, convergence
+ * round). The run's input steps were the only fact these rows rode on, and an
+ * agent whose template asks no visible required input carries none: a run held
+ * at its skills question with no schedule row of its own drew the gate row and
+ * nothing else -- the one-entry rail `screenDrawsPageRail`'s own comment calls
+ * the reading the plan does not allow ("a rail holding the gate row alone shows
+ * nothing for it to be ahead of"), and the departure cinatra#3184 names. The
+ * ninth graded reading of cinatra#3047 read four rows because the run it
+ * measured carried a form; the gate is the same kind of fact and rides the same
+ * span -- for as long as the run has produced no execution record.
  */
 export function railDrawsUpcomingRunSteps(params: {
   inputStepIsOpen: boolean;
   inputStepsInRail: boolean;
+  gateStepInRail: boolean;
   hasExecution: boolean;
 }): boolean {
   if (params.inputStepIsOpen) return true;
-  return params.inputStepsInRail && !params.hasExecution;
+  return (params.inputStepsInRail || params.gateStepInRail) && !params.hasExecution;
 }
 
 /**
@@ -1824,6 +1836,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 drawUpcoming: railDrawsUpcomingRunSteps({
                   inputStepIsOpen,
                   inputStepsInRail,
+                  gateStepInRail: hasRecommendationStep,
                   hasExecution: runHasExecution,
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
