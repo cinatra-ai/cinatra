@@ -352,7 +352,15 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         retired: [...before].filter((id) => !after.has(id)),
       };
     };
-    expect(moved("app.json")).toEqual({ gained: ["sidebar-assistants-entry"], retired: [] });
+    expect(moved("app.json")).toEqual({
+      gained: [
+        "sidebar-assistants-entry",
+        "sidebar-workspace-entry",
+        "workspace-scope-page",
+        "workspace-scope-empty-tab",
+      ],
+      retired: [],
+    });
     expect(moved("app-components.json")).toEqual({
       gained: ["breadcrumb-entity-resolution", "scheduling-step-configured"],
       retired: ["scheduling-trigger-tab"],
@@ -771,13 +779,13 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
       "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
     );
     expect(message).toContain(
-      "b26135882216c0eeb7004bd74ea4017cfd0ea775b13785e7e60e754d87b20fb3",
+      "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
     );
     expect(message).toContain(
       "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e",
     );
     expect(message).toContain(
-      "sha256:b99de5a3c18442333c51bf0a6ee583c6dab55ec4a0646052d5d36ce7aad9090c",
+      "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add",
     );
     expect(message).toContain("drift");
     expect(message).toContain(MOVE_RULE);

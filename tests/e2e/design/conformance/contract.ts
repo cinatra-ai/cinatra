@@ -54,6 +54,18 @@ import {
   type LifecycleSuggestionChipMount,
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-card-fixture-data";
 import {
+  LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
+  LIFECYCLE_REVIEW_TARGET_HEADER_NOW,
+  type LifecycleReviewTargetHeaderFixture,
+} from "../../../../src/app/design-fixtures/conformance/lifecycle-review-target-header-fixture-data";
+// The PRODUCT's own readings, read here so the driver's expectation is derived
+// the way the shipped composer derives it and never restated by the test.
+import {
+  reviewRevisionMarker,
+  reviewTargetRowFacts,
+  reviewTypeLabel,
+} from "../../../../src/lib/artifacts/review-surface-model";
+import {
   CONNECTOR_CONFIG_TAB,
   CONNECTOR_CONFIG_TAB_ERROR_LABEL,
   CONNECTOR_CONFIG_TAB_LOADING_LABEL,
@@ -350,6 +362,27 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
 // The manifest's actions elsewhere in this drawing that no shipped control
 // carries are NOT driven here, and are not approximated through a different
 // control either. They are on this wave's surface-readiness list.
+//
+// THE ARTIFACT-KIND REVIEW CARDS ARE NOT ROWS OF THIS FAMILY YET (cinatra#3157,
+// epic #3155 W1). The in-conversation card for an individual artifact kind —
+// the email body, the mixed kind, the picture, the slide deck, the dashboard,
+// the portlet, the CMS page and the Drupal pointer — declares one floor action
+// and the three generic card states apiece, and a field binding each except the
+// slide deck, which declares none. None of them is addressable from a
+// props-only mount on the default branch today:
+// the card draws no DOM before an authorised server resolve, each per-kind
+// reading of the target is drawn by a SERVER component inside the card's own
+// credentialed island frame, and no first-party control carries the
+// continue-review or open-in-cms action the manifest declares. Adding a fixture
+// row for one of them is therefore not a fixture-data edit yet — it waits on
+// that display and that floor landing. See README.md, "Committed but not yet
+// pinned".
+//
+// Each of those aspects is recorded, with its reason and the pull request that
+// lands it where there is one, in surface-readiness.json — and re-proved
+// against the tree on every root run by
+// scripts/design/__tests__/surface-readiness.test.mjs, so an entry that has
+// become false is a RED here rather than a stale note.
 
 /** The chip row of one mounted fixture row. */
 function chipRow(root: Locator): Locator {
@@ -438,6 +471,183 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
         },
       },
     },
+    states: {},
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// The ARTIFACT-KIND card family (cinatra#3157, epic #3155 W1)
+// ---------------------------------------------------------------------------
+//
+// Every artifact kind the drawing draws in a conversation opens the same way.
+//
+// The rule is worded on the review screen's drawing, §IV (the review target —
+// immutable header & representation): "Every target opens with a header that
+// names what is under review and fixes it in place: the artifact's display title
+// over a mono meta line carrying its type, the pinned representation revision
+// (shown as a mono revision id with a pinned marker), and the read-only row facts
+// the host authorized — owner level / visibility, MIME, and updated time. The
+// header is inert: it exposes no edit control and no revision picker, because the
+// target is versioned and frozen."
+//
+// THIS MANIFEST'S OWN DRAWING draws that same header over every kind, and says in
+// so many words that it is the one thing the kinds share. §XIII.1 draws the
+// states once over the email body and rules: "Nothing in either drawing is
+// particular to email except the panel in the middle: put any other review
+// target's display, §XIII.2 to §XIII.7, in its place and the turn, the floor, the
+// marker and the words around them are unchanged." Each kind section after it
+// "draws its rendering alone".
+//
+// So the kinds differ BELOW that line and are identical on it, and they are one
+// family over one fixture list — the same shape `cardDriver` and
+// `suggestionChipDriver` already give their families. A later wave adds rows.
+//
+// WHAT THIS FAMILY ASSERTS, AND WHAT IT DELIBERATELY DOES NOT.
+//
+//   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
+//     (attribute AND visible text, both derived by the product's own
+//     `reviewTypeLabel` from the row's type id), the type id on the meta line,
+//     the pinned revision (addressed by the exact id, read as the elided marker
+//     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
+//     each authorized row fact as the product's own `reviewTargetRowFacts`
+//     composes it from the stored row, and the inertness — no control, no link,
+//     no revision picker anywhere inside it.
+//
+//     THE FIXTURE SEEDS THE ARTIFACT, NOT THE READING. A row carries only what a
+//     stored artifact row carries; both readings the header draws over it are
+//     composed by the two product functions the server-side composer calls. That
+//     is what keeps this a driver and not an echo test: a fixture that named a
+//     finished fact could assert a line the shipped composer cannot produce, and
+//     the assertion would pass on the component printing its own props back.
+//
+//   • It does NOT assert the plural ORDERING of several pinned targets. Every
+//     surface of this wave pins one target: the mixed-kind gate draws the same
+//     artifact at the same revision under two content forms, and target
+//     normalization (src/lib/artifacts/artifact-review-target.ts) treats that as
+//     one target, so seeding two would seed a gate the product does not compose.
+//     Reported with it: `ReviewTargetHeaders` keys its list on
+//     `${revisionId}:${objectType}` alone (packages/agents/src/review-gate-card.tsx),
+//     which omits the artifact id that is part of a target's identity, so two
+//     distinct artifacts sharing a type and a revision string would collide.
+//     That is a product change, not a drivers-wave change; it is on the wave's
+//     readiness list with the ordering reading that would exercise it.
+//
+//   • TWO DRAWN READINGS IT REPORTS RATHER THAN ASSERTS, because the shipped
+//     composer has no reading for them: the scope pair's CASING (the drawing
+//     prints "Team · Private"; `reviewTargetRowFacts` returns the row's stored
+//     values verbatim, in lower case), and the CMS page's PLATFORM and page
+//     ADDRESS (its drawn identity line carries both; the composer composes owner
+//     level, visibility, MIME and updated time for every kind alike). Asserting
+//     either against a hand-written fixture fact would report conformance the
+//     product does not have.
+//
+//   • It declares NO field driver. Every one of these surfaces binds its field
+//     to a `representation.*` source — the email body, the content form, the
+//     capture URL, the pinned configuration, the portlet entry — and the
+//     representation is server-rendered inside the island document, which ships
+//     no per-kind rendering on the default branch. An unshipped binding is on
+//     this wave's readiness list, not approximated through the header.
+//
+//   • It declares NO action driver. Six of these surfaces declare
+//     `continue-review -> resolved` as their only action and no shipped control
+//     carries it (open pull request #3100 is the one that lands it, and it lands
+//     the name `regenerate-review -> changes-requested`, which has to be
+//     reconciled with the manifest before either can be driven at all). The CMS
+//     page declares `open-in-cms -> cms-opened` instead, which the drawing puts
+//     UNDER the representation rather than in the header, and which no shipped
+//     control carries anywhere.
+//
+//   • It declares NO state driver. `loading` and `error` are the island's two
+//     non-loaded readings, drawn by `ReviewTargetIsland`, which is not exported
+//     and frames a real document; driving them would need a harness mount this
+//     wave does not build and a src this wave will not invent.
+//
+// THE ONE SURFACE OF THIS WAVE THE FAMILY DOES NOT TAKE.
+// `drupal-pointer-never-a-review-target` is drawn as a page and never as a
+// review: "It is not pinnable and it is never a review target: no gate opens on
+// it and no floor is ever drawn beneath it." Its drawn identity line carries
+// `not pinnable` exactly where every other kind's carries `revision … · pinned`,
+// and the shipped header has no such reading — it draws the pinned marker
+// unconditionally. Putting the pointer through this family would therefore assert
+// a pinned header the drawing says the pointer never has, so it stays unmapped
+// this wave rather than mapped falsely, and no allowlist entry is added for it
+// either (the ratchet is shrink-only, and a whole-surface exemption is exactly
+// what this epic refuses).
+//
+// Under the committed-but-unpinned rule (cinatra#3156) an aspect no wave has
+// landed simply has no test, and the pin is exactly what this epic withholds
+// until every one of them does.
+
+/** The one header the shipped card draws per pinned target. */
+function targetHeaders(root: Locator): Locator {
+  return root.locator('[data-conformance-id="review-target-header"]');
+}
+
+export function reviewTargetHeaderDriver(
+  fixture: LifecycleReviewTargetHeaderFixture,
+): SurfaceDriver {
+  const rootSel = `[data-surface-id="${fixture.surfaceId}"]`;
+
+  return {
+    path: HARNESS_PATH,
+    root: (page) => page.locator(rootSel),
+    present: async (_page, root) => {
+      const headers = targetHeaders(root);
+      // ONE HEADER PER PINNED TARGET, in gate order. Every row of this wave
+      // pins one target; the plural ordering reading is on the readiness list
+      // (see the fixture type's own note) rather than seeded with a target the
+      // drawing does not draw.
+      await expect(headers).toHaveCount(fixture.headers.length);
+      const now = new Date(LIFECYCLE_REVIEW_TARGET_HEADER_NOW);
+
+      for (const [index, seed] of fixture.headers.entries()) {
+        const header = headers.nth(index);
+        // "the artifact's display title …"
+        await expect(header).toContainText(seed.title);
+        // "… over a mono meta line carrying its type …". The TAG carries the
+        // label, the line carries the id. The expected label is derived by the
+        // PRODUCT's own `reviewTypeLabel` from the row's type id — the call the
+        // server-side composer makes — so a harness that ever worded a label of
+        // its own is red here, and the tag is asserted on BOTH readings: the
+        // attribute value and the text a reader actually sees.
+        const tag = header.locator("[data-review-target-type]");
+        await expect(tag).toHaveCount(1);
+        await expect(tag).toHaveAttribute(
+          "data-review-target-type",
+          reviewTypeLabel(seed.objectType),
+        );
+        await expect(tag).toHaveText(reviewTypeLabel(seed.objectType));
+        await expect(header).toContainText(seed.objectType);
+        // "… the pinned representation revision (shown as a mono revision id
+        // with a pinned marker) …". Addressed by the EXACT revision the gate
+        // pinned, so a card drawing a different revision cannot resolve at all,
+        // while the VISIBLE reading is the elided one the product draws — the
+        // shipped truncation rule (`reviewRevisionMarker`), not the full id,
+        // which for an id past the bound is not what the header prints at all.
+        const revision = header.locator(
+          `[data-review-target-revision="${seed.revisionId}"]`,
+        );
+        await expect(revision).toHaveCount(1);
+        await expect(revision).toHaveText(
+          `revision ${reviewRevisionMarker(seed.revisionId).short}`,
+        );
+        await expect(header).toContainText("· pinned");
+        // "… and the read-only row facts the host authorized". The expected
+        // line is composed from the row by the PRODUCT's own
+        // `reviewTargetRowFacts` against the harness's fixed instant, so this
+        // asserts the shipped chain composer → component and not a fact the
+        // fixture handed the component to print back.
+        for (const fact of reviewTargetRowFacts(seed.row, now)) {
+          await expect(header).toContainText(fact);
+        }
+        // "The header is inert: it exposes no edit control and no revision
+        // picker, because the target is versioned and frozen."
+        await expect(header.locator("button, a, input, select, textarea")).toHaveCount(0);
+      }
+    },
+    fields: {},
+    actions: {},
     states: {},
   };
 }
@@ -1575,11 +1785,12 @@ const BREADCRUMB_ENTITY_RESOLUTION_DRIVER: SurfaceDriver = {
 //
 // Two things follow, and both are deliberate:
 //
-//   - The app pin is NOT advanced here. A pin advance is a claim that this
-//     branch's code satisfies the drawing at the new revision, and for these
-//     three surfaces it does not. The advance, its exact values and its
-//     preconditions are recorded (and checked) in
-//     scripts/design/__tests__/conformance-pin-advance-record.test.mjs.
+//   - The app pin IS advanced to the published manifest, so all three surfaces
+//     are declared and generate their batteries. A pin advance is a claim that
+//     this branch answers for the drawing at the new revision, and it does:
+//     these three answer with a named SKIP, never with a pass. The guard, the
+//     allowlist and the testid-contract holdbacks that keep that honest are
+//     checked in scripts/design/__tests__/awaiting-mount-guard.test.mjs.
 //   - The drivers below are nonetheless written in full, against the ratified
 //     manifest's own field sources, action outcomes and state variants. They are
 //     what the advance is waiting for. Nothing here stands in for the surface: a
@@ -3323,6 +3534,15 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
     LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((fixture) => [
       SUGGESTION_CHIP_MANIFEST_SURFACE[fixture.mount],
       suggestionChipDriver(fixture),
+    ]),
+  ),
+  // The in-conversation artifact-kind cards (cinatra#3157, epic #3155 W1). One
+  // family factory over one fixture list — the surfaces differ below §IV's
+  // header and are identical on it, so the later waves add rows, not drivers.
+  ...Object.fromEntries(
+    LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES.map((fixture) => [
+      fixture.surfaceId,
+      reviewTargetHeaderDriver(fixture),
     ]),
   ),
 };
