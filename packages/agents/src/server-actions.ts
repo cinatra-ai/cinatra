@@ -235,6 +235,17 @@ export type RecommendedSkillForChip = {
    * `skillId`, which is what the chip's `data-skill-id` carries.
    */
   name: string;
+  /**
+   * THE VENDOR THE PILL PRINTS BESIDE THE NAME (cinatra#3047, review point 3) —
+   * "<Skill name> by <vendor>". The owning package's byline, resolved
+   * server-side by the platform's ONE vendor resolver over the manifest
+   * declarations the skill scan already carries, exactly as the Installed page,
+   * the marketplace card and the assignable-skills picker resolve it. `null`
+   * where the package declares no vendor identity and no npm author: the pill
+   * then prints the name alone, and the npm scope segment is never pressed into
+   * service as a name.
+   */
+  vendorName: string | null;
   score: number;
   rank: number;
   recommended: boolean;
@@ -266,6 +277,7 @@ export async function getRunRecommendedSkillsAction(input: {
       skillRevisionId: r.skillRevisionId,
       // The RESOLVED display label, not the scored identity name — see the type.
       name: r.displayName,
+      vendorName: r.vendorName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,
