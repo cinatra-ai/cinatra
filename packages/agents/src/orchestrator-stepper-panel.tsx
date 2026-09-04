@@ -119,7 +119,12 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
-import { RailExtraEntry } from "./run-step-rail-extra-entry";
+import {
+  RailExtraEntry,
+  RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_ROW_CLASS,
+  RUN_PAGE_RAIL_SEP_CLASS,
+} from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -234,6 +239,40 @@ export type OrchestratorStepperPanelProps = {
    * kept current by the same shared reader.
    */
   initialReviewGate?: RunReviewSlot | null;
+  /**
+   * DOES THE PAGE'S RAIL ALREADY CARRY THE RUN'S INPUT STEP? (cinatra#3068)
+   *
+   * The step-less branch below returns a section titled "Agentic Run Progress"
+   * with a status badge and no step list. Over the run's FIRST moment — the
+   * agent's own input form, before anything has run — that is a progress panel
+   * over a run with no progress, and it is the one moment of the run that did
+   * not read as a step. When the screen has given that moment a rail entry of
+   * its own, the panel hands the stage card over BARE, exactly as `embedMode`
+   * does: the card is the step's screen in the detail column, under the rail
+   * that names it.
+   *
+   * Absent ⇒ the section, its title and its badge are drawn exactly as before,
+   * which keeps every other host — the chat thread's run card among them —
+   * byte-identical.
+   */
+  inputStepInRail?: boolean;
+  /**
+   * THE RAIL BESIDE THIS COLUMN ALREADY DRAWS THE FRAME (cinatra#3047 fix leg
+   * 8).
+   *
+   * The ratified drawing: "One page per gate — the step's own card, and
+   * nothing else ... two cards are never stacked in one detail." When the run
+   * page draws its two-column frame, the step's card IS the page, so this
+   * panel's own `soft-panel` section would be a second card stacked around it.
+   *
+   * `inputStepInRail` retired that section for ONE moment — the moment the
+   * rail carries the run's own input form. Every other step-less gate inside
+   * the same frame kept it, which is the doubled wrapper the eighth proof
+   * round photographed on a HITL gate. The fact this branch needs is not which
+   * moment the run is at but whether the frame is already drawn, which is what
+   * this states — the same handover `embedMode` makes, for the same reason.
+   */
+  railDrawsTheFrame?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -548,9 +587,12 @@ function HitlApprovalCard({
     );
   };
 
-  // The AI-assist prompt lives at the BOTTOM
-  // of the page via createPortal into <main>, NOT inside renderers. portalTarget
-  // is set in an effect because document.querySelector is browser-only.
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses.
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // Stable suggestion payload threaded into the renderer so it can sync local
   // state via useEffect([aiSuggestions]). Only changes when the user submits
@@ -581,10 +623,6 @@ function HitlApprovalCard({
   // take the fill away before its replacement exists.
   const runWindow = useRunWindowConversation({ runId, surface: "step-by-step" });
   const convIdRef = useRef(0);
-
-  useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
-  }, []);
 
   // Parent-side apply handler merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
@@ -1008,10 +1046,12 @@ function HitlApprovalCard({
     <Card data-hitl-output={isOutputHitl ? "true" : undefined}>
       <CardContent className="flex flex-col gap-4 p-6">{cardBody}</CardContent>
     </Card>
-    {/* Sticky bottom-of-page AI-assist
-        conversation panel. Delegates to the shared HitlConversationPanel.
-        resetSignal is intentionally omitted — orchestrator-stepper-panel never
-        had a renderer-change reset (no equivalent of agentic-run-panel.tsx:329). */}
+    {/* The AI-assist conversation panel, drawn into its own mount below the
+        step's work rather than across the foot of the frame. Delegates to the
+        shared HitlConversationPanel. resetSignal is intentionally omitted —
+        orchestrator-stepper-panel never had a renderer-change reset (no
+        equivalent of agentic-run-panel.tsx:329). */}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
     <HitlConversationPanel
       portalTarget={portalTarget}
       // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
@@ -1033,6 +1073,7 @@ function HitlApprovalCard({
       // the setup-loop server omits userResponse.
       enableAttachments={!isSetupGateTaskId(interruptContext.reviewTaskId)}
     />
+    </div>
     </>
   );
 }
@@ -1259,7 +1300,7 @@ function StepperColumn({
                     data-rail-replay={replayAffordance}
                   >
                     <StepperTrigger
-                      className="gap-2 px-0 py-0.5"
+                      className={RUN_PAGE_RAIL_ROW_CLASS}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={
@@ -1272,7 +1313,7 @@ function StepperColumn({
                               : undefined
                       }
                     >
-                      <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
+                      <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                         {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
                       </StepperIndicator>
                       <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
@@ -1298,7 +1339,7 @@ function StepperColumn({
                       </Tooltip>
                     )}
                   </div>
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             })}
@@ -1324,7 +1365,7 @@ function StepperColumn({
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
                   />
-                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
               );
             })}
@@ -1526,6 +1567,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     reviewHrefBase = "",
     initialReviewGate,
     canRespondInWindow,
+    inputStepInRail = false,
+    railDrawsTheFrame = false,
   } = props;
 
   const router = useRouter();
@@ -2143,6 +2186,14 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   }
 
   if (stepperSteps.length === 0) {
+    // THE RUN'S FIRST STEP IS A STEP (cinatra#3068). The page's rail names this
+    // moment now, so the section that used to stand in for a step list retires
+    // and the stage card IS the step's screen — the same handover `embedMode`
+    // makes above, for the same reason: the chrome belongs to whoever draws the
+    // frame, and here that is the rail beside this column.
+    if (inputStepInRail || railDrawsTheFrame) {
+      return <>{stageCard}</>;
+    }
     return (
       <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
         <div className="flex items-center justify-between">

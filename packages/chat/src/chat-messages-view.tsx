@@ -640,13 +640,13 @@ function AgentRunTurnSlot({
           would put one card inside another host's subtree and make "which host
           drew it" unanswerable.
 
-          AND THE ONLY ONE IN THE TURN. The panel mounts this same card on its
-          own `run_card` host, so a sibling that also drew it would show the
-          person two cards for one run. The panel reads the ambient host and
-          withholds its copy inside ANY conversation host
-          (`runCardOwnsLifecycleCopy`) — the conversation's card owns this run's
-          recommendation here, in EVERY state, and the run page's own panel keeps
-          its copy because no conversation host is in scope there.
+          AND THE ONLY ONE IN THE TURN. The inline run panel beside this card
+          used to mount the same card on its own `run_card` host, so a sibling
+          that also drew it showed the person two cards for one run; it withheld
+          its copy inside a conversation host and kept one on the run page. That
+          copy is gone entirely (cinatra#3047) — the run page draws the row in one
+          place, its own rail step — so the panel mounts none on any host and this
+          container is the conversation's single mount, in EVERY state.
 
           BOTH ARMS OF THE ONE COLUMN (cinatra#2790, epic #2784 S9f). This
           container is shared by `/chat` and by the site widget, and the mount is

@@ -47,6 +47,16 @@ const CALLABLE_BEFORE_2817: readonly string[] = [
   "agent_version_diff",
   "agent_version_get",
   "agent_version_list",
+  // cinatra#2368 acceptance item 3 — the assistant add flow for appointment
+  // schedules. Unlike the #2988 entry this one is reach the chat did NOT
+  // have before: the core registered the bridge but declared no chat class
+  // for it, so the evaluator refused it as "undeclared" and the model was
+  // never offered the tool at all. The live acceptance round found the
+  // assistant contradicting itself across three consecutive turns about
+  // whether the tool existed — because it did not exist ON ITS SURFACE.
+  // Granting that reach IS the acceptance criterion, so the name is added
+  // here deliberately, not as a side effect of editing a declaration table.
+  "appointment_schedule_add",
   "artifact_assertion_get",
   "artifact_assertion_list",
   "artifact_authoring_chain_get",
@@ -146,10 +156,13 @@ describe("the perimeter swap did not change what is callable", () => {
 
   // 83 names when this branch was cut, 84 after main's cinatra#2988 added the
   // lent action to its own allowlist — see the entry itself for why it counts
-  // as reach that already existed rather than reach this swap granted.
-  it("the frozen list is the real one (84 names), not an empty set passing vacuously", () => {
-    expect(CALLABLE_BEFORE_2817).toHaveLength(84);
-    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(84);
+  // as reach that already existed rather than reach this swap granted — and 85
+  // after cinatra#2368 granted the appointment-schedule add flow the chat reach
+  // its own acceptance criterion requires. See that entry for why it is a
+  // genuine widening rather than a restatement of reach that already existed.
+  it("the frozen list is the real one (85 names), not an empty set passing vacuously", () => {
+    expect(CALLABLE_BEFORE_2817).toHaveLength(85);
+    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(85);
     expect([...CALLABLE_BEFORE_2817]).toEqual([...CALLABLE_BEFORE_2817].sort());
   });
 });
