@@ -29,6 +29,7 @@ import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
+import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -314,6 +315,21 @@ export default function ConformanceHarnessPage() {
                 on, and a step still ahead. The harness supplies the entries; the
                 shipped component draws every row. */}
             <RunStepRailConformanceFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Review gate states (surfaces: review-gate-loading, review-gate-blocked)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3163, epic #3155: the REAL ReviewGateLoading and
+                ReviewGateBlocked. Both are props-only, so nothing is intercepted;
+                the blocked reason comes from the closed set the surface model
+                owns and the panel writes its own words from it. */}
+            <ReviewGateStateConformanceFixtures />
           </CardContent>
         </Card>
       </PageContent>

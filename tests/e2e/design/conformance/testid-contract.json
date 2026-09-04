@@ -565,6 +565,38 @@
           "literals": ["data-conformance-id=\"notifications-degraded\""]
         }
       ]
+    },
+    "review-gate-loading": {
+      "manifest": "app-artifact-review",
+      "selector": "harness [data-surface-id=\"review-gate-loading\"][data-variant] (populated + the declared loading reading). Real surface: the [data-conformance-id=\"review-gate-loading\"] skeleton the gate draws in each target slot while the host prepares it — a busy region that reports nothing.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": ["data-conformance-id=\"review-gate-loading\"", "aria-busy=\"true\""]
+        },
+        {
+          "file": "src/app/design-fixtures/conformance/review-gate-state-fixtures.tsx",
+          "literals": ["<ReviewGateLoading />", "data-surface-id={fixture.surface}"]
+        }
+      ]
+    },
+    "review-gate-blocked": {
+      "manifest": "app-artifact-review",
+      "selector": "harness [data-surface-id=\"review-gate-blocked\"][data-variant] (populated + the declared error reading). Real surface: the [data-conformance-id=\"review-gate-blocked\"] panel, carrying its reason from the drawing's closed set on data-blocked-reason and the refresh back to the live gate on [data-action=\"refresh-gate -> live-gate\"].",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        },
+        {
+          "file": "src/app/design-fixtures/conformance/review-gate-state-fixtures.tsx",
+          "literals": ["<ReviewGateBlocked reason={REVIEW_GATE_BLOCKED_FIXTURE_REASON}"]
+        }
+      ]
     }
   },
   "shared": {
