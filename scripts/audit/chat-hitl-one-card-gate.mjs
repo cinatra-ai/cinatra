@@ -372,10 +372,11 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         proof: {
           file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
           // The row used to cite "covers every branch — no shape is left without
-          // an answer", which is the totality proof of the OTHER picker
-          // (`screenHostsRecommendationCard`). It named no reading of
-          // `runDetailPanelKind` at all, and the old "asserts anything" check
-          // could not see that. The cited test now proves THIS picker.
+          // an answer", which was the totality proof of a SECOND picker that has
+          // since been deleted with the second owner it chose between
+          // (cinatra#3047). It named no reading of `runDetailPanelKind` at all,
+          // and the old "asserts anything" check could not see that. The cited
+          // test proves THIS picker.
           testName:
             "answers exactly one panel for every run shape — the two run_card adapters are never both chosen",
         },
@@ -487,18 +488,11 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       ],
       run_card: [
         {
-          module: "packages/agents/src/agentic-run-panel.tsx",
-          adapter: "mount",
-          region: "run_panel",
-          surface: "production",
-          why: "the agentic panel branch of the run card",
-        },
-        {
           module: "packages/agents/src/instance-screens.tsx",
           adapter: "mount",
           region: "step_rail",
           surface: "production",
-          why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state. It is a STEP in the rail since cinatra#2790 (S9f) — plan (A) §6.2 puts the row \"at the trigger position, the top entry on the step rail, ahead of the work steps it would authorize\", and the ratified drawing opens a gate step's surface \"right here in the run detail, under the same rail\". ONE mount serves the step's surface and the run detail's settled reading, which are mutually exclusive slots of the same frame (`RunSurfaceRail`), so the region names where the card is reached from rather than a second place it is drawn",
+          why: "the run page's ONE owner of this row (cinatra#3047): the run-progress panel used to mount a second copy on the agentic branch, so the same row was drawn beside the rail at the schedule moment and inside that panel at the HITL, working and review moments; that mount is deleted and this screen draws it on every branch. It has to be a host at all because the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that. It is a STEP in the rail since cinatra#2790 (S9f) — plan (A) §6.2 puts the row \"at the trigger position, the top entry on the step rail, ahead of the work steps it would authorize\", and the ratified drawing opens a gate step's surface \"right here in the run detail, under the same rail\". ONE mount serves the step's surface and the run detail's settled reading, which are mutually exclusive slots of the same frame (`RunSurfaceRail`), so the region names where the card is reached from rather than a second place it is drawn",
         },
         {
           module: "packages/agents/src/orchestrator-stepper-panel.tsx",
@@ -508,34 +502,41 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
         },
       ],
-      // THE REVIEW-PAGE APPEARANCE (cinatra#2790, epic #2784 S9f). Its position
-      // is the plan's, not a layout choice: §6.4 item 6 puts the same row on the
-      // review page, ahead of the gate it would authorize, "where it is mostly
-      // seen in its decided form". The page declares the host on the gate
-      // region's root and keys the card by the run and nothing else.
+      // THE REVIEW-PAGE APPEARANCE (cinatra#2790, epic #2784 S9f) — AND IT IS
+      // THE PAGE'S SKILLS STEP NOW, NOT ITS GATE REGION (cinatra#3047).
+      //
+      // The position used to be read from §6.4 item 6 as "the same row on the
+      // review page, ahead of the gate it would authorize" and was composed as a
+      // row ABOVE the review card. The ratified drawing at the capture
+      // contract's pin rules one page per gate, and the change request says the
+      // same in its own words — "do not show the skills on top of the review
+      // card" — so the row is the FIRST ENTRY of this page's rail, opening in
+      // the run detail in place of the review card rather than over it. The
+      // module that composes those two columns is the adapter; the region is the
+      // rail's step, the same `step_rail` the run page's own entry declares.
+      //
+      // THE HOST DID NOT MOVE. The mount still declares `page_gate_region`, so
+      // the anchor contract's `hostParity` row for this kind is unchanged and
+      // this gate still counts four hosts.
       page_gate_region: [
         {
           module:
-            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
           adapter: "mount",
-          region: "gate_region",
+          region: "step_rail",
           surface: "production",
-          why: "the review page mounts the same chip row inside its gate region, above the review card and under that region's own `page_gate_region` host declaration; the page composes no recommendation drawing of its own and passes only the run id, so the card decides whether it draws and in which state",
+          why: "the review page's Skills step mounts the same chip row as its own surface, under that page's `page_gate_region` host declaration; the module composes no recommendation drawing of its own and passes only the run id, so the card decides whether it draws and in which state",
         },
       ],
     },
-    exclusions: {
-      run_card: {
-        selector: "screenHostsRecommendationCard",
-        module: "packages/agents/src/instance-screens.tsx",
-        proof: {
-          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
-          testName: "stands down on the branch whose panel already declares the host",
-        },
-      },
-    },
+    // NO EXCLUSION, because there is nothing to exclude (cinatra#3047):
+    // `run_card` carries ONE production adapter for this kind. A picker is what
+    // two adapters on one host owe; a single owner owes a mount that is not
+    // gated, which `instance-screens-recommendation-host.test.ts` reads off the
+    // source and `run-page-recommendation-one-place.test.tsx` counts in real DOM
+    // on every branch of `runDetailPanelKind`.
     hostGap:
-      "NO HOST CARRIES A GAP ANY MORE. All four are mounted and each is counted: the run card and the review page's gate region compose the card directly, and the two conversation hosts are drawn by the one shared column — the chat thread by cinatra#2794 (S9b), the site widget by cinatra#2790 (S9f), each in the change that bound its route, identity and authorization reader. The panel's own copy stands down inside either conversation host (`runCardOwnsLifecycleCopy`), which is what keeps one mount per host true where two adapters are in scope.",
+      "NO HOST CARRIES A GAP ANY MORE. All four are mounted and each is counted: the run card and the review page's gate region compose the card directly, and the two conversation hosts are drawn by the one shared column — the chat thread by cinatra#2794 (S9b), the site widget by cinatra#2790 (S9f), each in the change that bound its route, identity and authorization reader. The run panel draws no copy at all any more (cinatra#3047), so the run page's one owner is its own rail step and nothing has to stand down for it.",
     // The row's own root, because the lifecycle-card identity is the open
     // obligation below. When that obligation closes, this becomes
     // `[data-lifecycle-card="recommendation_hold"]` in the same change.
@@ -773,7 +774,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "step_rail",
           surface: "production",
-          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card, holding the recommendation hold card above the review gate card, which is the composition the plan requires",
+          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it draws no schedule card. It holds the review gate card and the run's own parked question and NOTHING else: the recommendation hold card stood there too until cinatra#3047, and it is the surface of this rail's own Skills step now, because no reading is drawn as a row above another card",
         },
       ],
     },
@@ -1226,10 +1227,11 @@ export const RETIRED_PARALLELS = Object.freeze([
       // and a HELD run IS `pending_input`, so the HELD state on the run-detail
       // page was drawn ONLY by the parallel path. cinatra#2710 (`7123d2bf1`)
       // deleted that path: the screen now mounts `RecommendationHoldCard`
-      // inside its own `<LifecycleCardSurfaceProvider host="run_card">`,
-      // branch-selected by `runDetailPanelKind` / `screenHostsRecommendationCard`
-      // so exactly one renderer draws on every branch. The allowlist entry was
-      // deleted with it, which is what makes this gate's pass mean the criterion.
+      // inside its own `<LifecycleCardSurfaceProvider host="run_card">`, on
+      // every branch and gated by nothing (cinatra#3047 deleted the branch gate
+      // together with the run panel's own copy), so exactly one renderer draws.
+      // The allowlist entry was deleted with the parallel path, which is what
+      // makes this gate's pass mean the criterion.
       "packages/agents/src/run-recommendation-chip-row.tsx",
     ],
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
