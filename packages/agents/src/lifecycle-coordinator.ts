@@ -875,11 +875,88 @@ async function runTheLaunch(
           }`,
         );
       }
+    } else {
+      // THE HEADLESS BRANCH STRANDS TOO (cinatra#3033, convergence review Q1).
+      // It was written here that a headless launch "made no transition of its
+      // own, so it has nothing to undo" — true of the TRANSITION, and beside the
+      // point: reaching this line headless means the run was CREATED `queued`
+      // (`create.kind: "full"` with no park), so a refused enqueue leaves a
+      // durable `queued` row with no job behind it and no error on it, which
+      // nothing later recovers. There is no waiting state to return it to — it
+      // never held one — so the honest landing is terminal, carrying the one
+      // line that says why.
+      await failRunOnCallerDispatchFailure({
+        runId: run.id,
+        authority,
+        error: enqueueErr,
+      });
     }
     throw enqueueErr;
   }
 
   return { carrier: { kind: "run", run }, status: "queued", moment: null };
+}
+
+/**
+ * FAIL A RUN THIS COORDINATOR CREATED `queued` WHEN ITS CALLER'S DISPATCH DIED.
+ *
+ * THE STRAND THIS CLOSES. `launchAgentRun` with `create.kind: "full"` and
+ * `dispatch.kind: "caller_dispatches"` inserts the row ALREADY `queued` and
+ * returns; the caller puts the job on the queue in a LATER statement. Between
+ * those two statements the run is a durable `queued` row with no job behind it,
+ * and the enqueue chokepoint may not compensate it — `enqueueAgentRun` is
+ * explicitly barred from minting an org-write authority (org-write-boundary-gate
+ * R2/R5). So a refused enqueue — a scope change landing after creation, a
+ * connector/LLM preflight refusal, an archived org, a Redis blip — used to leave
+ * exactly the row a person cannot act on and nothing recovers: `queued`,
+ * `started_at` null, `error` null, no trigger, no job, forever.
+ *
+ * WHY `failed` AND NOT A REVERT. The transition-then-enqueue callers revert to
+ * the waiting state the run CAME FROM. A run created `queued` came from nowhere:
+ * `pending_input` is a state it never held, and putting it there would invent a
+ * wait no screen asked for. The honest landing is terminal, carrying the ONE
+ * LINE that says why — the failure floor: a run that can never start never sits
+ * blank.
+ *
+ * BEST-EFFORT AND HONEST ABOUT ITS LIMIT. A run already picked up by a worker
+ * has moved off `queued` and the CAS declines — that run owns itself now. If the
+ * terminal write itself cannot land, the run really is stranded and this says so
+ * in the log rather than returning a success it did not achieve.
+ */
+export async function failRunOnCallerDispatchFailure(input: {
+  runId: string;
+  authority: OrgWriteAuthority | undefined;
+  error: unknown;
+}): Promise<"failed" | "moved_on" | "stranded"> {
+  const reason =
+    input.error instanceof Error ? input.error.message : String(input.error);
+  try {
+    await transitionRunStatus(
+      input.runId,
+      "queued",
+      "failed",
+      {
+        error: `This run could not be started: ${reason}`,
+      },
+      input.authority,
+    );
+    return "failed";
+  } catch (failErr) {
+    if (
+      failErr instanceof RunTransitionError &&
+      failErr.code === "stale_from_status"
+    ) {
+      // Someone else moved it — a worker that picked it up, or a compensation
+      // that already ran. Nothing of ours to land.
+      return "moved_on";
+    }
+    console.error(
+      "[lifecycle-coordinator] a caller dispatch failed and the run could not be failed — it is queued with no job behind it",
+      input.runId,
+      failErr,
+    );
+    return "stranded";
+  }
 }
 
 /**

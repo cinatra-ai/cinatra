@@ -199,8 +199,84 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s1" },
+      // cinatra#3033: PER-LEG job id. A single `resume-setup-<runId>` was
+      // constant for the whole run, and the queue both retains settled jobs and
+      // holds the previous leg ACTIVE across its own unwind — so BullMQ's
+      // HSETNX add silently dropped the second approval of a two-field setup.
+      { jobId: expect.stringMatching(/^resume-setup-run-s1:.+/) },
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3033 fix leg 3 — the setup-resume hand-off deadlock, at the seam
+  // that owns the transition.
+  //
+  // The real runs: an agent whose setup asks for TWO fields (postTitle, then
+  // blogPostUrl) takes the sequential per-field path. Approval one merges its
+  // field, flips `pending_approval -> queued` and enqueues `resume-setup-<runId>`;
+  // that leg re-parks the run on the second field. Approval two merges ITS field
+  // and flips the run back to `queued` again — and then enqueues the SAME job id,
+  // which BullMQ silently drops because the first leg's job is still retained on
+  // the queue (`removeOnComplete: 200`). The run stalls at `queued` with no job,
+  // no trigger row and no error, and every further press is refused by the
+  // `pending_approval` guard naming the run's own current status.
+  //
+  // Clearing a settled entry of the shared id is NOT enough: the leg that
+  // re-parks the run is still ACTIVE for the rest of its own unwind after the
+  // park commits, so a press inside that window meets a LIVE job of the same id
+  // and is dropped exactly as before. The fix is a PER-LEG id, so the
+  // assertions below pin that the two legs enqueue under DIFFERENT ids — the
+  // whole point is that the second one is a real enqueue.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3033: EVERY setup leg gets its OWN job id, so a second approval really enqueues", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-two-field",
+      templateId: "tpl-two-field",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    // Leg one — the first setup field.
+    await approveReviewTaskInternal(
+      "setup-run-two-field",
+      "actor-1",
+      { postTitle: "A title" },
+      "postTitle",
+    );
+
+    // The run re-parks on the second field; the form is pressed again.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-two-field",
+      templateId: "tpl-two-field",
+      status: "pending_approval",
+      inputParams: { postTitle: "A title" },
+    });
+
+    // Leg two — the field the stalled real runs died on.
+    await approveReviewTaskInternal(
+      "setup-run-two-field",
+      "actor-1",
+      { blogPostUrl: "https://example.test/post" },
+      "blogPostUrl",
+    );
+
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const jobIds: string[] = [];
+    for (const call of bgJobs.enqueueBackgroundJob.mock.calls) {
+      const [, payload, options] = call as [
+        string,
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      expect(payload).toEqual({ runId: "run-two-field", resumedFromSetup: true });
+      // The id still names the run it resumes, for anyone reading the queue...
+      expect(String(options.jobId)).toMatch(/^resume-setup-run-two-field:.+/);
+      jobIds.push(String(options.jobId));
+    }
+    // ...but the two legs are DIFFERENT jobs. A shared id is what let BullMQ
+    // drop the second leg — whether the first was retained-and-settled or still
+    // active — and strand the run at `queued` with nothing to run it.
+    expect(jobIds[0]).not.toBe(jobIds[1]);
   });
 
   // Regression: assert the SQL fragment serializes only values[fieldName],
@@ -382,7 +458,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s2" },
+      { jobId: expect.stringMatching(/^resume-setup-run-s2:.+/) },
     );
   });
 
@@ -459,7 +535,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s6" },
+      { jobId: expect.stringMatching(/^resume-setup-run-s6:.+/) },
     );
   });
 
@@ -507,7 +583,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: "resume-setup-run-554a" },
+      { jobId: expect.stringMatching(/^resume-setup-run-554a:.+/) },
     );
   });
 

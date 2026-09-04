@@ -562,6 +562,12 @@ async function _installAgentFromPackageImpl(
       lifecycleConfig: seed.lifecycleConfig,
       // cinatra#2498 — same parity for the binding-presence authority.
       hasArtifactBindings: seed.hasArtifactBindings,
+      // cinatra#3033 — the compiled per-run trigger classification. Persisted
+      // here for the same reason lifecycleConfig is: it is a compiled ROW column
+      // the runtime gate reads, and a registry install that omitted it left the
+      // column NULL on every seeded template.
+      triggerMode: seed.triggerMode,
+      gatedSteps: seed.gatedSteps,
       status: input.status ?? "draft",
     };
 
@@ -620,6 +626,11 @@ async function _installAgentFromPackageImpl(
             // concurrently-completing run of the OLD version see a package_version
             // match paired with the NEW version's (wrong) flag.
             hasArtifactBindings: seed.hasArtifactBindings,
+            // cinatra#3033: re-project the compiled trigger classification on
+            // every (re)install, EXPLICITLY (never omitted) so a version that
+            // changes its runtime cannot leave a stale gate behind.
+            triggerMode: seed.triggerMode,
+            gatedSteps: seed.gatedSteps,
             packageVersion: extracted.packageVersion,
             agentDependencies:
               Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,

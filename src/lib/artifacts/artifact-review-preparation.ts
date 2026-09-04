@@ -290,6 +290,11 @@ export interface PrepareReviewPorts {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
+    // ASYNCHRONOUS BY CONTRACT, exactly like `resolveMount` above (lifecycle-c
+    // W9, cinatra#3033). The content channel's own enabler asks for "an
+    // ASYNCHRONOUS PROPS BUILDER THAT READS THE PINNED REVISION ON THE SERVER",
+    // so a binder that wires the channel has to read bytes here. The union keeps
+    // every synchronous binder — the pure fixtures included — valid as written.
   }): Promise<ArtifactRendererProps> | ArtifactRendererProps;
 }
 

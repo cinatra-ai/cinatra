@@ -33,6 +33,9 @@ import {
   type LlmCapability,
   type OasCinatraLlm,
 } from "@cinatra-ai/agents";
+// The repository-owned, provider-neutral structured-JSON extractor. Used by
+// the answer shaping at the foot of this file; already in this route's graph.
+import { parseStructuredJson } from "@cinatra-ai/llm/structured-json";
 
 // Capability matrix moved to the declared single source of truth
 // (packages/agents/src/llm-provider-policy.ts). `canProviderSatisfyCapability`
@@ -354,4 +357,130 @@ export async function resolveCinatraLlmDispatch(
       softFellBack: false,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// The answer side of the same dispatch (cinatra#3033, fix leg 2).
+// ---------------------------------------------------------------------------
+// A bridge ApiNode that DECLARES outputs is sent an `output_schema` derived
+// from those declarations, and the runtime maps this route's answer back onto
+// them by key. The shaping below is what decides whether those keys survive.
+//
+// It used to be a bare `JSON.parse`: an answer that carried the declared
+// object inside a fenced block, or behind a one-line preface, parsed to
+// nothing and came back as `{ output: <the whole text> }`. Every declared
+// output then resolved to its EndNode default, the call still answered 200,
+// and the run died one frame later at materialization naming the wrong thing
+// ("titleFrom output ... did not resolve to a non-empty string") instead of
+// the call that actually went wrong.
+//
+// So: the strict parse still runs first for everyone and its result still
+// wins, and only when it finds nothing AND a shape was DECLARED does the
+// repository's own provider-neutral extractor get a turn — and only when what
+// it recovers is a plain object actually carrying a declared key. Without a
+// declaration there is no key set to recover and a greedy brace slice would
+// invent an object out of prose, so that path is untouched.
+// The declared outputs an answer does not carry are named rather than
+// swallowed, so the failure can be reported where it happened.
+
+export type BridgeAnswerShape = {
+  /** The JSON body the route answers with. */
+  body: unknown;
+  /**
+   * Declared outputs the shaped answer does not carry a usable value for.
+   * Always empty when the caller declared no `output_schema` — there is
+   * nothing to be missing from.
+   */
+  missingDeclaredOutputs: readonly string[];
+};
+
+/** The declared output names, or `[]` when the caller declared no shape. */
+function declaredOutputNames(outputSchema: unknown): string[] {
+  if (!outputSchema || typeof outputSchema !== "object") return [];
+  const properties = (outputSchema as { properties?: unknown }).properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return [];
+  }
+  return Object.keys(properties as Record<string, unknown>);
+}
+
+/** A declared output "came back" only when it carries a usable value. */
+function carriesValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+
+/**
+ * Shape the provider's answer text into the bridge's response body.
+ *
+ * `outputSchema` is the schema the CALLER sent on the request — its presence
+ * is the whole signal: it says the answer is expected in a declared shape, and
+ * names the keys the runtime will read back.
+ */
+export function shapeBridgeAnswer(input: {
+  text: string;
+  outputSchema?: unknown;
+  skillSelection?: unknown;
+}): BridgeAnswerShape {
+  const declared = declaredOutputNames(input.outputSchema);
+  const { skillSelection } = input;
+
+  // The strict parse runs FIRST for every caller, declared shape or not, so
+  // whatever a bare `JSON.parse` made of this answer is still exactly what the
+  // caller gets back — a literal `null`, a scalar and an array included.
+  // Tolerance is a FALLBACK, never an override: making the tolerant extractor
+  // the sole parser on the declared path would have re-shaped answers that
+  // never needed recovering (`null` is the extractor's own failure sentinel,
+  // and a fenced array used to come back as `{ output: <the text> }`).
+  let parsed: unknown;
+  let parsedOk = false;
+  try {
+    parsed = JSON.parse(input.text);
+    parsedOk = true;
+  } catch {
+    parsedOk = false;
+  }
+
+  if (!parsedOk && declared.length > 0) {
+    // A shape WAS asked for and the strict parse found none: recover the
+    // declared object out of a fenced or prefaced answer rather than dropping
+    // it. The recovery is accepted only when it produced a plain object that
+    // actually carries at least one DECLARED key — the extractor's
+    // outermost-brace candidate would otherwise invent an object out of prose
+    // that merely happens to contain braces.
+    const recovered = parseStructuredJson<unknown>(input.text);
+    if (
+      recovered !== null &&
+      typeof recovered === "object" &&
+      !Array.isArray(recovered) &&
+      declared.some((name) => name in (recovered as Record<string, unknown>))
+    ) {
+      parsed = recovered;
+      parsedOk = true;
+    }
+  }
+
+  const isObject =
+    parsedOk && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+
+  let body: unknown;
+  if (!parsedOk) {
+    body = skillSelection ? { output: input.text, skillSelection } : { output: input.text };
+  } else if (isObject) {
+    body = skillSelection
+      ? { ...(parsed as Record<string, unknown>), skillSelection }
+      : parsed;
+  } else {
+    body = skillSelection ? { output: parsed, skillSelection } : parsed;
+  }
+
+  const missingDeclaredOutputs =
+    declared.length === 0
+      ? []
+      : declared.filter((name) =>
+          isObject ? !carriesValue((parsed as Record<string, unknown>)[name]) : true,
+        );
+
+  return { body, missingDeclaredOutputs };
 }

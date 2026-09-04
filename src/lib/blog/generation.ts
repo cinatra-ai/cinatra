@@ -215,6 +215,11 @@ export async function runBlogPostImageRegenerationJob(
       imageBase64: image.imageBase64,
       imageMimeType: image.imageMimeType,
       title: post.title,
+      // The picture type declares the post it belongs to as a REQUIRED field.
+      // The post's own artifact is the reference when it exists; a draft whose
+      // body has not been materialized yet is named by its durable draft id, so
+      // a picture is never filed without naming its post.
+      post: post.postArtifactId ?? post.id,
     });
 
     await updateBlogPostImageGenerationState(project.id, {

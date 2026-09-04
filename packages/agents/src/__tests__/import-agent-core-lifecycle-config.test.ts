@@ -265,6 +265,28 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
 // `org_id NULL` — still UNCLAIMED — and the next organization's import of the
 // same package name takes it. Both branches must stamp it.
 // ---------------------------------------------------------------------------
+describe("cinatra#3033 — the boot-seed import road persists the compiled trigger classification", () => {
+  // THE ROAD THIS PINS. `importAgentTemplateCore` is what the required-extension
+  // materializer rides at boot on an un-set-up instance — the road that seeds
+  // every blog agent. It compiles the OAS (so it HAS `triggerMode`/`gatedSteps`
+  // in hand) and then wrote neither onto the row, so a development boot of this
+  // branch read `trigger_mode` NULL on all 36 seeded templates while their own
+  // packages compiled a mode. Both branches are pinned: a fresh seed and a
+  // re-seed of an existing row.
+  it("CREATE: the compiled mode and its gated steps land on the fresh row", async () => {
+    await importZip();
+    expect(createInput()).toHaveProperty("triggerMode", "full");
+    expect(createInput()).toHaveProperty("gatedSteps", []);
+  });
+
+  it("UPSERT (re-seed): the classification is re-projected onto the existing row", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing" });
+    await importZip();
+    expect(upsertPatch()).toHaveProperty("triggerMode", "full");
+    expect(upsertPatch()).toHaveProperty("gatedSteps", []);
+  });
+});
+
 describe("cinatra#2616 — the ZIP import records its identity claim", () => {
   it("CREATE: a claimant with no explicit orgId is RECORDED on the fresh row", async () => {
     await importAgentTemplateCore(zip({ lifecycle: undefined }), undefined, {

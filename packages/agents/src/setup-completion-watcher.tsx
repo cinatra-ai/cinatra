@@ -150,13 +150,24 @@ export function SetupCompletionWatcher({
   // case where the page loads after setup completed (no live stream events).
   useEffect(() => {
     if (hasFiredRef.current) return;
-    const isPending = initialStatus === "pending_input" || initialStatus === "pending_approval";
-    if (isPending) return;
-    // A run that is already `failed`/`stopped` on load must stay on the run page
-    // so its error stays visible — redirecting away would mask the failure
-    // (cinatra#580). Non-failure post-setup states (completed and legitimate
-    // in-flight `queued`/`running`) still advance to /trigger.
-    if (initialStatus === "failed" || initialStatus === "stopped") return;
+    // Issue 3033 — a POSITIVE allowlist, the same one this component's own
+    // polling effect uses further down. This used to be a NEGATIVE exclusion
+    // list (bail on pending_input / pending_approval / failed / stopped) which
+    // omitted `queued` and `running`, so a run that had ALREADY been dispatched
+    // fell through every guard and was pushed into the setup wizard. That is how
+    // a re-dispatched run parked: it reached `queued`, minted no trigger row (a
+    // Run-button / chat / retry dispatch never mints one by contract; only the
+    // explicit wizard path does), and the run page bounced it back to /trigger.
+    //
+    // A dispatched run is past the trigger step BY DEFINITION — it is executing —
+    // so there is no setup hand-off left to make. Only genuine setup-success
+    // advances: `pending_trigger` (setup done, awaiting the trigger choice,
+    // cinatra#2523) and `completed` (a run that executed straight through,
+    // cinatra#580 / #831). `failed`/`stopped` were already excluded and stay so
+    // by simply not being on the list — a failed run keeps its error on screen.
+    const isSetupHandOff =
+      initialStatus === "completed" || initialStatus === "pending_trigger";
+    if (!isSetupHandOff) return;
     // A run that already fully EXECUTED must stay on the run page so its
     // output stays reachable — the trigger scheduler is a dead end for it
     // (cinatra#831). Only setup-success `completed` (no execution evidence)
@@ -207,11 +218,17 @@ export function SetupCompletionWatcher({
         return r.json();
       })
       .then((data: { status?: string; inputParams?: Record<string, unknown> }) => {
-        // A run that failed/stopped after the setup interrupt cleared must stay
-        // on the run page so its error stays visible — never redirect away from
-        // a failure here (cinatra#580). Non-terminal post-setup states
-        // (queued/running) and `completed` still advance to /trigger.
-        if (data.status === "failed" || data.status === "stopped") return;
+        // Issue 3033 — the SAME positive allowlist the mount guard above and
+        // the polling fallback below use. This was the last negative check in
+        // the component: it excluded only `failed`/`stopped`, so a run already
+        // DISPATCHED past the setup step (fetched back as `queued` or
+        // `running`) was still pushed into the setup wizard on the stream road,
+        // which is the same park the mount guard now refuses. Only genuine
+        // setup-success advances: `pending_trigger` (setup done, awaiting the
+        // trigger choice, cinatra#2523) and `completed`. `failed`/`stopped`
+        // stay excluded by simply not being on the list, so a failure is still
+        // never navigated away from (cinatra#580).
+        if (data.status !== "completed" && data.status !== "pending_trigger") return;
         const params = data.inputParams ?? {};
         const allFilled = requiredFields.every((f) =>
           Object.prototype.hasOwnProperty.call(params, f),

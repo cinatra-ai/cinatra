@@ -129,6 +129,7 @@ import {
   mcpRequestContextStorage,
   type McpRequestContext,
 } from "@cinatra-ai/mcp-server";
+import { composeRunFailureFloorMessage } from "./run-failure-floor";
 
 // ---------------------------------------------------------------------------
 // FAIL-CLOSED pinned-run snapshot resolution (cinatra#1040 S7).
@@ -379,6 +380,131 @@ export function gateBackoffMs(attempt: number): number {
   const safeAttempt = Math.max(1, attempt);
   const ms = 30_000 * Math.pow(2, safeAttempt - 1);
   return Math.min(ms, 300_000);
+}
+
+/**
+ * How many closed-gate fires a run may take before a MISSING trigger row (as
+ * opposed to an unreleased one) is read as terminal. Five is the whole backoff
+ * sequence above — 30s, 60s, 120s, 240s, 300s — so a trigger that is merely
+ * slow, or that is being minted concurrently with this fire, has the full
+ * twelve and a half minutes to appear before the floor is written.
+ */
+export const GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR = 5;
+
+/**
+ * The ONE LINE a run gets when its gate is armed and no trigger was ever minted
+ * for it (cinatra#3033). Says what happened, in the person's words, with no run
+ * id, no status token and no internal name in it — the drawn failure floor: a
+ * run that can never start never sits blank.
+ *
+ * BEST-EFFORT, AND HONEST ABOUT ITS LIMIT, exactly like the coordinator's own
+ * dispatch compensation: if a worker has already moved the run off `queued` the
+ * CAS declines and that run owns itself now; if the terminal write cannot land
+ * at all, the run really is stranded and this says so in the log rather than
+ * reporting a landing it did not achieve.
+ */
+export async function failRunWithNoTriggerEverMinted(
+  runId: string,
+  authority: OrgWriteAuthority | undefined,
+): Promise<"failed" | "moved_on" | "stranded"> {
+  try {
+    await transitionRunStatus(
+      runId,
+      "queued",
+      "failed",
+      {
+        error:
+          "This run could not be started: this agent holds its side effects behind a trigger, and no trigger was ever set for this run.",
+      },
+      authority,
+    );
+    return "failed";
+  } catch (err) {
+    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+      return "moved_on";
+    }
+    console.error(
+      "[trigger-gate] a run was gated with no trigger ever minted and could not be failed — it is queued with nothing coming",
+      runId,
+      err,
+    );
+    return "stranded";
+  }
+}
+
+/**
+ * HAND A GATED RUN TO ITS TRIGGER STEP, so it leaves `queued` at once
+ * (cinatra#3033, convergence review).
+ *
+ * THE INVARIANT THE FLOOR ALONE DID NOT REPAIR. Bounding the park stops a run
+ * sitting blank forever, but it does not let the run happen: a person who
+ * presses Run on an agent that gates its side effects would have waited out the
+ * whole backoff and then read that nothing could start. The gate is not the only
+ * seam here — the LAUNCH is, and every immediate-dispatch road (the run-start
+ * page's create-and-trigger, an agent-as-tool call, an A2A send) reaches the gate
+ * with no trigger row because nothing on those roads mints one: the row is minted
+ * by the person's own trigger choice, which only ever runs against a run PARKED
+ * at `pending_trigger`.
+ *
+ * So park it there, which is the state that legitimately awaits that choice and
+ * is already drawn, already rendered by the run panel and the schedule card,
+ * already covered by bulk-stop and the kernel's lease accounting. This is the
+ * SAME hand-off the setup-success leg performs; it was keyed on `resumedFromSetup`
+ * and therefore never reached a run that was dispatched straight to the queue.
+ *
+ * The trigger read after the transition is the correctness boundary, exactly as
+ * it is on the setup leg: a trigger configured in the window is honoured rather
+ * than handed back the step it has just answered.
+ */
+export async function handOffGatedRunToTriggerChoice(
+  run: { id: string; orgId: string },
+  authority: OrgWriteAuthority | undefined,
+): Promise<"parked" | "moved_on" | "kept"> {
+  try {
+    await transitionRunStatus(run.id, "queued", "pending_trigger", undefined, authority);
+  } catch (err) {
+    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+      // Another writer moved the run off `queued` — a stop, a cancel, a worker
+      // that took it. That writer owns it and there is nothing to hand off.
+      return "moved_on";
+    }
+    // The hand-off could not land. NOT terminal on its own: the run keeps its
+    // place on the gate backoff, and the floor below is what ends it if nothing
+    // ever comes.
+    console.warn(
+      "[trigger-gate] a gated run could not be handed to its trigger step — it stays on the gate backoff:",
+      run.id,
+      err instanceof Error ? err.message : String(err),
+    );
+    return "kept";
+  }
+
+  const configuredInTheWindow = await readRunTriggerByRunId(run.id).catch(() => null);
+  if (configuredInTheWindow === null) {
+    // THE RUN IS AT ITS SCHEDULE MOMENT, and now it says so — the same record the
+    // setup leg states, with the same run-scoped card reference.
+    await stateRunScheduleMoment({
+      run,
+      cardRef: encodeScheduleRunRef({ runId: run.id, fromScheduleStep: true }),
+      authority,
+    });
+    return "parked";
+  }
+
+  // A trigger landed while we were handing off. Honour WHICH choice it was: a
+  // schedule is armed for its own fire (the release job owns the run from there,
+  // so this job stands down); an immediate choice goes back to `queued` and the
+  // next gate fire reads the release the choice wrote.
+  const back = configuredInTheWindow.triggerType === "immediate" ? "queued" : "armed";
+  try {
+    await transitionRunStatus(run.id, "pending_trigger", back, undefined, authority);
+  } catch (err) {
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+    return "moved_on";
+  }
+  return back === "armed" ? "moved_on" : "kept";
 }
 
 // ---------------------------------------------------------------------------
@@ -632,12 +758,6 @@ export function stripCinatraEndNodeOutputMessages(
   });
 }
 
-/** Upper bound on the `agent_runs.error` message this module composes for a
- *  materialization failure — enough for every failing output's reason on a
- *  realistic binding set, short enough that a pathological error string can
- *  never bloat the row. */
-const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
-
 /**
  * cinatra#2486 — the operator-facing reason a terminal-success run is landed as
  * `failed` rather than `completed`: which declared outputs failed to
@@ -645,25 +765,30 @@ const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
  * and the external-A2A branch, cinatra#2497) so a failed run reads identically
  * whichever runtime produced it. Module-private: the honesty suites assert it
  * through the persisted `error`, which is the surface that actually matters.
+ *
+ * Issue 3033 — this used to compose the MATERIALIZER'S OWN sentence
+ * ("... did not produce (1 of 1 failed): ideaBatch [@pkg]: contentFrom output
+ * ... did not resolve to a string") and the run-progress card drew it verbatim
+ * on the conversation surface. The ratified run-surface drawing gives exactly
+ * one reading for a target that did not resolve, and it is sanitized: "a
+ * sanitized, telemetry-safe one-line diagnostic (package - slot - reason, never
+ * a raw error or manifest value)". So the persisted row now carries the floor,
+ * and the raw per-output cause keeps going to the server log — every caller
+ * below already writes one `[artifact-materializer] run=... output=...
+ * extension=... failed: <raw>` warn line per failed outcome BEFORE this
+ * composes, which is where an operator reads the cause. Nothing is lost; it
+ * simply stops being drawn at a reader.
+ *
+ * `totalOutcomes` is no longer part of the message (the drawn floor names one
+ * target, not a tally) but stays in the signature: both call sites pass it, and
+ * the count is what makes the log line above readable next to the row.
  */
 function describeMaterializationFailure(
   failures: ReadonlyArray<Record<string, unknown>>,
   totalOutcomes: number,
 ): string {
-  const detail = failures
-    .map(
-      (outcome) =>
-        `${String(outcome.outputId)}${
-          outcome.extension ? ` [${String(outcome.extension)}]` : ""
-        }: ${String(outcome.error)}`,
-    )
-    .join("; ");
-  const message =
-    `artifact materialization failed — the run declared artifact output(s) it did not produce ` +
-    `(${failures.length} of ${totalOutcomes} failed): ${detail}`;
-  return message.length > MATERIALIZATION_ERROR_MAX_CHARS
-    ? `${message.slice(0, MATERIALIZATION_ERROR_MAX_CHARS - 1)}…`
-    : message;
+  void totalOutcomes;
+  return composeRunFailureFloorMessage(failures);
 }
 
 /**
@@ -3209,6 +3334,59 @@ async function runAgentBuilderExecutionJobInner(
       const released = await isTriggerReleased(runId);
       if (!released) {
         const nextAttempt = currentGateAttempt + 1;
+        // ---------------------------------------------------------------
+        // THE PARK IS BOUNDED WHEN NOTHING IS EVER COMING (cinatra#3033).
+        //
+        // MEASURED: a run dispatched straight to the queue (the run-start
+        // page's create-and-trigger road, an agent-as-tool call, an A2A
+        // send — every `dispatch.kind` that is not `await_trigger`) reaches
+        // this gate with NO `agent_run_triggers` row, because nothing on
+        // those roads mints one: the row is minted by the person's own
+        // trigger choice (`setRunTriggerForActor`), which only ever runs
+        // against a run PARKED at `pending_trigger`. The gate then closed,
+        // the job moved to delayed, and the whole cycle repeated on the
+        // backoff forever — leaving exactly the row nobody can act on:
+        // `queued`, `started_at` null, `error` null, no trigger, and a job
+        // that is neither waiting, active nor failed, so even the queue
+        // looked healthy.
+        //
+        // AN UNRELEASED TRIGGER THAT EXISTS IS A LEGITIMATE WAIT — a person
+        // has been asked and has not answered yet, and that park stays
+        // indefinite. What is NOT legitimate is waiting on a trigger that
+        // was never minted and that no road will mint. After the backoff
+        // sequence has run its whole length (30s + 60s + 120s + 240s +
+        // 300s, so the window is wide enough to absorb a mint that is
+        // merely slow or racing this fire), a run with NO trigger row at
+        // all can never start — and the drawn floor says a run that can
+        // never start must say so in one line, never sit blank.
+        // ---------------------------------------------------------------
+        const trigger = await readRunTriggerByRunId(runId);
+        if (!trigger) {
+          // NOTHING WILL EVER MINT ONE ON THIS ROAD, so the run does not wait on
+          // the backoff for it: hand it to the trigger step, where the choice
+          // that releases this gate is actually made. It leaves `queued` on the
+          // first closed fire and says what it is waiting at.
+          const handed = await handOffGatedRunToTriggerChoice(
+            { id: runId, orgId: run.orgId },
+            executionAuthority,
+          );
+          if (handed === "parked" || handed === "moved_on") {
+            return;
+          }
+          // THE HAND-OFF ITSELF COULD NOT LAND. The floor is the backstop under
+          // it, and only after the whole backoff has run.
+          if (nextAttempt > GATE_ATTEMPTS_BEFORE_NO_TRIGGER_FLOOR) {
+            const landed = await failRunWithNoTriggerEverMinted(runId, executionAuthority);
+            if (landed !== "stranded") {
+              return;
+            }
+            // STRANDED — the terminal write did not land either (convergence
+            // review). Returning here would complete the BullMQ job and remove
+            // the last thing holding this run, leaving exactly the queued row
+            // with no job behind it that this floor exists to end. Fall through
+            // instead: the job stays delayed and tries the whole road again.
+          }
+        }
         throw new TriggerGateClosedError({
           runId,
           nextAttempt,

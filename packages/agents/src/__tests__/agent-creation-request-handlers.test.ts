@@ -43,6 +43,17 @@ const dbMock = vi.hoisted(() => ({
   postgresSchema: "cinatra_test",
   isAgentCreationPinActive: vi.fn(() => false),
   runPostgresQueriesSync: vi.fn(() => [{ rows: [] }]),
+  // Per-scope skill-assignment readers. `agents-store.getAssignedSkillIdsForAgent`
+  // calls both whenever an ActorContext is in scope, and swallows a throw — so a
+  // missing entry here is not a red test, only eight lines of logged noise each
+  // and a silently empty skill union. Both return the real functions' EMPTY
+  // shape (rows / ids), which is what an unconfigured workspace reads.
+  readCustomSkillAssignmentsForAgent: vi.fn(() => []),
+  readSystemGlobalSkillIdsForAgent: vi.fn(() => []),
+  // Reached one level deeper, through skills-store's `syncInstalledSkillsToDatabase`,
+  // once the two readers above stop throwing. Empty catalog = the two collections
+  // its callers iterate, both empty.
+  readSkillCatalogFromDatabase: vi.fn(() => ({ skills: [], skillPackages: [] })),
 }));
 vi.mock("@/lib/database", () => dbMock);
 
@@ -124,6 +135,11 @@ const storeReadMock = vi.hoisted(() => {
     readAgentTemplateByPackageName: vi.fn(
       async (packageName: string) => templateRowsByPackageName.get(packageName) ?? null,
     ),
+    // The /agents installed-template reader. Same story as the two database
+    // readers above: reached through a defensive catch, so its absence logged
+    // rather than failed. Empty list = no installed templates, the default the
+    // rest of this file already assumes.
+    readInstalledAgentTemplates: vi.fn(async () => []),
   };
 });
 vi.mock("../store", () => storeReadMock);

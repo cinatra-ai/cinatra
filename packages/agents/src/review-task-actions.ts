@@ -1,6 +1,8 @@
 import "server-only";
 import { GateNotPendingError } from "./run-status";
 
+import { randomUUID } from "node:crypto";
+
 import { sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
@@ -468,7 +470,33 @@ export async function approveReviewTaskInternal(
       // trigger step before it may dispatch — so it hands off to
       // `pending_trigger` instead of running before the user has chosen when.
       { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
+      {
+        // cinatra#3033 — THE HAND-OFF. One job id PER LEG, never one per run.
+        //
+        // `reviewTaskId` is `setup-<runId>`, so `resume-${reviewTaskId}` alone
+        // was CONSTANT for the whole run while the queue retains settled jobs
+        // (`removeOnComplete: 200`). BullMQ's `add` is HSETNX-based, so with the
+        // previous leg's job still on the queue the add returned that old job
+        // and enqueued NOTHING: a setup asking for two fields parked, resumed
+        // once, parked again — and the second approval flipped the run
+        // `pending_approval -> queued` and then handed it to nobody. The run
+        // stalled at `queued` with no job, no trigger row and no error, and
+        // every further press of the same form was refused by the
+        // `pending_approval` guard above with the run's own current status.
+        //
+        // Clearing a SETTLED entry of a shared id does not close this: the
+        // previous leg is itself what re-parks the run, and it stays ACTIVE for
+        // the rest of its own unwind after that park commits — a press inside
+        // that window meets a LIVE job of the same id and is dropped exactly as
+        // before. A per-leg id closes the window outright.
+        //
+        // Safe because nothing resolves a resume job by its id (the run-href
+        // resolver reads `job.data`, never `job.id`), and a genuine double press
+        // is already de-duplicated one statement earlier: the org-scoped
+        // `pending_approval` CAS inside `resumeRunFromSetupApproval` lets
+        // exactly one press through and the loser throws before this line.
+        jobId: `resume-${reviewTaskId}:${randomUUID()}`,
+      },
     );
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,

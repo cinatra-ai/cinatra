@@ -669,3 +669,119 @@ describe("published-reader audit", () => {
     expect(code).not.toContain("isPlatformAdmin");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE FOURTH STRANDABLE SHAPE — created `queued`, dispatched by the caller
+// (cinatra#3033)
+// ---------------------------------------------------------------------------
+describe("create-queued-then-enqueue sites compensate too", () => {
+  // THE SHAPE. `launchAgentRun` with `create.kind: "full"` and
+  // `dispatch.kind: "caller_dispatches"` inserts the row ALREADY `queued` and
+  // hands the dispatch back; the caller's enqueue is a LATER statement. So
+  // between them the run IS a durable `queued` row the chokepoint can refuse —
+  // and the chokepoint may not fail it (it holds no org-write authority,
+  // org-write-boundary-gate R2/R5). Unfixed, a refused enqueue there left the
+  // run `queued` with `started_at` null, `error` null, no trigger and no job,
+  // and nothing could ever move it. That is the run state the fourth and fifth
+  // proof rounds recorded on this branch.
+  //
+  // Read as SOURCE for the same reason the rest of this suite does: the
+  // guarantee is structural, so a future edit that drops a compensation must
+  // fail here rather than silently reopen the strand.
+
+  it("the coordinator owns a compensation for the runs it creates `queued`", () => {
+    const coordinator = read("packages/agents/src/lifecycle-coordinator.ts");
+    const at0 = at(coordinator, "export async function failRunOnCallerDispatchFailure(");
+    const body = coordinator.slice(at0, at0 + 2000);
+    // Terminal, not a revert: a run created `queued` never held a waiting state
+    // to be returned to, so inventing one would be a lie about its history.
+    expect(body).toMatch(/transitionRunStatus\(\s*input\.runId,\s*"queued",\s*"failed"/);
+    // And it carries the ONE LINE that says why — the failure floor.
+    expect(body).toContain("This run could not be started:");
+    // A run a worker already picked up is not this call's to move.
+    expect(body).toContain("stale_from_status");
+  });
+
+  it("the published-agent-as-tool dispatch compensates its enqueue", () => {
+    const registry = read("packages/agents/src/mcp/agent-tools-registry.ts");
+    const at0 = at(registry, "await enqueueAgentRun({ runId });");
+    const block = registry.slice(at0, at0 + 900);
+    expect(block).toContain("failRunOnCallerDispatchFailure");
+    // The tool answers with the reason instead of a bare throw the caller
+    // cannot act on.
+    expect(block).toContain("This run could not be started");
+  });
+
+  it("the in-process A2A dispatch compensates its enqueue", () => {
+    const a2a = read("packages/agents/src/a2a-actions.ts");
+    const at0 = at(a2a, "await enqueueAgentRun({ runId: payload.runId });");
+    const block = a2a.slice(at0, at0 + 700);
+    expect(block).toContain("failRunOnCallerDispatchFailure");
+    // THE AUTHORITY IS PER-RUN, not the action's outer one: the creation
+    // callback re-resolves for a run in another org, and compensating with the
+    // outer authority would be refused — leaving the strand intact.
+    expect(block).toContain("authorityByCreatedRunId.get(payload.runId)");
+    expect(block).not.toMatch(/authority:\s*runAuthority\b/);
+  });
+
+  it("the external A2A dispatch compensates its enqueue with the run's own authority", () => {
+    const server = read("src/lib/a2a-server.ts");
+    const at0 = at(server, "createAndEnqueueAgentRun: async (record, options) => {");
+    const block = server.slice(at0, at0 + 700);
+    expect(block).toContain("compensateDispatch(record.runId");
+    const helper = server.slice(at(server, "const compensateDispatch ="), at(server, "const compensateDispatch =") + 700);
+    expect(helper).toContain("failRunOnCallerDispatchFailure");
+    expect(helper).toContain("takeCreationAuthority(runId)");
+  });
+
+  it("the external A2A ledger is TAKEN, never merely read — the mount outlives every run", () => {
+    // The mount is process-cached for the life of its generation, so an entry
+    // left behind after the dispatch settles retains that run id and its
+    // authority for as long as the process lives (convergence review). Every
+    // terminal path goes through the take.
+    const server = read("src/lib/a2a-server.ts");
+    const taker = server.slice(
+      at(server, "const takeCreationAuthority ="),
+      at(server, "const takeCreationAuthority =") + 400,
+    );
+    expect(taker).toContain("authorityByCreatedRunId.delete(runId)");
+    // The success arms take it too, not just the compensation.
+    expect(server).toContain("takeCreationAuthority(record.runId);");
+    expect(server).toContain("takeCreationAuthority(payload.runId);");
+  });
+
+  it("the coordinator's OWN headless enqueue branch compensates too", () => {
+    const coordinator = read("packages/agents/src/lifecycle-coordinator.ts");
+    // The headless branch creates the run `queued` (`create.kind: \"full\"`), so
+    // a refused enqueue strands it exactly as a caller-dispatched one would.
+    const at0 = at(coordinator, "} else {\n      // THE HEADLESS BRANCH STRANDS TOO");
+    const block = coordinator.slice(at0, at0 + 1200);
+    expect(block).toContain("failRunOnCallerDispatchFailure");
+  });
+
+  it("the chokepoint no longer claims same-frame creators cannot strand a run", () => {
+    const enqueue = read("src/lib/agent-run-enqueue.ts");
+    // The old (false) claim, removed: it was true only of the PRE-DISPATCH
+    // creators, and reading it was how the fourth shape stayed unnoticed.
+    expect(enqueue).not.toContain("hold no pre-existing `queued` row to strand.");
+    expect(enqueue).toContain("failRunOnCallerDispatchFailure");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A REFUSED RUN-START IS A NAMED REFUSAL, NOT A BLANK (cinatra#3033)
+// ---------------------------------------------------------------------------
+describe("the run-start road answers a scope refusal with its reason", () => {
+  it("createAndTriggerRunCore returns the refusal instead of re-raising it", () => {
+    const actions = read("packages/agents/src/run-actions.ts");
+    expect(actions).toContain("AGENT_TEMPLATE_SCOPE_DENIED");
+    const at0 = at(actions, "const actionable = asActionablePreflightError(enqueueErr);");
+    const block = actions.slice(at0, at0 + 1600);
+    // MEASURED before the fix on a development boot of this branch: the
+    // creation perimeter's refusal was re-raised out of the server component
+    // and the person was shown a blank not-found page with no reason on it.
+    expect(block).toContain("isScopeDenial(enqueueErr)");
+    expect(block).toMatch(/ok:\s*false/);
+    expect(block).toContain("scope does not include your organization");
+  });
+});

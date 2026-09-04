@@ -231,6 +231,22 @@ describe(`§I–VI — spec→render: every ${SPEC_COMMIT} conformance anchor is
       expect(anchorCorpus.some((s) => s.includes(id))).toBe(true);
     });
   }
+
+  // THE MAPPING LITERAL IS NOT A RENDERING (lifecycle-c W9, cinatra#3033).
+  // The check above accepts an anchor that appears only in the model's mapping
+  // literal — an id that reaches the screen only that way is one this suite
+  // cannot tell apart from an id that never reaches it at all. So every id the
+  // closed set still carries for a target REGION is pinned to the surface's own
+  // source here. The two renderer-tier ids are no longer members of that set:
+  // the default branch narrowed the provenance union to the floor reading, so
+  // there is no value the surface could hold for them.
+  for (const id of ["review-target-floor"]) {
+    it(`emits the "${id}" reading from the SURFACE, not only from the model's map`, () => {
+      expect(SPEC_IDS).toContain(id);
+      const panel = stripComments(TARGET_PANEL);
+      expect(panel).toContain(`"${id}"`);
+    });
+  }
 });
 
 describe("§I–VI — render→spec: the route invents no anchor outside the closed spec set", () => {
@@ -311,6 +327,40 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     const panel = stripComments(TARGET_PANEL);
     // The strip exists only behind a null check on the resolved region id.
     expect(panel).toMatch(/provenanceConformanceId !== null/);
+  });
+
+  // THE DRAWING MOVED, AND THIS ASSERTION FOLLOWS IT (lifecycle-c W9,
+  // cinatra#3033). Pinned at design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f the
+  // section read, verbatim: "Each target says how it was rendered ... a
+  // build-time renderer (one the defining extension ships in the build) carries
+  // the extension's indigo chip; a runtime renderer (one loaded from a
+  // marketplace-installed extension) carries the same chip plus its package
+  // identity". At the CURRENT ratified drawing the same section reads, verbatim:
+  // "It is not put on screen: a display shows the work and nothing about itself
+  // - no renderer name, no package identity, no provenance line - because the
+  // reader is deciding on the work, not on what drew it", and: "a build-time
+  // renderer and a runtime one are drawn the same way, because nothing on either
+  // target says which resolved it - only the caption, written for the reader of
+  // this page, names the tier. The one that does speak on a surface is the
+  // floor, and only because a reader must be told a render failed." The markdown
+  // display's own section repeats it: "no renderer chip and no provenance line,
+  // here or on any other surface this display is drawn".
+  //
+  // So the two renderer tiers draw NO region at all, and only the floor speaks.
+  // The default branch has since narrowed the conformance MAP to the floor
+  // reading as well (the two tier ids are no longer members of the closed set),
+  // so what is pinned here is the surface behaviour the two readings share: the
+  // tier a target resolved through stays host-derived, and it reaches no
+  // attribute and no pixel.
+  it("NEITHER renderer tier puts its provenance on screen - no chip, no package identity", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+    expect(panel).not.toMatch(/build-time · |runtime · /);
+  });
+
+  it("only the FLOOR speaks on the surface, because a reader must be told a render failed", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/provenance\.kind === "floor"/);
   });
 
   it("the floor's region carries the Floor pill over its structured-data reading", () => {

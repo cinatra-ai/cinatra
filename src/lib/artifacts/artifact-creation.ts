@@ -9,6 +9,11 @@ import type {
   ArtifactOriginKind,
   ArtifactRef,
 } from "@cinatra-ai/artifacts";
+import {
+  buildArtifactObjectEnvelope,
+  snapshotDeclaredObjectFields,
+  type DeclaredObjectFields,
+} from "./artifact-object-envelope";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import {
   classifyArtifactTypeOwnership,
@@ -136,6 +141,18 @@ export type CreateSemanticArtifactInput = {
   stream: AsyncIterable<Uint8Array>;
   maxBytes?: number;
   createdByRunId?: string | null;
+  /**
+   * Type-DECLARED object fields carried into the row's `objects.data` beside
+   * the host's own envelope (lifecycle-c W9).
+   *
+   * An artifact type may declare REQUIRED fields of its own — the picture type
+   * declares the post it belongs to and its placement — and the host's fixed
+   * file envelope alone does not satisfy such a schema. A deterministic caller
+   * that KNOWS those values passes them here; they are validated by exactly the
+   * same declared-schema check the envelope already passes through, and a field
+   * naming a reserved envelope key is REFUSED (never merged).
+   */
+  declaredObjectFields?: DeclaredObjectFields;
   // Opt-in HANDLE for the classifier-signal intake path. The service resolves
   // the handle via the tenant-safe reader (`readChatThreadForClassifier`) and
   // composes the persisted `ClassifierSignals` blob server-side. Callers do
@@ -369,6 +386,14 @@ export async function createSemanticArtifact(
   const visibility =
     input.visibility ?? defaultVisibilityFor(ownerLevelNorm);
   const originKind: ArtifactOriginKind = input.originKind ?? "upload";
+  // The type-declared fields are materialized ONCE, here, and the same frozen
+  // snapshot feeds the pre-transaction envelope that is validated and the final
+  // envelope that is persisted. Reading the caller's object twice would let the
+  // persisted row differ from the row that passed the declared-schema check.
+  const declaredObjectFieldsSnapshot =
+    input.declaredObjectFields === undefined
+      ? undefined
+      : snapshotDeclaredObjectFields(input.declaredObjectFields);
   const maxBytes = input.maxBytes ?? ARTIFACT_BLOB_MAX_DEFAULT_BYTES;
 
   // -------------------------------------------------------------------
@@ -433,16 +458,19 @@ export async function createSemanticArtifact(
         `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
       );
     }
-    const previewEnvelope: ArtifactObjectData = {
-      artifactType: "file",
-      latestRepresentationRevisionId: representationRevisionId,
-      latestDigest: newBlob.sha256,
-      mime: newBlob.mimeDetected,
-      size: newBlob.sizeBytes,
-      originKind,
-      viewerHint: "mime",
-      title: input.title,
-    };
+    const previewEnvelope = buildArtifactObjectEnvelope(
+      {
+        artifactType: "file",
+        latestRepresentationRevisionId: representationRevisionId,
+        latestDigest: newBlob.sha256,
+        mime: newBlob.mimeDetected,
+        size: newBlob.sizeBytes,
+        originKind,
+        viewerHint: "mime",
+        title: input.title,
+      },
+      declaredObjectFieldsSnapshot,
+    );
     const parsed = preDef.schema.safeParse(previewEnvelope);
     if (!parsed.success) {
       throw new ObjectsTypeNotRegisteredError(
@@ -765,16 +793,19 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     }),
   );
 
-  const objectData: ArtifactObjectData = {
-    artifactType: "file",
-    latestRepresentationRevisionId: representationRevisionId,
-    latestDigest: newBlob.sha256,
-    mime: authoritative.mime,
-    size: authoritative.sizeBytes,
-    originKind,
-    viewerHint: "mime",
-    title: input.title,
-  };
+  const objectData = buildArtifactObjectEnvelope(
+    {
+      artifactType: "file",
+      latestRepresentationRevisionId: representationRevisionId,
+      latestDigest: newBlob.sha256,
+      mime: authoritative.mime,
+      size: authoritative.sizeBytes,
+      originKind,
+      viewerHint: "mime",
+      title: input.title,
+    },
+    declaredObjectFieldsSnapshot,
+  );
 
   // -------------------------------------------------------------------
   // Dedupe-delta re-validation (epic #1785, wave A3). The pre-Tx1 validation

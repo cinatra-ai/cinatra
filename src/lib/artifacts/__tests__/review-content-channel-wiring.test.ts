@@ -95,6 +95,10 @@ function deps(over: Partial<PinnedSubstanceReaderDeps> = {}): PinnedSubstanceRea
       mime: "text/markdown",
       sizeBytes: Buffer.byteLength(DRAFT, "utf8"),
       originKind: "upload",
+      // The form the SUBSTRATE recorded (lifecycle-c W9, cinatra#3033): the
+      // resolver reports it rather than letting a caller infer "it resolved,
+      // therefore it is a file".
+      form: "file",
     }),
     resolveNonFileRevision: () => null,
     openBytes: async () => ({
@@ -207,6 +211,7 @@ describe("the pinned-substance read behind the channel", () => {
             mime: "text/markdown",
             sizeBytes: PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES + 1,
             originKind: "upload",
+            form: "file",
           }),
           openBytes: async () => {
             opened = true;

@@ -153,15 +153,24 @@ export function deriveTypeDefinitionRows(
  * the platform-owned NULL-org rows are read separately and merged) so "Used by"
  * reflects what is actually installed for this workspace.
  */
+/** Unresolved-claim lines already logged in this process — the diagnostic above
+ *  is a standing condition, so it is said once rather than on every load. */
+const reportedUnresolvedClaimLines = new Set<string>();
+
 export async function loadTypeDefinitionRows(
   organizationId: string | null,
 ): Promise<TypeDefinitionRow[]> {
-  const [{ objectTypeRegistry }, { listInstalledExtensions }, { registerAllObjectTypes }] =
-    await Promise.all([
-      import("@cinatra-ai/objects"),
-      import("@cinatra-ai/extensions/canonical-store"),
-      import("@/lib/register-all-object-types"),
-    ]);
+  const [
+    { objectTypeRegistry },
+    { listInstalledExtensions },
+    { registerAllObjectTypes },
+    { reportClaimedTypeIdsWithNoRegistrar },
+  ] = await Promise.all([
+    import("@cinatra-ai/objects"),
+    import("@cinatra-ai/extensions/canonical-store"),
+    import("@/lib/register-all-object-types"),
+    import("@cinatra-ai/objects/register-artifact-extensions"),
+  ]);
 
   // Warm the process-global object-type registry before reading it. The registry
   // is populated LAZILY (registerAllObjectTypes bridges every kind:"artifact"
@@ -174,6 +183,33 @@ export async function loadTypeDefinitionRows(
   // registerAllObjectTypes is idempotent (replace-by-id), so this is safe to
   // call on every load.
   registerAllObjectTypes();
+
+  // A SERVER-SIDE DIAGNOSTIC FOR WHAT THIS MAP CANNOT DRAW (cinatra#3033).
+  //
+  // A pack may declare a type id under a namespace it does not own; ownership is
+  // by namespace, so the declaring pack registers a RENDERER and the OWNING
+  // package registers the type. When nothing registers that id the type resolves
+  // nowhere — it is absent from `listArtifacts()` and therefore absent from this
+  // map, with nothing anywhere stating why. MEASURED over the pinned tree, three
+  // claims are orphaned this way (brand-voice, marketing-icp, slide-deck), one
+  // per `-artifact` pack whose declared namespace no installed package has.
+  //
+  // NOT the reason the LinkedIn post-draft was missing (cinatra#3033). That id is
+  // claimed cross-namespace too, but it RESOLVES — the host is its single runtime
+  // registrar — and it was filtered out of this map by the `isArtifact` predicate
+  // below, because that registration carried no artifact descriptor. Fixed there;
+  // named here so the two failure shapes are never conflated again.
+  //
+  // BE PRECISE ABOUT WHAT THIS IS. The ROWS below are unchanged: an unresolved
+  // claim is not a type and must never be listed as one. This is a log line, not
+  // a surface — putting the gap on the console is a separate, drawn change. Said
+  // ONCE per distinct line rather than on every load, so a permanent condition
+  // does not become permanent noise.
+  for (const line of reportClaimedTypeIdsWithNoRegistrar()) {
+    if (reportedUnresolvedClaimLines.has(line)) continue;
+    reportedUnresolvedClaimLines.add(line);
+    console.warn(line);
+  }
 
   const types = objectTypeRegistry.listArtifacts().map((def) => ({
     typeId: def.type,

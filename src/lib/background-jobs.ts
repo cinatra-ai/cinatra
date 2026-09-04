@@ -17,6 +17,7 @@ import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
 import {
   BACKGROUND_JOB_REGISTRY,
+  clearSettledJobForReuse,
   dispatchRegisteredJob,
   UnclassifiedBackgroundJobError,
   type JobAuthorityMetadata,
@@ -656,9 +657,11 @@ export async function enqueueBackgroundJob(
     "jobId" | "priority" | "delay" | "attempts" | "backoff"
   > & {
     skipWorker?: boolean;
-    // When true and a completed/failed job with the same jobId exists, removes
-    // it before adding the new entry so BullMQ HSETNX doesn't silently no-op.
-    // Use only with skipWorker:true bootstrap calls (crash-restart dedup).
+    /**
+     * Clear a SETTLED job of this `jobId` first (a LIVE one is left alone), or
+     * BullMQ's HSETNX-based `add` returns the retained entry and enqueues
+     * nothing. Honoured on BOTH paths via `clearSettledJobForReuse`.
+     */
     overwriteIfStale?: boolean;
     /**
      * When provided, the ActorContext is serialized onto the job payload under
@@ -705,24 +708,21 @@ export async function enqueueBackgroundJob(
       inheritActorContext: _ih,
       ...jobOpts
     } = options;
-    if (overwriteIfStale && jobOpts.jobId) {
-      const existing = await runtime.queue.getJob(jobOpts.jobId);
-      if (existing) {
-        const state = await existing.getState();
-        if (state === "completed" || state === "failed") {
-          await existing.remove();
-        }
-      }
-    }
+    await clearSettledJobForReuse(runtime.queue, overwriteIfStale, jobOpts.jobId);
     const job = await runtime.queue.add(name, payload, jobOpts);
     return String(job.id);
   }
   const {
+    // This function's OWN option keys, stripped so none reaches BullMQ as a
+    // stray job option (`overwriteIfStale` used to fall through — cinatra#3033).
+    skipWorker: _sw,
+    overwriteIfStale,
     actorContext: _ac,
     inheritActorContext: _ih,
     ...jobOpts
   } = options ?? {};
   const runtime = await ensureBackgroundJobRuntime();
+  await clearSettledJobForReuse(runtime.queue, overwriteIfStale, jobOpts.jobId);
   const job = await runtime.queue.add(name, payload, jobOpts);
   return String(job.id);
 }

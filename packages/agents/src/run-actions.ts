@@ -103,6 +103,14 @@ export type CreatePendingRunResult =
  * The exported name (`...ForZeroInputTemplate`) is preserved for the chat
  * package callers that import it.
  */
+/** A refusal from the agent-template scope guard, recognized by its CODE rather
+ *  than `instanceof` so it survives the dynamic-import boundary the creation
+ *  perimeter is reached through (the same recognizer `trigger-service.ts` uses
+ *  for the immediate-dispatch arm). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
+
 export async function createPendingRunForZeroInputTemplate(
   args: CreatePendingRunArgs,
 ): Promise<CreatePendingRunResult> {
@@ -239,6 +247,32 @@ async function createAndTriggerRunCore(
     // coordinator, so the retry the message asks for has somewhere to land.
     const actionable = asActionablePreflightError(enqueueErr);
     if (actionable) return { ok: false, ...actionable };
+    // A SCOPE REFUSAL IS A DECISION, NOT A FAULT (cinatra#3033). The creation
+    // perimeter refuses a template this person's org may not run by THROWING —
+    // and this catch used to re-raise it, so the throw escaped the run-start
+    // server component and the person was shown a blank page with no reason on
+    // it (measured on a development boot of this branch: an
+    // `AGENT_TEMPLATE_SCOPE_DENIED` refusal drawn as "Page not found"). The
+    // refusal is returned as a result now, with the one line that says what
+    // happened — the same shape the immediate-trigger arm already answers with.
+    // No run exists at this point: the perimeter refused BEFORE the insert, so
+    // there is nothing to compensate.
+    if (isScopeDenial(enqueueErr)) {
+      // Stated once, server-side, so the refusal is never a silent gap in the
+      // log either. The run id is not in the format-string position (the id is
+      // request-controlled and a `%` in it must never be read as a specifier).
+      console.warn(
+        "[createAndTriggerRunCore] run-start refused by the agent-template scope guard for template",
+        template.id,
+        "-",
+        enqueueErr.reason,
+      );
+      return {
+        ok: false,
+        error:
+          "This agent can't be run from here — its scope does not include your organization.",
+      };
+    }
     throw enqueueErr;
   }
   if (launched.carrier.kind !== "run") {
