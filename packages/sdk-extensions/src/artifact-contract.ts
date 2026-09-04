@@ -270,6 +270,71 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 // ===========================================================================
+// The DECLARED artifact-kind label (border correction, cinatra#2926 / #3023).
+//
+// WHICH FIELD: `cinatra.displayName` — the field admitted above and already
+// declared by the shipped artifact fleet. No new manifest key is minted: this
+// module only STATES the shape rule for reading that existing declaration as
+// the name of the pack's KIND, so a second, parallel field can never appear
+// beside the one that already carries the meaning.
+//
+// ADVISORY, exactly like `vendor`: a pack owns its own spelling, so the SDK and
+// the host carry a declared label THROUGH unchanged — surrounding whitespace is
+// trimmed at generation and at read, and nothing else is rewritten — and never
+// overrule it. This function NAMES a gap for the companion repo's publish gate
+// (which is where a label is enforced) and for the border audit — it is not an
+// install-time refusal, and calling it never changes what a surface renders.
+// ===========================================================================
+
+/** A kind label is a short name, not a sentence. */
+export const ARTIFACT_KIND_LABEL_MAX_LENGTH = 32;
+
+/** The named ways a declared kind label falls short of the shape rule. */
+export type ArtifactKindLabelIssue =
+  | "not-a-string"
+  | "empty"
+  | "too-long"
+  | "multi-line"
+  | "trailing-packaging-word";
+
+/**
+ * The trailing words that name the PACKAGING, not the kind. A pack called
+ * `@scope/zip-artifact` holds archives; its kind is "Archive", never "Zip
+ * Artifact" — the label answers "what is this thing", and "artifact" is the
+ * container word every one of them shares.
+ */
+const ARTIFACT_PACKAGING_WORDS: ReadonlySet<string> = new Set(["artifact", "artifacts"]);
+
+/**
+ * Name every way a declared artifact-kind label departs from the shape rule.
+ * Pure; an empty array means the declaration reads as a kind.
+ */
+export function artifactKindLabelIssues(label: unknown): ArtifactKindLabelIssue[] {
+  if (typeof label !== "string") return ["not-a-string"];
+  const trimmed = label.trim();
+  if (trimmed.length === 0) return ["empty"];
+  // The two issues above are TERMINAL — there is no declaration left to read,
+  // so they are returned alone. Every issue below that applies is named, because
+  // this function promises the whole list: a repository closing one gap should
+  // not discover a second one on its next run.
+  const issues: ArtifactKindLabelIssue[] = [];
+  if (/[\r\n]/.test(label)) issues.push("multi-line");
+  if (trimmed.length > ARTIFACT_KIND_LABEL_MAX_LENGTH) issues.push("too-long");
+  const words = trimmed.split(/\s+/);
+  const last = words[words.length - 1] ?? "";
+  // A BARE "Artifact" / "Artifacts" is named too. A label made of nothing but
+  // the container word every artifact shares says nothing about the kind, so
+  // the rule holds whether that word stands alone or ends a phrase.
+  if (ARTIFACT_PACKAGING_WORDS.has(last.toLowerCase())) issues.push("trailing-packaging-word");
+  return issues;
+}
+
+/** Does this declaration read as a kind label? */
+export function isDeclaredArtifactKindLabel(label: unknown): boolean {
+  return artifactKindLabelIssues(label).length === 0;
+}
+
+// ===========================================================================
 // cinatra.artifact.ui — the versioned artifact-renderer manifest block
 // (cinatra#1621, epic #1620 "artifact extensions own their UI", S1).
 //
