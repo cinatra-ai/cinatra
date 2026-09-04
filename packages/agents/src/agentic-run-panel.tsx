@@ -50,9 +50,12 @@ import {
   type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
-// The review screen's PLACEHOLDER (cinatra#2997) — one of the review screen's
-// own states, so it lives with them rather than in this panel.
-import { ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
+// The review screen's PLACEHOLDER (cinatra#2997) and the gate-level BLOCKED
+// state (cinatra#3219) — both are the review screen's own states, so they live
+// with them rather than in this panel, and this panel restates neither the
+// markup nor the copy. shortRunReference names the run in the park column
+// (cinatra#3007) from that same module.
+import { ReviewGateBlocked, ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -551,6 +554,12 @@ export function AgenticRunPanel({
   const [isRechecking, setIsRechecking] = useState(false);
 
   const [isApproving, setIsApproving] = useState(false);
+
+  // The drawn blocked state for the active gate (cinatra#3219). Set from the
+  // typed outcome `approveReviewTask` returns; the reason is one of the review
+  // surface's closed blocked set, so this panel names a state instead of
+  // authoring a message.
+  const [gateBlocked, setGateBlocked] = useState<"no-longer-pending" | null>(null);
   // cinatra#2444 — bare-gate inline Reject. Tracks WHICH decision is in
   // flight so the Approve button doesn't flip to its pending label while a
   // Reject submit (which also drives isApproving via trackApproving) runs.
@@ -998,7 +1007,22 @@ export function AgenticRunPanel({
       if (args.trackApproving) setIsApproving(true);
       if (args.suppressGate) justSubmittedXRendererRef.current = args.xRenderer;
       try {
-        await approveReviewTask(args.reviewTaskId, args.payload, args.payloadFieldName);
+        const outcome = await approveReviewTask(
+          args.reviewTaskId,
+          args.payload,
+          args.payloadFieldName,
+        );
+        if (!outcome.ok) {
+          // cinatra#3219 — the gate moved on under this submit. It is a
+          // RETURNED outcome, so it is handled here and never becomes a throw:
+          // the `rethrow` caller is the setup-field submit, whose rethrow is
+          // what put the masked framework string into SchemaFieldRenderer's
+          // submitError line. Nothing is submitted, so the suppression is
+          // released and the surface draws the blocked state instead.
+          if (args.suppressGate) justSubmittedXRendererRef.current = null;
+          setGateBlocked(outcome.blocked);
+          return;
+        }
         if (args.clearAttachmentsOnSuccess) pendingAttachmentsRef.current = [];
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
@@ -1249,6 +1273,19 @@ export function AgenticRunPanel({
   ) {
     setPrevBufferedHitlValueKey(bufferedHitlValueKey);
     setBufferedHitlValue({});
+  }
+
+  // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
+  // review-task id — not on the buffer key above (cinatra#3219 convergence).
+  // `xRenderer::fieldName` is not gate identity: a mid-run gate carries no
+  // fieldName and can reuse the same renderer, so a block keyed that way would
+  // survive onto a gate that is genuinely open and hide it behind a panel that
+  // says the review is closed.
+  const blockedGateTaskId = effectiveHitlContext?.reviewTaskId ?? null;
+  const [prevBlockedGateTaskId, setPrevBlockedGateTaskId] = useState<string | null>(null);
+  if (blockedGateTaskId !== null && blockedGateTaskId !== prevBlockedGateTaskId) {
+    setPrevBlockedGateTaskId(blockedGateTaskId);
+    if (gateBlocked !== null) setGateBlocked(null);
   }
 
   // THE derived-context refetch. Lifted out of the interval so
@@ -2224,6 +2261,15 @@ export function AgenticRunPanel({
               data-field-presentation={hitlFieldPresentationFor("run_card")}
             >
               {(() => {
+                // The gate is gone (cinatra#3219). Draw the state the surface
+                // already draws for it — the shipped panel, its ratified copy
+                // and its Refresh back to the live gate — in place of the whole
+                // gate region: every submit this region offers, the outer
+                // Continue and the setup field alike, would be submitting into
+                // a gate that is no longer there.
+                if (gateBlocked) {
+                  return <ReviewGateBlocked reason={gateBlocked} />;
+                }
                 // Presentation-first branch. When the gate embedded a
                 // PresentationHint in currentValues.presentation, short-circuit
                 // through the generic DispatchRenderer instead of resolving a
