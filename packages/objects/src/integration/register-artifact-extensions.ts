@@ -200,6 +200,8 @@ export function registerParsedArtifactManifest(
   // without provenance and are therefore never touched.
   objectTypeRegistry.removeByPackage(packageName);
   semanticRendererRegistry.removeByPackage(packageName);
+  // cinatra#3033: the cross-namespace claim ledger reconciles with them.
+  forgetCrossNamespaceClaimsOf(packageName);
   // MEANING-SURFACE channel (cinatra#1891 A3): register this pack's pack-wide
   // matcher surface iff it declares one — ORTHOGONAL to object-type
   // registration, and BEFORE the no-objectTypes early-return below, so it
@@ -243,6 +245,123 @@ export function registerParsedArtifactManifest(
     return false;
   }
   return registerDeclaredArtifactTypes(descriptor, packageName);
+}
+
+// ---------------------------------------------------------------------------
+// THE CROSS-NAMESPACE CLAIM LEDGER (cinatra#3033).
+//
+// A pack may claim a type id in ANOTHER package's namespace: ownership is by
+// namespace, so the claim registers a RENDERER but never the type, and the
+// owning package is the sole registrar. That is correct when the owner exists.
+// When it does not — the id names a namespace no installed package has, and
+// none ever will — the claim resolves NOWHERE and the type simply vanishes: it
+// is absent from `listArtifacts()`, so it is absent from the console's type map,
+// silently, with nothing anywhere saying why.
+//
+// MEASURED over the pinned tree: three claims are orphaned this way —
+// `@cinatra-ai/brand-voice:guide`, `@cinatra-ai/marketing-icp:profile` and
+// `@cinatra-ai/slide-deck:deck`, each claimed by its own `-artifact` pack under a
+// namespace no installed package has. Each vanishes from the type map in silence;
+// this ledger is what lets the map say so instead.
+//
+// NOT one of them: `@cinatra-ai/linkedin:post-draft`. It reads like the same
+// shape — a claim under a namespace with no package — but it RESOLVES, because
+// the HOST is its single runtime registrar (`register-types.ts`, epic #1448
+// principle 5). Its own absence from the console had a different cause, fixed at
+// that registration: it carried no `isArtifact` descriptor, so it was never an
+// artifact type to list. `claimedTypeIdsWithNoRegistrar` correctly says nothing
+// about it — a resolvable type is not an orphaned claim.
+//
+// This ledger records every cross-namespace claim as it is made, and
+// `claimedTypeIdsWithNoRegistrar()` answers, AFTER all packs have registered,
+// which of them nothing owns. It is a reading, not a registration: it never
+// mints a type, and a claim whose owner registers later stops being reported by
+// the same read.
+// ---------------------------------------------------------------------------
+
+// CROSS-COMPILATION SINGLETON, for the SAME reason `objectTypeRegistry` is one
+// (registry.ts): Next.js builds separate bundler compilations, each with its own
+// module cache, and a pack registered by the package-store rescan in one of them
+// would otherwise leave its claims in a Map the console's compilation cannot
+// see — a ledger that answers "orphaned" for a claim whose owner is registered
+// right there. Anchored on the same namespaced+versioned `Symbol.for` idiom
+// (convergence review).
+/** typeId -> the package names that claimed it without owning it. */
+const CROSS_NAMESPACE_CLAIM_LEDGER_KEY = Symbol.for(
+  "@cinatra-ai/objects:cross-namespace-claim-ledger/v1",
+);
+type ClaimLedgerHolder = { [k: symbol]: Map<string, Set<string>> | undefined };
+const _claimLedgerHolder = globalThis as unknown as ClaimLedgerHolder;
+const crossNamespaceClaimLedger: Map<string, Set<string>> =
+  _claimLedgerHolder[CROSS_NAMESPACE_CLAIM_LEDGER_KEY] ??
+  (_claimLedgerHolder[CROSS_NAMESPACE_CLAIM_LEDGER_KEY] = new Map<string, Set<string>>());
+
+function recordCrossNamespaceClaim(typeId: string, claimedBy: string): void {
+  const existing = crossNamespaceClaimLedger.get(typeId);
+  if (existing) existing.add(claimedBy);
+  else crossNamespaceClaimLedger.set(typeId, new Set([claimedBy]));
+}
+
+/**
+ * Drop this package's claims — the reconcile parity with
+ * `objectTypeRegistry.removeByPackage`, on BOTH roads it is needed:
+ *  - before a re-registration, so a manifest that dropped a claim stops being
+ *    reported for it; and
+ *  - on archive/uninstall TEARDOWN (exported for the host adapter beside
+ *    `invalidateObjectTypesForPackage`), so a removed package does not keep a
+ *    stale claim alive and keep naming a gap nothing is asking for any more
+ *    (convergence review).
+ */
+export function forgetCrossNamespaceClaimsOf(packageName: string): void {
+  for (const [typeId, claimants] of crossNamespaceClaimLedger) {
+    claimants.delete(packageName);
+    if (claimants.size === 0) crossNamespaceClaimLedger.delete(typeId);
+  }
+}
+
+/**
+ * The claimed type ids that NOTHING registers — one row per orphaned claim, in
+ * declaration order. Read after registration to say out loud what would
+ * otherwise be an unexplained gap in the type map.
+ */
+export function claimedTypeIdsWithNoRegistrar(): readonly {
+  typeId: string;
+  owningNamespace: string | null;
+  claimedBy: readonly string[];
+}[] {
+  const orphans: {
+    typeId: string;
+    owningNamespace: string | null;
+    claimedBy: readonly string[];
+  }[] = [];
+  for (const [typeId, claimants] of crossNamespaceClaimLedger) {
+    // EXISTENCE, NOT PROVENANCE (convergence review, finding 2).
+    // `getRegisteringPackage` answers null for BOTH an unregistered id and a
+    // host/built-in type registered without package provenance — so asking it
+    // here would report a legitimate claim on a host type as an orphan.
+    // `resolve` answers the question actually being asked: does anything define
+    // this type at all?
+    if (objectTypeRegistry.resolve(typeId)) continue;
+    orphans.push({
+      typeId,
+      owningNamespace: claimedTypeRegisteringPackage(typeId),
+      claimedBy: [...claimants].sort(),
+    });
+  }
+  return orphans;
+}
+
+/** One line per orphaned claim — the failure floor for the type map: a display
+ *  that cannot be drawn says why, instead of being missing in silence. */
+export function reportClaimedTypeIdsWithNoRegistrar(): readonly string[] {
+  return claimedTypeIdsWithNoRegistrar().map(
+    (o) =>
+      `[artifacts:bridge] '${o.typeId}' is claimed by ${o.claimedBy.join(", ")} but nothing registered it in this process` +
+      (o.owningNamespace
+        ? ` — ownership of the id belongs to '${o.owningNamespace}', which registered no such type here, so the type never registers and never draws` +
+          `; either that package is not present, or it does not declare this type`
+        : " — its id names no resolvable namespace"),
+  );
 }
 
 /**
@@ -290,7 +409,12 @@ function registerDeclaredArtifactTypes(
     // malformed / non-namespaced id (owner === null) is skipped entirely.
     const owner = claimedTypeRegisteringPackage(claim.type);
     if (owner !== packageName) {
-      if (owner !== null) crossNamespaceRendererTypeIds.push(claim.type);
+      if (owner !== null) {
+        crossNamespaceRendererTypeIds.push(claim.type);
+        // cinatra#3033 — remembered so an orphaned claim can be NAMED rather
+        // than disappearing from the type map without a word.
+        recordCrossNamespaceClaim(claim.type, packageName);
+      }
       continue;
     }
     // Enforce the type's inline JSON Schema when present; fall back to a permissive

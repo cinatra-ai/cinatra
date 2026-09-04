@@ -319,9 +319,21 @@ export async function enqueueAgentRun(
   //   - `setRunTriggerForActor`  (trigger-service.ts)    — member session authority
   //     (also unwinds its durable trigger row + released gate)
   //
-  // Callers that CREATE a run and enqueue it in the same frame are not exposed:
-  // the creation perimeter (layer 1) already asserted the same scope, and they
-  // hold no pre-existing `queued` row to strand.
+  // A FOURTH SHAPE, MEASURED AND NOW COMPENSATED (cinatra#3033). It used to be
+  // written here that callers which CREATE a run and enqueue it in the same
+  // frame are not exposed, because they hold no pre-existing `queued` row to
+  // strand. That is true only of the PRE-DISPATCH creators. A launch with
+  // `create.kind: "full"` and `dispatch.kind: "caller_dispatches"` inserts the
+  // row ALREADY `queued` and returns; its enqueue is a LATER statement, so
+  // between the two the run IS a durable `queued` row this function can refuse —
+  // and the run then sat `queued`, `started_at` null, `error` null, no trigger,
+  // no job, with nothing able to move it. Those callers now compensate too, with
+  // `failRunOnCallerDispatchFailure` (lifecycle-coordinator), which lands the run
+  // terminal with the one line that says why:
+  //   - `invokePublishedAgentTool` (packages/agents/src/mcp/agent-tools-registry.ts)
+  //   - the in-process A2A `enqueueJob` (packages/agents/src/a2a-actions.ts)
+  // The remaining pre-dispatch creators are unchanged and still hold no
+  // strandable row.
   {
     const { assertAgentRunDispatchAuthorized } = await import(
       "@cinatra-ai/agents/store"
