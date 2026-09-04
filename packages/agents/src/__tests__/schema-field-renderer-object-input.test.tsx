@@ -29,6 +29,11 @@ import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/re
 
 // Same lucide stub as the sibling schema-field-renderer suites.
 vi.mock("lucide-react", () => ({
+  // The gate's control floor draws the arrow glyph after the word
+  // (cinatra#3047 fix leg 8): the drawing's floor is "the primary
+  // Continue, right-aligned over a hairline floor".
+  ArrowRight: ({ className }: { className?: string }) =>
+    React.createElement("span", { "data-icon": "arrow-right", className }),
   LinkIcon: ({ className }: { className?: string }) =>
     React.createElement("span", { "data-icon": "link", className }),
   MailIcon: ({ className }: { className?: string }) =>

@@ -39,7 +39,7 @@
 // however it is drawn, and by whichever module — can open an empty column.
 // ---------------------------------------------------------------------------
 
-import { Check } from "lucide-react";
+import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -63,8 +63,10 @@ import {
   isRunSurfaceStepSelectable,
   resolveRunSurfaceSelection,
   runSurfaceNodeExists,
+  runSurfaceStepDrawsGlyph,
   type RunStepSelection,
   type RunSurfaceRailStep,
+  type RunSurfaceRailStepKey,
 } from "./run-surface-rail-step";
 
 // Re-exported as TYPES ONLY. The subpath consumers already import
@@ -72,7 +74,7 @@ import {
 // again for the review page), and a type crosses no boundary. The predicate is
 // deliberately NOT re-exported: a server caller that reached it through here
 // would be handed a client reference.
-export type { RunStepSelection, RunSurfaceRailStep };
+export type { RunStepSelection, RunSurfaceRailStep, RunSurfaceRailStepKey };
 
 // THE RAIL'S LABELS ARE NOT DECLARED HERE. They live in
 // `run-surface-rail-labels.ts`, a module carrying no directive, because the
@@ -109,33 +111,122 @@ export function useRunStepSelection() {
  * vendored primitives. `ghost` plus the size/hover neutralisers is what keeps a
  * rail ROW looking like a rail row rather than a pill: no chrome at rest, no
  * muted fill while it is selected.
+ *
+ * `border-0` IS THE DRAWING'S RHYTHM (cinatra#3188 item 2, forward + fix leg 1).
+ * The drawing's rail is two boxes and the mark's own margin between them --
+ * ".rail .step { ... padding: 2px 0; ... }" over the 24px circle is a 28px
+ * entry, and ".rail .sep { ... margin: 4px 0 4px 11px; ... }" is the only
+ * whitespace between two of them. The design-system Button draws a 1px
+ * TRANSPARENT border on every side: invisible, and still in the box. It made
+ * each row 30px and put an extra pixel of whitespace above and below every
+ * mark -- the surplus the first proof round measured at 7.5px above and 6.5px
+ * below the drawing's own 4px and 4px. Nothing about the row's padding was
+ * wrong, so the fix is the box: the rail row carries no border, exactly as the
+ * drawing's `.rail .step` carries none. THE ROW KEEPS ITS FOCUS INDICATOR --
+ * the base's `focus-visible:ring-3` ring is what draws focus on this control,
+ * and a 1px border that is transparent at rest never drew it.
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
-  "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
 
 /**
  * The same row, for one that cannot be opened: neither the hover affordance nor
  * the press animation of a row that does something (cinatra#2970).
  */
 export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
-  "h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
+  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
  * `StepperIndicator` gives an active or completed step, and the ones
  * `RunStepRailPanel` gives an inactive row — so a gate row reads as one of the
  * rail's rows and no second vocabulary is invented for it.
+ *
+ * A SETTLED ENTRY IS NEVER FILLED (cinatra#3188 item 1). The ratified drawing
+ * names the settled entry and the upcoming entry in ONE rule — ".rail
+ * .step.upcoming .glyph, .rail .step.settled .glyph { background:
+ * rgba(92,103,121,0.4); color: var(--paper); }" — so the two circles take the
+ * same muted ground, and the indigo fill is reserved for the entry the reader
+ * is standing on. The rule is HELD HERE rather than at each row, because the
+ * rail has three rows in three modules and a rule each of them had to
+ * remember is a rule one of them would forget: pass the settled answer and the
+ * circle cannot come out filled.
  */
-export function runSurfaceRailIndicatorClass(filled: boolean) {
+/*
+ * THE GROUND IS THE DESIGN SYSTEM'S OWN MUTED INK, AND THAT IS NAMED RATHER
+ * THAN SILENTLY DIFFERENT (cinatra#3188, item 4 of the first proof round's
+ * record).
+ *
+ * The drawing writes the ground as a literal -- "background:
+ * rgba(92,103,121,0.4)" -- and the rail takes it from the token instead:
+ * `bg-muted-foreground/40`, whose ink is the system's own muted `--muted`,
+ * `#5a6477` = rgb(90,100,119). At four tenths the two compose one unit apart
+ * per channel, which is the distance between a drawing that quotes a colour
+ * and a page that owns one. THE TOKEN IS KEPT: a rail that hard-coded the
+ * literal would be the one element on the page that stopped following the
+ * theme, and the drawing's own rule reads the paper through `var(--paper)` for
+ * exactly that reason. The one-unit gap is a named deviation, not a defect to
+ * close.
+ */
+export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
   return cn(
     "relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs",
-    filled ? "bg-primary text-primary-foreground" : "bg-muted-foreground/40 text-background",
+    filled && !settled
+      ? "bg-primary text-primary-foreground"
+      : "bg-muted-foreground/40 text-background",
   );
 }
 
+// THE RUN PAGE'S OWN RAIL ROWS ARE NOT DECLARED HERE. The rows the run page
+// draws through the vendored `Stepper` -- the panel rail's steps, the rows
+// beside them and the live rail inside the orchestrator panel -- read the same
+// drawing anatomy from `run-step-rail-extra-entry`, the module all three
+// already import. Held here, that declaration pulled this frame into the module
+// graph of four route-budgeted routes and the route-graph ratchet refused it.
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {
   return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
+}
+
+/**
+ * THE SKILLS ENTRY'S OWN GLYPH (cinatra#3047, the re-shoot's third defect).
+ *
+ * The ratified drawing at the capture contract's pin draws this entry with a
+ * clipboard-check glyph while its question is open, where every other step of
+ * the rail carries a numeral: the Skills step is the run's gate on what it may
+ * use, not the run's Nth piece of work, and the drawing numbers the work alone
+ * (`[glyph] Skills · 1 Fetch cohort · 2 Draft email`). The re-shoot photographed
+ * a numeral "1" here, with the first work step pushed to "2".
+ *
+ * ONE AUTHOR. Two rows draw this entry — the run page's and the review page's
+ * anchored `RecommendationRailStepRow`, and the setup run page's generic
+ * `RunSurfaceRailRow` — and a glyph authored twice is a glyph for one of them to
+ * miss, exactly as the label was before review point A. The conformance id is
+ * what lets a capture measure "a glyph, and no numeral" without knowing which of
+ * the two rows drew it.
+ *
+ * IT IS NOT DRAWN ON A SETTLED ROW, and that is the drawing's own rule rather
+ * than a simplification: a resolved gate is the rail's read-only history row —
+ * "the completed circle in place of the numeral" — and every settled
+ * illustration draws the Skills entry with exactly the check the rail gives any
+ * completed step. So this glyph belongs to the open question, and the check to
+ * the answered one.
+ */
+export function RunSurfaceRailStepGlyph(): ReactElement {
+  return (
+    // THE ANCHOR IS THE SPAN, NOT THE ICON. A suite that stubs `lucide-react`
+    // renders no icon element at all, and an anchor carried by the icon would
+    // vanish with it — a capture and a suite would then be measuring different
+    // things on the same row. The span is this component's own, so "a glyph and
+    // no numeral" is readable wherever the row is drawn.
+    <span
+      aria-hidden="true"
+      data-conformance-id="recommendation-rail-glyph"
+      className="flex items-center justify-center"
+    >
+      <ClipboardCheck className="h-3 w-3" />
+    </span>
+  );
 }
 
 /**
@@ -175,8 +266,11 @@ export function RunSurfaceRailRow({
   /** The step this row selects. */
   selectionKey: Exclude<RunStepSelection, "detail">;
   label: string;
-  /** The numeral the circle shows — the row's 1-based position in its rail. */
-  displayStep: number;
+  /** The numeral the circle shows — the row's position among the rail's
+   *  NUMBERED steps. `null` for a step the drawing draws with its own glyph
+   *  instead (`runSurfaceStepDrawsGlyph`), which is how the Skills entry stops
+   *  consuming a numeral the work steps would otherwise start after. */
+  displayStep: number | null;
   /** The row's own conformance id, so a capture can address exactly this row. */
   conformanceId: string;
   /** The indicator's conformance id, where the caller measures the circle. */
@@ -234,12 +328,28 @@ export function RunSurfaceRailRow({
     >
       <span
         data-conformance-id={indicatorConformanceId}
-        // A settled circle is FILLED whether or not its step is the open one:
-        // it is what the rail already gives a completed step, and it is what
-        // makes the row read as history rather than as something still ahead.
-        className={runSurfaceRailIndicatorClass(emphasised || settled)}
+        // A settled circle takes the drawing's MUTED ground whether or not its
+        // step is the open one (cinatra#3188 item 1) — the same ground the
+        // entry still ahead takes, which is what makes the row read as history
+        // rather than as the entry the reader is standing on. The check inside
+        // it is what records that it was answered.
+        className={runSurfaceRailIndicatorClass(emphasised, settled)}
       >
-        {settled ? <Check className="h-3 w-3" /> : displayStep}
+        {/* THREE READINGS, IN THE ORDER THE DRAWING RESOLVES THEM
+            (cinatra#3047). A settled step is the completed circle — the rail's
+            read-only history row, and the same check every completed step
+            carries. An unsettled step that the drawing gives its own glyph
+            draws the glyph. Everything else is the numeral it has always been.
+            The glyph is asked for from the KEY rather than passed in, so a
+            caller cannot give one row a numeral and another the glyph for the
+            same step. */}
+        {settled ? (
+          <Check className="h-3 w-3" />
+        ) : runSurfaceStepDrawsGlyph(selectionKey) ? (
+          <RunSurfaceRailStepGlyph />
+        ) : (
+          displayStep
+        )}
       </span>
       {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
           "the completed circle in place of the numeral, the title
@@ -247,6 +357,29 @@ export function RunSurfaceRailRow({
           none. */}
       <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
     </Button>
+  );
+}
+
+/**
+ * THE MARK BETWEEN TWO ENTRIES (cinatra#3188 item 2).
+ *
+ * The ratified drawing's rail draws one of these between every pair of adjacent
+ * entries, at its own measurements: ".rail .sep { width: 2px; height: 8px;
+ * margin: 4px 0 4px 11px; border-radius: 1px; background: var(--line); }" —
+ * 11px being the centre of the 24px circle the entries carry, so the marks and
+ * the circles read as one line down the rail.
+ *
+ * It is a MARK, not an entry: nothing to read out and nothing to press, so it
+ * is hidden from the accessibility tree.
+ */
+export function RunSurfaceRailSeparator(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      data-run-surface-rail-separator=""
+      data-conformance-id="run-step-rail-separator"
+      className="my-1 ml-[11px] h-2 w-0.5 shrink-0 rounded-[1px] bg-line"
+    />
   );
 }
 
@@ -300,15 +433,30 @@ export function RunSurfaceRail({
 
   return (
     <RunStepSelectionContext.Provider value={{ selected, select }}>
-      {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows. */}
+      {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows,
+          with the drawing's separator standing between adjacent entries.
+
+          THE COLUMN ITSELF NO LONGER SPACES THE ROWS (cinatra#3188 item 2). The
+          drawing puts the whole gap between two entries INSIDE the mark — 4px
+          above it and 4px below — so a column gap on top of that would space
+          the rail at three times the drawing's rhythm. The rows keep their own
+          2px of padding, exactly as the drawing's `.rail .step` does. */}
       <div
         data-conformance-id="run-step-rail-column"
         data-run-step-rail-column=""
-        className="flex shrink-0 flex-col gap-2 pt-1"
+        className="flex shrink-0 flex-col pt-1"
       >
-        {steps.map((step) => (
-          <Fragment key={step.key}>{step.row}</Fragment>
+        {steps.map((step, index) => (
+          <Fragment key={step.key}>
+            {index > 0 ? <RunSurfaceRailSeparator /> : null}
+            {step.row}
+          </Fragment>
         ))}
+        {/* The page's own rows are one more entry after the gate rows, so the
+            mark stands before them too. They carry their own separators
+            inside (`RunStepRailPanel`), which is why only the join is drawn
+            here. */}
+        {runSurfaceNodeExists(rail) && steps.length > 0 ? <RunSurfaceRailSeparator /> : null}
         {rail}
       </div>
 

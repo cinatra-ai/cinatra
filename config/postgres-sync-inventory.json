@@ -333,7 +333,7 @@
     },
     {
       "file": "src/lib/run-selected-skill-revisions.ts",
-      "calls": 7
+      "calls": 9
     },
     {
       "file": "src/lib/skill-bundle-store.ts",

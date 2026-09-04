@@ -96,6 +96,10 @@ function TabsContent({
 // header that renders no divider so the rule does not stack with a header rule
 // above.
 //
+// cinatra#3216 — the rule starts IMMEDIATELY right of the last tab, so the row
+// grid carries NO column gap (it used to carry `gap-7`, 28px, which read as a
+// hole between the tabs and the rule). Kept in lockstep with the host copy.
+//
 // Host parity: `src/components/ui/tabs.tsx` composes this from a Separator
 // (`major`) component. To keep the primitive dependency-light (no host
 // Separator import, no `@/`
@@ -109,7 +113,7 @@ function TabsListRow({
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.List>) {
   return (
-    <div className="grid grid-cols-[auto_1fr] items-end gap-7">
+    <div className="grid grid-cols-[auto_1fr] items-end">
       <TabsList className={cn("border-b-0", className)} {...props}>
         {children}
       </TabsList>
