@@ -59,6 +59,7 @@ async function readPinnedRevisionText(input: {
   orgId: string;
   artifactId: string;
   representationRevisionId: string;
+  liveOnly: boolean;
 }): Promise<string | null> {
   try {
     // THE RESOLUTION READS THE DATABASE, so it belongs INSIDE the guard with
@@ -71,6 +72,12 @@ async function readPinnedRevisionText(input: {
       orgId: input.orgId,
       artifactId: input.artifactId,
       representationRevisionId: input.representationRevisionId,
+      // THE BOUND THE MEMBERSHIP ANSWER WAS MADE UNDER travels with the member
+      // (`RevisionMemberOutcome.historical`), so this read resolves the same
+      // revision under the same rule instead of guessing: a live reading never
+      // replays a tombstoned pin, and a settled card that kept its work keeps
+      // its content too.
+      liveOnly: input.liveOnly,
     });
     if (!resolved) return null;
     const store = createLocalDiskBlobStore();
@@ -127,6 +134,7 @@ export function reviewTargetSubstancePorts(
           orgId: input.orgId,
           artifactId: input.artifactId,
           representationRevisionId: input.representationRevisionId,
+          liveOnly: member.historical !== true,
         });
         return text === null ? null : { class: "text", text };
       }

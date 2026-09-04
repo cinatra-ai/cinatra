@@ -166,6 +166,20 @@ export type RevisionMemberOutcome =
       configuration?: unknown;
       /** Its stable digest — what a data capability is sealed to (enabler 0.12). */
       configurationDigest?: string | null;
+      /**
+       * Was this member resolved through the GATE-AUTHORIZED HISTORICAL reader
+       * (enabler 0.9) rather than the live one?
+       *
+       * It exists so a later read of the SAME revision — the content channel's
+       * server read, which runs after this port has answered — is made under the
+       * SAME bound this membership answer was made under, instead of guessing. A
+       * settled card that kept its work must keep its content too; a live
+       * reading must not replay a tombstoned pin to get one.
+       *
+       * Optional, and absent reads as the LIVE bound: that is what every caller
+       * written before the content channel was bound meant.
+       */
+      historical?: boolean;
     }
   | null;
 
@@ -451,11 +465,12 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  // AWAITED, like `resolveMount` above (cinatra#3080, fix leg 7). The content
-  // channel reads the pinned revision on the SERVER — "the text arm streams
-  // bytes off the blob store, and the plan asks for an asynchronous builder
-  // precisely so no display is ever tempted to fetch them itself" — so the props
-  // a review target is built with cannot be assembled synchronously any more.
+  // AWAITED, because the props builder READS THE PINNED REVISION (enabler 0.3:
+  // "an ASYNCHRONOUS PROPS BUILDER that reads the pinned revision on the
+  // server"). The synchronous signature this replaces is what kept every
+  // consumer of this core on the named-absent content projection, and a display
+  // handed an absent projection draws its own "nothing pinned" floor over work
+  // that is really there.
   const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,

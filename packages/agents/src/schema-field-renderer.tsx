@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LinkIcon, MailIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowRight, LinkIcon, MailIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -55,6 +55,29 @@ type Props = {
    */
   bypassRegistry?: boolean;
 };
+
+/**
+ * THE CONTROL FLOOR EVERY GATE PAGE DRAWS (cinatra#3047 fix leg 8).
+ *
+ * The ratified drawing, `specs/app-artifact-review.html` section I: "the
+ * primary Continue, right-aligned over a hairline floor: the same control
+ * floor every gate page draws". The drawing's own markup for that floor is a
+ * right-aligned row over a one-pixel line rule, with the arrow glyph after the
+ * word — which is exactly what the approval card's own floor already draws
+ * (`flex justify-end pt-2 border-t border-line`, `ArrowRight` after the label).
+ *
+ * Every single-field branch below wrapped its submit in a bare box instead:
+ * left-aligned, no rule, no glyph. On the run page's input step that box IS the
+ * gate's floor — there is no other control on the page — so the eighth proof
+ * round photographed a gate whose Continue stood on nothing. One floor, stated
+ * once and taken by every branch, so the renderer cannot drift from the card.
+ *
+ * `hideSubmit` is unchanged: where the form owns the one control, no floor is
+ * drawn at all, because the floor belongs to whoever draws the control.
+ */
+function GateControlFloor({ children }: { children: ReactNode }) {
+  return <div className="flex justify-end pt-2 border-t border-line">{children}</div>;
+}
 
 function isLikelyMultiline(schema: Record<string, unknown>): boolean {
   const explicit = (schema as { ["x-multiline"]?: boolean })["x-multiline"];
@@ -575,11 +598,12 @@ export function SchemaFieldRenderer(props: Props) {
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         {!hideSubmit && (
-          <div>
-            <Button size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void submitNum()}>
+          <GateControlFloor>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void submitNum()}>
               {submitting ? "Submitting…" : "Continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </GateControlFloor>
         )}
       </div>
     );
@@ -604,11 +628,12 @@ export function SchemaFieldRenderer(props: Props) {
         {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
-          <div>
-            <Button size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
+          <GateControlFloor>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
               {submitting ? "Submitting…" : "Continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </GateControlFloor>
         )}
       </div>
     );
@@ -641,11 +666,12 @@ export function SchemaFieldRenderer(props: Props) {
         {submitError ? <FieldDescription className="text-destructive">{submitError}</FieldDescription> : null}
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
-          <div>
-            <Button size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+          <GateControlFloor>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </GateControlFloor>
         )}
       </Field>
     );
@@ -678,11 +704,12 @@ export function SchemaFieldRenderer(props: Props) {
         {submitError ? <FieldDescription className="text-destructive">{submitError}</FieldDescription> : null}
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
-          <div>
-            <Button size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+          <GateControlFloor>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </GateControlFloor>
         )}
       </Field>
     );
@@ -706,11 +733,12 @@ export function SchemaFieldRenderer(props: Props) {
         {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
-          <div>
-            <Button size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+          <GateControlFloor>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </GateControlFloor>
         )}
       </div>
     );
@@ -732,11 +760,12 @@ export function SchemaFieldRenderer(props: Props) {
       {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
-        <div>
-          <Button size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+        <GateControlFloor>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
             {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
-        </div>
+        </GateControlFloor>
       )}
     </div>
   );
@@ -952,11 +981,12 @@ function SingleTextObjectField(props: ObjectFieldProps & { textProperty: string 
       {displayError ? <p className="text-xs text-destructive">{displayError}</p> : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
-        <div>
-          <Button size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
+        <GateControlFloor>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
             {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
-        </div>
+        </GateControlFloor>
       )}
     </div>
   );
@@ -1344,11 +1374,12 @@ function StructuredObjectField(props: ObjectFieldProps) {
       ) : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
-        <div>
-          <Button size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
+        <GateControlFloor>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
             {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
-        </div>
+        </GateControlFloor>
       )}
     </div>
   );
@@ -1492,15 +1523,16 @@ function JsonObjectField(props: ObjectFieldProps) {
       {displayError ? <p className="text-xs text-destructive">{displayError}</p> : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
-        <div>
-          <Button
+        <GateControlFloor>
+          <Button className="gap-1.5"
             size="sm"
             disabled={disabled || submitting || !!shapeError}
             onClick={() => void handleContinue()}
           >
             {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
-        </div>
+        </GateControlFloor>
       )}
     </div>
   );

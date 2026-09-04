@@ -269,15 +269,20 @@ describe("the evaluator's four fixtures", () => {
     expect(projectsOwnerCard(projection)).toBe(true);
   });
 
-  it("FAILS a partial mount — the row is there but a decision control is not", () => {
+  it("FAILS a partial mount — a control is there but the OWNER's own anchor is not", () => {
+    // RE-AIMED (cinatra#3047). This drove the four owner anchors this row used
+    // to carry and dropped three of them. The row now names ONE — the chip
+    // row's own conformance id, the only anchor its owner draws on every host,
+    // because the run page's Skills step decides with a checkbox and a Continue
+    // rather than with the three per-chip affordances — so "partial" is a node
+    // that carries a control WITHOUT the owner's anchor, which is exactly the
+    // shape this assertion exists to refuse: something on the page that looks
+    // like a decision but is not this owner's card.
     const projection: TurnProjection = {
       parts: heldParts(CLEAN_DISPATCH_TEXT),
       nodes: [
         cardNode({
-          anchors: [
-            '[data-conformance-id="run-chip-row"]',
-            '[data-skill-action="confirm"]',
-          ],
+          anchors: ['[data-skill-action="confirm"]'],
         }),
       ],
     };

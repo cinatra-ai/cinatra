@@ -155,7 +155,11 @@ export function bindArtifactReviewPorts(ctx: {
       representationRevisionId,
       liveOnly,
     });
-    if (file) return { mime: file.mime, form: "file" };
+    // The bound this answer was made under travels WITH it (see
+    // `RevisionMemberOutcome.historical`), so the content read that follows
+    // resolves the same revision under the same rule rather than guessing.
+    const historical = !liveOnly;
+    if (file) return { mime: file.mime, form: "file", historical };
     const nonFile = resolveNonFileArtifactRevision({
       orgId,
       artifactId,
@@ -168,6 +172,7 @@ export function bindArtifactReviewPorts(ctx: {
       form: nonFile.form,
       configuration: nonFile.configuration,
       configurationDigest: nonFile.configurationDigest,
+      historical,
     };
   };
 

@@ -1,33 +1,15 @@
 /**
  * Vendor byline resolution for the Installed extensions page (cinatra#948
- * reopen, gap 3).
+ * reopen, gap 3) — RE-EXPORTED from its home in `@cinatra-ai/registries`
+ * (cinatra#3047).
  *
- * §VI renders "{Type} by {Vendor}" with the HUMAN vendor name in ink. The
- * hydration chain is manifest/registry metadata only:
- *
- *   1. the extension's SELF-DECLARED vendor identity name (`cinatra.vendor`
- *      from the generated static extension manifest — the value the
- *      marketplace publish gate verified);
- *   2. the registry summary's npm `author` (packument manifest metadata);
- *   3. null — the byline renders the bare "{Type}" with no "by".
- *
- * The raw npm scope segment NEVER renders as the vendor (the shipped
- * `vendorFor` fell back to it — "Agent by cinatra-ai" — which the reopen
- * live-proved against §VI L894–898).
+ * §VI renders "{Type} by {Vendor}" with the HUMAN vendor name in ink, and this
+ * module path is what the marketplace card, the modal byline and the assigned-
+ * skills display already import. The function itself moved one package down so
+ * a third surface — the run page's Skills step, drawn by `@cinatra-ai/agents`,
+ * which `@cinatra-ai/extensions` DEPENDS on — can print the same byline without
+ * closing a dependency cycle. Nothing about the resolution changed: the module
+ * that owns it states the chain, and this file is the path that keeps every
+ * existing caller and its tests reading exactly as before.
  */
-export function resolveInstalledVendorName(input: {
-  /** `cinatra.vendor.name` from the generated static extension manifest. */
-  manifestVendorName: string | null | undefined;
-  /** Registry summary `author` (npm packument author, already length-capped). */
-  author: string | null | undefined;
-}): string | null {
-  const manifest = normalize(input.manifestVendorName);
-  if (manifest) return manifest;
-  return normalize(input.author);
-}
-
-function normalize(value: string | null | undefined): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
+export { resolveInstalledVendorName } from "@cinatra-ai/registries";

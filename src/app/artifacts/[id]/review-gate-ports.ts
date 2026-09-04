@@ -341,7 +341,7 @@ export async function readReviewGatePinnedTargets(
 
 // ---------------------------------------------------------------------------
 // SURFACE LOADER — the host decision-chrome page's single server entrypoint
-// (cinatra#1795 S12 item 4; spec design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f §I–VI). Composes the run/gate
+// (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997 §I–VI). Composes the run/gate
 // ports into the discriminated `ReviewSurfaceModel` the page renders: reads the
 // pinned gate, prepares EVERY pinned target (the host reviews the whole gate —
 // the reviewer never supplies targets), and resolves the terminal/comment
