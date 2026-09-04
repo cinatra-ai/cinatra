@@ -39,7 +39,7 @@
 // however it is drawn, and by whichever module — can open an empty column.
 // ---------------------------------------------------------------------------
 
-import { Check } from "lucide-react";
+import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
   createContext,
@@ -64,8 +64,10 @@ import {
   isRunSurfaceStepSelectable,
   resolveRunSurfaceSelection,
   runSurfaceNodeExists,
+  runSurfaceStepDrawsGlyph,
   type RunStepSelection,
   type RunSurfaceRailStep,
+  type RunSurfaceRailStepKey,
 } from "./run-surface-rail-step";
 
 // Re-exported as TYPES ONLY. The subpath consumers already import
@@ -73,7 +75,7 @@ import {
 // again for the review page), and a type crosses no boundary. The predicate is
 // deliberately NOT re-exported: a server caller that reached it through here
 // would be handed a client reference.
-export type { RunStepSelection, RunSurfaceRailStep };
+export type { RunStepSelection, RunSurfaceRailStep, RunSurfaceRailStepKey };
 
 // THE RAIL'S LABELS ARE NOT DECLARED HERE. They live in
 // `run-surface-rail-labels.ts`, a module carrying no directive, because the
@@ -188,6 +190,47 @@ export function runSurfaceRailTitleClass(selected: boolean) {
 }
 
 /**
+ * THE SKILLS ENTRY'S OWN GLYPH (cinatra#3047, the re-shoot's third defect).
+ *
+ * The ratified drawing at the capture contract's pin draws this entry with a
+ * clipboard-check glyph while its question is open, where every other step of
+ * the rail carries a numeral: the Skills step is the run's gate on what it may
+ * use, not the run's Nth piece of work, and the drawing numbers the work alone
+ * (`[glyph] Skills · 1 Fetch cohort · 2 Draft email`). The re-shoot photographed
+ * a numeral "1" here, with the first work step pushed to "2".
+ *
+ * ONE AUTHOR. Two rows draw this entry — the run page's and the review page's
+ * anchored `RecommendationRailStepRow`, and the setup run page's generic
+ * `RunSurfaceRailRow` — and a glyph authored twice is a glyph for one of them to
+ * miss, exactly as the label was before review point A. The conformance id is
+ * what lets a capture measure "a glyph, and no numeral" without knowing which of
+ * the two rows drew it.
+ *
+ * IT IS NOT DRAWN ON A SETTLED ROW, and that is the drawing's own rule rather
+ * than a simplification: a resolved gate is the rail's read-only history row —
+ * "the completed circle in place of the numeral" — and every settled
+ * illustration draws the Skills entry with exactly the check the rail gives any
+ * completed step. So this glyph belongs to the open question, and the check to
+ * the answered one.
+ */
+export function RunSurfaceRailStepGlyph(): ReactElement {
+  return (
+    // THE ANCHOR IS THE SPAN, NOT THE ICON. A suite that stubs `lucide-react`
+    // renders no icon element at all, and an anchor carried by the icon would
+    // vanish with it — a capture and a suite would then be measuring different
+    // things on the same row. The span is this component's own, so "a glyph and
+    // no numeral" is readable wherever the row is drawn.
+    <span
+      aria-hidden="true"
+      data-conformance-id="recommendation-rail-glyph"
+      className="flex items-center justify-center"
+    >
+      <ClipboardCheck className="h-3 w-3" />
+    </span>
+  );
+}
+
+/**
  * ONE RAIL ROW, for a step whose row is a numeral and a word (cinatra#2970).
  *
  * The gate steps that carry their own anchors draw their own rows
@@ -224,8 +267,11 @@ export function RunSurfaceRailRow({
   /** The step this row selects. */
   selectionKey: Exclude<RunStepSelection, "detail">;
   label: string;
-  /** The numeral the circle shows — the row's 1-based position in its rail. */
-  displayStep: number;
+  /** The numeral the circle shows — the row's position among the rail's
+   *  NUMBERED steps. `null` for a step the drawing draws with its own glyph
+   *  instead (`runSurfaceStepDrawsGlyph`), which is how the Skills entry stops
+   *  consuming a numeral the work steps would otherwise start after. */
+  displayStep: number | null;
   /** The row's own conformance id, so a capture can address exactly this row. */
   conformanceId: string;
   /** The indicator's conformance id, where the caller measures the circle. */
@@ -290,7 +336,21 @@ export function RunSurfaceRailRow({
         // it is what records that it was answered.
         className={runSurfaceRailIndicatorClass(emphasised, settled)}
       >
-        {settled ? <Check className="h-3 w-3" /> : displayStep}
+        {/* THREE READINGS, IN THE ORDER THE DRAWING RESOLVES THEM
+            (cinatra#3047). A settled step is the completed circle — the rail's
+            read-only history row, and the same check every completed step
+            carries. An unsettled step that the drawing gives its own glyph
+            draws the glyph. Everything else is the numeral it has always been.
+            The glyph is asked for from the KEY rather than passed in, so a
+            caller cannot give one row a numeral and another the glyph for the
+            same step. */}
+        {settled ? (
+          <Check className="h-3 w-3" />
+        ) : runSurfaceStepDrawsGlyph(selectionKey) ? (
+          <RunSurfaceRailStepGlyph />
+        ) : (
+          displayStep
+        )}
       </span>
       {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
           "the completed circle in place of the numeral, the title
