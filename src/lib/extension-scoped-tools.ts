@@ -247,7 +247,7 @@ async function runStoredIdeasGate(
     releaseIdeaReservation,
     reserveStoredIdea,
   } = await import("@/lib/blog/stored-ideas-gate-runner");
-  const { IDEA_RELATION_TABLE_DECLARED, resolveIdeaPick } = await import(
+  const { IDEA_RELATION_TABLE_DECLARED, parseOfferedIdeas, resolveIdeaPick } = await import(
     "@/lib/blog/stored-ideas-gate"
   );
 
@@ -340,14 +340,10 @@ async function runStoredIdeasGate(
       : { ok: false, ideas: [], reason: offer.reason };
   }
   if (op === "reserve") {
-    const offered = Array.isArray(raw.offered)
-      ? (raw.offered as Array<{
-          artifactId: string;
-          representationRevisionId: string;
-          title: string;
-          text: string;
-        }>)
-      : [];
+    // The flow sends the offer as `{{ ideas | tojson }}` — JSON TEXT, exactly like
+    // the pick beside it — so both halves of the reservation are read back by the
+    // gate's own parsers rather than an array test that an encoded list fails.
+    const offered = parseOfferedIdeas(raw.offered);
     const picked = resolveIdeaPick({ pick: raw.pick, offered });
     if (!picked.ok) return { ok: false, reason: picked.reason };
     const taken = await reserveStoredIdea({

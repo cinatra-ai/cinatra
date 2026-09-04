@@ -100,6 +100,60 @@ export function offerStoredIdeas(input: {
 }
 
 /**
+ * The offered list as the RUN carries it, read back into ideas.
+ *
+ * The flow's reservation step sends its offer as the template `{{ ideas | tojson }}`
+ * and its pick as one InputMessageNode string, so BOTH sides of a reservation
+ * arrive as JSON TEXT. The pick side has always been read back that way; this is
+ * the same reading for the list it is validated against, so the two halves of one
+ * call are parsed by one rule instead of the list silently arriving empty and
+ * refusing every pick made against it.
+ *
+ * FAILS SOFT, unlike the pick: an unreadable list is an EMPTY list, and an element
+ * that is not a usable reference is dropped rather than rejecting the whole offer.
+ * Nothing is admitted by this — `resolveIdeaPick` still fails closed on an empty
+ * list and still refuses a pick naming anything the list does not hold — so the
+ * strict decision stays in exactly one place.
+ */
+export function parseOfferedIdeas(value: unknown): OfferedIdea[] {
+  let raw: unknown = value;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) return [];
+    try {
+      raw = JSON.parse(trimmed) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  const ideas: OfferedIdea[] = [];
+  for (const element of raw) {
+    if (!element || typeof element !== "object" || Array.isArray(element)) continue;
+    const e = element as {
+      artifactId?: unknown;
+      representationRevisionId?: unknown;
+      title?: unknown;
+      text?: unknown;
+    };
+    if (typeof e.artifactId !== "string" || e.artifactId.length === 0) continue;
+    if (
+      typeof e.representationRevisionId !== "string" ||
+      e.representationRevisionId.length === 0
+    ) {
+      continue;
+    }
+    ideas.push({
+      artifactId: e.artifactId,
+      representationRevisionId: e.representationRevisionId,
+      title: typeof e.title === "string" ? e.title : "",
+      text: typeof e.text === "string" ? e.text : "",
+    });
+  }
+  return ideas;
+}
+
+/**
  * The person's pick, validated against the list they were shown.
  *
  * FAILS CLOSED IN EVERY DIRECTION the silent first-idea default used to fill in:

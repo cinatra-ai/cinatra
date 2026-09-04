@@ -35,7 +35,7 @@
     {
       "packageName": "@cinatra-ai/blog-idea-artifact",
       "repo": "cinatra-ai/blog-idea-artifact",
-      "resolvedSha": "79a3f6c137e0035fc2d20b511cfe25aea1caee27"
+      "resolvedSha": "2d54d8abc12989bc43aec5b954e9c3b2bbe538a1"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-authoring-skill",
@@ -75,22 +75,22 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-publish-agent",
       "repo": "cinatra-ai/blog-linkedin-publish-agent",
-      "resolvedSha": "9e4dbd197210389a786434af4a1df80e9b6f5181"
+      "resolvedSha": "13cbf33117b8847543399c0aab343f161fe0bb52"
     },
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
       "repo": "cinatra-ai/blog-linkedin-writer-agent",
-      "resolvedSha": "f271e9ba17494ebd594262b4906f3f8700b34a5c"
+      "resolvedSha": "8e020332b60bc4989b87ea7bad6643961ded4ebe"
     },
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f8971d50e992adad83604d14888b179d70978ff2"
+      "resolvedSha": "0d7abdb9d9f7f971a678ccd84480134e6dfcc926"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
       "repo": "cinatra-ai/blog-post-artifact",
-      "resolvedSha": "3d2094e69a7d2b65815ba67835a1ab5cf0f7580b"
+      "resolvedSha": "0d46672d772a1b84b3e580d2b1f9885e48538ad8"
     },
     {
       "packageName": "@cinatra-ai/blog-post-matcher-skill",
@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "d14bb8adf79bd92ddcb574d2377a92492b06ed3a"
+      "resolvedSha": "cd0e28178fe62749f927ef0771d28ddf88b8b889"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
@@ -265,7 +265,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
       "repo": "cinatra-ai/linkedin-artifacts",
-      "resolvedSha": "9f9874b53c010361b7ae8c7a865df66c65b6f33f"
+      "resolvedSha": "c4e793b7927ff5c3eb450b6992940b6f438d7d4d"
     },
     {
       "packageName": "@cinatra-ai/linkedin-connector",

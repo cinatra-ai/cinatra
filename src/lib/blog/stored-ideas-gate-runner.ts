@@ -61,7 +61,9 @@ export interface StoredIdeasPorts {
   listRelationRows(): Promise<Array<Record<string, unknown>>>;
   insertRelationRow(row: Record<string, unknown>): Promise<RelationWriteResult>;
   updateRelationRow(
-    keys: { run_id: string; idea_artifact_id: string },
+    /** `state` narrows the row a write may touch: a release names the reserved
+     *  state so it cannot reach a row already completed into a relation. */
+    keys: { run_id: string; idea_artifact_id: string; state?: string },
     patch: Record<string, unknown>,
   ): Promise<RelationWriteResult>;
 }
@@ -181,7 +183,10 @@ export async function releaseIdeaReservation(input: {
   readonly ideaArtifactId: string;
 }): Promise<{ ok: boolean }> {
   const written = await input.ports.updateRelationRow(
-    { run_id: input.runId, idea_artifact_id: input.ideaArtifactId },
+    // KEYED ON THE RESERVED STATE, not on run and idea alone: a completed relation
+    // must survive its run's reservation being swept, or a finished draft would
+    // hand its idea back to the list while the draft still stands.
+    { run_id: input.runId, idea_artifact_id: input.ideaArtifactId, state: "reserved" },
     { state: "released", expires_at: null },
   );
   return { ok: written.ok };
