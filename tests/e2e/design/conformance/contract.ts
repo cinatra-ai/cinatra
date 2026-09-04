@@ -1575,11 +1575,12 @@ const BREADCRUMB_ENTITY_RESOLUTION_DRIVER: SurfaceDriver = {
 //
 // Two things follow, and both are deliberate:
 //
-//   - The app pin is NOT advanced here. A pin advance is a claim that this
-//     branch's code satisfies the drawing at the new revision, and for these
-//     three surfaces it does not. The advance, its exact values and its
-//     preconditions are recorded (and checked) in
-//     scripts/design/__tests__/conformance-pin-advance-record.test.mjs.
+//   - The app pin IS advanced to the published manifest, so all three surfaces
+//     are declared and generate their batteries. A pin advance is a claim that
+//     this branch answers for the drawing at the new revision, and it does:
+//     these three answer with a named SKIP, never with a pass. The guard, the
+//     allowlist and the testid-contract holdbacks that keep that honest are
+//     checked in scripts/design/__tests__/awaiting-mount-guard.test.mjs.
 //   - The drivers below are nonetheless written in full, against the ratified
 //     manifest's own field sources, action outcomes and state variants. They are
 //     what the advance is waiting for. Nothing here stands in for the surface: a
