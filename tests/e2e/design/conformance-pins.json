@@ -6,8 +6,8 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "379e7673771e6f582626057201425e325cf684d578b5bfdc9e7d4e5511e6a215",
-      "specContentHash": "sha256:3d63418e9c8cef191a1a7a4c1ef43b842fe2ec5ef4db288fb616e4e436d5eb13"
+      "manifestSha256": "e3e59dfd5b832f408bcba30649234f1bd0fb4f5774531347a0c8fad19fc77ddc",
+      "specContentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168"
     },
     {
       "id": "app-components",

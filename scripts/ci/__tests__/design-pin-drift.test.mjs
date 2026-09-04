@@ -352,7 +352,15 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         retired: [...before].filter((id) => !after.has(id)),
       };
     };
-    expect(moved("app.json")).toEqual({ gained: ["sidebar-assistants-entry"], retired: [] });
+    expect(moved("app.json")).toEqual({
+      gained: [
+        "sidebar-assistants-entry",
+        "sidebar-workspace-entry",
+        "workspace-scope-page",
+        "workspace-scope-empty-tab",
+      ],
+      retired: [],
+    });
     expect(moved("app-components.json")).toEqual({
       gained: ["breadcrumb-entity-resolution", "scheduling-step-configured"],
       retired: ["scheduling-trigger-tab"],
