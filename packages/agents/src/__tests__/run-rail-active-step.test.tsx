@@ -16,7 +16,7 @@
  * the live interrupt's spine step alone, so a gate that arrives as a TRAILING
  * entry — a context-selection gate, a review gate past the spine — was never
  * its target: on a gate reading no entry highlighted at all. The election now
- * lives in `run-rail-active-step.ts`, pure, and is read here twice — as a unit
+ * lives in `run-step-rail-extra-entry.tsx`, pure, and is read here twice — as a unit
  * (item 2) and through the mounted panel's DOM (items 1, 3, 4).
  *
  * Run:
@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { electRunRailActiveStep } from "../run-rail-active-step";
+import { electRunRailActiveStep } from "../run-step-rail-extra-entry";
 
 const stream = vi.hoisted(() => ({ interruptContext: null as unknown }));
 

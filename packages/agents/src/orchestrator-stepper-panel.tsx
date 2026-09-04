@@ -69,7 +69,6 @@ import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bi
 import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
-import { electRunRailActiveStep } from "./run-rail-active-step";
 import {
   cancelOrchestratorAction,
   resumeStoppedOrchestratorAction,
@@ -121,6 +120,7 @@ import {
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
 import {
+  electRunRailActiveStep,
   RailExtraEntry,
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
@@ -1836,7 +1836,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
 
   const activeStep = (() => {
     // THE STEP THE RUN IS PAUSED ON IS HIGHLIGHTED (cinatra#3221). The election
-    // lives in `run-rail-active-step.ts`, pure, and is read against the ratified
+    // lives in `run-step-rail-extra-entry.tsx`, pure, and is read against the
+    // ratified
     // drawing there: a gate the run is parked on — on the spine or as one of
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:

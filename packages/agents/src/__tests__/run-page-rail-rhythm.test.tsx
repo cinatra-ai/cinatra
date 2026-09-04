@@ -38,7 +38,7 @@ import { cleanup, render } from "@testing-library/react";
 import { RunStepRailPanel } from "../run-step-rail-panel";
 import type { RunStepRailEntry } from "../run-step-rail";
 import { RUN_PAGE_RAIL_SEP_CLASS } from "../run-step-rail-extra-entry";
-import { RUN_RAIL_MARK_CLASS } from "../run-rail-mark";
+import { RUN_RAIL_MARK_CLASS } from "../run-step-rail-extra-entry";
 import { RunSurfaceRail, RunSurfaceRailRow } from "../run-surface-rail";
 import type { RunSurfaceRailStep } from "../run-surface-rail-step";
 

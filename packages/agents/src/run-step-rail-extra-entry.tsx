@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
-import { RUN_RAIL_MARK_CLASS } from "./run-rail-mark";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 
@@ -85,12 +84,29 @@ export const RUN_PAGE_RAIL_ROW_CLASS = "h-auto gap-2 border-0 px-0 py-0.5";
  * real completed run, the run page's own panel rail composed a 50.0px and then
  * a 45.5px pitch between adjacent circle centres where the run-surface rail
  * composed the drawing's 44.0px. Two compositions of one rail are two rhythms;
- * the mark is declared once, in `run-rail-mark.ts`, and read here.
+ * the mark is declared ONCE, HERE, and both rails read it.
+ *
+ * WHY HERE AND NOT IN A LEAF OF ITS OWN. The declaration first landed in a
+ * zero-import leaf beside this file. A leaf is still a MODULE: it entered the
+ * reachable first-party graph of the four route-budgeted routes that already
+ * reach this module, and the route-graph ratchet refuses a locked route that
+ * grows. The rule belongs where the rows already meet -- the same reason the
+ * indicator and the row classes above are held here and not in the rail frame.
+ *
+ * `!h-2`: the vendored `StepperSeparator` sets its vertical height through a
+ * variant-scoped token emitted AFTER the plain utilities, so the drawing's 8px
+ * has to win by importance there; on the run-surface frame's plain mark the
+ * importance is inert. `my-1` overrides the primitive's `m-0.5` above and
+ * below; `ml-[11px]` is the drawing's own indent, the centre of the 24px
+ * circle the entries carry, so the marks and the circles read as one line.
  *
  * THE ROW IS CONTENT-SIZED for the same reason (`h-auto` above): the shared
  * Button pins a fixed `h-8`, a 32px box around a 24px circle, where the
  * drawing's `.rail .step { padding: 2px 0 }` over the circle is 28px.
  */
+export const RUN_RAIL_MARK_CLASS = "my-1 ml-[11px] !h-2 w-0.5 shrink-0 rounded-[1px] bg-line";
+
+/** The run page's own panel rails read the same mark under the rail's name. */
 export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
 
 
@@ -261,4 +277,110 @@ export function RailExtraEntry({
       )}
     </div>
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// THE ENTRY THE RUN IS PARKED ON (cinatra#3221).
+//
+// The ratified drawing, agent run and review surface, "The step rail -- merged
+// steps and gate entries": "The step the run is paused on is highlighted; steps
+// already passed sit above it, steps still to come below" -- "so the rail is
+// the run's whole lifecycle at a glance, not just its live tip."
+//
+// The run page's live rail elects its highlighted entry from ONE number, the
+// stepper's `value`, and every row -- the template spine's rows and the
+// trailing rows a gate arrives on -- is capable of taking it. The number used
+// to be derived from the run's status and the live interrupt's spine step
+// alone, so a gate that arrives as a TRAILING entry (a context-selection gate,
+// a review gate past the spine) was never its target: with no spine step number
+// the election fell through to the first row, with `awaitingNextStep` it
+// pointed one past the row the run was parked on, and a finished run pointed
+// one past the spine -- which is the FIRST trailing row. On a gate reading
+// nothing highlighted; on a finished rail the wrong thing could.
+//
+// The election is PURE, so the rail's one number can be read against the
+// drawing's sentence without mounting the panel. It lives in THIS module and
+// not in a leaf of its own for the reason the mark above states: its only
+// caller, the live rail in `orchestrator-stepper-panel`, already imports the
+// rail vocabulary from here, so the election reaches it over an edge that
+// already exists -- where a leaf of its own is one more module in the
+// reachable graph of four route-budgeted routes.
+// ---------------------------------------------------------------------------
+
+/** A spine row: its display index and the policy step number it stands for. */
+export type RailSpineStep = { index: number; stepNumber: number };
+
+/** A trailing row: only its status matters to the election. */
+export type RailTrailingEntry = { status: string };
+
+export type RailActiveStepInput = {
+  /** The run's live status. */
+  status: string;
+  /** The live interrupt's policy step number, or null when it carries none. */
+  currentStepNumber: number | null;
+  /** True between a Continue press and the next interrupt's arrival. */
+  awaitingNextStep: boolean;
+  /** The highest policy step number the stream has reported so far. */
+  highestStepNumber: number;
+  /** The template spine, in display order. */
+  spine: ReadonlyArray<RailSpineStep>;
+  /** The trailing rows, in the order the rail draws them after the spine. */
+  railExtras: ReadonlyArray<RailTrailingEntry>;
+};
+
+/**
+ * The display index of the entry the run is parked on — the stepper's `value`.
+ *
+ * Display indices are 1-based: the spine takes `1..spine.length` and the
+ * trailing rows continue from `spine.length + 1`, exactly as the rail numbers
+ * them. A number past every row highlights nothing.
+ */
+export function electRunRailActiveStep(input: RailActiveStepInput): number {
+  const { status, currentStepNumber, awaitingNextStep, highestStepNumber, spine, railExtras } = input;
+  const spineLength = spine.length;
+  const pastTheEnd = spineLength + railExtras.length + 1;
+  const toDisplayIndex = (policyStepNumber: number): number =>
+    spine.find((s) => s.stepNumber === policyStepNumber)?.index ?? policyStepNumber;
+  const onSpine = (policyStepNumber: number): boolean =>
+    spine.some((s) => s.stepNumber === policyStepNumber);
+
+  // THE PARKED TRAILING ROW: the first trailing entry still pending is the gate
+  // the run is waiting on, and its display index is its own.
+  const parkedTrailingIndex = railExtras.findIndex((entry) => entry.status === "pending");
+  const parkedTrailingStep = parkedTrailingIndex === -1 ? null : spineLength + parkedTrailingIndex + 1;
+
+  if (status === "pending_input" || status === "queued") return 1;
+
+  if (status === "pending_approval") {
+    // A gate that arrives ON the spine is the row the live interrupt names.
+    if (currentStepNumber !== null && onSpine(currentStepNumber) && !awaitingNextStep) {
+      return toDisplayIndex(currentStepNumber);
+    }
+    // A gate that arrives as a TRAILING entry is its own row — whether the
+    // interrupt named no spine step, or the reader has already continued past
+    // the spine step it did name.
+    if (parkedTrailingStep !== null) return parkedTrailingStep;
+    if (currentStepNumber !== null) {
+      return awaitingNextStep ? toDisplayIndex(currentStepNumber) + 1 : toDisplayIndex(currentStepNumber);
+    }
+    return 1;
+  }
+
+  if (status === "running") {
+    return toDisplayIndex(highestStepNumber || 0) + 1;
+  }
+
+  if (status === "completed" || status === "stopped") {
+    // A gate reached on a stopped run is still where the run stands; a run
+    // with nothing pending stands past EVERY row, spine and trailing alike.
+    return parkedTrailingStep ?? pastTheEnd;
+  }
+
+  if (status === "failed") {
+    // Show the step that was active when the run failed, not "all done".
+    return toDisplayIndex(highestStepNumber) || 1;
+  }
+
+  return 1;
 }

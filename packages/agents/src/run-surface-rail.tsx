@@ -51,7 +51,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { RUN_RAIL_MARK_CLASS } from "./run-rail-mark";
+import { RUN_RAIL_MARK_CLASS } from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -319,7 +319,8 @@ export function RunSurfaceRailSeparator(): ReactElement {
       aria-hidden="true"
       data-run-surface-rail-separator=""
       data-conformance-id="run-step-rail-separator"
-      // ONE definition for both rails (cinatra#3225, `run-rail-mark.ts`).
+      // ONE definition for both rails (cinatra#3225), declared with the rest
+      // of the rail vocabulary in `run-step-rail-extra-entry`.
       className={RUN_RAIL_MARK_CLASS}
     />
   );
