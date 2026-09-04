@@ -621,11 +621,67 @@ export function runPageActiveTab(params: {
   inputStepIsOpen: boolean;
   inputStepsInRail: boolean;
   scheduleStepInFrame: boolean;
+  gateStepInFrame: boolean;
 }): "setup" | "none" {
   if (params.inputStepIsOpen || params.inputStepsInRail) return "none";
+  if (params.gateStepInFrame) return "none";
   return runPageScheduleStepActiveTab({
     scheduleStepInFrame: params.scheduleStepInFrame,
   });
+}
+
+/**
+ * AND THE SKILLS GATE IS A STEP IN THIS FRAME TOO (cinatra#3184 item 3).
+ *
+ * Application Design — Agents, the run view's conditional-tab section: "A step
+ * shown inside the frame selects nothing ... no tab is drawn selected: what sits
+ * under the strip is that step, not the body of a tab", and "A step drawn inside
+ * this frame never lights a tab the strip does not carry". The same section
+ * fixes what does NOT move for it: "The frame, the title row and the etched rule
+ * are unchanged."
+ *
+ * The run's own input span and the schedule span each already answer this, and
+ * the skills gate is the one step inside this frame neither of them covers: a
+ * run held at its skills question drew that step in the frame and the strip lit
+ * Setup under it, which is the reading the drawing forbids.
+ *
+ * THE SPAN, NOT THE MOMENT — the same shape the input span above is written in.
+ * The strip's answer is a SERVER prop; the rail's selection is the reader's own
+ * client state and changes without a server round trip. An answer scoped to "the
+ * gate is open right now" would therefore light Setup again the moment a reader
+ * pressed the settled gate's row and its read-only card stood in the frame. The
+ * span this reads is the whole span in which the gate's row CAN BE OPENED and
+ * the run has produced no execution record, so the held reading and the
+ * re-opened settled reading both fall inside it, and every moment outside it
+ * keeps the Setup tab this page has always lit.
+ *
+ * WHY "CAN BE OPENED" AND NOT "HAS AN ENTRY" (convergence round, fix leg 2). A
+ * hold that expires undecided leaves a terminal `policy_unresolved` park with no
+ * evidence behind it: the entry still reads `settled`, so the rail keeps the
+ * row, but `recommendationRailStepOpens` closes it — it is drawn muted, it opens
+ * nothing, and what stands in the frame is the run detail, not a step. Reading
+ * the ENTRY there would darken the whole strip over a page that is showing no
+ * step at all, which is the same contradiction inverted. The page's own
+ * "can this row be opened" answer is therefore the fact this rides on, and it is
+ * read once above and handed to the rail and to this question alike.
+ *
+ * WHERE THIS ANSWER STOPS, NAMED. The span ends at the run's own execution
+ * record. A reader who opens a run ALREADY UNDER WAY and then presses the
+ * settled gate's row is shown the settled card with Setup still lit, because
+ * that moment is not answerable from here: `activeTab` is a server-rendered prop
+ * on the page layout, while the row press is client state inside the rail's own
+ * provider, which wraps the two columns and not the strip above them. Joining
+ * them is a page-tree change and is not this leg's.
+ *
+ * Exported so the regression test can read the rule without a DB or a render.
+ */
+export function runGateStepInFrame(params: {
+  /** The page's own answer that the gate's row opens onto a surface — the
+   *  `recommendationRailStepOpens` reading, not the bare entry. */
+  gateStepOpens: boolean;
+  hasExecution: boolean;
+}): boolean {
+  return params.gateStepOpens && !params.hasExecution;
 }
 
 /**
@@ -1468,6 +1524,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           inputStepIsOpen,
           inputStepsInRail,
           scheduleStepInFrame: runDetailPanel === "trigger",
+          gateStepInFrame: runGateStepInFrame({
+            gateStepOpens: recommendationRailStepReached,
+            hasExecution: runHasExecution,
+          }),
         })}
         // THE YOU-ARE-HERE ANCHOR NAMES THE STEP (cinatra#3068 fix leg 2). The
         // schedule step is named in the page header because it answers at its
