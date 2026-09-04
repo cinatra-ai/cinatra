@@ -67,7 +67,16 @@ export function runStatusPillStatus(
 ): "running" | "approved" | "needs-review" | "queued" | "failed" {
   if (status === "completed") return "approved";
   if (status === "failed" || status === "stopped") return "failed";
-  if (status === "running") return "running";
+  // `waiting_trigger` IS A RUNNING RUN (convergence round, 2026-09-04). It is
+  // not a wait BEFORE the run — that is `pending_trigger`, three lines below.
+  // It is an IN-FLIGHT WayFlow run parked at a TriggerWaitNode with its A2A
+  // context held open by the worker (run-status.ts, the union's own note), and
+  // the write kernel classifies it UNCONDITIONALLY LIVE in the same set as
+  // `running` (org-write-kernel/src/live-attempt.ts). It is also absent from
+  // PRE_EXECUTION_RUN_STATUSES, the one place the started/not-started boundary
+  // is expressed. Letting it fall through to `queued` drew a run that is
+  // already executing as one that has not begun.
+  if (status === "running" || status === "waiting_trigger") return "running";
   if (
     status === "pending_approval" ||
     status === "pending_input" ||

@@ -1532,7 +1532,24 @@ export function AgenticRunPanel({
   // output instead of drawing it once. That is the same rule the card's own
   // sentence already follows, so the two can never disagree about where a
   // finished run's output is.
-  const showRawOutputPanels = !(status === "completed" && messages.length > 0);
+  // WHICH ROWS COUNT (convergence round, 2026-09-04). The test is not "the
+  // transcript has rows" but "the transcript carries the run's own produced
+  // output". A run window accepts turns from the reader (cinatra#2933), so a
+  // completed external run whose answer lives only in the accumulated stream
+  // can hold a transcript made of nothing but the reader's own text row with
+  // role "user" — and keying the stand-down on messages.length alone would
+  // hide that run's only copy of its answer behind a transcript that never
+  // carried it. The rows that DO carry produced output are the run's final
+  // message and any non-user text row; a tool call or a tool result is the
+  // run's working, not its answer.
+  const transcriptCarriesTheRunsOutput = messages.some(
+    (m) =>
+      m.body.messageType === "final" ||
+      (m.body.messageType === "text" && m.body.role !== "user"),
+  );
+  const showRawOutputPanels = !(
+    status === "completed" && transcriptCarriesTheRunsOutput
+  );
 
   // The sticky field-assist panel is the SAME mount on every reading of this
   // card, so it is built once here and rendered by whichever return runs. Its
@@ -1771,9 +1788,20 @@ export function AgenticRunPanel({
           beside this column names that step and the form below is its screen,
           so a progress heading over a run that has produced no progress is the
           one reading this surface must not make. Every other host keeps it. */}
-      {inputStepInRail || railDrawsTheFrame ? null : (
+      {inputStepInRail ? null : (
       <div className="flex items-center justify-between">
+        {/* THE HEADING RETIRES, THE STATUS DOES NOT (cinatra#3002, convergence
+            round). cinatra#3068 retires the PLATE'S HEADING where the rail
+            frames the detail — and the run page frames it for every run with a
+            recommendation step, an input step or a schedule step
+            (railFramesTheRunDetail, instance-screens.tsx), which is the
+            drawing's own completed reading. Retiring the pill with the heading
+            left the run's status drawn NOWHERE on that page: the rail supplies
+            no replacement, and instance-screens draws no pill of its own. So
+            the heading goes and the pill stays. */}
+        {railDrawsTheFrame ? null : (
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
+        )}
         {/* THE STATUS PILL THE DRAWING DRAWS (cinatra#3002, fix leg 3).
             This header used to carry the generic badge, whose variants are not
             the design system's status-pill family at all — the third proof

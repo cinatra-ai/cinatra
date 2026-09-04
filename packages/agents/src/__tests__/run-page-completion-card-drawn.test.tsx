@@ -167,6 +167,26 @@ function toolTranscriptRow(): SerializedAgentRunMessage {
   };
 }
 
+/**
+ * A turn the READER typed into the run window (cinatra#2933) — a transcript row
+ * that is not the run's produced output. Used to pin that the raw-panel
+ * stand-down asks whether the transcript carries the run's OWN output, not
+ * merely whether it has rows.
+ */
+function readerTurnRow(): SerializedAgentRunMessage {
+  return {
+    id: "msg-user-1",
+    runId: "run-3002",
+    sequence: 1,
+    role: "user",
+    messageType: "text",
+    toolCallId: null,
+    toolName: null,
+    body: { messageType: "text" as const, role: "user" as const, text: "any update?" },
+    createdAt: "2026-09-04T01:30:00.000Z",
+  };
+}
+
 /** The run page's own mount, for a run that EXECUTED on the agent runtime. */
 function runPageProps(overrides: Partial<WatcherProps> = {}): WatcherProps {
   return {
@@ -339,5 +359,52 @@ describe("the completion card's drawn items on the run's own page", () => {
     expect(
       toolRow?.querySelector('[data-run-transcript-body=""]')?.className ?? "",
     ).toContain("font-mono");
+  });
+});
+
+describe("the convergence round's three findings, pinned on the run's own page", () => {
+  it("keeps the status pill where the rail frames the detail — the heading retires, the status does not", async () => {
+    // The run page frames the run detail for every run with a recommendation
+    // step, an input step or a schedule step (`railFramesTheRunDetail`,
+    // instance-screens.tsx) — which is the ratified drawing's own completed
+    // reading, the schedule-step example. cinatra#3068 retires the plate's
+    // HEADING on that reading; it does not retire the run's status, and no
+    // other mount on the page draws one.
+    await renderRunPage({ railDrawsTheFrame: true });
+
+    expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+
+    const pill = document.querySelector('[data-slot="status-pill"]');
+    expect(pill).not.toBeNull();
+    expect(pill!.getAttribute("data-status")).toBe("approved");
+    expect(pill!.getAttribute("data-glyph")).toBe("dot");
+    expect(pill!.querySelector('[data-slot="status-pill-dot"]')).not.toBeNull();
+    expect(pill!.textContent).toContain("completed");
+  });
+
+  it("keeps the run's only output when the transcript carries nobody's work but the reader's", async () => {
+    // A completed external run whose answer lives only in the accumulated
+    // stream, whose transcript holds ONE row — the reader's own window turn.
+    // Standing the panel down on `messages.length` alone would delete the only
+    // copy of this run's answer.
+    hookState.streamedText = "the answer this run produced";
+
+    await renderRunPage({ initialMessages: [readerTurnRow()] });
+
+    expect(await screen.findByText("Agent output")).toBeTruthy();
+    expect(screen.queryByText("the answer this run produced")).not.toBeNull();
+  });
+
+  it("still stands the panel down when the transcript does carry the run's answer", async () => {
+    // The guard on the guard: the fix above must not reopen the second panel
+    // the drawing does not give.
+    hookState.streamedText = "the answer this run produced";
+
+    await renderRunPage({ initialMessages: [readerTurnRow(), finalTranscriptRow()] });
+
+    expect(screen.queryByText("Agent output")).toBeNull();
+    expect(
+      document.querySelector('[data-run-transcript-row="final"]'),
+    ).not.toBeNull();
   });
 });

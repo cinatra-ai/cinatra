@@ -245,3 +245,35 @@ describe("applyJustSubmittedSuppression", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE RUN-STATUS -> PILL-FAMILY MAPPING (cinatra#3002 fix leg 3, and the
+// convergence round that corrected it).
+// ---------------------------------------------------------------------------
+describe("runStatusPillStatus", () => {
+  it("draws a run parked at a trigger step as the RUNNING run it is", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    // `waiting_trigger` is an IN-FLIGHT WayFlow run holding an open A2A context
+    // (run-status.ts, the union's own note); the write kernel classifies it
+    // unconditionally live in the same set as `running`
+    // (org-write-kernel/src/live-attempt.ts), and it is absent from
+    // PRE_EXECUTION_RUN_STATUSES. Drawing it in the queued family said the run
+    // had not begun.
+    expect(runStatusPillStatus("waiting_trigger")).toBe("running");
+    expect(runStatusPillStatus("running")).toBe("running");
+  });
+
+  it("keeps the pre-execution waits out of the live family", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    expect(runStatusPillStatus("queued")).toBe("queued");
+    expect(runStatusPillStatus("armed")).toBe("queued");
+    expect(runStatusPillStatus("pending_trigger")).toBe("needs-review");
+  });
+
+  it("keeps the terminal families as the drawing gives them", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    expect(runStatusPillStatus("completed")).toBe("approved");
+    expect(runStatusPillStatus("failed")).toBe("failed");
+    expect(runStatusPillStatus("stopped")).toBe("failed");
+  });
+});
