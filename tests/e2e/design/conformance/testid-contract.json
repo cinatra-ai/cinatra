@@ -28,6 +28,13 @@
     "extension-listing-card-installing": { "$ref": "extension-listing-card" },
     "extension-listing-card-incompatible": { "$ref": "extension-listing-card" },
     "suggestion-accepted": { "$ref": "suggestion-chip" },
+    "review-card-email-body": { "$ref": "review-target-header" },
+    "review-card-mixed-kind": { "$ref": "review-target-header" },
+    "review-card-screenshot": { "$ref": "review-target-header" },
+    "review-card-slide-deck": { "$ref": "review-target-header" },
+    "review-card-dashboard": { "$ref": "review-target-header" },
+    "review-card-portlet": { "$ref": "review-target-header" },
+    "review-card-cms-page": { "$ref": "review-target-header" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -528,6 +535,20 @@
     }
   },
   "shared": {
+    "review-target-header": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"review-target-header\"] — the REAL immutable target header (the review screen's drawing §IV), the header the review card itself draws above the island, exported from that card's own owner module and mounted on the conformance harness route inside a chat-thread host declaration. ONE header per pinned target, in gate order. The type tag carries data-review-target-type (the label the product's own surface model words from the type id, never a label the harness names); the mono meta line carries the type id, the pinned revision as data-review-target-revision (the EXACT id, beside the elided reading and the pinned marker) and the authorized row facts as the product's own surface model composes them from the stored artifact row (the harness seeds the row, never a finished fact). The header is inert, so the driver also asserts there is no control, link or picker inside it. The representation BELOW the header is server-rendered inside the island document and ships no per-kind rendering, so no driver here asserts a representation.* field binding and none is approximated through the header.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-target-header\"",
+            "data-review-target-type={header.typeLabel}",
+            "data-review-target-revision={revision.full}"
+          ]
+        }
+      ]
+    },
     "suggestion-chip": {
       "manifest": "app-lifecycle-cards",
       "selector": "[data-surface-id={surface}] [data-conformance-id=\"suggestion-chips\"][data-suggestion-chips-mode=\"live\"] — the REAL SuggestionChips row, the shipped chip row of the one review renderer, mounted on the conformance harness route inside a chat-thread host declaration. ONE chip per suggestion, addressed by the state it is drawn in: [data-conformance-id=\"suggestion-accepted\"] / \"suggestion-dismissed\", each carrying data-suggestion-state and, on that same row element, the MANIFEST'S OWN action name as data-action (\"dismiss-suggestion -> dismissed\" on an accepted chip, \"accept-suggestion -> accepted\" on a dismissed one); the press target is the button inside the row. The harness holds only the reader's LOCAL dismissal set, which is where a mark lives on a pending gate (§VIII gives the chips no submit of their own); the drawn state, the offered control and its name are computed by the shipped component, so nothing the driver asserts is named by the harness.",

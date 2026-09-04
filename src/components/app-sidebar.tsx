@@ -63,6 +63,13 @@ export function buildSidebarData() {
       { title: "Projects", url: "/projects", icon: domainIcons.projects },
       { title: "Teams", url: "/teams", icon: domainIcons.teams },
       { title: "Organizations", url: "/organizations", icon: domainIcons.organizations },
+      // The workspace is the scope ABOVE every organization (cinatra#2807), so
+      // it closes the Management group. It is visible to every authenticated
+      // viewer: no NAV_TARGET_GATE key is registered for it (unknown targets
+      // default to visible), and the layout never names it in hiddenNavTitles —
+      // including a single-organization instance, where only "Organizations"
+      // itself is filtered out below.
+      { title: "Workspace", url: "/workspace", icon: domainIcons.workspace },
     ] as NavItem[],
   });
 
@@ -106,6 +113,34 @@ export function buildSidebarData() {
   });
 
   return groups;
+}
+
+/**
+ * The nav model the sidebar actually renders: `buildSidebarData()` minus the
+ * titles this viewer may not reach (`hiddenNavTitles`, resolved server-side)
+ * and, in single-organization mode, the "Organizations" entry.
+ *
+ * Exported so the filter can be asserted directly — an entry that must survive
+ * `singleOrg` (the Workspace entry, cinatra#2807) is proven against THIS
+ * function rather than against a restatement of it.
+ */
+export function visibleNavGroups({
+  singleOrg = false,
+  hiddenNavTitles,
+}: {
+  singleOrg?: boolean;
+  hiddenNavTitles?: string[];
+} = {}): { title: string; items: NavItem[] }[] {
+  const hidden = new Set([
+    ...(hiddenNavTitles ?? []),
+    ...(singleOrg ? ["Organizations"] : []),
+  ]);
+  return buildSidebarData()
+    .map((group) => ({
+      ...group,
+      items: (group.items as NavItem[]).filter((item) => !hidden.has(item.title)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 // ---------- Chat nav item ----------
@@ -295,16 +330,7 @@ export function AppSidebar({
   // rather than relying on "click → 403".
   hiddenNavTitles?: string[];
 }) {
-  const hidden = new Set([
-    ...(hiddenNavTitles ?? []),
-    ...(singleOrg ? ["Organizations"] : []),
-  ]);
-  const navGroups = buildSidebarData()
-    .map((group) => ({
-      ...group,
-      items: (group.items as NavItem[]).filter((item) => !hidden.has(item.title)),
-    }))
-    .filter((group) => group.items.length > 0);
+  const navGroups = visibleNavGroups({ singleOrg, hiddenNavTitles });
 
   return (
     <Sidebar collapsible="icon">
