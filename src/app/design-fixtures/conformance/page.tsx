@@ -27,6 +27,7 @@ import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
 import { LifecycleReviewTargetHeaderFixtures } from "./lifecycle-review-target-header-fixtures";
 import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
+import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -282,6 +283,22 @@ export default function ConformanceHarnessPage() {
                 answers "no row for this reader" and the card draws nothing, which
                 is its own fail-closed reading. See the module header. */}
             <LifecycleRecommendationFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation schedule card (nine surfaces, five readings)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3161, epic #3155: the REAL drawn schedule card under the
+                REAL chat-thread host declaration, one mount per manifest
+                surface. The harness supplies only what a server would have said
+                — the resolved state and body, and the one answer the decision
+                endpoint gives — and computes no presentation from it. */}
+            <LifecycleScheduleCardFixtures />
           </CardContent>
         </Card>
       </PageContent>

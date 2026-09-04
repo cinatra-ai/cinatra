@@ -42,6 +42,15 @@
     "review-composer-unbound-card": { "$ref": "review-composer-row" },
     "composer-bound-acting": { "$ref": "review-composer-row" },
     "chat-composer-primary": { "$ref": "chat-composer-field" },
+    "schedule-card-first-shown": { "$ref": "schedule-card" },
+    "schedule-card-confirm-floor": { "$ref": "schedule-card" },
+    "schedule-card-configured": { "$ref": "schedule-card" },
+    "schedule-card-save-floor": { "$ref": "schedule-card" },
+    "schedule-card-expired": { "$ref": "schedule-card" },
+    "schedule-card-expired-floor": { "$ref": "schedule-card" },
+    "schedule-card-fired": { "$ref": "schedule-card" },
+    "schedule-card-fired-recurring": { "$ref": "schedule-card" },
+    "schedule-card-fired-recurring-floor": { "$ref": "schedule-card" },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -592,6 +601,32 @@
             "conformanceId=\"chat-composer-primary\"",
             "primary"
           ]
+        }
+      ]
+    },
+    "schedule-card": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"schedule-proposal-card\"] — the REAL drawn schedule card: the shipped part `ScheduleProposalCard` itself composes, mounted on the conformance harness route inside a chat-thread host declaration. Nine surfaces over the drawing's FIVE readings, because the drawing annotates the card and the floor beneath it separately; the mount carries the manifest surface id, since nothing in the product carries a schedule-card-* id. The rows are [data-conformance-id=\"schedule-option-rows\"] (one [data-schedule-option] per row) and the floor is [data-conformance-id=\"schedule-proposal-floor\"], ABSENT by design on a spent one-off. The floor's controls are addressed by their shipped attribute values (confirm-schedule-proposal, save-schedule-changes, cancel-trigger-schedule) and the driver map binds each to the manifest's own action name (confirm-schedule / save-schedule / cancel-schedule) — the same reconciliation the PINNED scheduling-step-configured surface already uses for the same two operations, rather than a rename of values a ratified capture record and the one-card gate's anchor set both address. A state variant here is what the card draws AROUND a decision: loading is the in-flight floor between a press and an answer, error is [data-conformance-id=\"schedule-proposal-refusal\"]. The harness supplies only the resolved state and body and the one answer the decision endpoint gives, all in the protocol's own types; every drawn consequence is computed by the shipped component, which src/app/design-fixtures/conformance/__tests__/lifecycle-schedule-card-fixture.test.tsx pins at the source.",
+      "requires": [
+        {
+          "file": "packages/agents/src/schedule-proposal-card.tsx",
+          "literals": [
+            "export function ScheduleProposalCardBody",
+            "data-conformance-id=\"schedule-proposal-card\"",
+            "data-conformance-id=\"schedule-option-rows\"",
+            "data-conformance-id=\"schedule-proposal-floor\"",
+            "data-conformance-id=\"schedule-proposal-expired\"",
+            "data-conformance-id=\"schedule-proposal-refusal\"",
+            "data-conformance-id=\"schedule-saved\"",
+            "data-schedule-option={rowKind}",
+            "data-action=\"confirm-schedule-proposal\"",
+            "data-action=\"save-schedule-changes\"",
+            "data-action=\"cancel-trigger-schedule\""
+          ]
+        },
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
         }
       ]
     },
