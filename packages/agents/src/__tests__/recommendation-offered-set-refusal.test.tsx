@@ -119,7 +119,7 @@ async function mountRow() {
   // nothing upward — because it is a property of the row's refusal path, which
   // both readings share. Only the control that reaches it moved.
   return render(
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host="chat_thread">
       <RunRecommendationChipRow
         runId="run-2906"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -200,7 +200,7 @@ describe("cinatra#2906 AC-5 — a refused decision draws the reason in place", (
     const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
     // Driven through §V's Continue — see the note on `mountRow` above.
     render(
-      <LifecycleCardSurfaceProvider host="run_card">
+      <LifecycleCardSurfaceProvider host="chat_thread">
         <RunRecommendationChipRow
           runId="run-2906"
           agentPackageName="@cinatra-test/hold-fixture-agent"

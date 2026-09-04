@@ -608,21 +608,54 @@ export async function resolveRecommendationHoldStateForActor(input: {
   // all, because the hold's offer is settled. With no claim to read, the live
   // scoring is the row, exactly as before #2906.
   const presentation = new Map(recs.map((r) => [r.skillId, r] as const));
+  // WHAT DECIDES MEMBERSHIP, AND WHAT ONLY LABELS IT (cinatra#3047, the ninth
+  // proof round's settlement finding).
+  //
+  // WHAT WAS WRONG. The claim above settles WHICH skills this hold offered, and
+  // the reader's own entitled candidate set settles which of them THIS reader
+  // may see. The live re-scoring settles neither — it is the label, the score
+  // and the feature citation. Gating membership on it made the row's existence
+  // depend on a pass that is explicitly allowed to fail: `recs` is read through
+  // a `.catch(() => [])` a few lines above, so a re-open whose scoring did not
+  // answer dropped EVERY offered entry and published a HELD state offering
+  // nothing. The step then drew no pills over a live Continue, and that press is
+  // `release`'s SKIP branch — no selected-revision row written at all, the hold
+  // released and the run advanced. That is the two graded walks of the ninth
+  // round exactly: a two-row offered set, zero selected revisions, the run at
+  // its next gate. It also breaks the sentence this step is built to: a reader
+  // "may come back and change the selection, and Continue keeps it", and
+  // "Continue keeps the whole row in one act". A row that is not drawn cannot be
+  // kept.
+  //
+  // THE RULE, and it is the SETTLED reading's rule — `resolveSettledCandidates`
+  // has always gated the offer on `entitled` and joined names as labels only.
+  // The live reading now reads the same way, so one hold reads one way whichever
+  // side of its decision it is read from. The viewer intersection is not
+  // loosened by a hair: it moves from the scoring result to `assignedSkillIds`,
+  // which is the SAME viewer-scoped resolve (`viewerScopeForHoldActor(who)`) the
+  // scoring was itself restricted to — computed independently of it, so a
+  // narrower reader still never learns a wider one's scoped skill names, and a
+  // scoring pass that fails can no longer widen or empty what they see.
+  const entitled = new Set(assignedSkillIds);
   const chips =
     offered.length > 0
       ? offered.flatMap((o) => {
+          if (!entitled.has(o.skillId)) return [];
           const live = presentation.get(o.skillId);
-          if (!live) return [];
           return [
             {
               skillId: o.skillId,
               skillRevisionId: o.skillRevisionId,
-              name: live.displayName,
-              vendorName: live.vendorName,
-              score: live.score,
+              // Labels, and only labels: an offered skill this reader is
+              // entitled to but the pass could not describe prints its own id
+              // rather than vanishing — the same fallback the settled reading
+              // takes (`nameBySkillId.get(o.skillId) ?? o.skillId`).
+              name: live?.displayName ?? o.skillId,
+              vendorName: live?.vendorName ?? null,
+              score: live?.score ?? 0,
               rank: o.rank,
               recommended: o.recommended,
-              scoredFeatures: live.scoredFeatures,
+              scoredFeatures: live?.scoredFeatures ?? [],
             },
           ];
         })
