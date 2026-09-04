@@ -48,12 +48,29 @@ function awaitingIdea() {
 }
 
 describe("runDetailInitialStep — the run detail opens on the input step", () => {
-  it("opens on the input step the run is standing at, ahead of every other step", () => {
+  it("opens on the input step the run is standing at, ahead of every step but the run's first gate", () => {
+    // ORDER CORRECTED BY cinatra#3047 FIX LEG 8. This case asserted "input:0"
+    // over a HELD Skills question, on the strength of a sentence in
+    // cinatra#3068's own issue rather than a drawn one. The ratified drawing
+    // says the opposite in the section that governs this rail: the Skills
+    // question "is the run's first gate — the first entry on the step rail",
+    // "ahead of the work steps it would authorize", and it carves out no
+    // exception for an input form — it names none anywhere. So a held Skills
+    // question opens first, and the form opens the moment it is not held.
     expect(
       runDetailInitialStep({
         openInputStepKey: "input:0",
         hasRecommendationStep: true,
         recommendationHeld: true,
+        hasScheduleStep: true,
+        hasExecution: false,
+      }),
+    ).toBe("recommendation");
+    expect(
+      runDetailInitialStep({
+        openInputStepKey: "input:0",
+        hasRecommendationStep: true,
+        recommendationHeld: false,
         hasScheduleStep: true,
         hasExecution: false,
       }),
@@ -127,13 +144,18 @@ describe("buildRunInputRailSteps — the input form gets the rail's own step row
 });
 
 describe("the screen's JSX composes the input step and retires the step-less panel", () => {
-  it("heads the rail with the input steps, before the recommendation row", () => {
+  it("puts the input steps on the rail, beneath the run's first gate", () => {
+    // ORDER CORRECTED BY cinatra#3047 FIX LEG 8, for the reason given above:
+    // the drawing puts the Skills entry at the head of the rail and names no
+    // input step anywhere, so there is no drawn exception to weigh against it.
+    // What this case still pins is that the input steps ARE on the rail and
+    // that the screen builds them there — only their place has moved.
     expect(SCREEN_SRC).toContain("buildRunInputRailSteps");
-    const inputPush = SCREEN_SRC.indexOf("buildRunInputRailSteps(");
+    const inputPush = SCREEN_SRC.indexOf("railSteps.push(...buildRunInputRailSteps(");
     const recommendationPush = SCREEN_SRC.indexOf('key: "recommendation",');
     expect(inputPush).toBeGreaterThan(-1);
     expect(recommendationPush).toBeGreaterThan(-1);
-    expect(inputPush).toBeLessThan(recommendationPush);
+    expect(recommendationPush).toBeLessThan(inputPush);
   });
 
   it("tells BOTH run panels that the rail carries the input step", () => {
