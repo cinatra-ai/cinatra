@@ -100,7 +100,7 @@ import {
   detectCredentialPattern,
 } from "../validate-agent-json";
 import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
-import { serializeArtifactBindingDeclaration } from "../artifact-binding";
+import { syncCompiledTemplateToDb } from "./agent-source-compile-template-sync";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
@@ -3956,69 +3956,10 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Register agent skills in the skills catalog so they are discoverable via skill_ids.
   const registeredSkillIds: string[] = [];
   try {
-    // Sync packageVersion + compiled approvalPolicy + inputSchema + outputSchema
-    // + prompt (as taskSpec) to the DB template so subsequent runs reflect the
-    // current on-disk OAS Flow.
-    {
-      try {
-        const template = await readAgentTemplateByPackageName(agentPackageName);
-        if (template) {
-          await updateAgentTemplate(template.id, {
-            approvalPolicy: compiled.approvalPolicy as Parameters<typeof updateAgentTemplate>[1]["approvalPolicy"],
-            inputSchema: compiled.inputSchema as Parameters<typeof updateAgentTemplate>[1]["inputSchema"],
-            outputSchema: (compiled.outputSchema ?? undefined) as Parameters<typeof updateAgentTemplate>[1]["outputSchema"] | undefined,
-            taskSpec: compiled.prompt ?? undefined,
-            hitlScreens: compiled.hitlScreens,
-            type: compiled.type,
-            // Persist triggerMode + gatedSteps so the runtime gate and
-            // Trigger tab UI can
-            // read them directly from agent_templates without recompiling.
-            triggerMode: compiled.triggerMode,
-            gatedSteps: compiled.gatedSteps,
-            // cinatra#2498: re-project the locally-persisted binding-presence
-            // authority on every recompile — a source edit that adds/removes
-            // the last binding must flip agent_templates.has_artifact_bindings
-            // so the run-completion materializer's registry short-circuit
-            // stays accurate. Folded into THIS SAME update as packageVersion
-            // (below) — codex round-2 finding: two separate writes left a
-            // window where a run reading mid-write would see the NEW
-            // package_version paired with the OLD has_artifact_bindings (or
-            // vice versa), defeating the version-pin guard that trusts the
-            // flag exactly when it's read alongside its OWN package_version.
-            // One UPDATE statement moves both columns atomically.
-            //
-            // PAIRED, never independent (codex round-3 finding): unlike
-            // every install path, `agentPackageVersion` here is OPTIONAL — a
-            // dev iterating on local source can recompile without bumping
-            // the version string at all. `packageVersion: undefined` means
-            // "leave the column unchanged" (the store's own patch
-            // convention), so an unpaired write would silently re-point
-            // has_artifact_bindings at whatever package_version the row
-            // ALREADY had — a run pinned to that untouched version would then
-            // trust a flag that was never actually computed FOR it. So this
-            // recompile only ever touches has_artifact_bindings together
-            // with the SAME version write it is confirming; with no version
-            // to confirm against, BOTH are omitted and the column is left
-            // exactly as the last version-paired write set it.
-            packageVersion: agentPackageVersion ?? undefined,
-            hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
-            // cinatra#3208 — the executed declaration re-projects on the SAME
-            // version-paired terms as the presence flag above: a source edit
-            // that changes a binding must move the persisted declaration the
-            // materializer resolves against, and with no version to confirm
-            // against, BOTH are omitted and the column keeps whatever the last
-            // version-paired write set.
-            artifactBindings: agentPackageVersion
-              ? compiled.artifactBindings
-                ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
-                : null
-              : undefined,
-          });
-        }
-      } catch (versionSyncErr) {
-        console.warn(`[agent_source_compile] DB sync failed:`, versionSyncErr);
-      }
-    }
+    // Re-project the compiled result onto the agent_templates row. The
+    // version-pairing rule this write encodes lives with it, in
+    // ./agent-source-compile-template-sync (cinatra#3208 file-size ratchet).
+    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled);
 
     // skills dir lives next to the agent root (handles both new
     // canonical and legacy layouts via resolveAgentRootDirForRead).
