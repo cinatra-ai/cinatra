@@ -121,6 +121,8 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
         "page-direct-decision-composition": "return <ReviewDecisionBar action={a} />;",
         "page-direct-verification-composition":
           'return <div data-verification-chrome="Core analysis">Core analysis</div>;',
+        "second-per-skill-control-emitter":
+          'return <button data-skill-action="confirm">Confirm</button>;',
       }[parallel.id];
       expect(sample, `no fixture for '${parallel.id}'`).toBeTypeOf("string");
       const hits = scanModule("src/app/new-surface/page.tsx", sample);
@@ -128,6 +130,55 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
       expect(hits.find((h) => h.rule === "R2").detail).toContain(parallel.id);
     });
   }
+
+  // THE PER-SKILL CONTROL BAN (cinatra#3138, executing the decision recorded in
+  // cinatra#3062). Section V of the lifecycle-cards drawing: "The row and its
+  // Continue are the whole card. There is no heading plate above the row, and a
+  // pill carries nothing to press — no Confirm, no Adjust, no Skip." The three
+  // per-pill controls are retired, and the ban has to be able to say so from the
+  // day the wording lands — which is BEFORE the conversation-and-widget redraw
+  // takes the branch out of the owner. So what the entry forbids TODAY is a
+  // SECOND emitter: any module other than the owner drawing a per-skill control
+  // is the retirement being undone somewhere new, and it fails now.
+  //
+  // THE ALLOWLIST IS THE PENDING HALF, and it is named rather than hidden: the
+  // owner still draws the trio for the two hosts the redraw has not reached, so
+  // allowlisting it is the truth about the tree and not an exemption invented to
+  // get green. The redraw empties this allowlist in the same change that deletes
+  // the branch — at which point the entry bans the control everywhere, the owner
+  // included, with no edit to the rule itself.
+  it("a SECOND emitter of a per-skill control fails R2 — the trio is retired", () => {
+    for (const action of ["confirm", "adjust", "skip"]) {
+      const hits = scanModule(
+        "src/app/agents/[vendor]/skills-row.tsx",
+        `return <button data-skill-action="${action}">x</button>;`,
+      );
+      expect(hits.map((h) => h.rule), action).toContain("R2");
+      expect(hits.map((h) => h.detail).join(" "), action).toMatch(
+        /second-per-skill-control-emitter/,
+      );
+    }
+  });
+
+  it("the OWNER still passes while it draws the trio for the hosts the redraw has not reached", () => {
+    const hits = scanModule(
+      "packages/agents/src/run-recommendation-chip-row.tsx",
+      'return <button data-skill-action="confirm">Confirm</button>;',
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it("PINNING a per-skill selector is not EMITTING one — a contract module stays clean", () => {
+    // src/lib/lifecycle/held-turn-card-contract.ts names the three controls as
+    // SELECTORS the chat card must carry while it still draws them. A contract
+    // that asserts the DOM is not a second drawing of it, so the ban is scoped
+    // to the JSX attribute form and reads the bracketed selector as what it is.
+    const hits = scanModule(
+      "src/lib/lifecycle/held-turn-card-contract.ts",
+      'export const C = [\'[data-skill-action="confirm"]\', \'[data-skill-action="skip"]\'];',
+    );
+    expect(hits).toEqual([]);
+  });
 
   it("FALSE-POSITIVE CONTROL: prose in a comment about a retired renderer is clean", () => {
     const src = [
@@ -580,6 +631,29 @@ describe("R7 — the owner emits its ratified anchors, from code that runs", () 
     );
   });
 
+  // THE TWO CHECKBOX ANCHORS ARE LOAD-BEARING, pinned at the granularity R7 has
+  // (cinatra#3138). A convergence round on this change made the honest
+  // objection: R7 reads the owner's COMBINED live source, not one host's branch,
+  // so widening the closed set does not make the gate refuse a card drawn
+  // per-host without the checkbox row. What the widening DOES buy is pinned here
+  // rather than claimed in prose — strip the checkbox anatomy out of the REAL
+  // owner and the REAL contract fails, so the two members cannot rot into
+  // decoration.
+  it("the checkbox anatomy is REQUIRED of the real owner — dropping it fails R7", () => {
+    const contract = LIFECYCLE_CARD_CONTRACTS.recommendation_hold;
+    const real = read(contract.owner);
+    for (const attr of ["data-skills-step-checkbox", "data-skills-step-continue"]) {
+      expect(real, `${attr} is not drawn by the owner at all`).toContain(attr);
+      const stripped = real.split(attr).join("data-struck-by-this-fixture");
+      const hits = scanOwnerModule("recommendation_hold", contract, {
+        [contract.owner]: stripped,
+      });
+      expect(hits.map((h) => h.detail).join(" "), attr).toMatch(
+        new RegExp(`ratified anchor '\\[${attr}\\]' is never emitted`),
+      );
+    }
+  });
+
   it("REJECTS a missing anchor outright", () => {
     const source = PROPER_OWNER.replace('data-conformance-id="proper-floor"', 'className="floor"');
     const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
@@ -986,10 +1060,33 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
     // scripts/audit/chat-hitl-anchor-contract.json ratifies these anchor names
     // for this owner. The row-level confirm/skip pair this table used to mirror
     // is not emitted on any host any more.
+    //
+    // TWO MEMBERS JOINED when the drawing gave the card ONE control (cinatra#3138,
+    // executing the decision recorded in cinatra#3062). The ratified §V reading is
+    // "The row and its Continue are the whole card. There is no heading plate
+    // above the row, and a pill carries nothing to press — no Confirm, no Adjust,
+    // no Skip. The reader sets the boxes and presses Continue beneath the list
+    // … and the whole row is answered at once, every box together." So the
+    // closed set carries the checkbox anatomy, with the scope R7 really has:
+    // the owner must EMIT a per-skill checkbox and the one Continue from code
+    // that runs, and its named rendered proof must read both back. R7 has no
+    // host dimension, so this is not a per-host assertion while the owner still
+    // draws the per-pill branch for two hosts; the case below pins what it does
+    // hold, by stripping the checkbox row out of the REAL owner.
+    //
+    // AND THE THREE PER-CHIP ANCHORS STAY, deliberately rather than by omission.
+    // R7 fails an anchor that is never emitted AND, differently, one emitted only
+    // from a branch that can never run — so the trio can only leave this list in
+    // the same change that takes the per-pill branch out of the owner, which is
+    // the conversation-and-widget redraw of this same row. Striking them first
+    // would drop a requirement while the thing it pins is still drawn on two
+    // hosts: a weaker gate, not a corrected one.
     recommendation_hold: [
       '[data-lifecycle-card="recommendation_hold"]',
       "[data-run-recommendation-chip-row]",
       '[data-conformance-id="run-chip-row"]',
+      "[data-skills-step-checkbox]",
+      "[data-skills-step-continue]",
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
