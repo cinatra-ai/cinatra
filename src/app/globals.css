@@ -667,6 +667,20 @@
   --text-badge-xs: var(--badge-text-xs);
   --text-badge-2xs: var(--badge-text-2xs);
   --text-badge-2xs--letter-spacing: var(--badge-tracking);
+  /* The entity page's Dashboards-tab caption — the ratified drawing draws that
+     lede at 13px muted, one step under the 14px body baseline and one over the
+     12px helper. Named here (cinatra#2807) so the site carries a token, never a
+     bracket literal. */
+  --text-scope-caption: 13px;
+  --text-scope-caption--line-height: 1.5;
+  /* The Dashboards tab's own empty reading — the load-states drawing sets its
+     headline at 12.5px/600 over its helper at 11px/1.5, a real step between the
+     two lines. Named here (cinatra#2807 fix leg 5) for the same reason the
+     caption above is: the site carries a token, never a bracket literal. */
+  --text-scope-empty-title: 12.5px;
+  --text-scope-empty-title--line-height: 1.4;
+  --text-scope-empty-help: 11px;
+  --text-scope-empty-help--line-height: 1.5;
   --tracking-title-tight: var(--title-tracking-tight);
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);
