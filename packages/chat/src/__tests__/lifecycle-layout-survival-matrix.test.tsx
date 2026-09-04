@@ -188,6 +188,7 @@ import {
 } from "@/lib/lifecycle/held-turn-card-contract";
 import { LifecycleCardSurfaceProvider } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
 import {
   __resetAssistantChatNegotiation,
   driveAssistantChatTurn,
@@ -433,6 +434,12 @@ async function mountTranscript(messages: UiMessage[], layout: Layout) {
 }
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, and several of them are NEGATIVE controls, so
+  // each declares a reader who has been shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
   confirmMock.mockClear();
   skipMock.mockClear();

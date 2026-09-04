@@ -165,6 +165,7 @@ import {
   useLifecycleCardHost,
 } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
+import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
 
 import {
   installWidgetServiceStub,
@@ -214,6 +215,11 @@ beforeEach(() => {
   holdState.current = HELD;
   holdState.calls = [];
   holdState.pending = null;
+  // A FRESH BROWSER SESSION PER ARM (cinatra#3062, fix leg 3). The card
+  // remembers the row it drew, keyed by run, so that a remount redraws it
+  // instead of emptying the turn — every arm here reuses one run id, so each
+  // starts from a reader who has been shown nothing.
+  resetDrawnRecommendationReadings();
 });
 afterEach(cleanup);
 
@@ -822,5 +828,107 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountHeldTurn();
     expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
     expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SETTLED ROW KEEPS ITS PLACE IN THE TURN (cinatra#3062, fix leg 3).
+// ---------------------------------------------------------------------------
+// The ratified drawing's section V:
+//
+//   "A row the reader did see keeps its place in the turn and states, box by
+//    box, that no recommended skill was applied — otherwise the question, the
+//    answer and the fact that nothing was applied all vanish from the transcript
+//    together, and nothing on screen says any of it happened."
+//
+// A conversation RE-CREATES its turns: the page replaces its whole message array
+// whenever the server's copy of the thread grows, and a reload rebuilds them from
+// the persisted parts. Both remount this card, whose own read is a round trip —
+// so a mount with no answer yet used to draw no card DOM at all and the settled
+// row left the turn. A live boot measured fifteen seconds of that after the one
+// Continue, and twenty on a fresh load.
+//
+// BOTH CONVERSATION HOSTS, because one column serves `/chat` and the widget and
+// a rule that holds on only one of them is not the rule.
+describe("the settled skills row survives the transcript's own re-creation", () => {
+  const SETTLED = {
+    state: "confirmed",
+    runId: RUN_ID,
+    skillNames: ["blog-content"],
+    decided: [
+      { skillId: "@cinatra-ai/chat:blog-content", name: "blog-content", mark: "confirmed" },
+    ],
+    holdRef: "hold-ref-1",
+    runStarted: false,
+    canDecide: true,
+    candidates: [
+      {
+        skillId: "@cinatra-ai/chat:blog-content",
+        name: "blog-content",
+        vendorName: "Cinatra",
+        skillRevisionId: "rev-1",
+        recommended: true,
+      },
+    ],
+  };
+
+  it("redraws the settled row on the chat host when the new read has not landed", async () => {
+    holdState.current = SETTLED;
+    const first = await mountSurface("chat", { messages: dispatchTurn() });
+    await waitFor(() => {
+      if (!first.container.querySelector("[data-chat-thread-recommendation-hold]")) {
+        throw new Error("no settled row on the first mount");
+      }
+    });
+    cleanup();
+
+    // The transcript re-creates the turn; the fresh mount's read HANGS.
+    holdState.pending = new Promise(() => {});
+    const again = await mountSurface("chat", { messages: dispatchTurn() });
+    const row = again.container.querySelector("[data-chat-thread-recommendation-hold]");
+    expect(row, "the settled row left the turn while a fresh mount re-read it").not.toBeNull();
+    expect(row!.getAttribute("data-run-recommendation-settled")).toBe("true");
+    expect(
+      Array.from(again.container.querySelectorAll("[data-skills-step-pill]")).map((p) =>
+        p.getAttribute("data-skill-applied"),
+      ),
+      "the row states, box by box, what the run applied",
+    ).toEqual(["true"]);
+  });
+
+  it("redraws the settled row on the widget host too", async () => {
+    // The widget reads the SAME hold through its own broker transport, so the
+    // rule has to hold against that read rather than against the cookie one.
+    const first = installWidgetServiceStub({
+      lifecycle: () => null,
+      recommendationHold: () => SETTLED,
+    });
+    try {
+      const view = render(surfaceElement("widget", { messages: dispatchTurn() }));
+      await waitFor(() => {
+        if (!view.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+          throw new Error("no settled row on the widget's first mount");
+        }
+      });
+    } finally {
+      first.restore?.();
+    }
+    cleanup();
+
+    // The widget's broker read now never answers.
+    const hung = installWidgetServiceStub({
+      lifecycle: () => null,
+      recommendationHold: () => {
+        throw new Error("the broker read has not landed");
+      },
+    });
+    try {
+      const again = render(surfaceElement("widget", { messages: dispatchTurn() }));
+      const row = again.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+      expect(row, "the settled row left the widget's turn on a remount").not.toBeNull();
+      expect(row!.getAttribute("data-run-recommendation-settled")).toBe("true");
+    } finally {
+      hung.restore?.();
+    }
   });
 });

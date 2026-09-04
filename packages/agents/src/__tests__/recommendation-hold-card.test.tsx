@@ -139,6 +139,12 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, so each one declares a reader who has been
+  // shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
 });
 
@@ -1033,6 +1039,7 @@ const HELD_THREE: HoldState = {
 // WHICH READING A HOST DRAWS is imported, never restated: a second copy of the
 // host list in a suite is a copy that can disagree with the shipped one.
 import { chipRowDrawsSkillChecklist } from "../run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../run-recommendation-reading-register";
 
 const chips = () => [
   ...document.querySelectorAll<HTMLElement>("[data-recommendation-chip]"),

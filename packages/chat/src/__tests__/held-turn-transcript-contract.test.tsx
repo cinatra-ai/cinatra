@@ -212,6 +212,7 @@ vi.mock("../inline-agent-run-card", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
 import { mountSurface } from "./conversation-column-harness";
 import type { UiMessage } from "../types";
 
@@ -468,6 +469,12 @@ function mountRealCardInto(container: HTMLElement) {
 }
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, and several of them are NEGATIVE controls, so
+  // each declares a reader who has been shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
   routerPush.mockReset();
   routerReplace.mockReset();

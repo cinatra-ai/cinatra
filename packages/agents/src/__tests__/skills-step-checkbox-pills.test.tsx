@@ -71,6 +71,7 @@ vi.mock("../server-actions", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { RecommendationHoldCard } from "../run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../run-recommendation-reading-register";
 
 const RUN_ID = "run-3047";
 const PKG = "@cinatra-ai/blog-draft-writer-agent";
@@ -135,6 +136,12 @@ const continueButton = (c: HTMLElement) =>
   c.querySelector<HTMLElement>("[data-skills-step-continue]");
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, so each one declares a reader who has been
+  // shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockReset();
   confirmRunRecommendationAction.mockClear();
   skipRunRecommendationAction.mockClear();

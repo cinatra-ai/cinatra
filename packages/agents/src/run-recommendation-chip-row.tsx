@@ -40,6 +40,10 @@ import {
   type RunRecommendationHoldState,
   type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
+import {
+  recallDrawnRecommendationReading,
+  rememberDrawnRecommendationReading,
+} from "./run-recommendation-reading-register";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 import { VENDOR_BY_CONNECTIVE, resolveVendorPresentation } from "@/lib/vendor-presentation";
 
@@ -817,6 +821,28 @@ export function RunRecommendationChipRow({
     initialRecommendations ?? [],
   );
   const [loaded, setLoaded] = useState(initialRecommendations != null);
+  /**
+   * A FRESHER OFFER OUTRANKS THE ONE THIS ROW WAS SEEDED WITH (cinatra#3062,
+   * fix leg 3).
+   *
+   * `recs` is seeded ONCE, at mount. That was exact while a row could only ever
+   * be mounted AFTER its authority had answered: there was one offer and the row
+   * had it. A row that keeps its place in the turn is mounted BEFORE that answer
+   * — from the reading the reader was already shown — so the authority's own
+   * offer arrives as a PROP CHANGE, and a seed that ignores it would leave the
+   * remembered offer on screen for the life of the mount, which is the stale
+   * card this whole leg exists to prevent.
+   *
+   * Adjusted during render rather than in an effect, which is React's own shape
+   * for state that follows an input, and guarded by a reference comparison so it
+   * costs exactly one extra render per genuinely new offer and nothing at rest.
+   */
+  const [seededOffer, setSeededOffer] = useState(initialRecommendations);
+  if (initialRecommendations !== undefined && initialRecommendations !== seededOffer) {
+    setSeededOffer(initialRecommendations);
+    setRecs(initialRecommendations);
+    setLoaded(true);
+  }
   /** Per-chip marks — the decision model §V draws, held until the row releases. */
   const [chips, setChips] = useState<Record<string, ChipDecision>>({});
   /**
@@ -2358,7 +2384,48 @@ export function RecommendationHoldCard({
   // reading until then. `resolution.state` is non-null only on `answered`, so
   // the fallback covers exactly the two readings that drew nothing before — the
   // resolve still in flight, and the resolve that gave up.
-  const state = resolution.state ?? initialState;
+  const authoritative = resolution.state ?? initialState;
+  /**
+   * AND THE ROW THE READER DID SEE KEEPS ITS PLACE (cinatra#3062, fix leg 3).
+   *
+   * §V: "A row the reader did see keeps its place in the turn and states, box by
+   * box, that no recommended skill was applied — otherwise the question, the
+   * answer and the fact that nothing was applied all vanish from the transcript
+   * together, and nothing on screen says any of it happened."
+   *
+   * The two fallbacks above are both a HOST's gift, and a conversation has
+   * neither: it resolves nothing server-side, so `initialState` is absent, and
+   * its transcript RE-CREATES its turns whenever the server's copy of the thread
+   * grows — which remounts this card with no memory at all. A live boot measured
+   * the consequence twice over: the settled row stood for twelve seconds after
+   * the one Continue and then left the turn for fifteen while a fresh mount
+   * re-read the authority, and a reload drew no row for twenty seconds. Neither
+   * is §IV's Absent reading, which belongs to the reader who may not see the
+   * thing; both are the row a reader was already shown, withdrawn.
+   *
+   * So the reading this card DREW is remembered beside the component, keyed by
+   * the run, and a mount with no answer of its own redraws it. The authority
+   * still wins the moment it answers — this is the same "stay with the last
+   * authorized answer" posture the resolve already takes for a transport
+   * failure, extended to the one thing a remount destroys.
+   *
+   * `{ state: "none" }` NEVER withdraws a drawn row either. That answer is the
+   * resolver's single indistinguishable "never held / not yours / cannot tell",
+   * and reading it as "take the row away" is precisely how "the question, the
+   * answer and the fact that nothing was applied" leave the transcript together.
+   */
+  const remembered = recallDrawnRecommendationReading(present ? runId : "");
+  const state =
+    authoritative !== null && authoritative.state !== "none"
+      ? authoritative
+      : (remembered ?? authoritative);
+  // Written from what is DRAWN, never from what merely arrived: the register
+  // ignores `none` and anything it cannot classify, so the memory can only hold
+  // a row that was on screen.
+  useEffect(() => {
+    if (!present) return;
+    rememberDrawnRecommendationReading(runId, state);
+  }, [present, runId, state]);
 
   // A surface with NO declared host never asks, so its reading is not "waiting"
   // — nothing is coming. Saying so is what stops a host that withholds on
@@ -2374,10 +2441,16 @@ export function RecommendationHoldCard({
     () =>
       !present
         ? RECOMMENDATION_UNREADABLE
-        : resolution.phase !== "answered" && initialState !== null
-          ? { phase: "answered", state: initialState }
-          : resolution,
-    [present, resolution, initialState],
+        : resolution.phase !== "answered" && state !== null
+          ? { phase: "answered", state }
+          : state !== null && state !== resolution.state
+            ? // The remembered row is what is on screen, so it is what is
+              // published: a host told "still resolving" while a row it can see
+              // is drawn beside it is the two-statements-about-one-run seam this
+              // card exists to close.
+              { phase: "answered", state }
+            : resolution,
+    [present, resolution, state],
   );
 
   // Published on every change, and only on a change. `onStateChange` is in the
