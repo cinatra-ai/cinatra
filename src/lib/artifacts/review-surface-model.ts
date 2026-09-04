@@ -7,7 +7,7 @@
  * §I–VI display+decide matrix is unit-testable without React or a DB.
  *
  * Ratified design spec `specs/app-artifact-review.html`
- * @ design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f (owner-approved). This module owns the spec's derived,
+ * @ design@0c484154b069c6369a33c1375056126289888997 (owner-approved). This module owns the spec's derived,
  * non-visual mappings (provenance chip class, blocked/permission copy, the
  * per-mount conformance anchor) so the surface components stay thin.
  *

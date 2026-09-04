@@ -24,6 +24,13 @@ export {
 } from "./scope";
 export type { PackageId } from "./scope";
 
+// The platform's vendor BYLINE resolver — "who makes this package", as every
+// surface that prints a vendor prints it (cinatra#948 reopen; rehomed here by
+// cinatra#3047 so the agents package's Skills-step pill can print the same
+// byline without closing a dependency cycle). `@cinatra-ai/extensions` keeps
+// its own module path, which re-exports this one.
+export { resolveInstalledVendorName } from "./scope";
+
 export {
   PluginDependencyCycleError,
   PluginDependencyConflictError,

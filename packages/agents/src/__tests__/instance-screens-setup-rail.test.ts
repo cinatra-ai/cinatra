@@ -52,6 +52,26 @@ function sliceBetween(from: string, to: string): string {
 
 const SETUP_BRANCH = sliceBetween("const setupSteps: SetupRailStep[]", "</AgentPageLayout>");
 
+/**
+ * THE STEP KEYS OF THE SCREEN'S OWN ARRAY, IN SOURCE ORDER.
+ *
+ * The array BODY alone — the branch runs on past it into the JSX — with its
+ * comments removed, so a `key: "..."` literal written in prose can never stand
+ * in for an entry the screen actually composes, and either quote style counts
+ * as the same entry. An array this reader cannot find reads as no steps at all,
+ * which fails the order case rather than passing it.
+ */
+function setupStepKeysInSourceOrder(): string[] {
+  const end = SETUP_BRANCH.indexOf("\n    : [];");
+  if (end < 0) return [];
+  const code = SETUP_BRANCH.slice(0, end)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+  return Array.from(code.matchAll(/key:\s*["'](schedule|recommendation|review)["']/g)).map(
+    (m) => m[1],
+  );
+}
+
 /** The schedule step's surface, as the screen composes it once, above — both
  *  its readings: the first-step form, and the schedule the run already carries
  *  (cinatra#3004). */
@@ -107,6 +127,28 @@ describe("the setup run page draws the run surface, not a single column", () => 
     );
   });
 
+  it("puts the SKILLS step FIRST on the rail, ahead of the steps it authorizes", () => {
+    // THE ORDER IS THE DRAWING'S, and it is the array's own (cinatra#3047).
+    // The ratified drawing at the capture contract's pin puts the skills
+    // question at "the top entry on the step rail, ahead of the work steps it
+    // would authorize" (plan (A) 6.2), and acceptance 2 of the issue says the
+    // same in one line: "the recommendation entry stays first on the rail".
+    //
+    // THE OTHER TWO RAILS OF THE PRODUCT ALREADY DO IT — the run page's own
+    // rail pushes the recommendation before the schedule, and the review
+    // page's composition builds its keys in that order — so a screen that
+    // lists the schedule first makes one series read two ways in one product,
+    // which is exactly what the re-shoot photographed here: "1 Schedule /
+    // Skills / 2 Review".
+    //
+    // Read in SOURCE ORDER off the screen's own array, because the order is a
+    // property of the array and no render of a server component reaches it.
+    // Read off the array BODY with its comments stripped, so the pin is the
+    // screen's composed entries and not any literal that happens to be written
+    // in the branch's prose.
+    expect(setupStepKeysInSourceOrder()).toEqual(["recommendation", "schedule", "review"]);
+  });
+
   it("makes the scheduling form the SCHEDULE step's surface — not a column of its own", () => {
     // The form is composed once, into the step, and the step is what the
     // surface is handed. A second `<TriggerScreenClient` inside this branch
@@ -118,7 +160,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
 
   it("hands the skills-recommendation step the one shipped renderer, host-declared", () => {
     const start = SETUP_BRANCH.indexOf('key: "recommendation"');
-    const end = SETUP_BRANCH.indexOf('key: "review"', start + 1);
+    // The step that FOLLOWS it on the rail — the schedule, since cinatra#3047
+    // put the skills question first — so the slice stays this one step and not
+    // two of them.
+    const end = SETUP_BRANCH.indexOf('key: "schedule"', start + 1);
     const step = start < 0 || end < 0 ? "" : SETUP_BRANCH.slice(start, end);
     expect(step).toContain('<LifecycleCardSurfaceProvider host="run_card">');
     expect(step).toContain("<RecommendationHoldCard");
@@ -257,9 +302,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
       "const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;",
     );
     expect(TRIGGER_SCREEN).toContain("const recommendationEntry = recommendationRailEntry({");
-    // This screen IS the host on the setup surface: it draws no run-detail
-    // panel, so there is no other module that could mount the card.
-    expect(TRIGGER_SCREEN).toContain("hostsCard: true,");
+    // …with the PARK alone. The predicate lost its host input when the run
+    // page's row lost its second owner (cinatra#3047), and this screen has only
+    // ever been the one host on the setup surface: it draws no run-detail panel,
+    // so there is no other module that could mount the card.
+    expect(TRIGGER_SCREEN).not.toContain("hostsCard");
 
     // THE REVIEW STEP: the same reader the run page's panel uses (cinatra#2997),
     // and the pure step from its two facts to the three readings.
@@ -282,12 +329,19 @@ describe("the setup run page draws the run surface, not a single column", () => 
     // `policy_unresolved` park is terminal and carries no decision to show.
     expect(TRIGGER_SCREEN).toContain("const recommendationStepOpens = recommendationRailStepOpens({");
     expect(TRIGGER_SCREEN).toContain("parkStatus: recommendationPark?.status,");
+    // ENDS AT THE STEP THAT FOLLOWS IT — the schedule, since cinatra#3047 put
+    // the skills question first. An end at the review key would run through the
+    // schedule block as well, and this step's readings would then be satisfied
+    // by a line composed on the NEXT step.
     const recommendation = SETUP_BRANCH.slice(
       SETUP_BRANCH.indexOf('key: "recommendation"'),
-      SETUP_BRANCH.indexOf('key: "review"'),
+      SETUP_BRANCH.indexOf('key: "schedule"'),
     );
+    expect(recommendation.length).toBeGreaterThan(0);
     expect(recommendation).toContain("reached: recommendationStepOpens,");
     expect(recommendation).toContain("surface: !recommendationStepOpens ? null : (");
+    // And it is THIS step's slice: the schedule's own surface is not in it.
+    expect(recommendation).not.toContain("surface: scheduleStepSurface,");
   });
 
   it("makes the review step's surface the run's REVIEW SLOT — the placeholder, then the card", () => {
@@ -329,7 +383,7 @@ describe("the setup run page draws the run surface, not a single column", () => 
     );
     const recommendation = SETUP_BRANCH.slice(
       SETUP_BRANCH.indexOf('key: "recommendation"'),
-      SETUP_BRANCH.indexOf('key: "review"'),
+      SETUP_BRANCH.indexOf('key: "schedule"'),
     );
     expect(recommendation).toContain("settled: recommendationSettled,");
 
@@ -360,8 +414,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
     // surface already draws. The run page's schedule row has none either.
     const schedule = SETUP_BRANCH.slice(
       SETUP_BRANCH.indexOf('key: "schedule"'),
-      SETUP_BRANCH.indexOf('key: "recommendation"'),
+      SETUP_BRANCH.indexOf('key: "review"'),
     );
+    // The slice has to be a real one: a step read as an empty string would pass
+    // every "does not contain" below it without reading anything at all.
+    expect(schedule.length).toBeGreaterThan(0);
     expect(schedule).toContain("surface: scheduleStepSurface,");
     expect(schedule).not.toContain("settled:");
 

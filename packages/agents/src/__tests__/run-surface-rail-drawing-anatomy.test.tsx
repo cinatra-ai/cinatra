@@ -164,7 +164,11 @@ describe("the settled entry's circle takes the drawing's muted ground (item 1)",
         steps={[
           {
             key: "recommendation",
-            row: <RecommendationRailStepRow displayStep={1} settled />,
+            // NO NUMERAL, ON THIS BRANCH (cinatra#3047). The Skills entry
+            // draws the drawing's own glyph and consumes no numeral, so the
+            // row this suite arrived with on cinatra#3188's branch — which
+            // still handed it a `displayStep` — takes none here.
+            row: <RecommendationRailStepRow settled />,
             surface: <StepSurface name="recommendation" />,
           },
         ]}

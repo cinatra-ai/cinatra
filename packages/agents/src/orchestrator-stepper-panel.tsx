@@ -262,6 +262,23 @@ export type OrchestratorStepperPanelProps = {
    * byte-identical.
    */
   inputStepInRail?: boolean;
+  /**
+   * THE RAIL BESIDE THIS COLUMN ALREADY DRAWS THE FRAME (cinatra#3047 fix leg
+   * 8).
+   *
+   * The ratified drawing: "One page per gate — the step's own card, and
+   * nothing else ... two cards are never stacked in one detail." When the run
+   * page draws its two-column frame, the step's card IS the page, so this
+   * panel's own `soft-panel` section would be a second card stacked around it.
+   *
+   * `inputStepInRail` retired that section for ONE moment — the moment the
+   * rail carries the run's own input form. Every other step-less gate inside
+   * the same frame kept it, which is the doubled wrapper the eighth proof
+   * round photographed on a HITL gate. The fact this branch needs is not which
+   * moment the run is at but whether the frame is already drawn, which is what
+   * this states — the same handover `embedMode` makes, for the same reason.
+   */
+  railDrawsTheFrame?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -1557,6 +1574,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     initialReviewGate,
     canRespondInWindow,
     inputStepInRail = false,
+    railDrawsTheFrame = false,
   } = props;
 
   const router = useRouter();
@@ -2321,7 +2339,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // and the stage card IS the step's screen — the same handover `embedMode`
     // makes above, for the same reason: the chrome belongs to whoever draws the
     // frame, and here that is the rail beside this column.
-    if (inputStepInRail) {
+    if (inputStepInRail || railDrawsTheFrame) {
       return <>{stageCard}</>;
     }
     return (

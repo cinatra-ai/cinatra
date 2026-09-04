@@ -104,12 +104,6 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
-import {
-  RECOMMENDATION_UNRESOLVED,
-  RecommendationHoldCard,
-  recommendationWasDecided,
-  type RunRecommendationHoldResolution,
-} from "./run-recommendation-chip-row";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
@@ -125,7 +119,7 @@ export type SerializedAgentRunMessage = {
   createdAt: string;
 };
 
-type AgenticRunPanelProps = {
+export type AgenticRunPanelProps = {
   runId: string;
   taskId?: string; // present for runs created via A2A sendMessage
   initialStatus: string;
@@ -219,6 +213,23 @@ type AgenticRunPanelProps = {
    */
   inputStepInRail?: boolean;
   /**
+   * THE RAIL BESIDE THIS COLUMN ALREADY DRAWS THE FRAME (cinatra#3047 fix leg
+   * 8).
+   *
+   * The ratified drawing: "One page per gate — the step's own card, and
+   * nothing else ... two cards are never stacked in one detail." This panel's
+   * own `soft-panel rounded-card` plate is a card, and inside the run frame it
+   * wraps the gate's own card — the doubled wrapper the eighth proof round
+   * photographed. cinatra#3068 retired the HEADING inside the plate for one
+   * moment; the plate itself stayed, on every moment.
+   *
+   * So inside the frame the box keeps its job — it is still the flow container
+   * for the failure block, the trace link, the streamed output and the message
+   * list — and gives up its CARD chrome and its heading, leaving the step's own
+   * card alone in the detail. Every other host is untouched.
+   */
+  railDrawsTheFrame?: boolean;
+  /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
    *
@@ -229,11 +240,14 @@ type AgenticRunPanelProps = {
    * every assigned skill reads as a live choice that disagrees with the one that
    * was taken.
    *
-   * IT IS A PROP because of WHERE the panel is. Inside a conversation the
-   * transcript owns the recommendation card and this panel mounts none, so the
-   * conversation's single resolve is passed down. On the run page there is no
-   * conversation host, the panel mounts the card itself, and it reads the answer
-   * off that mount instead — same authority, resolved once either way.
+   * IT IS A PROP ON EVERY HOST, and it is the panel's ONLY reading of the
+   * question (cinatra#3047). This panel used to mount the recommendation card
+   * itself on the run page and read the answer off that mount; the mount is gone
+   * — the row has one owner and one place, the run page's own rail step — so the
+   * host that DOES own the card is the one that answers here. Inside a
+   * conversation that is the transcript's card; on the run page it is the run
+   * screen, which reads the run's own park row server-side and passes the answer
+   * down before the first paint.
    */
   recommendationDecided?: boolean;
   /**
@@ -430,6 +444,7 @@ export function AgenticRunPanel({
   initialReviewGate,
   readReviewSlot,
   inputStepInRail = false,
+  railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -441,7 +456,7 @@ export function AgenticRunPanel({
   // THE AMBIENT HOST, read BEFORE this panel declares its own. When an outer
   // conversation provider (`chat_thread` or `site_widget`) is already in scope,
   // this panel is being drawn INSIDE a conversation transcript that mounts the
-  // recommendation card itself — see the mount below for what that decides.
+  // HITL screen card itself — see that mount below for what it decides.
   const ambientLifecycleHost = useLifecycleCardHost();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
@@ -643,36 +658,26 @@ export function AgenticRunPanel({
   // isPendingApproval is derived below from status; we compute a local guard from
   // initialStatus here so the effect dependency is stable across re-renders.
   const [hitlSkills, setHitlSkills] = useState<SkillForChip[]>([]);
-  // THE RUN'S RECOMMENDATION, as this panel's own card resolved it. Read only on
-  // the run page, where this panel mounts the card (see the mount below); inside
-  // a conversation the transcript owns that card and tells this panel through
-  // `recommendationDecided` instead. Either way ONE resolve answers it.
-  const [ownRecommendation, setOwnRecommendation] =
-    useState<RunRecommendationHoldResolution>(RECOMMENDATION_UNRESOLVED);
-  // Does this panel mount the recommendation card itself? The same condition the
-  // mount below uses, read once so the skill-picker rule can ask whether an
-  // answer is even coming.
-  const panelMountsRecommendationCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
   // ONE HITL SCREEN CARD PER RUN PER TURN (cinatra#2930, lifecycle-b W3).
   //
-  // The same rule the recommendation card is held to, for the same reason:
-  // inside a conversation this panel is a SIBLING of the conversation's own
+  // Inside a conversation this panel is a SIBLING of the conversation's own
   // mount of the SAME card for the SAME run, so an unconditional mount here
   // would show the person two screens for one question. The conversation's
   // card owns it inside `chat_thread` and `site_widget`; the run page keeps
   // its own because no conversation host is in scope there.
   const panelMountsHitlScreenCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
   // Was this run's skill set settled on the recommendation card? If it was,
-  // nothing inside this card offers a skill to press. While the panel's own read
-  // is still in flight the picker also stays away — it is a run's OWN skills
-  // being offered, and offering them and then withdrawing them is the flicker
-  // the ruling exists to prevent. A read that gives up (or a host that never
-  // reads) leaves the picker exactly as it was.
-  const skillsDecidedOnCard =
-    recommendationDecided === true || recommendationWasDecided(ownRecommendation);
-  const recommendationStillResolving =
-    panelMountsRecommendationCard && ownRecommendation.phase === "resolving";
-  const drawSkillPicker = !skillsDecidedOnCard && !recommendationStillResolving;
+  // nothing inside this card offers a skill to press.
+  //
+  // THE HOST THAT DRAWS THE CARD IS THE ONE THAT ANSWERS (cinatra#3047). This
+  // panel no longer mounts the recommendation card anywhere, so it no longer
+  // resolves the question itself: the answer arrives as a prop from whichever
+  // host owns the row — the transcript's card in a conversation, the run
+  // screen's server-side park read on the run page. That also retires the
+  // flicker window the panel's own in-flight read opened: there is no "not
+  // answered yet" state here to draw a pressable skill list in and withdraw.
+  const skillsDecidedOnCard = recommendationDecided === true;
+  const drawSkillPicker = !skillsDecidedOnCard;
   const isPendingApprovalForEffect = pollStatus === "pending_approval" || initialStatus === "pending_approval";
   useEffect(() => {
     if (!isPendingApprovalForEffect || !agentPackageName) return;
@@ -681,19 +686,24 @@ export function AgenticRunPanel({
       .catch(() => setHitlSkills([]));
   }, [isPendingApprovalForEffect, agentPackageName]);
 
-  // Run-start recommendation hold: THE POLL IS GONE (cinatra#2568 AC-1).
+  // Run-start recommendation hold: THE POLL WENT FIRST, THE MOUNT WENT AFTER IT
+  // (cinatra#2568 AC-1, then cinatra#3047).
   //
   // This panel used to own a 4-second timer over the hold-state server action
   // plus a hand-rolled stop condition, and S4 layered a wire-driven refetch on
   // top of it because the timer alone missed a hold that appeared after its
-  // first tick. Both are replaced by `RecommendationHoldCard` (mounted below),
-  // which resolves the SAME authoritative action on mount, on a change in the
-  // typed hold interrupt, on focus, and on its own decision — and never on a
-  // schedule. The issue ordered the retirement "LAST, after replay + routing
-  // exist": the reconnect-authoritative snapshot (the SSE route synthesizes the
-  // run's CURRENT hold, or an explicit retirement, on every connect) and the
-  // confirm/skip routing both landed with S4, so a late joiner and a re-parked
-  // run are covered by the wire rather than by re-asking every four seconds.
+  // first tick. Both were replaced by `RecommendationHoldCard`, which resolves
+  // the SAME authoritative action on mount, on a change in the typed hold
+  // interrupt, on focus, and on its own decision — and never on a schedule.
+  //
+  // The CARD then left this panel too: the row has one owner and one place on
+  // the run page (the rail step the run screen draws), so neither the state nor
+  // the wire signal is read here any more. Nothing is lost with the signal. The
+  // run page's own mount takes `wireRef={null}` and always has — it resolves on
+  // mount, on focus and on its own decision — and this panel renders only for a
+  // run that is past `pending_input`, i.e. one whose hold is already settled: a
+  // decided summary does not move, and a dispatched run cannot acquire a new
+  // hold.
 
   // No audit affordance is mounted here, and there is no auditor-agent flow gate
   // driving one any more: the auditor agent is retired, and audit output now
@@ -708,32 +718,6 @@ export function AgenticRunPanel({
     initialStatus,
     initialStreamedText, // hydrate from DB on page load for external runs
   });
-
-  // THE HOLD ON THE WIRE DRIVES THE CARD (cinatra#2568). The typed hold
-  // interrupt and its paired RESUME are exactly the events that change the
-  // answer, so the card takes this ref as its CHANGE SIGNAL and re-reads the
-  // authoritative, actor-scoped state when it moves. Nothing is read OUT of the
-  // ref here — the wire only ever says "something changed"; what this viewer may
-  // see is the server action's call, on every resolve.
-  //
-  // Guarded by `kind` rather than by "there is an interrupt": the slot is typed
-  // for every lifecycle interrupt kind, and only `recommendation_hold` addresses
-  // this card. A future kind landing in the slot must not move this card's ref.
-  //
-  // A RUN THAT CAN BE HELD ALWAYS HAS THE WIRE, so retiring the timer does not
-  // strand a streamless surface. `agUiEnabled` is the SSE-vs-legacy-poll
-  // discriminator, and every path that inserts a run sets it TRUE — the two
-  // `createAgentRun` inserts and the pending-input insert alike (the last one
-  // says so in its own comment: without it "a setup → run transition would
-  // appear as legacy to the panel"). `null` marks rows that predate the
-  // discriminator, and those cannot acquire a NEW hold: a hold is minted at
-  // trigger time by the same current code that sets the flag. So the case
-  // "a hold appears after mount on a run with no stream" is unreachable, and the
-  // card's mount/focus resolves cover a legacy row that was already parked.
-  const holdWireRef =
-    streamResult.lifecycleInterrupt?.kind === "recommendation_hold"
-      ? streamResult.lifecycleInterrupt.ref
-      : null;
 
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
@@ -2032,21 +2016,24 @@ export function AgenticRunPanel({
       status === "running" ||
       ((reviewMayStillOpen || pausePlaceholder) && !widgetHostedPanel));
 
-  // The recommendation card's ONE mount, lifted to a value so the slot's three
-  // readings share it instead of each carrying a copy (the one-card rule is
-  // about instances, and this is how there stays exactly one).
-  const recommendationCardNode: ReactNode = panelMountsRecommendationCard ? (
-    <LifecycleCardSurfaceProvider host="run_card">
-      <RecommendationHoldCard
-        runId={runId}
-        agentPackageName={agentPackageName ?? ""}
-        wireRef={holdWireRef}
-        onStateChange={setOwnRecommendation}
-      />
-    </LifecycleCardSurfaceProvider>
-  ) : null;
+  // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
+  //
+  // This panel used to mount one wherever no conversation host was in scope —
+  // the run page — and that mount was the second placement of the skills row on
+  // that page: the row sat BESIDE the rail at the schedule moment, drawn by the
+  // run screen, and INSIDE this panel at the HITL, working and review moments,
+  // drawn here. The same row moved between two placements as the run advanced.
+  //
+  // The ratified drawing fixes one placement — "the trigger-gate entry at the
+  // head of the rail … its chip-row filling the run detail while the rail
+  // carries the run's steps beside it" — so the row has one owner: the run
+  // screen's own rail step (`instance-screens.tsx`), on every branch of
+  // `runDetailPanelKind`, including this one. Nothing here draws it and nothing
+  // here is gated to draw it later; what this panel still needs from that
+  // interaction is the ANSWER, and it takes it as a prop
+  // (`recommendationDecided`).
 
-  // The review screen's ONE mount, for the same reason. cinatra#2566's account
+  // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
@@ -2091,7 +2078,6 @@ export function AgenticRunPanel({
           // the review screen arrive in the same slot.
           data-run-review-slot={reviewScreenNode !== null ? "review" : "working"}
         >
-          {recommendationCardNode}
           {reviewScreenNode ?? (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
@@ -2153,12 +2139,24 @@ export function AgenticRunPanel({
 
   return (
     <>
-    <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
+    <section
+      className={
+        railDrawsTheFrame
+          ? "flex flex-col gap-4"
+          : "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+      }
+      // WHICH BOX THIS IS. Passive — it draws nothing and drives nothing — and
+      // it is here for the same reason `data-run-review-slot` above is: the
+      // ruled property is that the skills row is NOT in this box (cinatra#3047),
+      // and a proof of an absence has to be able to name the place it is absent
+      // from.
+      data-run-progress-panel=""
+    >
       {/* THE HEADING RETIRES FOR THE RUN'S FIRST STEP (cinatra#3068): the rail
           beside this column names that step and the form below is its screen,
           so a progress heading over a run that has produced no progress is the
           one reading this surface must not make. Every other host keeps it. */}
-      {inputStepInRail ? null : (
+      {inputStepInRail || railDrawsTheFrame ? null : (
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
         <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">
@@ -2170,34 +2168,12 @@ export function AgenticRunPanel({
       </div>
       )}
 
-      {/* The run-start recommendation hold, through the ONE card (cinatra#2568
-          AC-5). The panel's DIRECT chip-row mount — and the local hold state it
-          needed — are gone: the interaction is a lifecycle card like the review
-          gate beside it, declared on the same `run_card` host, drawn by the one
-          renderer of `recommendation_hold`. No parallel chip-row mount remains
-          on this host, and there is nothing here for a later edit to poll.
-
-          ONE CARD PER TURN, IN EVERY STATE. Inside a chat transcript this panel
-          is a SIBLING of the conversation's own recommendation card, and both
-          resolve the same run — so an unconditional mount here draws the card
-          twice in one turn. It went unnoticed because only the SETTLED states
-          render on both: the held state self-gates to the chat card's turn,
-          which made the duplication look like a settled-only quirk rather than
-          what it is.
-
-          The contract is the one the ruling names: inside a CONVERSATION host
-          — `chat_thread` or the widget's `site_widget`, both served by the one
-          shared column — the conversation's card owns this run's
-          recommendation, in every state, and the panel draws none. The run page
-          keeps its copy untouched — there is no outer conversation host there,
-          so `ambientLifecycleHost` is null and the mount renders exactly as
-          before. Gating on the ambient host rather than on
-          the `surface` prop keeps the rule true for any future embedder of this
-          panel inside a transcript, without that embedder having to remember a
-          prop. The condition itself lives in `runCardOwnsLifecycleCopy` so this
-          mount and the transcript's own test cannot drift into two copies of
-          the same rule. */}
-      {recommendationCardNode}
+      {/* NO RECOMMENDATION CARD IN THIS BOX (cinatra#3047). The skills row is
+          drawn in ONE place on the run page — its own step at the head of the
+          rail, filling the run detail beside it — and the run-progress panel
+          draws no copy of it at any moment. The account of what stood here, and
+          of what the panel still takes from that interaction, is above the
+          review-screen mount. */}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (

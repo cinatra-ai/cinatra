@@ -70,6 +70,7 @@ import {
   type RunSurfaceRailStep,
 } from "../run-surface-rail";
 import { recommendationRailEntry } from "../recommendation-rail-entry";
+import { runSurfaceRailNumberedCount } from "../run-surface-rail-step";
 
 const HELD: HoldState = {
   state: "held",
@@ -119,8 +120,8 @@ function ReviewRow() {
   );
 }
 
-/** The run detail as the screen composes it: the settled card, then the run's
- *  own progress section. */
+/** The run detail as the screen composes it: the run's own progress section,
+ *  and nothing above it (cinatra#3047, review point D). */
 function RunProgress() {
   return (
     <section data-testid="run-detail-panel">
@@ -130,9 +131,10 @@ function RunProgress() {
 }
 
 /**
- * The run surface, composed the way `SetupScreen` composes it: ONE card mount
- * used by the step's surface and by the run detail, which are mutually
- * exclusive slots of the same frame.
+ * The run surface, composed the way `SetupScreen` composes it: ONE card mount,
+ * given to the Skills step's surface and to nothing else (cinatra#3047, review
+ * point D — "every HITL shows on its own dedicated page"). The run detail is the
+ * run's own panel; the settled row is reached by selecting its step.
  */
 function surface(opts: {
   hasRecommendationStep?: boolean;
@@ -153,19 +155,23 @@ function surface(opts: {
   if (opts.hasRecommendationStep !== false) {
     steps.push({
       key: "recommendation",
-      row: (
-        <RecommendationRailStepRow
-          displayStep={steps.length + 1}
-          settled={opts.settled === true}
-        />
-      ),
+      row: <RecommendationRailStepRow settled={opts.settled === true} />,
       surface: card,
     });
   }
   if (opts.hasScheduleStep !== false) {
     steps.push({
       key: "schedule",
-      row: <ScheduleRailStepRow host="run_card" displayStep={steps.length + 1} />,
+      // THE SCHEDULE'S NUMERAL IS THE RAIL'S RULE (cinatra#3047): the Skills
+      // entry above draws its own glyph and consumes none, so the schedule is
+      // "1" whether or not it is the second gate row — the same arithmetic the
+      // screen applies.
+      row: (
+        <ScheduleRailStepRow
+          host="run_card"
+          displayStep={runSurfaceRailNumberedCount(steps.map((step) => step.key)) + 1}
+        />
+      ),
       surface: <div data-testid="schedule-surface" />,
     });
   }
@@ -178,12 +184,7 @@ function surface(opts: {
       <RunSurfaceRail
         steps={steps}
         rail={<ReviewRow />}
-        detail={
-          <>
-            {card}
-            <RunProgress />
-          </>
-        }
+        detail={<RunProgress />}
         initialSelection={opts.initialSelection}
       />
     </div>
@@ -242,13 +243,20 @@ describe("a LIVE hold — the gate opens in the run detail, under the same rail"
       "schedule-rail-step",
       "review-row",
     ]);
-    // …and it is numbered first, with the schedule renumbered behind it.
+    // …and it takes NO numeral (cinatra#3047, the re-shoot's third defect): the
+    // drawing gives this entry its own glyph on the open reading and starts the
+    // numerals on the step after it, so the schedule below reads "1" rather than
+    // being renumbered behind a Skills entry that took the first slot.
+    const indicator = rail.querySelector(
+      '[data-conformance-id="recommendation-rail-indicator"]',
+    )!;
+    expect(indicator.textContent?.trim()).toBe("");
     expect(
-      rail.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
-    ).toBe("1");
+      indicator.querySelector('[data-conformance-id="recommendation-rail-glyph"]'),
+    ).not.toBeNull();
     expect(
       rail.querySelector('[data-conformance-id="schedule-rail-indicator"]')!.textContent,
-    ).toBe("2");
+    ).toBe("1");
   });
 
   it("draws NO agentic run progress beside it — the selected step is what the detail shows", async () => {
@@ -281,13 +289,13 @@ describe("a DECIDED hold — the settled reading in the rail, the run detail res
     expect(
       entry.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
     ).toBe("");
-    expect(entry.textContent).toBe("Recommendation");
-    // The run detail is what the run page otherwise shows.
+    expect(entry.textContent).toBe("Skills");
+    // The run detail is what the run page otherwise shows…
     expect(container.textContent).toContain("Agentic Run Progress");
-    // …and the settled chip row stays where the branch already draws it.
-    await waitFor(() => expect(chipRow(container)).not.toBeNull());
-    expect(detailColumn(container).contains(chipRow(container)!)).toBe(true);
-    expect(railColumn(container).contains(chipRow(container)!)).toBe(false);
+    // …and the settled row is NOT drawn above it (cinatra#3047, review point D).
+    // It is the Skills step's own page; the next test opens it.
+    expect(chipRow(container)).toBeNull();
+    expect(detailColumn(container).querySelectorAll("[data-recommendation-chip]")).toHaveLength(0);
   });
 
   it("re-opens the settled reading in the same place when its step is selected", async () => {
@@ -313,140 +321,23 @@ describe("a DECIDED hold — the settled reading in the rail, the run detail res
   });
 });
 
-/**
- * THE BRANCH WHOSE PANEL DRAWS THE CARD (cinatra#2790, S9f — R6).
- *
- * `AgenticRunPanel` declares `run_card` and mounts the one card itself, so the
- * screen hosts none (`screenHostsRecommendationCard("agentic") === false`, pinned
- * in `instance-screens-recommendation-step.test.ts` together with the run
- * statuses that reach this branch). Whether the rail still carries the entry is
- * `recommendationRailEntry`'s answer — the screen's own — so what this renders is
- * what the run page renders. The step gets NO surface of its own here: the
- * settled card is already inside the panel, which is the frame's "this step
- * keeps the run detail" case.
- */
-function panelHostedSurface(opts: { hasPark: boolean; held: boolean }) {
-  const hostsCard = false;
-  const entry = recommendationRailEntry({
-    hasPark: opts.hasPark,
-    held: opts.held,
-    hostsCard,
-  });
-  const detail = (
-    <section data-testid="run-detail-panel">
-      <h2>Agentic Run Progress</h2>
-      <LifecycleCardSurfaceProvider host="run_card">
-        <RecommendationHoldCard
-          runId="run-2790"
-          agentPackageName="@cinatra-test/rail-fixture-agent"
-          wireRef={null}
-        />
-      </LifecycleCardSurfaceProvider>
-    </section>
-  );
-  const steps: RunSurfaceRailStep[] = [];
-  if (entry !== "none") {
-    steps.push({
-      key: "recommendation",
-      row: (
-        <RecommendationRailStepRow displayStep={steps.length + 1} settled={entry === "settled"} />
-      ),
-      surface: null,
-    });
-  }
-  return (
-    <div
-      className="flex items-start gap-6"
-      data-run-detail-contract=""
-      data-conformance-id="run-surface"
-    >
-      <RunSurfaceRail
-        steps={steps}
-        rail={<ReviewRow />}
-        detail={detail}
-        initialSelection="detail"
-      />
-    </div>
-  );
-}
-
-describe("a DECIDED hold on the branch whose PANEL draws the card — R6", () => {
-  it("keeps the settled entry on the rail, to the LEFT of the run detail", async () => {
-    holdStateMock.mockImplementation(async () => DECIDED);
-    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
-
-    await waitFor(() =>
-      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
-    );
-
-    const entry = recommendationRow(container);
-    expect(entry).not.toBeNull();
-    expect(entry!.getAttribute("data-recommendation-step-settled")).toBe("true");
-    expect(entry!.getAttribute("data-recommendation-step-selected")).toBe("false");
-    // The rail's own completed reading: the numeral replaced by the check, and
-    // no status word added beside the title.
-    expect(
-      entry!.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
-    ).toBe("");
-    expect(entry!.textContent).toBe("Recommendation");
-
-    // TWO COLUMNS, the rail first — the drawing's frame.
-    const contract = container.querySelector("[data-run-detail-contract]")!;
-    expect(contract.children.length).toBe(2);
-    expect(contract.children[0]).toBe(railColumn(container));
-    expect(contract.children[1]).toBe(detailColumn(container));
-    expect(railColumn(container).contains(entry!)).toBe(true);
-    expect(detailColumn(container).contains(entry!)).toBe(false);
-  });
-
-  it("leaves the run detail exactly as the branch draws it — the panel and its ONE card", async () => {
-    holdStateMock.mockImplementation(async () => DECIDED);
-    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
-
-    await waitFor(() => expect(chipRow(container)).not.toBeNull());
-
-    const detail = detailColumn(container);
-    expect(detail.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
-    expect(container.textContent).toContain("Agentic Run Progress");
-    // Still exactly one chip row on this host, and it is the panel's.
-    expect(container.querySelectorAll("[data-run-recommendation-chip-row]").length).toBe(1);
-    expect(detail.contains(chipRow(container)!)).toBe(true);
-    expect(railColumn(container).contains(chipRow(container)!)).toBe(false);
-  });
-
-  it("selecting the settled entry keeps the run detail — it opens no surface of its own", async () => {
-    holdStateMock.mockImplementation(async () => DECIDED);
-    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
-
-    await waitFor(() =>
-      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
-    );
-
-    fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
-
-    // The row takes the selection — it is a rail row — but the detail stays put,
-    // because the settled card it would show is already inside that panel.
-    expect(recommendationRow(container)!.getAttribute("data-recommendation-step-selected")).toBe(
-      "true",
-    );
-    expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
-    expect(container.textContent).toContain("Agentic Run Progress");
-    expect(container.querySelectorAll("[data-run-recommendation-chip-row]").length).toBe(1);
-  });
-
-  it("a run on that branch that NEVER held draws no entry at all — unchanged", async () => {
-    holdStateMock.mockImplementation(async () => ({ state: "none" }));
-    const { container } = render(panelHostedSurface({ hasPark: false, held: false }));
-
-    await waitFor(() =>
-      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
-    );
-
-    expect(recommendationRow(container)).toBeNull();
-    expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
-    expect(chipRow(container)).toBeNull();
-  });
-});
+// ---------------------------------------------------------------------------
+// THE BRANCH WHOSE PANEL DREW THE CARD IS GONE (cinatra#2790 S9f — R6, closed
+// out by cinatra#3047).
+//
+// This file used to carry a second fixture family for it: a run surface whose
+// recommendation step opened NO surface of its own, because `AgenticRunPanel`
+// mounted the card inside its own box and a step must never open onto a card
+// another module draws. That is exactly the two-placement defect #3047 reports —
+// the row sat beside the rail at the schedule moment and inside the run-progress
+// panel at the HITL, working and review moments — and the panel's mount is
+// deleted: the screen owns the row on EVERY branch, so every branch is the
+// branch this file's first two fixtures already model.
+//
+// What that family proved travels to `run-page-recommendation-one-place.test.tsx`,
+// which drives all four `runDetailPanelKind` branches with the REAL panel in the
+// run detail and counts the roots.
+// ---------------------------------------------------------------------------
 
 describe("the server's answer wins when it changes — the refresh after a decision", () => {
   it("moves the open step when the screen recomputes it, without a remount", async () => {

@@ -10,9 +10,10 @@ import {
   type ReactElement,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRight, Check, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Sheet,
   SheetContent,
@@ -39,6 +40,11 @@ import {
   type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
+import {
+  VENDOR_BY_CONNECTIVE,
+  VENDOR_MISSING_LABEL,
+  resolveVendorPresentation,
+} from "@/lib/vendor-presentation";
 
 // ---------------------------------------------------------------------------
 // RunRecommendationChipRow — the SHARED run-start recommendation chip-row
@@ -129,6 +135,56 @@ import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-rev
 // three affordances on screen, disabled, over the reason line.
 // ---------------------------------------------------------------------------
 
+/**
+ * DOES THIS HOST DRAW THE RUN PAGE'S SKILLS STEP? (cinatra#3047, the review's
+ * points B and C.)
+ *
+ * The review, in its own words: "Remove all buttons from the skill pills, i.e.
+ * Confirm, Adjust, Skip — instead, show a checkbox in the front of the pill,
+ * i.e. before the name of the skill. Selected checkbox means that this skill
+ * must be applied to the agent run", and "the continue button is missing on the
+ * skills recommendation screen".
+ *
+ * IT IS THE RUN'S OWN PAGES, and the review says which those are: point E asks
+ * for a SEPARATE issue to apply the same two changes to the chat and the widget,
+ * so the conversation and the embedded widget keep the chip-row they draw today,
+ * byte for byte, until that issue lands.
+ *
+ * THE REVIEW PAGE IS ONE OF THE RUN'S PAGES (cinatra#3047, the re-shoot's first
+ * defect), and this predicate said otherwise for one round. The review route is
+ * a SECOND composition of the same run surface — the same run, the same rail,
+ * the same Skills step at its head — and the change request names it in the same
+ * breath as the run page: "Do not show the skills on top of the review card or
+ * the schedule card or any other card either." While the predicate named
+ * `run_card` alone, moving that page's mount onto its Skills step opened the
+ * step onto the PRE-REFINEMENT reading — the settled outcome chips reading
+ * "✓ CONFIRMED / ✗ SKIPPED", with no checkbox and nothing to press — which is
+ * what the re-shoot photographed. The drawing at the capture contract's pin
+ * draws §V's checkbox pills as the anatomy EVERY host reuses, so widening this
+ * seam to the run's other page follows the drawing rather than outrunning it.
+ * The two transcript hosts stay exactly where point E left them.
+ *
+ * WHY THE HOST DECLARATION IS STILL THE SEAM. The four hosts are declared in
+ * exactly one production place each — the run page's own frame in
+ * `instance-screens.tsx` for `run_card`, the review route's gate region for
+ * `page_gate_region`, the conversation for `chat_thread` and the embedded widget
+ * for `site_widget`. So "the run's own page" is a fact the card can read off the
+ * provider it is already mounted under, rather than a prop a host could pass by
+ * accident, and a host that never declared itself draws no card at all. It is
+ * the same declaration the card root publishes as `data-lifecycle-card-host`, so
+ * the reading and the anchor a capture is graded by can never disagree.
+ *
+ * AND THE MOUNT KEEPS ITS HOST. The review page's Skills step declares
+ * `page_gate_region` exactly as its gate region always did — re-declaring it as
+ * `run_card` would take `recommendation_hold` off a host the anchor contract's
+ * `hostParity` records it on, which the host-parity ratchet raises `host-lost`
+ * for. The same four hosts, the same two methods; one of them draws a different
+ * reading.
+ */
+export function chipRowDrawsSkillChecklist(host: string | null): boolean {
+  return host === "run_card" || host === "page_gate_region";
+}
+
 /** What one chip recorded — the three marks §V draws on a settled chip. */
 export type RunRecommendationChipMark = "confirmed" | "adjusted" | "skipped";
 
@@ -137,6 +193,14 @@ export type RunRecommendationDecision =
   | {
       kind: "confirmed";
       skillNames: string[];
+      /**
+       * HAS THE RUN STARTED RUNNING? (cinatra#3047, review point 1.) A settled
+       * step whose run has NOT started is still editable — the same pills, the
+       * same Continue, bound to the same hold. Absent is the safe reading: a
+       * caller that does not answer gets the read-only one, so a step can never
+       * be made editable by silence.
+       */
+      runStarted?: boolean;
       /** Per-skill settled marks, derived from the run's durable evidence. */
       decided?: RunRecommendationDecidedSkill[];
       /**
@@ -147,6 +211,8 @@ export type RunRecommendationDecision =
     }
   | {
       kind: "skipped";
+      /** See the `confirmed` arm — the same reading, for the same reason. */
+      runStarted?: boolean;
       decided?: RunRecommendationDecidedSkill[];
       /** The same offer, for the same reason — see the `confirmed` arm above. */
       candidates?: RunRecommendationSettledCandidate[];
@@ -162,6 +228,23 @@ export type RunRecommendationDecision =
 
 /** One chip's live (pre-release) state: what was pressed, and what it means. */
 type ChipDecision = { mark: RunRecommendationChipMark; keep: boolean };
+
+/**
+ * WHAT THE SKILLS STEP NEEDS TO KNOW ABOUT ONE SKILL (cinatra#3047), and no
+ * more. Both sources project onto it — the LIVE hold's scored chips
+ * (`RecommendedSkillForChip`) and a SETTLED hold's own recorded offer
+ * (`RunRecommendationSettledCandidate`) — so the step draws, and decides, from
+ * one shape whichever of the two it was handed. The four fields are exactly what
+ * the pill prints and what the decision path pins: nothing about a score, a rank
+ * or a feature breakdown reaches this reading.
+ */
+type SkillsStepCandidate = {
+  skillId: string;
+  skillRevisionId: string;
+  name: string;
+  vendorName: string | null;
+  recommended: boolean;
+};
 
 /**
  * The row's decision transport (cinatra#2790, epic #2784 S9f) — the two terminal
@@ -419,6 +502,152 @@ function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): Re
 }
 
 /**
+ * ONE PILL ON THE RUN PAGE'S SKILLS STEP — the run page's WHOLE vocabulary for a
+ * skill, in every one of the step's readings (cinatra#3047, review points 1, 2,
+ * 3 and 4).
+ *
+ * ONE COMPONENT, THREE READINGS. The step is drawn three times over a run's
+ * life — live at the hold, settled-but-still-editable before the run starts, and
+ * read-only once it has started — and all three draw THIS pill. That is the
+ * point: a reader who changes nothing must not be able to tell the first two
+ * apart by looking, because the selection genuinely has not been frozen, and the
+ * third must differ in exactly one way, which is that nothing can be pressed.
+ * Three near-identical pills would eventually disagree about one of them.
+ *
+ * "<SKILL NAME> BY <VENDOR>", ON ONE LINE (review point 3), AND NO FORMAT IS
+ * INVENTED FOR IT. Both halves come from the platform's own vendor machinery,
+ * and this pill is a byline surface like the marketplace card and the /agents
+ * card:
+ *
+ *   · the NAME CANDIDATE is resolved server-side by `resolveInstalledVendorName`
+ *     — the manifest's `cinatra.vendor.name`, then the npm `author`, and nothing
+ *     else — which is the same chain the Installed page and the assignable-skills
+ *     picker resolve a skill package's vendor with;
+ *   · the LABEL is minted by `resolveVendorPresentation`, the app's single
+ *     vendor-presentation resolver, and the connective is its own
+ *     `VENDOR_BY_CONNECTIVE`. A package whose vendor cannot be named resolves to
+ *     the `missing` STATE and prints that resolver's own `VENDOR_MISSING_LABEL`,
+ *     never a slug, never a package scope and never a silent omission.
+ *
+ * It is drawn in the muted secondary text style beside the name, on one line.
+ *
+ * THE ACCESSIBLE NAME STAYS THE SKILL'S NAME. `aria-labelledby` points at the
+ * NAME span alone, not at the pill and not at the name-plus-vendor wrapper, so
+ * the box is announced as the skill it toggles rather than as a sentence about
+ * its publisher.
+ *
+ * NO PANEL CHROME (review point 4). The pill is a chip: a rounded outline and a
+ * ground that states whether the box is ticked. It carries no card, and neither
+ * does the list around it — the step's pills and their Continue sit directly in
+ * the run detail column beside the rail.
+ *
+ * READ-ONLY IS `disabled`, NOT A DIFFERENT CONTROL. The pill keeps its role and
+ * its accessible name in every reading, so one query finds it in all three and a
+ * reader on assistive technology is told the box is unavailable rather than
+ * being handed a box that silently refuses.
+ *
+ * NO RECORDED WORD BESIDE THE NAME, and that is review point 2 rather than an
+ * omission. The step's earlier drawing printed `Confirmed` / `Adjusted` /
+ * `Skipped` next to each settled name. With the boxes editable until the run
+ * starts, such a word would state a decision the reader may still change on the
+ * very same pill — and with checkboxes there is no skip ACT for it to report:
+ * the box IS the outcome, ticked or clear. `Adjusted` cannot be produced from
+ * this screen at all (a checkbox has two positions and neither means "I opened
+ * this one and shaped it"); it stays drawn on the hosts that still draw Adjust.
+ */
+function SkillsStepPill({
+  skillId,
+  name,
+  vendorName,
+  checked,
+  editable,
+  forced,
+  title,
+  onCheckedChange,
+}: {
+  skillId: string;
+  name: string;
+  /** The resolved byline, or `null` — the pill then prints the name alone. */
+  vendorName: string | null;
+  checked: boolean;
+  /** May this reader move the box right now? `false` draws it `disabled`. */
+  editable: boolean;
+  forced?: boolean;
+  title?: string;
+  onCheckedChange?: (next: boolean) => void;
+}): ReactElement {
+  const labelId = `skills-step-label-${skillId}`;
+  // The app's ONE byline resolver, on the same terms every other byline surface
+  // consumes it: a display-name candidate in, a discriminated state out, and the
+  // label read off that state alone.
+  const vendor = resolveVendorPresentation(
+    { name: vendorName },
+    { surface: "run-skills-step-pill", ref: skillId },
+  );
+  const vendorLabel = vendor.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL;
+  return (
+    <span
+      data-recommendation-chip=""
+      data-skills-step-pill=""
+      data-skill-id={skillId}
+      data-skill-applied={checked ? "true" : "false"}
+      data-skills-step-pill-editable={editable ? "true" : "false"}
+      data-forced={forced ? "true" : undefined}
+      // ONE GROUND FOR EVERY PILL, AND A STADIUM (cinatra#3047, leg 7). The
+      // drawing's `.skchip` is a single rule — `border-radius: 9999px`, `border:
+      // 1px solid var(--line)`, `background: var(--surface-strong)` — with no
+      // second rule anywhere giving a ticked pill a ground of its own: the
+      // value is stated in the BOX, which the drawing paints blue when it is on
+      // and leaves on the muted ground when it is off. The sixth proof round
+      // measured a tinted ground on the ticked pill (#DEE3E0 light, #04171B
+      // dark) against the clear pill's white, and a corner radius of roughly 6
+      // CSS px, so the pill read as a rounded box with two faces where the
+      // drawing gives one shape with one face.
+      //
+      // THE READ-ONLY READING IS SAID OUT LOUD. `.skchip[aria-disabled="true"]
+      // { color: var(--muted); }` is the drawing's own reading for a run that
+      // has started, and its examples carry the attribute on every pill; the
+      // box keeps its `disabled`, so a reader on assistive technology is told
+      // by the pill AND by the control it holds.
+      {...(editable ? {} : { "aria-disabled": "true" })}
+      className={`inline-flex items-center gap-2 rounded-full border border-line bg-surface-strong py-[5px] pr-[11px] pl-[7px] text-xs ${
+        editable ? "text-foreground" : "text-muted-foreground"
+      }`}
+      {...(title ? { title } : {})}
+    >
+      {/* THE CHECKBOX, IN FRONT OF THE NAME. The vendored primitive, because the
+          design-system boundary admits no raw control JSX: it is a real checkbox
+          to a reader and to assistive technology (role `checkbox`,
+          `aria-checked`, operated from the keyboard), and it is LABELLED BY THE
+          SKILL NAME beside it rather than by a repeated string of its own. */}
+      <Checkbox
+        checked={checked}
+        disabled={!editable}
+        aria-labelledby={labelId}
+        data-skills-step-checkbox=""
+        data-skill-id={skillId}
+        {...(onCheckedChange ? { onCheckedChange: (next) => onCheckedChange(next === true) } : {})}
+      />
+      <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+        {/* TWO WEIGHTS, ONE LINE. The drawing writes the name at 600 and the
+            byline that follows it at 500 in the muted ink, so the skill is what
+            a reader meets first and its vendor is the qualifier. */}
+        <span id={labelId} className="font-semibold">
+          {name}
+        </span>
+        <span
+          data-skills-step-vendor=""
+          data-vendor-state={vendor.kind}
+          className="font-medium text-muted-foreground"
+        >
+          {`${VENDOR_BY_CONNECTIVE} ${vendorLabel}`}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+/**
  * THE ZERO-CHIP SETTLED READING (cinatra#2893) — the outcome panel a settled
  * hold draws when the recorded set names NO skill at all.
  *
@@ -534,6 +763,9 @@ export function RunRecommendationChipRow({
   // anything was inside it.
   const chatThreadHoldMarker =
     lifecycleHost === "chat_thread" ? { "data-chat-thread-recommendation-hold": "" } : {};
+  // WHICH READING THIS HOST GETS (cinatra#3047, review points B, C and E) — the
+  // run page's Skills step, or the chip-row every other host keeps.
+  const drawsChecklist = chipRowDrawsSkillChecklist(lifecycleHost);
   const [recs, setRecs] = useState<RecommendedSkillForChip[]>(
     initialRecommendations ?? [],
   );
@@ -547,6 +779,54 @@ export function RunRecommendationChipRow({
    * are written together in `decideChip`, the only place either is set.
    */
   const chipsRef = useRef<Record<string, ChipDecision>>({});
+  /**
+   * THE BOXES THE READER HAS MOVED (cinatra#3047, review points B and C), and
+   * only those.
+   *
+   * The INITIAL state of every checkbox is the recommendation's own default:
+   * checked for a skill the scorer RECOMMENDED, unchecked for one it did not.
+   * That is the row's own `recommended` flag — the scorer's verdict, carried
+   * through the hold's offer — and it is the same set the shipped Confirm took
+   * as scored, so a reader who presses Continue without touching anything runs
+   * exactly the recommendation. The unchecked ones are the below-threshold
+   * candidates the row has always offered as force-adds; checking one is the
+   * shipped forced addition, revision-pinned by `release` below.
+   *
+   * A SPARSE OVERRIDE MAP, not a seeded copy of the candidate set. The
+   * candidates arrive asynchronously on a host that fetches them, so a seeded
+   * state would have to be reconciled by an effect and would be wrong for one
+   * paint; reading the default THROUGH the candidate makes the answer correct
+   * on the first render and on every later one, whenever the list arrives.
+   */
+  const [checkedOverrides, setCheckedOverrides] = useState<Record<string, boolean>>({});
+  /**
+   * HAS THIS ROW ALREADY RELEASED? (cinatra#3047, review point B.)
+   *
+   * One release per run: a second press inside the in-flight window must not
+   * become a second decision. `pending` cannot carry this — `useTransition`
+   * turns it on asynchronously, so two presses landing in one tick both read it
+   * as false — so the guard is a ref, written synchronously before the transition
+   * is started. It is cleared again when the decision comes back REFUSED, because
+   * a transport failure or a server refusal leaves the hold live and the reader
+   * must be able to press Continue again; a SUCCEEDED release keeps it, and the
+   * row is replaced by its settled reading anyway.
+   */
+  const releasedRef = useRef(false);
+  /**
+   * THE SAME ANSWER, RENDERED (cinatra#3047, review point B — codex round).
+   *
+   * The ref alone stops a second CALL; it does not stop a second PRESS from
+   * looking possible. `useTransition`'s `pending` goes false the moment the
+   * action resolves, and the authoritative re-read behind `onDecided` /
+   * `router.refresh()` lands later — so between the two the reader would be
+   * looking at editable boxes and a live Continue on a run that has already
+   * been decided, and a press on them would do nothing at all. That is exactly
+   * the "refused once the run has moved on, ON THE SCREEN" half of the
+   * requirement, so the screen states it: once the step has been submitted the
+   * whole reading is inert until the settled reading replaces it. Cleared again
+   * only by a REFUSAL, which leaves the hold live and the step decidable.
+   */
+  const [submitted, setSubmitted] = useState(false);
   const [detail, setDetail] = useState<RecommendedSkillForChip | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -570,9 +850,11 @@ export function RunRecommendationChipRow({
     };
   }, [loaded, decision.kind, agentPackageName, promptText]);
 
-  // ── The SETTLED row (a released hold) — one chip per skill, each with its
-  //    own recorded outcome. No heading, no summary line, nothing to press.
-  if (decision.kind !== "pending") {
+  // ── THE SETTLED READING'S OWN INPUTS, computed before the branches below so
+  //    the run page's editable settled reading can use the very same decision
+  //    helpers the live reading uses (cinatra#3047, review point 1).
+  const settledInputs = (() => {
+    if (decision.kind === "pending") return null;
     const recorded: RunRecommendationDecidedSkill[] =
       decision.decided ??
       (decision.kind === "confirmed"
@@ -588,56 +870,25 @@ export function RunRecommendationChipRow({
     // §V's settled row is one chip per skill the hold ASKED ABOUT, not one per
     // skill that happened to leave a row — see `settledChipsForRow`.
     const settled = settledChipsForRow(decision.candidates, recorded);
-    // A settled hold whose durable evidence names no skill at all has nothing
-    // PER-SKILL to state — and since cinatra#2893 §V draws the reading for
-    // exactly that row: the outcome panel below, in place of the chips. The card
-    // root is untouched by the choice, so the kind/host/state declaration a
-    // capture is identified by is the same one either reading carries.
-    //
-    // The one state with no ratified face left. `confirmed` with an empty
-    // decided set contradicts its own answer — `confirmed` means at least one
-    // skill was kept, and the resolver cannot produce it (see
-    // `SettledOutcomePanel`) — so no host mounts it, no outcome word is true of
-    // it, and none is invented for it.
-    const zeroChip = settled.length === 0;
-    if (zeroChip && decision.kind !== "skipped") return null;
-    return (
-      <div
-        data-run-recommendation-chip-row=""
-        data-conformance-id="run-chip-row"
-        // THE CARD-ROOT DECLARATION (cinatra#2841). The capture contract
-        // (`scripts/ci/lib/capture-record-contract.mjs`) identifies a
-        // `recommendation_hold` capture by the card root's OWN three
-        // attributes, exactly as it does for the review gate — the kind, the
-        // host that declared the surface, and the state. The row IS the card
-        // (§V), so the row's outermost element carries them; without them no
-        // truthful capture of this card could ever satisfy its own contract.
-        data-lifecycle-card="recommendation_hold"
-        data-lifecycle-card-state="decided"
-        // Omitted rather than guessed when no surface declared a host: the
-        // component renders outside a provider only in tests.
-        data-lifecycle-card-host={lifecycleHost ?? undefined}
-        {...chatThreadHoldMarker}
-        data-run-recommendation-decision={decision.kind}
-        data-run-recommendation-settled="true"
-        data-variant={variant}
-        className="flex flex-wrap gap-2"
-      >
-        {zeroChip ? (
-          <SettledOutcomePanel
-            {...(decision.kind === "skipped" && decision.decidedByName
-              ? { decidedByName: decision.decidedByName }
-              : {})}
-          />
-        ) : (
-          settled.map((s) => (
-            <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
-          ))
-        )}
-      </div>
+    // WHICH SKILLS THE RUN ACTUALLY RECORDED AS APPLIED. A settled pill's box is
+    // ticked for a skill that is IN the run and clear for one that is not, and
+    // an editable settled step starts from exactly that — the run's own answer,
+    // not the scorer's, because the reader has already answered once.
+    const appliedSkillIds = new Set(
+      settled.filter((row) => row.mark !== "skipped").map((row) => row.skillId),
     );
-  }
-
+    // Carried out of the narrowed branch so the readings below can ask it
+    // without re-narrowing the union they are already past.
+    //
+    // ONLY AN EXPLICIT `false` OPENS THE BOXES. The resolver always answers the
+    // question, so absence here is a caller that did not — and a step is never
+    // made editable by silence. That is the opposite direction from
+    // `recommendationRunHasStarted`, deliberately: there the input is a run's
+    // STATUS and an unreadable status must not freeze a step the reader may
+    // still edit; here the input is the ANSWER itself, and no answer is not an
+    // answer of "not started".
+    return { recorded, settled, appliedSkillIds, runNotStarted: decision.runStarted === false };
+  })();
   // ── The interactive chip-row (a live parked hold) ────────────────────────
 
   /**
@@ -647,9 +898,21 @@ export function RunRecommendationChipRow({
    * kept set, or a skip when nothing was kept. A skip is not "an empty confirm":
    * an empty selection writes no row at all, which reads back as no decision.
    */
-  const release = (next: Record<string, ChipDecision>) => {
+  const release = (
+    next: Record<string, ChipDecision>,
+    /**
+     * THE SET THIS DECISION IS ABOUT (cinatra#3047, review point 1). The live
+     * reading passes the hold's scored chips; the run page's settled-but-editable
+     * reading passes the hold's OWN RECORDED OFFER, which is the set a
+     * re-decision may pin — the decision path resolves against that offer, not
+     * against a fresh scoring.
+     */
+    pool: readonly SkillsStepCandidate[],
+    /** Told whether the decision LANDED — see `releasedRef` (cinatra#3047). */
+    onOutcome?: (ok: boolean) => void,
+  ) => {
     setError(null);
-    const kept = recs.filter((r) => next[r.skillId]?.keep === true);
+    const kept = pool.filter((r) => next[r.skillId]?.keep === true);
     if (kept.length === 0) {
       startTransition(async () => {
         // A REJECTED action is a refusal, not silence (cinatra#2905 AC-1). The
@@ -667,12 +930,15 @@ export function RunRecommendationChipRow({
           });
         } catch {
           setError(RECOMMENDATION_ROW_REFUSAL);
+          onOutcome?.(false);
           return;
         }
         if (!res.ok) {
           setError(res.error || "Could not skip.");
+          onOutcome?.(false);
           return;
         }
+        onOutcome?.(true);
         onDecided?.();
         router.refresh();
       });
@@ -708,12 +974,15 @@ export function RunRecommendationChipRow({
         });
       } catch {
         setError(RECOMMENDATION_ROW_REFUSAL);
+        onOutcome?.(false);
         return;
       }
       if (!res.ok) {
         setError(res.error || "Could not confirm the skill selection.");
+        onOutcome?.(false);
         return;
       }
+      onOutcome?.(true);
       onDecided?.();
       router.refresh();
     });
@@ -738,7 +1007,7 @@ export function RunRecommendationChipRow({
     const next = { ...chipsRef.current, [skillId]: { mark, keep } };
     chipsRef.current = next;
     setChips(next);
-    if (recs.length > 0 && recs.every((r) => next[r.skillId] !== undefined)) release(next);
+    if (recs.length > 0 && recs.every((r) => next[r.skillId] !== undefined)) release(next, recs);
   };
 
   const openAdjust = (skill: RecommendedSkillForChip) => {
@@ -750,6 +1019,357 @@ export function RunRecommendationChipRow({
     setSheetOpen(false);
     setDetail(null);
   };
+
+  // ── THE RUN PAGE'S SKILLS STEP (cinatra#3047, review points B and C) ──────
+  //
+  // The same live hold, the same candidate set, the same decision transport —
+  // a different reading of it. One pill per skill, a checkbox in FRONT of the
+  // name, and ONE Continue beneath the list. Checked means the skill is applied
+  // to the run; unchecked means it is not.
+
+  /**
+   * THE SKILLS THIS STEP IS ABOUT, from whichever half of the answer it was
+   * handed (cinatra#3047).
+   *
+   * A LIVE hold hands over its scored chips. A SETTLED one hands over the offer
+   * it recorded when it was first drawn — the set a re-decision may pin, read
+   * back rather than re-scored, so the pills a reader edits after the decision
+   * are the very pills they decided on.
+   */
+  const stepCandidates: SkillsStepCandidate[] =
+    decision.kind === "pending" ? recs : (decision.candidates ?? []);
+
+  /**
+   * Is this skill checked?
+   *
+   * The reader's own answer first. Failing that, the reading's own default —
+   * and the two readings have DIFFERENT defaults, on purpose. A live step starts
+   * from the SCORER's verdict (`recommended`), so a reader who presses Continue
+   * without touching anything runs exactly the recommendation. A settled step
+   * starts from the RUN's own record, so a reader who opens the completed step
+   * and presses Continue again records exactly what the run already had.
+   */
+  const skillIsChecked = (skill: SkillsStepCandidate): boolean =>
+    checkedOverrides[skill.skillId] ??
+    (decision.kind === "pending"
+      ? skill.recommended === true
+      : (settledInputs?.appliedSkillIds.has(skill.skillId) ?? false));
+
+  /**
+   * CONTINUE — submit the selection and release the hold, through the SAME
+   * decision path the chips used (cinatra#3047, review point B).
+   *
+   * No new write path: the boxes are mapped onto the per-chip decision model
+   * that already exists — checked is `confirmed` and kept, unchecked is
+   * `skipped` and not kept — and handed to `release`, which is the shipped
+   * whole-row release: a confirm carrying the kept set (with a forced revision
+   * pinned for a kept skill the scorer did not recommend), or a skip when the
+   * reader kept nothing.
+   *
+   * WHAT AN ALL-CLEAR CONTINUE MEANS, stated exactly (cinatra#3047, review
+   * point 2, and the convergence round's second finding). It is the SHIPPED
+   * SKIP: every recommendation this hold offered is recorded as skipped and the
+   * run is released. It is NOT an authoritative empty selection — the selection
+   * store reads zero rows as "no set", and every delivery path then falls back
+   * to the run's computed assignment, exactly as it does for a skip taken any
+   * other way. So "the run proceeds with no RECOMMENDED skill" is the claim, and
+   * it is the whole claim; nothing here promises the run will carry no skill at
+   * all, because a skip has never meant that and this screen does not change
+   * what a skip means. NO `adjusted` mark can come from this screen, because a
+   * checkbox has two positions and neither of them means "I opened this one and
+   * shaped it"; the mark stays reachable from the hosts that still draw Adjust.
+   *
+   * ONE RELEASE PER RUN. `releasedRef` is written synchronously, so a double
+   * press submits once; the server's own binding is the other half — a decision
+   * naming a hold that is no longer this run's park is refused there, which is
+   * what "the run has moved on" means to a decision already in flight.
+   */
+  const onContinue = () => {
+    if (releasedRef.current) return;
+    releasedRef.current = true;
+    setSubmitted(true);
+    const next: Record<string, ChipDecision> = {};
+    for (const skill of stepCandidates) {
+      const keep = skillIsChecked(skill);
+      next[skill.skillId] = { mark: keep ? "confirmed" : "skipped", keep };
+    }
+    chipsRef.current = next;
+    setChips(next);
+    release(next, stepCandidates, (ok) => {
+      if (!ok) {
+        releasedRef.current = false;
+        setSubmitted(false);
+      }
+    });
+  };
+
+  /**
+   * THE RUN PAGE'S SKILLS STEP, drawn once for all three of its readings
+   * (cinatra#3047).
+   *
+   * The pills, the reason line, the error line and — where there is one — the
+   * Continue beneath them. `editable` is the ONLY thing that separates the live
+   * step from the settled-but-not-yet-started one, and the read-only reading is
+   * the same frame with `editable` false and NO control at all.
+   *
+   * NO CARD (review point 4). The root is a plain flex column: no border, no
+   * ground, no radius, no padding of its own. The step's pills and their
+   * Continue sit directly in the run detail column beside the rail, and the
+   * read-only reading sits there the same way.
+   */
+  const skillsStep = (opts: {
+    cardState: "held" | "decided";
+    pills: readonly SkillsStepCandidate[];
+    editable: boolean;
+    /** Have the candidates been read at all? A live step fetches them. */
+    ready: boolean;
+    /** Draw the control? Never on a reading a person cannot act on. */
+    control: boolean;
+  }): ReactElement => (
+    <div
+      data-run-recommendation-chip-row=""
+      data-conformance-id="run-chip-row"
+      // The same card-root declaration every reading carries — the kind, the
+      // host that declared the surface, and the state a capture is graded by.
+      data-lifecycle-card="recommendation_hold"
+      data-lifecycle-card-state={opts.cardState}
+      data-lifecycle-card-host={lifecycleHost ?? undefined}
+      data-run-recommendation-reading="skills-checklist"
+      {...(opts.cardState === "decided"
+        ? {
+            "data-run-recommendation-decision": decision.kind,
+            "data-run-recommendation-settled": "true",
+          }
+        : {})}
+      data-variant={variant}
+      data-can-decide={canDecide ? "true" : "false"}
+      // THE STEP'S OWN READING OF ITSELF, for a capture and for a suite: are the
+      // boxes still movable, and has this reader already submitted?
+      data-skills-step-editable={opts.editable ? "true" : "false"}
+      data-skills-step-submitted={submitted ? "true" : "false"}
+      className="flex flex-col gap-3"
+    >
+      <div data-skills-step-list="" className="flex flex-wrap gap-2">
+        {!opts.ready ? (
+          <span className="text-xs text-muted-foreground">Loading recommendations…</span>
+        ) : opts.pills.length === 0 ? (
+          <span className="text-xs text-muted-foreground">No candidate skills.</span>
+        ) : (
+          opts.pills.map((skill) => {
+            const checked = skillIsChecked(skill);
+            return (
+              <SkillsStepPill
+                key={skill.skillId}
+                skillId={skill.skillId}
+                name={skill.name}
+                vendorName={skill.vendorName}
+                checked={checked}
+                editable={opts.editable}
+                forced={!skill.recommended}
+                title={
+                  skill.recommended
+                    ? "Recommended for this run"
+                    : "Not recommended — checking this adds the skill to the run"
+                }
+                {...(opts.editable
+                  ? {
+                      onCheckedChange: (next: boolean) =>
+                        setCheckedOverrides((prev) => ({ ...prev, [skill.skillId]: next })),
+                    }
+                  : {})}
+              />
+            );
+          })
+        )}
+      </div>
+
+      {/* The read-only reason line, unchanged in substance: the reason sits
+          under the list and every control above it is disabled. */}
+      {!canDecide ? (
+        <p data-run-recommendation-restricted="" className="text-xs text-warning">
+          Shaping this run needs run access on it.
+        </p>
+      ) : null}
+
+      {error ? (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {/* CONTINUE, BENEATH THE LIST — the one control that records the selection
+          and releases the hold. Drawn as soon as the candidates have been read,
+          including for a hold that offers none, so the step is never a dead end;
+          and NOT drawn at all once the run has started, because there is then
+          nothing a press could change. */}
+      {opts.control ? (
+        // THE FLOOR THE DRAWING GIVES THIS ROW (cinatra#3047, leg 7):
+        // `display:flex; justify-content:flex-end; padding-top:12px;
+        // border-top:1px solid var(--line)`, with the 12px of air above the rule
+        // supplied by this row's own `gap-3` rather than a second margin. The
+        // sixth proof round measured the control left-aligned, with no rule
+        // above it and no glyph in it — three departures at once, on every
+        // frame of both palettes.
+        <div data-skills-step-floor="" className="flex justify-end border-t border-line pt-3">
+          <Button
+            type="button"
+            size="sm"
+            data-action="continue-skills-step -> released"
+            data-skills-step-continue=""
+            // INERT EXACTLY WHEN THE READING SAYS SO (cinatra#3047, review point
+            // B — the re-shoot round). `submitted` is the step's own answer: it
+            // is written synchronously on the press and cleared, together with
+            // the refusal message, in ONE commit. `pending` was read here too,
+            // and it does NOT move with it — React clears the transition flag in
+            // a later commit of its own — so a refusal painted a frame that said
+            // the hold was live and the step decidable while the one control it
+            // offers was greyed out. The control now follows the single answer
+            // the row publishes as `data-skills-step-submitted`, which covers
+            // the in-flight window as well: it is true from the press until the
+            // decision comes back, and only a refusal clears it.
+            disabled={!canDecide || submitted}
+            onClick={onContinue}
+          >
+            Continue
+            {/* THE ANCHOR IS THE SPAN, NOT THE ICON — the same rule the rail's
+                own glyph follows: a suite that stubs `lucide-react` renders no
+                icon element, and an anchor carried by the icon would vanish
+                with it. */}
+            <span
+              aria-hidden="true"
+              data-skills-step-continue-glyph=""
+              className="flex items-center justify-center"
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // ── THE SETTLED READINGS (a released hold) ───────────────────────────────
+  if (settledInputs !== null) {
+    const { settled, appliedSkillIds } = settledInputs;
+    if (drawsChecklist) {
+      // THE RUN PAGE, AND THE BOXES ARE NOT FROZEN (review point 1). While the
+      // run has not started, the completed Skills step draws the SAME pills with
+      // their boxes editable and the SAME Continue, and a changed selection is
+      // recorded through the same decision path bound to the same hold. Once it
+      // has started the very same page is read-only with nothing to press.
+      //
+      // The offer is what an edit may pin, so an editable reading needs one: a
+      // settled hold whose recorded offer cannot be read has nothing a
+      // re-decision could resolve against, and falls to the read-only reading
+      // rather than offering a box that the decision path would refuse.
+      const canEdit = settledInputs.runNotStarted && canDecide && stepCandidates.length > 0;
+      if (canEdit) {
+        return skillsStep({
+          cardState: "decided",
+          pills: stepCandidates,
+          editable: !submitted,
+          ready: true,
+          control: true,
+        });
+      }
+      // READ-ONLY. One pill per skill the hold asked about — the offer's own
+      // vendor and name where it can be read, the run's durable evidence where
+      // it cannot — with the box stating what the run recorded and nothing to
+      // press. NO OUTCOME PANEL and NO DECIDER NAME reaches this host (review
+      // point 2): an all-clear row IS the row, with every box clear.
+      const vendorBySkillId = new Map(
+        stepCandidates.map((c) => [c.skillId, c.vendorName] as const),
+      );
+      return skillsStep({
+        cardState: "decided",
+        pills: settled.map((row) => ({
+          skillId: row.skillId,
+          skillRevisionId: "",
+          name: row.name,
+          vendorName: vendorBySkillId.get(row.skillId) ?? null,
+          recommended: appliedSkillIds.has(row.skillId),
+        })),
+        editable: false,
+        ready: true,
+        control: false,
+      });
+    }
+
+    // EVERY OTHER HOST keeps §V's settled row exactly as it is today — the chips
+    // with their recorded outcome, and the zero-chip outcome panel — until the
+    // review's own point E changes the conversation and the widget.
+    // A settled hold whose durable evidence names no skill at all has nothing
+    // PER-SKILL to state — and since cinatra#2893 §V draws the reading for
+    // exactly that row: the outcome panel below, in place of the chips. The card
+    // root is untouched by the choice, so the kind/host/state declaration a
+    // capture is identified by is the same one either reading carries.
+    //
+    // The one state with no ratified face left. `confirmed` with an empty
+    // decided set contradicts its own answer — `confirmed` means at least one
+    // skill was kept, and the resolver cannot produce it (see
+    // `SettledOutcomePanel`) — so no host mounts it, no outcome word is true of
+    // it, and none is invented for it.
+    const zeroChip = settled.length === 0;
+    if (zeroChip && decision.kind !== "skipped") return null;
+    return (
+      <div
+        data-run-recommendation-chip-row=""
+        data-conformance-id="run-chip-row"
+        // THE CARD-ROOT DECLARATION (cinatra#2841). The capture contract
+        // (`scripts/ci/lib/capture-record-contract.mjs`) identifies a
+        // `recommendation_hold` capture by the card root's OWN three
+        // attributes, exactly as it does for the review gate — the kind, the
+        // host that declared the surface, and the state. The row IS the card
+        // (§V), so the row's outermost element carries them; without them no
+        // truthful capture of this card could ever satisfy its own contract.
+        data-lifecycle-card="recommendation_hold"
+        data-lifecycle-card-state="decided"
+        // Omitted rather than guessed when no surface declared a host: the
+        // component renders outside a provider only in tests.
+        data-lifecycle-card-host={lifecycleHost ?? undefined}
+        {...chatThreadHoldMarker}
+        data-run-recommendation-decision={decision.kind}
+        data-run-recommendation-settled="true"
+        // NO NEW ATTRIBUTE HERE (cinatra#3047). The settled root is the element
+        // every settled capture on file is identified by, and this branch draws
+        // only the hosts whose reading is unchanged — `settled-chip-faces.test.tsx`
+        // is the byte record of exactly that.
+        data-variant={variant}
+        className="flex flex-wrap gap-2"
+      >
+        {zeroChip ? (
+          <SettledOutcomePanel
+            {...(decision.kind === "skipped" && decision.decidedByName
+              ? { decidedByName: decision.decidedByName }
+              : {})}
+          />
+        ) : (
+          settled.map((s) => (
+            <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
+          ))
+        )}
+      </div>
+    );
+  }
+
+  // ── THE RUN PAGE'S LIVE SKILLS STEP (cinatra#3047) ───────────────────────
+  //
+  // The same live hold, the same candidate set, the same decision transport as
+  // every other host — a different reading of it. One pill per skill, a checkbox
+  // in FRONT of the name, and ONE Continue beneath the list. Checked means the
+  // skill is applied to the run; unchecked means it is not.
+  if (drawsChecklist) {
+    return skillsStep({
+      cardState: "held",
+      pills: stepCandidates,
+      // A SUBMITTED step is inert until the settled reading replaces it: the
+      // action resolves before the authoritative re-read lands, and a live box
+      // over an already-decided run is a control whose press would do nothing.
+      editable: !submitted,
+      ready: loaded,
+      control: loaded,
+    });
+  }
 
   return (
     <div
@@ -1606,6 +2226,7 @@ export function RecommendationHoldCard({
   agentPackageName,
   wireRef,
   onStateChange,
+  initialState = null,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
@@ -1633,6 +2254,29 @@ export function RecommendationHoldCard({
    * Hosts with no stream pass `null` and still get mount/focus/decision resolves.
    */
   wireRef?: string | null;
+  /**
+   * THE HOST'S OWN READING, RESOLVED BEFORE THE FIRST PAINT (cinatra#3047,
+   * review point C — the re-shoot round).
+   *
+   * WHAT WAS WRONG WITHOUT IT. Everything this card drew came from one client
+   * round trip made after hydration, and until that answer landed the card drew
+   * NO DOM AT ALL (the two returns below). For a LIVE hold that is right — there
+   * is nothing to say about a question whose offer has not been read. For a
+   * SETTLED step it is not: the run's answer is already on file, the host that
+   * mounted this card read the same run's rows to know the step is settled at
+   * all, and a step drawn only after a round trip is a step drawn NEVER when
+   * that round trip does not land. That is what the re-shoot photographed —
+   * a settled Skills step over an empty detail column — and the frame around it
+   * cannot catch it, because a surface that is an ELEMENT is a non-null value
+   * however the component later resolves (`run-surface-rail-step.ts`).
+   *
+   * So a host that has already resolved this run's state SERVER-SIDE hands it
+   * over, and the card draws it immediately. It is a READING, not an override:
+   * the card still resolves for itself, and the moment its own answer lands
+   * that answer wins — same run, fresher reading. A host with nothing to hand
+   * over passes nothing and is unchanged.
+   */
+  initialState?: RunRecommendationHoldState | null;
 }): ReactElement | null {
   // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
   // it — the per-surface matrix that withheld this card from the widget is gone.
@@ -1672,14 +2316,31 @@ export function RecommendationHoldCard({
     reloadToken,
     auth,
   });
-  const state = resolution.state;
+  // WHAT THE CARD DRAWS: its own answer where it has one, the host's server-side
+  // reading until then. `resolution.state` is non-null only on `answered`, so
+  // the fallback covers exactly the two readings that drew nothing before — the
+  // resolve still in flight, and the resolve that gave up.
+  const state = resolution.state ?? initialState;
 
   // A surface with NO declared host never asks, so its reading is not "waiting"
   // — nothing is coming. Saying so is what stops a host that withholds on
   // `resolving` from withholding for ever on a surface this card never reads on.
-  const published: RunRecommendationHoldResolution = present
-    ? resolution
-    : RECOMMENDATION_UNREADABLE;
+  //
+  // AND WHAT IT PUBLISHES IS WHAT IT DRAWS. A host's own reading is an answer
+  // about this run — it was resolved by the same core, through the same access
+  // door — so publishing "still resolving" while drawing that answer would put
+  // the card's two statements about one run in contradiction, which is the
+  // seam this card exists to close. A host that hands over nothing publishes
+  // exactly what it always did.
+  const published: RunRecommendationHoldResolution = useMemo(
+    () =>
+      !present
+        ? RECOMMENDATION_UNREADABLE
+        : resolution.phase !== "answered" && initialState !== null
+          ? { phase: "answered", state: initialState }
+          : resolution,
+    [present, resolution, initialState],
+  );
 
   // Published on every change, and only on a change. `onStateChange` is in the
   // dependency list, so a caller passing a fresh closure every render is told
@@ -1712,9 +2373,10 @@ export function RecommendationHoldCard({
     // wrapper too would have published the identity on TWO nested elements and
     // broken the "ONE root" the contract measures, so the wrapper is gone and
     // the row's own root carries everything, including the chat transcript's
-    // evidence marker. Both mounts (`chat_thread` here, `run_card` on the run
-    // panel) still get host-correct values by construction, and the run panel —
-    // which renders the row directly — now gets them too.
+    // evidence marker. Every mount still gets host-correct values by
+    // construction, whichever host declared the provider around it — the chat
+    // transcript, the run page's own rail step (`run_card`, cinatra#3047), or the
+    // review page's gate region.
     <RunRecommendationChipRow
       runId={runId}
       agentPackageName={
@@ -1722,8 +2384,13 @@ export function RecommendationHoldCard({
       }
       promptText={state.state === "held" ? state.promptText : undefined}
       initialRecommendations={state.state === "held" ? state.recommendations : undefined}
-      holdRef={state.state === "held" ? state.holdRef : undefined}
-      canDecide={state.state === "held" ? state.canDecide !== false : true}
+      // THE HOLD RIDES BOTH ANSWERS (cinatra#3047, review point 1). A settled
+      // step whose run has not started can be decided AGAIN, and the resolver
+      // publishes the same opaque handle for it — so the second decision binds
+      // to the hold the first one did, which is the idempotent-retry case
+      // `resolveDecisionHold` already accepts.
+      holdRef={state.holdRef}
+      canDecide={state.canDecide !== false}
       decision={
         state.state === "held"
           ? { kind: "pending" }
@@ -1732,11 +2399,15 @@ export function RecommendationHoldCard({
                 kind: "confirmed",
                 skillNames: state.skillNames,
                 decided: state.decided,
+                // The resolver's own answer, never the screen's — see
+                // `recommendationRunHasStarted`.
+                runStarted: state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
             : {
                 kind: "skipped",
                 decided: state.decided,
+                runStarted: state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
       }
