@@ -21,7 +21,7 @@ jobs:
       redis:
         image: redis:8
         ports:
-        - 6379:6379
+        - 127.0.0.1:6379:6379
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout
           5s --health-retries 10
       postgres:
@@ -31,7 +31,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-        - 5434:5432
+        - 127.0.0.1:5434:5432
         options: "--health-cmd pg_isready --health-interval 5s --health-timeout 5s
           --health-retries 10"
     env:
@@ -52,9 +52,9 @@ jobs:
       CINATRA_RUNTIME_MODE: production
       CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: 'true'
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: '24'
         cache: pnpm
@@ -68,7 +68,7 @@ jobs:
         v=$(pnpm list @playwright/test --json --depth=0 | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const e=Array.isArray(d)?d[0]:d; const ver=(e.devDependencies?.["@playwright/test"]?.version)||(e.dependencies?.["@playwright/test"]?.version); console.log(ver);')
         echo "version=$v" >> "$GITHUB_OUTPUT"
     - name: cache playwright browsers
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: "~/.cache/ms-playwright"
         key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version
@@ -91,7 +91,7 @@ jobs:
         cp -r .next/static .next/standalone/.next/static
         [ -d public ] && cp -r public .next/standalone/public || true
         [ -d migrations ] && cp -r migrations .next/standalone/migrations || true
-        (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1) &
+        (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=127.0.0.1 node server.js > /tmp/design-server.log 2>&1) &
         echo "standalone server launched as PID $!"
     - name: Wait for /design-fixtures readiness
       run: |
@@ -111,9 +111,16 @@ jobs:
       run: |
         timeout --kill-after=60 1800 pnpm exec playwright test -c tests/e2e/config/design.config.ts --project design-fixtures-chromium --update-snapshots
         git status --short tests/e2e/design/__screenshots__
+    - name: the refresh must have rewritten exactly the two baselines (fail closed)
+      run: |
+        set -euo pipefail
+        changed="$(git diff --name-only -- tests/e2e/design/__screenshots__ | sort)"
+        expected="$(printf '%s\n' tests/e2e/design/__screenshots__/design-fixtures-dark.png tests/e2e/design/__screenshots__/design-fixtures-light.png | sort)"
+        echo "changed:"; printf '%s\n' "$changed"
+        if [ "$changed" != "$expected" ]; then echo "::error::the refresh did not rewrite exactly the two expected baselines"; exit 1; fi
+        if [ -n "$(git status --porcelain --untracked-files=all -- tests/e2e/design/__screenshots__ | grep '^??' || true)" ]; then echo "::error::the refresh created baseline files that are not in the repository"; exit 1; fi
     - name: upload the refreshed baselines
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: design-baselines
         path: tests/e2e/design/__screenshots__/
