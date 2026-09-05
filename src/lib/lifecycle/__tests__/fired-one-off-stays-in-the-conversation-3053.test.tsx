@@ -245,13 +245,22 @@ describe.each(["chat_thread", "site_widget"] as const)(
       // The rows themselves stay drawn and stay unpressable: the reading keeps
       // all three, and not one of them takes a change.
       expect(rows!.querySelectorAll("[data-schedule-option]").length).toBe(3);
-      const rowControls = Array.from(
-        rows!.querySelectorAll<HTMLButtonElement>("button"),
-      );
-      expect(rowControls.length).toBeGreaterThan(0);
-      for (const control of rowControls) {
-        expect(control.disabled).toBe(true);
-      }
+      // AMENDED BY THE FORWARD MERGE OF cinatra#2934 (lifecycle-b W5c), and the
+      // ratified drawing is what decides it. This pair used to require a row
+      // control to be PRESENT and disabled. The drawing gives the spent one-off
+      // one reading and it is literal: "Once it has fired, the card is a
+      // reading. A one-off that has fired cannot be changed, so the rows go
+      // read-only — the values still legible, the pickers gone — and the card
+      // carries no floor at all: no hairline, no button, nothing to press", and
+      // its state table says the same in one line ("Fired, one-off — the
+      // schedule was spent | read-only | none at all"). Drawn-and-disabled is
+      // the drawing's OTHER reading — the restricted reader, who is owed the
+      // withheld control and the reason beside it — and two different states may
+      // not draw the same markup. W5c's fifth graded proof set measured the
+      // difference and made the frozen card draw no control at all; this case
+      // now pins that same absence, which is the stronger reading of the very
+      // thing it was written for (nothing here takes a change).
+      expect(rows!.querySelectorAll("button").length).toBe(0);
     });
   },
 );

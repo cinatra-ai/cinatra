@@ -66,11 +66,16 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
 }));
 
 // The run's stored exchange is a server action; the window reads it on mount.
+//
+// THE TURN'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): a turn reports the
+// fills it placed and whether it PRESSED a control of the bound card, and the
+// one controller reads both. A mock that omits them lies about the contract.
 vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
-  sendRunWindowTurn: vi.fn(async () => ({ kind: "ok", entries: [] })),
+  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [], fills: [], acted: false })),
 }));
 
+import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ReviewGateCard } from "../review-gate-card";
 
@@ -222,21 +227,67 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     }
   });
 
-  it("a landed change request KEEPS the exchange on screen — the card does not re-resolve it away", async () => {
-    // THE WINDOW'S OWN RULING, in its own words: "A landed changes-request
-    // RESOLVES the base gate, but the EXCHANGE (the typed request + the
-    // repair/lineage reply) must stay visible — so we do NOT blank the surface
-    // to the resolved/blocked state." The decision bar re-resolves the card
-    // after a landed decision; the window must not, or the settled reading
-    // unmounts the pending branch and takes the reader's own words with it.
+  // AMENDED BY THE FORWARD MERGE OF cinatra#2934 (lifecycle-b W5c). This case
+  // used to press the window and assert that the REVIEW'S DECISION ACTION had
+  // been called with `{ disposition: "comment" }` — the direct filing the window
+  // did before any model read the sentence. That road is the one W5c retires,
+  // and the code this case guarded says so in its own words ("kept until #2934
+  // retires it"). What the case is really about survives unchanged and is what
+  // it asserts now: the reader's own exchange is still on screen afterwards.
+  it("the typed request goes to the RUN's assistant — the window files nothing itself", async () => {
     const resolveFetch = mockResolve({ state: "pending", canDecide: true, canComment: true });
     const submitAction = vi.fn(
       async () =>
         ({ kind: "changes-requested", status: "requested", idempotent: false }) as const,
     );
+    // A QUESTION: the turn answered and pressed nothing.
+    vi.mocked(sendRunWindowTurn).mockImplementation(
+      async () => ({ ok: true, entries: [], fills: [], acted: false }) as never,
+    );
     const { container } = render(
       <LifecycleCardSurfaceProvider host="run_card">
         <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+    const resolvesBefore = resolveFetch.mock.calls.length;
+    vi.mocked(sendRunWindowTurn).mockClear();
+
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
+    });
+
+    // What was typed reached the run's own conversation, word for word …
+    expect(vi.mocked(sendRunWindowTurn)).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-3141", surface: "review", prompt: TYPED_REQUEST }),
+    );
+    // … and the window filed nothing itself. The decision bar keeps the action.
+    expect(submitAction).not.toHaveBeenCalled();
+    // The window — and with it the exchange — is still on screen.
+    expect(promptWindows(container)).toHaveLength(1);
+    expect(
+      container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      "the gate the exchange belongs to is still the reading on screen",
+    ).not.toBeNull();
+    // A turn that only answered moves nothing: no re-read.
+    expect(resolveFetch.mock.calls.length).toBe(resolvesBefore);
+  });
+
+  it("a turn that PRESSED Comment re-reads the card, and the exchange survives it", async () => {
+    // THE OTHER HALF OF THE SAME RULING. The exchange had to stay visible, and
+    // before W5c the only way to keep it was to refuse the re-read, because the
+    // outcome line lived in the window's own state. The exchange is the RUN's
+    // now — stored server side per turn and read back on mount (cinatra#2933) —
+    // so the card CAN show the state the server holds after a landed request
+    // without taking the reader's words off screen. It must: a gate that was
+    // settled by the press would otherwise keep drawing its decision bar.
+    const resolveFetch = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    vi.mocked(sendRunWindowTurn).mockImplementation(
+      async () => ({ ok: true, entries: [], fills: [], acted: true }) as never,
+    );
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId="run-3141" />
       </LifecycleCardSurfaceProvider>,
     );
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
@@ -246,15 +297,8 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
       fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
     });
 
-    expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: TYPED_REQUEST });
-    // The window — and with it the exchange — is still on screen.
+    await waitFor(() => expect(resolveFetch.mock.calls.length).toBeGreaterThan(resolvesBefore));
     expect(promptWindows(container)).toHaveLength(1);
-    expect(
-      container.querySelector('[data-conformance-id="review-decision-bar"]'),
-      "the gate the exchange belongs to is still the reading on screen",
-    ).not.toBeNull();
-    // And the card did not go back to the server for a settled answer.
-    expect(resolveFetch.mock.calls.length).toBe(resolvesBefore);
   });
 
   it("offered only to a reviewer who may comment — a restricted reader with none gets no window", async () => {

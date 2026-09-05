@@ -3477,6 +3477,18 @@ jobs:
         shell: bash
         run: pnpm test:run-window
 
+      # THE FIFTH, and it arrives the way the note above says the fourth did:
+      # `test:screen-fill` (W5c, cinatra#2934) is a root package script that no
+      # workflow invoked, so direction 4 of the pinned-test gate named it the
+      # moment this branch met that gate. Its config is the run-window tier's
+      # twin — same services, same schema, the same self-skip flag turning a
+      # missing SUPABASE_DB_URL into a hard throw — so it belongs beside it
+      # rather than in a job of its own.
+      - name: Bound-screen fill — real-DB tier (cinatra#2934, W5c)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:screen-fill
+
       # cinatra#3027 (epic #3023, lifecycle-c W3). The NON-FILE REVISION READER
       # (enabler 0.10) needs a real Postgres to prove anything: its whole subject
       # is that the substrate agrees about the (organization, artifact,

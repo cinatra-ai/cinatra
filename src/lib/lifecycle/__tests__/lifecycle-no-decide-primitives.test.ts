@@ -67,6 +67,7 @@ import {
   LENT_ACTION_NO_AUTHORITY,
   LENT_ACTION_PRIMITIVE,
 } from "../lent-action-mcp";
+import { BOUND_SCREEN_FILL_PRIMITIVE } from "../bound-screen-fill-mcp";
 
 const INVENTORY_PATH = resolve(
   __dirname,
@@ -201,23 +202,48 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     }
   });
 
-  it("that shared set is the four READ-ONLY pulls plus the ONE named exception", () => {
+  it("that shared set is the four READ-ONLY pulls, the ONE named exception and the fill", () => {
     // The parity assertion above says "the same"; this one says "the same WHAT".
     // Together they are the whole rule: the person sees everything on every
     // surface, and the AI transport resolves nothing on any of them EXCEPT the
     // one bound-card control the person's own message lent it, once.
+    //
+    // AMENDED for cinatra#2934 (lifecycle-b W5c). One entry joins the set, and
+    // THE RULE IS NOT WIDENED BY IT: `lifecycle_bound_screen_fill` resolves
+    // nothing. It presses no control, resumes no run and writes no value the run
+    // reads — it places the values the person described in the fields of the one
+    // screen their own message was bound to, and the person presses the screen's
+    // own button. The named exception is still the ONLY primitive on any
+    // delegated perimeter that can RESOLVE a lifecycle interaction, which is
+    // exactly what the two cases above assert and what this file exists for.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
       .filter((name) => isCoreDelegatedChatAdmitted(name))
       .sort();
-    expect(chatReachable).toEqual([
-      "artifact_review_gate_render",
-      "artifact_review_gates_list",
-      // THE ONE EXCEPTION, in its alphabetical place rather than tucked away.
-      LENT_ACTION_PRIMITIVE,
-      "schedule_proposal_render",
-      "verification_record_render",
-    ]);
+    expect(chatReachable).toEqual(
+      [
+        "artifact_review_gate_render",
+        "artifact_review_gates_list",
+        // THE ONE EXCEPTION, in its alphabetical place rather than tucked away.
+        LENT_ACTION_PRIMITIVE,
+        // The FILL — reachable, and not an exception to the rule at all.
+        BOUND_SCREEN_FILL_PRIMITIVE,
+        "schedule_proposal_render",
+        "verification_record_render",
+      ].sort(),
+    );
+  });
+
+  it("the fill carries no deciding verb, and the backstop still denies the class", () => {
+    // The name is load-bearing here as much as the lent action's is: a fill
+    // called `*_submit` or `*_confirm` would be denied by the verb backstop, and
+    // a DECISION named to slip past it is exactly what the epic's note about
+    // naming warns against. This one is honestly named because it honestly
+    // decides nothing — and the backstop is unmoved either way.
+    for (const verb of ["decide", "approve", "reject", "resume", "confirm", "arm"]) {
+      expect(BOUND_SCREEN_FILL_PRIMITIVE.split("_"), verb).not.toContain(verb);
+    }
+    expect(isCoreDelegatedChatAdmitted("lifecycle_bound_screen_confirm")).toBe(false);
   });
 
   for (const name of FORBIDDEN_LIFECYCLE_NAMES) {

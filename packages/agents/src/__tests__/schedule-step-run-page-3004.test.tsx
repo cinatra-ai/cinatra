@@ -26,6 +26,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { ScheduleStepSurface } from "../schedule-rail-step";
+import { SAVE_SCHEDULE_REFUSALS } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -138,18 +139,27 @@ describe("the run page's schedule step, on a run that no proposal created", () =
     expect(control(container, "cancel-trigger-schedule")).toBeTruthy();
   });
 
-  it("a fired one-off: the rows read-only, and no controls at all", async () => {
+  it("a fired one-off: the rows read-only, and no floor at all", async () => {
+    // A SCHEDULE THAT IS OVER CARRIES NO FLOOR (cinatra#2934, the FOURTH graded
+    // capture; the ratified drawing at the pin this pull request records, and
+    // plan (A) §7.2 — "the same form and nothing else"). The prompt window
+    // below the scheduler is where this state answers.
     const { container } = mountStep(ONE_OFF_FIRED);
     await waitFor(() => expect(rows(container)).toBeTruthy());
     expect(floor(container)).toBeNull();
     expect(control(container, "save-schedule-changes")).toBeNull();
     expect(control(container, "cancel-trigger-schedule")).toBeNull();
+    // Where the ANSWER is drawn — the window's own block, below the scheduler —
+    // is pinned by `schedule-over-window-answers-2934.test.tsx`, which mounts
+    // this surface with its prompt window. This mount has none, so what it
+    // proves is the card: the form, locked, and nothing else on it.
   });
 
   it("a recurring schedule cancelled after a fire: the same ending, on this surface too", async () => {
     const { container } = mountStep(RECURRING_CANCELLED);
     await waitFor(() => expect(rows(container)).toBeTruthy());
     expect(floor(container)).toBeNull();
+    expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     expect(container.textContent).not.toContain("Trigger configuration");
     expect(container.textContent).not.toContain("Cancel trigger");
   });

@@ -288,6 +288,22 @@ export const triggerScheduleProposalSettledViewSchema = z
      */
     canSave: z.boolean(),
     /**
+     * WHY **Save changes** IS WITHHELD, when the reason is about the READER
+     * (cinatra#2934, the fourth graded capture).
+     *
+     * Plan (A) §1.2: a card a person "may see but not act on" is "drawn in full
+     * with its buttons disabled and the reason on the card". This carries that
+     * reason. It is NOT sent for a schedule that is simply over — that card
+     * carries no floor at all and the window below it answers instead — so it
+     * appears only where a changeable schedule is not this person's to change.
+     *
+     * OPTIONAL AND OMITTED unless present, exactly like `stopped` and
+     * `superseded` above and for the same reason: this schema is `.strict()`,
+     * so a client on an older bundle would reject EVERY settled payload if the
+     * key were always sent.
+     */
+    saveRefusal: z.string().min(1).max(400).optional(),
+    /**
      * May this reader press **Cancel schedule** — the ONE control the page's
      * schedule step carries (cinatra#2972)?
      *

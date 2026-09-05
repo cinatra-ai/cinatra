@@ -42,8 +42,10 @@ import "server-only";
 import {
   buildCron,
   describeRecurrence,
+  mayChangeRunSchedule,
   parseCronToRecurring,
   DEFAULT_RECURRING_CONFIG,
+  SAVE_SCHEDULE_REFUSALS,
   type RecurringConfig,
 } from "./trigger-recurrence";
 import {
@@ -799,6 +801,33 @@ export type ProposalResolution =
        */
       canSave: boolean;
       /**
+       * WHY **Save changes** IS WITHHELD FROM THIS READER, when the reason is
+       * about the READER rather than about the schedule (cinatra#2934, the
+       * fourth graded capture).
+       *
+       * Plan (A) §1.2: a card a person "may see but not act on" is "drawn in
+       * full with its buttons disabled and the reason on the card". A schedule
+       * that is simply OVER is a different reading — the card carries no floor
+       * at all there and the window below it answers — so this is `null` for
+       * every state refusal and carries a sentence only where a person is
+       * looking at a perfectly changeable schedule that is not theirs.
+       */
+      saveRefusal: string | null;
+      /**
+       * MAY THIS READER ACT ON THE CARD AT ALL (plan (A) §7.1: the run's owner
+       * or an administrator)?
+       *
+       * ONE ANSWER FOR EVERY CONTROL ON THE FLOOR, not one per control. The
+       * fourth fix leg gated **Save changes** on it and left **Cancel
+       * schedule** reading only the schedule's own state, so a second person on
+       * a fired recurring run was still drawn a LIVE Cancel — a control the
+       * write refuses. Both controls act on the same run under the same rule,
+       * so both read this.
+       */
+      mayAct: boolean;
+      /** Whose run this is — the reading `mayChangeRunSchedule` is asked with. */
+      runOwnerId: string | null;
+      /**
        * This card's rows are NOT the ones the family settled on — it was
        * adjusted away from before Confirm landed. `scheduleCopy` says so and
        * `triggerType`/`timezone` are the installed ones, so the card is honest
@@ -915,6 +944,15 @@ export async function resolveProposalForReader(
         arming: !!intent && intent.status !== "done" && intent.status !== "failed",
         stopped: trigger?.stoppedAt != null,
       }),
+      // THIS ROAD IS ALREADY ONE PERSON'S (cinatra#2934, the fourth graded
+      // capture). The proposal token is read back under `expectedUserId` /
+      // `expectedOrgId`, so a second person cannot resolve this card at all,
+      // and the run it settled into was created with that same person as its
+      // owner. There is no second reader here to withhold anything from.
+      saveRefusal: null,
+      // AND THIS READER MAY ACT, for the same reason the line above is `null`.
+      mayAct: true,
+      runOwnerId: actor.userId ?? null,
       superseded,
     };
   }
@@ -1167,6 +1205,24 @@ export async function resolveProposalForRun(
     return { phase: "absent" };
   }
 
+  // MAY THIS READER ACT ON IT AT ALL — the same expression the card's own
+  // endpoint resolves an administrator with, asked once here so every surface
+  // downstream reads one answer.
+  const mayAct = mayChangeRunSchedule({
+    actorUserId: actor.userId,
+    isAdmin: access?.roles?.platformRole === "platform_admin",
+    runOwnerId: run.runBy ?? null,
+  });
+  // AND WHETHER THE SCHEDULE ITSELF IS STILL CHANGEABLE — asked once, because
+  // two lines below need the same answer and they must not drift apart.
+  const scheduleIsSavable = canSaveInstalled({
+    triggerType,
+    scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+    released: !!trigger?.releasedAt,
+    arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    stopped: trigger?.stoppedAt != null,
+  });
+
   return {
     phase: "settled",
     runId,
@@ -1197,13 +1253,27 @@ export async function resolveProposalForRun(
         ? !!trigger?.lastFiredAt
         : !!trigger?.releasedAt,
     stopped: trigger?.stoppedAt != null,
-    canSave: canSaveInstalled({
-      triggerType,
-      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
-      released: !!trigger?.releasedAt,
-      arming: !!intent && intent.status !== "done" && intent.status !== "failed",
-      stopped: trigger?.stoppedAt != null,
-    }),
+    // TWO QUESTIONS, ASKED SEPARATELY (cinatra#2934, the fourth graded
+    // capture). `canSaveInstalled` asks about the SCHEDULE — still arming,
+    // stopped, released, still in the future — and answers nothing at all about
+    // the person. Until this leg nothing else asked either, so a second person
+    // on somebody else's run was drawn a LIVE **Save changes**, their described
+    // change was placed into the owner's rows, and only the write at the very
+    // end refused. The person's own right is plan (A) §7.1's — the run's owner
+    // or an administrator — read from the one predicate the write itself now
+    // reads, so the surface and the write cannot disagree.
+    canSave: scheduleIsSavable && mayAct,
+    // ONLY THE READER-SHAPED REASON TRAVELS, AND ONLY WHERE THERE IS A FLOOR TO
+    // WRITE IT ON. A schedule that is over draws no floor at all and its window
+    // answers instead (plan (A) §7.2), so a state refusal has nowhere on the
+    // card to be written — and neither has a READER refusal on that same card.
+    // The convergence round of this leg found the reader sentence being sent
+    // for a fired or stopped schedule too, where nothing can draw it and it
+    // only widened what a stale bundle has to parse.
+    saveRefusal: scheduleIsSavable && !mayAct ? SAVE_SCHEDULE_REFUSALS.notYours : null,
+    // THE ONE ANSWER BOTH CONTROLS READ — see `ProposalResolution`.
+    mayAct,
+    runOwnerId: run.runBy ?? null,
     // NEVER superseded on this path, and structurally so rather than by
     // omission (cinatra#2859). `superseded` answers "this CARD is holding rows
     // the family did not settle on", and it can only be asked where the card

@@ -189,7 +189,7 @@ export type OrchestratorStepperPanelProps = {
   agentId: string;
   lgThreadId: string | null;
   // Agent template ID forwarded into FieldRendererContext so HITL
-  // renderers can POST to /api/agents/builder/[templateId]/hitl-assist.
+  // renderers can publish supplemental context for the fill road (cinatra#2934).
   templateId: string;
   /** Human-readable template name used as the base for auto-generated run names. */
   templateName?: string;
@@ -622,7 +622,7 @@ function HitlApprovalCard({
   // the bottom prompt — not on every poll tick.
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
   // Live data the active renderer publishes via onHitlContextChange. Merged
-  // into the hitl-assist fetch body (currentValue) so the LLM sees the current
+  // into the fill road's own reading of the screen so the assistant sees the current
   // array (e.g. recipients) rather than the empty interrupt payload that would
   // otherwise be sent.
   const [rendererHitlContext, setRendererHitlContext] = useState<Record<string, unknown>>({});
@@ -696,7 +696,8 @@ function HitlApprovalCard({
     includeSetupFormSuffix: true,
   });
 
-  // Bottom-of-page prompt handler. Posts to hitl-assist, applies result to the
+  // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
+  // the fill that comes back to the
   // buffer (handleApply), and exposes the suggestion payload to the renderer via
   // aiSuggestions so it can sync local state without using `value` (which
   // re-references on every poll).
@@ -714,40 +715,29 @@ function HitlApprovalCard({
       ];
     }
     if (!templateId || !interruptContext.xRenderer) return;
-    void runWindow.send(prompt);
-    // HitlConversationPanel's internal handleSubmit clears the PromptField and
-    // opens the overlay.
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "the assistant
+    // returns the filled values, the screen writes them into its own fields, and
+    // nothing is submitted until you press the button." One road: the message
+    // goes to the run's own conversation with the assistant, and what comes back
+    // is what THIS screen writes into ITS fields. The field-assist route and its
+    // second, hidden model are gone with this block — a message reaches one
+    // model now.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            xRenderer: interruptContext.xRenderer,
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            runId,
-            currentValue: { ...interruptContext.values, ...bufferedHitlValue, ...rendererHitlContext },
-            schemaProperties: Object.keys(
-              (interruptContext.schema as { properties?: Record<string, unknown> })?.properties ?? {},
-            ),
-            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
+      const effect = await runWindow.send(
+        prompt,
+        attachments as readonly Record<string, unknown>[] | undefined,
       );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as { suggestions?: Record<string, unknown>; message?: string | null };
-      const suggestions = json.suggestions ?? {};
-      handleApply(suggestions);          // updates parent buffer
-      setAiSuggestions(suggestions);     // notifies renderers to sync local state
-      if (Object.keys(suggestions).length === 0) {
-        toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
+      // A TURN THAT PRESSED WRITES NO FIELDS (cinatra#2934, convergence round 3).
+      // The fill and the press are two calls, and a fill can land after a press
+      // has already sent the form. Nothing is submitted by it — the press reads
+      // only what landed before it — but writing it into fields the run has
+      // moved past would show values that were never sent. "The card is the
+      // visible truth": a turn that pressed makes the screen re-read instead.
+      if (effect.fill && !effect.acted) {
+        handleApply(effect.fill.values);       // updates parent buffer
+        setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
     } finally {
       setPromptPending(false);
     }
@@ -1099,6 +1089,10 @@ function HitlApprovalCard({
       }
       conversation={runWindow.entries}
       promptPending={promptPending || runWindow.pending}
+      // THE KEY DOES NOT MOVE (cinatra#2934). The field-assist route it was
+      // named for is gone, but this string is where every reader's half-typed
+      // message is kept: renaming it would silently throw away the draft the
+      // plan requires to survive a reload.
       storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
       onSubmit={handlePromptSubmit}
       // Opt in to paperclip attachments. Setup gates hide the paperclip because

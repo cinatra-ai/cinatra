@@ -207,6 +207,52 @@ export async function consumeLentActionGrant(
 }
 
 /**
+ * Is this grant still UNSPENT — atomically, without spending it?
+ *
+ * Its one caller is the FILL road (cinatra#2934), which must not press anything
+ * and therefore must not consume anything, but must also not keep working after
+ * the grant it rides has been used: a model that submits first and fills
+ * afterwards would otherwise record values that were never sent, on a screen the
+ * run has already moved past (convergence round 1, finding 6).
+ *
+ * IT IS AN UPDATE, NOT A SELECT, AND THAT IS THE POINT (convergence round 2). A
+ * `SELECT` answers about a moment already past: a spend committing between the
+ * read and the caller's next statement would go unseen. This statement is a
+ * NO-OP write under the same predicate the spend uses, so it takes the row's own
+ * lock: a concurrent spend either commits first — and then this re-evaluates its
+ * predicate and matches nothing — or waits for this to finish. Nothing about the
+ * row changes; `message_text = message_text` is the whole assignment.
+ *
+ * Fail-CLOSED: a statement that throws answers `false`.
+ */
+export async function lentActionGrantIsSpendable(
+  input: {
+    readonly jti: string;
+    readonly userId: string;
+    readonly orgId: string;
+    readonly cardRefFingerprint: string;
+  },
+  deps: LentActionGrantStoreDeps = {},
+): Promise<boolean> {
+  const query = deps.query ?? defaultQuery;
+  try {
+    const rows = await query<{ jti: string }>(
+      `UPDATE ${grantTable()}
+          SET message_text = message_text
+        WHERE jti = $1 AND user_id = $2 AND org_id = $3
+          AND card_ref_fp = $4
+          AND spent_at IS NULL
+          AND expires_at > now()
+        RETURNING jti`,
+      [input.jti, input.userId, input.orgId, input.cardRefFingerprint],
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Sweep rows whose life has run out — unspent grants AND spent tombstones alike.
  *
  * Run by the mint BEFORE it inserts, so the collection is paid on the path that

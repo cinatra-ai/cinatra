@@ -4,10 +4,13 @@ import {
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   connectorCanonicalCrumbHref,
+  documentTitleLabelFromTrail,
+  documentTitleLabelForAgentInstance,
   idSegmentPlaceholder,
   isIdLikeSegment,
   isPagelessContainerCrumb,
   CANONICAL_CONNECTOR_SUBROUTE,
+  type BreadcrumbCrumb,
 } from "../breadcrumb-trail";
 
 // #422 (follow-up to #421): the connector "[slug]" breadcrumb crumb must be a
@@ -251,7 +254,17 @@ describe("buildBreadcrumbTrail — other routes (preserved behavior)", () => {
     ]);
   });
 
-  it("keeps the general trail for a 3-segment /agents/vendor/package (404) path", () => {
+  // RE-PINNED (cinatra#2934, fix leg 10). A page that is NOT FOUND has no
+  // hierarchy, so it has no trail to draw: "Its breadcrumb reads 'Page not
+  // found' and nothing else: one crumb, current, with no parent above it." The
+  // ancestors of the URL the reader typed name a place they never reached.
+  it("a 3-segment /agents/vendor/package path that was NOT FOUND reads Page not found, and nothing else", () => {
+    expect(
+      buildBreadcrumbTrail("/agents/vendor/pkg", { notFound: true }).map((c) => c.label),
+    ).toEqual(["Page not found"]);
+  });
+
+  it("the same 3-segment path, reached as a real page, still draws its general trail", () => {
     const crumbs = buildBreadcrumbTrail("/agents/vendor/pkg");
     expect(crumbs.map((c) => c.label)).toEqual(["Agents", "Vendor", "Pkg"]);
   });
@@ -677,20 +690,393 @@ describe("buildBreadcrumbTrail — the agent instance's sub-route labels (cinatr
     ]);
   });
 
+  // RE-PINNED (cinatra#2934, fix leg 11). These two read the SUB-ROUTE word,
+  // and they still do. What moved is the crumb beside it: the instance position
+  // used to title-case its raw path segment when nothing named the run
+  // ("run-1" -> "Run 1"), and a typed address therefore drew itself as if it
+  // were a name. Every real run id is a UUID, so a segment that is not one names
+  // no run at all; the position now has one unresolved reading, the run's KIND.
   it("leaves every other sub-route exactly as it was", () => {
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/run-1/permissions").map((c) => c.label),
-    ).toEqual(["Agents", "Run 1", "Permissions"]);
+    ).toEqual(["Agents", "Agent run", "Permissions"]);
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/run-1/setup").map((c) => c.label),
-    ).toEqual(["Agents", "Run 1", "Setup"]);
+    ).toEqual(["Agents", "Agent run", "Setup"]);
   });
 
   it("renames the sub-route crumb only — a run whose own id is `trigger` is not a schedule", () => {
     // The map is read at the SUB-ROUTE position (segment 5) and nowhere else,
-    // so the instance segment keeps whatever names it.
+    // so an instance segment that happens to read "trigger" is NOT the schedule
+    // surface: it is a run this trail cannot name, and it says so.
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/trigger").map((c) => c.label),
-    ).toEqual(["Agents", "Trigger"]);
+    ).toEqual(["Agents", "Agent run"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TRAIL NAMES THE RUN, IT NEVER IDENTIFIES IT (cinatra#2934, the sixth
+// graded proof set).
+//
+// The refusal panel and the not-found page both CLEAR the crumb contributions —
+// a label published by an authorized visit must not survive into a refused one
+// — but clearing them dropped the instance crumb through onto the id-derived
+// placeholder underneath, so the trail above a refusal read
+// "Agents > <the run id's first eight characters> > Schedule". A truncated
+// identifier is still an identifier. The reader typed the address, but the
+// trail is chrome the refusal itself draws, and the refusal draws nothing of
+// the run.
+//
+// THE SHAPE IS UNCHANGED, ONLY THE IDENTIFYING HALF IS GONE. An authorized
+// reader sees "Agents > <the run> > <the step>"; a refused reader now sees the
+// same three-crumb shape with the run crumb saying what the panel's own header
+// already says above it — "Agent run" — instead of eight characters of hex.
+// A contribution still wins wherever a route published one, so the authorized
+// reading is untouched, and the GENERAL branch's placeholder rule (#1737, which
+// the conformance driver binds) is untouched too: this is the agent-instance
+// crumb and nothing else.
+// ---------------------------------------------------------------------------
+describe("buildBreadcrumbTrail — the refused reading names no run id (cinatra#2934)", () => {
+  const RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+
+  /** Every run-id substring of three characters or more that `text` contains. */
+  function runIdPartsIn(text: string): string[] {
+    const hits: string[] = [];
+    for (let start = 0; start < RUN_ID.length; start++) {
+      for (let end = start + 3; end <= RUN_ID.length; end++) {
+        const part = RUN_ID.slice(start, end);
+        if (text.includes(part)) hits.push(part);
+      }
+    }
+    return hits;
+  }
+
+  it("the run page reading a refused reader gets carries no substring of the run id", () => {
+    const labels = buildBreadcrumbTrail(`/agents/vendor/pkg/${RUN_ID}`).map(
+      (c) => c.label,
+    );
+    expect(labels).toEqual(["Agents", "Agent run"]);
+    expect(runIdPartsIn(labels.join(" "))).toEqual([]);
+  });
+
+  it("the schedule URL reading a refused reader gets carries no substring of the run id", () => {
+    const labels = buildBreadcrumbTrail(
+      `/agents/vendor/pkg/${RUN_ID}/trigger`,
+    ).map((c) => c.label);
+    expect(labels).toEqual(["Agents", "Agent run", "Schedule"]);
+    expect(runIdPartsIn(labels.join(" "))).toEqual([]);
+  });
+
+  /** What the chrome actually puts in the document: every crumb's label, plus
+   *  the address of each crumb it draws as an ANCHOR — which is neither the
+   *  leaf (drawn as the current page) nor a non-navigable crumb. */
+  function drawnTextOf(crumbs: BreadcrumbCrumb[]): string {
+    return crumbs
+      .flatMap((c, i) => [
+        c.label,
+        i === crumbs.length - 1 || c.nonNavigable ? "" : c.href,
+      ])
+      .join(" ");
+  }
+
+  it("the schedule URL refusal links nowhere either — the crumb is not an anchor", () => {
+    // An intermediate crumb is drawn as a link, and the link's address is the
+    // WHOLE id — a longer disclosure than the eight characters the sixth proof
+    // set measured. The unresolved crumb is non-navigable, so the chrome draws
+    // plain text and the address never reaches the document.
+    const crumbs = buildBreadcrumbTrail(`/agents/vendor/pkg/${RUN_ID}/trigger`);
+    const instance = crumbs[1];
+    expect(instance.label).toBe("Agent run");
+    expect(instance.nonNavigable).toBe(true);
+    // Every part the reader would SEE — labels, and the addresses of the crumbs
+    // the chrome still draws as anchors — carries no piece of the run id.
+    const drawn = drawnTextOf(crumbs);
+    expect(runIdPartsIn(drawn)).toEqual([]);
+  });
+
+  it("the run page refusal draws no anchor to the run either", () => {
+    const crumbs = buildBreadcrumbTrail(`/agents/vendor/pkg/${RUN_ID}`);
+    expect(crumbs[1].nonNavigable).toBe(true);
+    const drawn = drawnTextOf(crumbs);
+    expect(runIdPartsIn(drawn)).toEqual([]);
+  });
+
+  it("an authorized reading keeps its navigable run crumb", () => {
+    const crumbs = buildBreadcrumbTrail(`/agents/vendor/pkg/${RUN_ID}/trigger`, {
+      contributions: [
+        { prefix: `/agents/vendor/pkg/${RUN_ID}`, label: "Sales Bot" },
+      ],
+    });
+    expect(crumbs[1]).toEqual({
+      label: "Sales Bot",
+      href: `/agents/vendor/pkg/${RUN_ID}`,
+    });
+  });
+
+  it("the authorized reader's own trail is untouched — a published contribution still wins", () => {
+    const labels = buildBreadcrumbTrail(
+      `/agents/vendor/pkg/${RUN_ID}/trigger`,
+      {
+        contributions: [
+          { prefix: `/agents/vendor/pkg/${RUN_ID}`, label: "Sales Bot" },
+        ],
+      },
+    ).map((c) => c.label);
+    expect(labels).toEqual(["Agents", "Sales Bot", "Schedule"]);
+  });
+
+  it("the general branch's short-id placeholder rule (#1737) is untouched", () => {
+    expect(buildBreadcrumbTrail(`/teams/${RUN_ID}`).map((c) => c.label)).toEqual([
+      "Teams",
+      idSegmentPlaceholder(RUN_ID),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, the SEVENTH graded proof set).
+//
+// The trail above a refused reading was made honest in the previous leg — it
+// reads "Agents > Agent run > Schedule" and carries no part of the run id. The
+// browser tab did not follow it. It kept the route file's own static literal,
+// because a refusal short-circuits BEFORE the screen's dynamic metadata ever
+// runs, so nothing downstream was left to write a truthful tab title.
+//
+// The ratified drawing binds the two together in one sentence: the browser-tab
+// title mirrors the resolved trail under the same rules, and an id-bearing
+// route never shows a raw id in the tab. So the tab is derived from the trail
+// that is already resolved, and from nothing else — one reading, one source,
+// and no second rule that can drift away from the first.
+//
+// It answers NULL rather than guessing whenever the trail's own leaf is still
+// unresolved (the short-id placeholder, an id-like label, an empty trail). A
+// null means "do not write" — the route's own server-rendered title stands —
+// which is strictly safer than putting an identifier in the tab.
+// ---------------------------------------------------------------------------
+describe("documentTitleLabelFromTrail — the tab mirrors the resolved trail", () => {
+  const RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+  const RUN_PAGE = `/agents/vendor/pkg/${RUN_ID}`;
+  const SCHEDULE = `${RUN_PAGE}/trigger`;
+  /** The refused reading: the path the reader typed, contributions cleared. */
+  const refused = (pathname: string) =>
+    buildBreadcrumbTrail(pathname, { contributions: [] });
+
+  it("takes the schedule refusal's trail leaf — the same word the trail ends on", () => {
+    expect(refused(SCHEDULE).map((c) => c.label)).toEqual([
+      "Agents",
+      "Agent run",
+      "Schedule",
+    ]);
+    expect(documentTitleLabelFromTrail(refused(SCHEDULE))).toBe("Schedule");
+  });
+
+  it("takes the run page refusal's trail leaf — the kind, never the run", () => {
+    expect(refused(RUN_PAGE).map((c) => c.label)).toEqual(["Agents", "Agent run"]);
+    expect(documentTitleLabelFromTrail(refused(RUN_PAGE))).toBe("Agent run");
+  });
+
+  it("carries no substring of the run id, on either refused reading", () => {
+    for (const pathname of [RUN_PAGE, SCHEDULE]) {
+      const label = documentTitleLabelFromTrail(refused(pathname)) ?? "";
+      for (let start = 0; start < RUN_ID.length; start++) {
+        for (let end = start + 3; end <= RUN_ID.length; end++) {
+          expect(label).not.toContain(RUN_ID.slice(start, end));
+        }
+      }
+    }
+  });
+
+  it("refuses to write when the trail's leaf is the short-id placeholder", () => {
+    const trail: BreadcrumbCrumb[] = [
+      { label: "Agents", href: "/agents" },
+      { label: idSegmentPlaceholder(RUN_ID), href: "/agents/x" },
+    ];
+    expect(documentTitleLabelFromTrail(trail)).toBeNull();
+  });
+
+  it("refuses to write when the trail's leaf is an id-like label", () => {
+    const trail: BreadcrumbCrumb[] = [
+      { label: "Agents", href: "/agents" },
+      { label: RUN_ID, href: "/agents/x" },
+    ];
+    expect(documentTitleLabelFromTrail(trail)).toBeNull();
+  });
+
+  it("steps over an ellipsis crumb and over an empty label", () => {
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "…", href: "/agents", ellipsis: true },
+      ]),
+    ).toBe("Agents");
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "   ", href: "/agents/x" },
+      ]),
+    ).toBe("Agents");
+  });
+
+  it("answers null on an empty trail, so nothing is written", () => {
+    expect(documentTitleLabelFromTrail([])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WHOLE DECISION, NOT HALF OF IT (cinatra#2934, convergence of fix leg 8).
+//
+// The tab title of an agent-instance route is decided from TWO inputs: the
+// label the owning page published for the instance crumb, and — when there is
+// none — the resolved trail. The published label is not automatically safe:
+// the page publishes the id's first eight characters plus an ellipsis whenever
+// neither a run name nor a template name is available, and that placeholder is
+// still an identifier. The drawing's rule is unqualified — an id-bearing route
+// never shows a raw id in the tab — so the SAME guard has to stand in front of
+// both inputs. This is the function the shell calls, so the guard cannot be
+// bypassed by reaching around it.
+//
+// The trail's own leaf is not automatically safe either: an agent-instance
+// sub-route the trail has no name for is humanized, and a humanized id
+// ("9c0dfce6 B2cb 4dab 8a01 661ca3288b9a") no longer looks like an id to a
+// raw-form test while still carrying the id. A humanized id is an id.
+// ---------------------------------------------------------------------------
+describe("documentTitleLabelForAgentInstance — one guard in front of both inputs", () => {
+  const RUN_ID = "9c0dfce6-b2cb-4dab-8a01-661ca3288b9a";
+  const RUN_PAGE = `/agents/vendor/pkg/${RUN_ID}`;
+  const SCHEDULE = `${RUN_PAGE}/trigger`;
+  const UNNAMED_SUB = `${RUN_PAGE}/${RUN_ID}`;
+  const trailFor = (pathname: string) =>
+    buildBreadcrumbTrail(pathname, { contributions: [] });
+  /** Every substring of the run id three characters and longer. */
+  const idPartsIn = (text: string): string[] => {
+    const hits: string[] = [];
+    for (let start = 0; start < RUN_ID.length; start++)
+      for (let end = start + 3; end <= RUN_ID.length; end++)
+        if (text.includes(RUN_ID.slice(start, end)))
+          hits.push(RUN_ID.slice(start, end));
+    return hits;
+  };
+
+  it("takes a real published name — the run's own title still wins", () => {
+    expect(
+      documentTitleLabelForAgentInstance("Weekly digest", trailFor(RUN_PAGE)),
+    ).toBe("Weekly digest");
+  });
+
+  it("REFUSES the published short-id placeholder and falls back to the trail", () => {
+    const published = idSegmentPlaceholder(RUN_ID);
+    expect(published).toBe("9c0dfce6…");
+    const label = documentTitleLabelForAgentInstance(published, trailFor(RUN_PAGE));
+    expect(label).toBe("Agent run");
+    expect(idPartsIn(label ?? "")).toEqual([]);
+  });
+
+  it("REFUSES a published raw id and falls back to the trail", () => {
+    const label = documentTitleLabelForAgentInstance(RUN_ID, trailFor(SCHEDULE));
+    expect(label).toBe("Schedule");
+    expect(idPartsIn(label ?? "")).toEqual([]);
+  });
+
+  it("answers null on a sub-route the trail can only humanize into an id", () => {
+    // The trail has no name for this segment, so it title-cases the id.
+    const leaf = trailFor(UNNAMED_SUB).at(-1)?.label ?? "";
+    expect(idPartsIn(leaf).length).toBeGreaterThan(0);
+    // The title must NOT take it: no write, the server title stands.
+    expect(documentTitleLabelForAgentInstance(undefined, trailFor(UNNAMED_SUB))).toBeNull();
+  });
+
+  it("carries no substring of the run id on any of these readings", () => {
+    for (const [published, pathname] of [
+      [undefined, RUN_PAGE],
+      [undefined, SCHEDULE],
+      [undefined, UNNAMED_SUB],
+      [idSegmentPlaceholder(RUN_ID), RUN_PAGE],
+      [RUN_ID, SCHEDULE],
+    ] as const) {
+      const label = documentTitleLabelForAgentInstance(published, trailFor(pathname)) ?? "";
+      expect(idPartsIn(label)).toEqual([]);
+    }
+  });
+});
+
+describe("documentTitleLabelFromTrail — a humanized id is still an id", () => {
+  it("refuses a title-cased id label", () => {
+    expect(
+      documentTitleLabelFromTrail([
+        { label: "Agents", href: "/agents" },
+        { label: "9C0dfce6 B2cb 4dab 8a01 661ca3288b9a", href: "/agents/x" },
+      ]),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TRAIL IS THE NAVIGATION HIERARCHY (cinatra#2934, fix leg 10).
+//
+// The ratified components drawing states it in one sentence: a breadcrumb
+// "always reflects the navigation hierarchy — the route the page sits on, not
+// the thing the page happens to be about", every trail under the agents area
+// starts with "Agents", an agent instance is named by the agent's own display
+// name, the page that starts a run reads "Agents > Agent run", and a review has
+// no trail of its own — "there is no review page view outside the route of the
+// agent's run, so 'Agents > Agent run > Review' is not a possible breadcrumb".
+// ---------------------------------------------------------------------------
+describe("the trail is the navigation hierarchy (fix leg 10)", () => {
+  const RUN_ID = "aced3514-1f8e-4a44-9c1e-2b6f0f5a77d1";
+  const RUN_PATH = `/agents/vendor/pkg/${RUN_ID}`;
+  const REVIEW_PATH = `${RUN_PATH}/review/8f2b1c7d-53aa-4d02-9d31-70b6c4f0a1e2`;
+  const RUN_NAME = "Blog Draft Writer Agent (1)";
+
+  it("the review page draws its run's own trail — Agents > <the run> — and no Review leaf", () => {
+    const labels = buildBreadcrumbTrail(REVIEW_PATH, {
+      contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+    }).map((c) => c.label);
+    expect(labels).toEqual(["Agents", RUN_NAME]);
+  });
+
+  it("neither an id nor the Agent run placeholder stands where the run's name is resolvable", () => {
+    const labels = buildBreadcrumbTrail(REVIEW_PATH, {
+      contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+    }).map((c) => c.label);
+    expect(labels).not.toContain("Agent run");
+    expect(labels.join(" ")).not.toContain("aced3514");
+  });
+
+  it("keeps the drawing's fixed label only while the run's name is genuinely unavailable", () => {
+    expect(buildBreadcrumbTrail(REVIEW_PATH).map((c) => c.label)).toEqual([
+      "Agents",
+      "Agent run",
+    ]);
+  });
+
+  it("the schedule sub-route still draws its own crumb — only the review has none", () => {
+    expect(
+      buildBreadcrumbTrail(`${RUN_PATH}/trigger`, {
+        contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+      }).map((c) => c.label),
+    ).toEqual(["Agents", RUN_NAME, "Schedule"]);
+  });
+
+  it("the page that starts a run reads Agents > Agent run — the area crumb stays", () => {
+    const crumbs = buildBreadcrumbTrail("/agents", {
+      pageTitle: { title: "Agent run", pathname: "/agents" },
+    });
+    expect(crumbs.map((c) => c.label)).toEqual(["Agents", "Agent run"]);
+    expect(crumbs[0].href).toBe("/agents");
+  });
+
+  it("a deeper page's broadcast title still replaces its own leaf, and nothing above it", () => {
+    expect(
+      buildBreadcrumbTrail("/extensions/upload", {
+        pageTitle: { title: "Upload Extension", pathname: "/extensions/upload" },
+      }).map((c) => c.label),
+    ).toEqual(["Extensions", "Upload Extension"]);
+  });
+
+  it("a page that was not found reads exactly Page not found", () => {
+    expect(
+      buildBreadcrumbTrail(REVIEW_PATH, { notFound: true }).map((c) => c.label),
+    ).toEqual(["Page not found"]);
   });
 });

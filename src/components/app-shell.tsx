@@ -27,13 +27,17 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  PAGE_NOT_FOUND_CRUMB_LABEL,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
   isIdLikeSegment,
   type BreadcrumbCrumb,
+  documentTitleLabelForAgentInstance,
+  documentTitleLabelFromTrail,
 } from "@/lib/breadcrumb-trail";
 import {
+  isPageNotFound,
   selectCrumbContributions,
   CRUMB_CONTRIBUTIONS_EVENT,
 } from "@/lib/breadcrumb-contributions";
@@ -619,14 +623,23 @@ export function AppShell({
     [pathname, crumbEpoch, crumbBusVersion],
   );
 
+  // The 404 boundary's own mark (cinatra#2934, fix leg 10) — read off the same
+  // bus, and invalidated by the same version counter the contributions are.
+  const pageNotFound = useMemo(
+    () => isPageNotFound(pathname),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathname, crumbBusVersion],
+  );
+
   const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
     () =>
       buildBreadcrumbTrail(pathname, {
         pageTitle,
         chatThreadTitle,
         contributions: crumbContributions,
+        notFound: pageNotFound,
       }),
-    [pathname, chatThreadTitle, pageTitle, crumbContributions],
+    [pathname, chatThreadTitle, pageTitle, crumbContributions, pageNotFound],
   );
 
   const refreshRoute = useCallback(() => router.refresh(), [router]);
@@ -666,18 +679,77 @@ export function AppShell({
             c.prefix === "/" + segments.slice(0, 4).join("/"),
         )?.label
       : undefined;
-    if (isChatThread && chatThreadTitle) {
+    if (pageNotFound) {
+      // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 11).
+      // Its trail is the single crumb "Page not found", so the tab is that one
+      // word too - before every branch below, because none of them can name a
+      // page the reader never reached: the agent-instance branch would name the
+      // run, and the general branch the address's own last segment.
+      document.title = `${PAGE_NOT_FOUND_CRUMB_LABEL} | Cinatra`;
+    } else if (isChatThread && chatThreadTitle) {
       document.title = `${chatThreadTitle} | Cinatra`;
-    } else if (isAgentInstance && agentLabel) {
-      document.title = `${agentLabel} | Cinatra`;
+    } else if (isAgentInstance) {
+      // cinatra#2934 — a REFUSED reading of an agent-instance route publishes
+      // no crumb contribution (the not-authorized panel clears it on purpose,
+      // and the not-found boundary never had one), so `agentLabel` is absent
+      // exactly there. It used to fall through to the no-write branch below
+      // on the reasoning that the route's own `generateMetadata` owns the tab
+      // — but a refusal short-circuits BEFORE that metadata ever runs, so what
+      // survived was the route file's static literal, and the tab read "Agent"
+      // above a trail that read "Agents > Agent run > Schedule". The drawing
+      // says the tab mirrors the resolved trail; so it is taken from the very
+      // trail already drawn above the page, which by construction carries no
+      // id. A trail whose own leaf is unresolved answers null and nothing is
+      // written, leaving the server title in place.
+      // ONE decision point: the published label is not automatically safe
+      // either — the owning page publishes the id's first eight characters
+      // plus an ellipsis when it has no name to publish, and a truncated
+      // identifier is still an identifier. The helper guards BOTH inputs and
+      // answers null when neither can be said without an id, in which case
+      // nothing is written and the server title stands.
+      // WHICH CRUMB THE TAB MIRRORS IS THE TRAIL'S LAST ONE, NOT THE RUN'S
+      // NAME (convergence round of fix leg 9). The published instance label may
+      // decide the tab only where the instance crumb IS the leaf - the run's
+      // own page, four segments. On a sub-route the leaf is the sub-route's own
+      // word ("Schedule" above the schedule surface), which is what the route's
+      // own server metadata already answers; preferring the published label
+      // here re-ran on the layout's publish and replaced that word with the
+      // run's name, so the tab read "Blog Pipeline Agent (1)" above a trail
+      // whose leaf read "Schedule" - the drawing's divergence, one route family
+      // over. The trail-only helper carries the same id guard, so nothing about
+      // the refused reading changes.
+      const label =
+        segments.length >= 5
+          ? documentTitleLabelFromTrail(breadcrumbSegments)
+          : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
+      if (label) document.title = `${label} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
       // correct server title with humanized hex. Deliberately no write.
     } else {
-      document.title = deriveDocumentTitle(pathname, activeHeader?.title);
+      // THE TAB MIRRORS THE RESOLVED TRAIL HERE TOO (cinatra#2934, fix leg 11).
+      // This branch derived its own words from the PATH, which is a second
+      // reading of the same route and drifts from the first the moment the two
+      // disagree: on the run-starting page the trail appends the page's own
+      // title beneath the area crumb ("Agents > Agent run") while the derived
+      // word stayed the area segment ("Agents"), and the proof round measured
+      // exactly that. So the trail already drawn above the page decides, and the
+      // path-derived word remains only as the floor for a trail with nothing
+      // safe to say.
+      const mirrored = documentTitleLabelFromTrail(breadcrumbSegments);
+      document.title = mirrored
+        ? `${mirrored} | Cinatra`
+        : deriveDocumentTitle(pathname, activeHeader?.title);
     }
-  }, [activeHeader?.title, pathname, chatThreadTitle, crumbContributions]);
+  }, [
+    activeHeader?.title,
+    pathname,
+    chatThreadTitle,
+    crumbContributions,
+    breadcrumbSegments,
+    pageNotFound,
+  ]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.
@@ -863,13 +935,27 @@ export function AppShell({
             data-testid="app-shell-topbar-row"
             className="flex h-full w-full items-center gap-3 px-5 sm:gap-4 sm:px-8"
           >
+            {/* cinatra#2934 — the drawing names the top-bar's left element and
+                it is this one: "The breadcrumb is the top-bar's left element
+                and moves with the bar — it anchors at that far-left edge."
+                The row carries only the standard edge gutters, so the trail
+                begins at the gutter and nothing is drawn to its left. The
+                sidebar toggle and its divider used to sit here and pushed the
+                trail 92px inside the sidebar's inner edge where 32px is drawn;
+                they now lead the right-hand cluster instead, so the control is
+                still one click away at every viewport while the left edge
+                belongs to the trail alone. Desktop collapse also remains on
+                the sidebar's own rail. */}
+            {/* Below `sm` the trail is not drawn, so there is nothing for the
+                toggle to push: it stays at the left edge, where the primary
+                navigation control has always been. At `sm` and up it is
+                `sm:hidden` here and leads the right-hand cluster instead, so
+                the trail alone sits at the gutter the drawing names. */}
             <SidebarTrigger
-              data-testid="app-shell-topbar-left"
               variant="outline"
-              className="max-md:scale-125"
+              className="max-md:scale-125 sm:hidden"
             />
-            <Separator orientation="vertical" className="h-6 shrink-0" />
-            <Breadcrumb className="hidden sm:flex">
+            <Breadcrumb data-testid="app-shell-topbar-left" className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
                   <Fragment key={breadcrumbCrumbKey(crumb, i)}>
@@ -894,6 +980,11 @@ export function AppShell({
               </BreadcrumbList>
             </Breadcrumb>
             <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
+            <SidebarTrigger
+              variant="outline"
+              className="max-md:scale-125 max-sm:hidden"
+            />
+            <Separator orientation="vertical" className="h-6 shrink-0 max-sm:hidden" />
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {
               setDevToolsOpen(open);
               if (open) {

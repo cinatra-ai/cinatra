@@ -60,12 +60,21 @@
 // "above '1 Review'" rather than a second row numbered 1.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
-import { ScheduleProposalCard } from "./schedule-proposal-card";
+import {
+  ScheduleProposalCard,
+  type ArmedScheduleFill,
+} from "./schedule-proposal-card";
 import { SchedulePromptWindow } from "./schedule-prompt-window";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
 import {
@@ -163,12 +172,25 @@ export function ScheduleRailStepRow({
 export type ScheduleSurfaceReading = {
   /** The card produced DOM: there IS a scheduler on this surface. */
   drawn: boolean;
-  /** The card drew its controls floor: the schedule can still be changed. */
+  /** The card's own floor says the schedule can still be changed. */
   changeable: boolean;
 };
 
 /** The card's controls floor, by the conformance id the renderer gives it. */
 const SCHEDULE_FLOOR_SELECTOR = '[data-conformance-id="schedule-proposal-floor"]';
+
+/**
+ * THE PRESENCE OF THE FLOOR IS THE ANSWER (cinatra#2934, the FOURTH graded
+ * capture).
+ *
+ * It always was, and for one turn of this pull request it stopped being: a
+ * schedule that is over drew its floor DEAD rather than not at all, so presence
+ * had to be qualified by an attribute on it. The fourth capture graded that
+ * dead floor against the ratified drawing at the pin this pull request records
+ * and against plan (A) §7.2 — the drawing gives that state no floor, no
+ * hairline and nothing to press — so the floor is gone again for it and the
+ * attribute with it. One fact, read one way, by both surfaces.
+ */
 
 export function useScheduleSurfaceReading(
   host: HTMLElement | null,
@@ -184,7 +206,8 @@ export function useScheduleSurfaceReading(
     }
     const read = () => {
       const drawn = host.childElementCount > 0;
-      const changeable = drawn && host.querySelector(SCHEDULE_FLOOR_SELECTOR) !== null;
+      const floor = drawn ? host.querySelector(SCHEDULE_FLOOR_SELECTOR) : null;
+      const changeable = floor !== null;
       // Same object identity while nothing moved: this runs on every mutation
       // inside the card, and a fresh object each time would re-render the
       // surface on every keystroke in the form below it.
@@ -235,6 +258,15 @@ export function ScheduleStepSurface({
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
   const scheduler = useScheduleSurfaceReading(cardHost);
+  // The SAME composition the run's schedule tab makes, for the same reason: the
+  // window is the card's sibling, so this host carries the turn's fill into the
+  // card's rows and re-mounts it after a press (cinatra#2934).
+  const [armedFill, setArmedFill] = useState<ArmedScheduleFill | null>(null);
+  const [cardGeneration, setCardGeneration] = useState(0);
+  const onActed = useCallback(() => {
+    setArmedFill(null);
+    setCardGeneration((n) => n + 1);
+  }, []);
   const cardView = {
     viewType: "trigger_schedule_proposal" as const,
     schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -245,11 +277,11 @@ export function ScheduleStepSurface({
       <div data-schedule-card-host="" ref={setCardHost}>
         {host === "run_card" ? (
           <LifecycleCardSurfaceProvider host="run_card">
-            <ScheduleProposalCard view={cardView} />
+            <ScheduleProposalCard key={cardGeneration} view={cardView} armedFill={armedFill} />
           </LifecycleCardSurfaceProvider>
         ) : (
           <LifecycleCardSurfaceProvider host="page_gate_region">
-            <ScheduleProposalCard view={cardView} />
+            <ScheduleProposalCard key={cardGeneration} view={cardView} armedFill={armedFill} />
           </LifecycleCardSurfaceProvider>
         )}
       </div>
@@ -265,17 +297,22 @@ export function ScheduleStepSurface({
           nothing for a run its resolver answers `absent` for; a window alone in
           that empty column would be a prompt about a form that is not there.
 
-          AND IT FOLLOWS THAT FORM'S STATE (cinatra#3004). The window invites
-          the reader to ask for edits to the fields above it, so once those
-          fields are a reading nobody can change — a fired one-off, a recurring
-          schedule cancelled after a fire — the invitation is one this surface
-          cannot keep, and it is withdrawn rather than drawn dead. */}
+          AND IT FOLLOWS THAT FORM'S STATE (cinatra#3004, as amended by
+          cinatra#2934). The window invites the reader to ask for edits to the
+          fields above it, so once those fields are a reading nobody can change
+          — a fired one-off, a recurring schedule cancelled after a fire — the
+          invitation is one this surface cannot keep. The INVITATION is
+          withdrawn; the WINDOW is not. Plan (A) §7.2 asks this state to say
+          that the schedule can no longer be changed, so the window stays and
+          answers, and only the box to type in goes. */}
       {promptWindowTemplateId && scheduler.drawn ? (
         <SchedulePromptWindow
           templateId={promptWindowTemplateId}
           runId={runId}
           canRespondInWindow={canRespondInWindow}
           readOnly={!scheduler.changeable}
+          onFill={(values) => setArmedFill({ values })}
+          onActed={onActed}
         />
       ) : null}
     </div>

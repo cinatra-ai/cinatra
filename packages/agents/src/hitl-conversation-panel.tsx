@@ -6,6 +6,7 @@ import { PromptField, type PromptFieldHandle } from "@cinatra-ai/sdk-ui";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
 import type { RunWindowSurface } from "./run-window-conversation-store";
+import { renderRunWindowMarkdown } from "./run-window-markdown";
 
 /**
  * ONE WINDOW, FIVE READINGS — the sentence in the empty field, per surface
@@ -30,11 +31,65 @@ export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
   "step-by-step": "Ask Cinatra to fill this step's fields, or ask about the run…",
   /** The schedule screen — the scheduler form, in both of its states. */
   schedule: "Ask Cinatra to set the schedule above, or ask about it…",
-  /** The armed-trigger tab — the run's schedule as it stands. */
-  "armed-trigger": "Ask Cinatra to change this schedule, or ask about it…",
+  /**
+   * The armed-trigger tab — the run's schedule as it stands.
+   *
+   * PLAN (A) §7.4 STEP 8'S OWN COPY, word for word: "You type into the prompt
+   * window under the tab ('Ask Cinatra to suggest edits to the fields above…')".
+   * A wording of this window's own stood here through four captures and was
+   * graded against the drawing on every one of them.
+   */
+  "armed-trigger": "Ask Cinatra to suggest edits to the fields above…",
   /** The review page — under the decision bar. */
   review: "Ask Cinatra about this review, or ask for changes to the work…",
 };
+
+/**
+ * WHERE THE WINDOW STANDS, per surface (design `458fb7ffce6c`,
+ * `app-artifact-review.html` §VI and §IX).
+ *
+ * ONE READING ON ALL FIVE. §VI, in its own words: "BENEATH THE DECISION BAR the
+ * run detail carries a conversational prompt window", and §IX asks that "the
+ * decision bar and prompt window stay reachable at the foot of the run detail at
+ * every width" — the foot of the RUN DETAIL, which is the column the step's work
+ * is drawn in, never the foot of the page frame around it.
+ *
+ * The floating reading four of these windows carried was a consequence of the
+ * old mount: three callers handed the shared panel the page's own frame element,
+ * so the only way to keep the window near the work was to dock it across the
+ * foot of the frame. cinatra#3188 item 3 fixed the mount itself — every window
+ * now stands inside the run detail column, under the work it belongs to — and
+ * with the mount fixed the dock is not a second reading of the drawing but a
+ * different drawing, on the review page and on the four form-following windows
+ * alike. So every surface stands in the flow.
+ *
+ * IT IS STILL A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares
+ * WHICH READING it is and never a placement of its own, so no window can drift
+ * from the drawing on its own and a sixth surface cannot compile without a
+ * placement.
+ */
+export const RUN_WINDOW_PLACEMENTS: Record<RunWindowSurface, "floating" | "in-flow"> = {
+  "run-page": "in-flow",
+  "step-by-step": "in-flow",
+  schedule: "in-flow",
+  "armed-trigger": "in-flow",
+  /** §VI — beneath the decision bar, in the flow, never over it. */
+  review: "in-flow",
+};
+
+/**
+ * The send control's ACCESSIBLE NAME, per surface.
+ *
+ * It carries the window's own sentence rather than a name borrowed from another
+ * surface: a reader on a screen reader hears what this window does where it
+ * stands, which is the same thing the empty field says to everyone else. It is
+ * DERIVED from that sentence, so the two cannot drift and a sixth surface gets
+ * a name the moment it gets a sentence.
+ */
+export function runWindowSendLabel(surface: RunWindowSurface): string {
+  const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
+  return `Send — ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+}
 
 export type HitlConversationEntry = {
   id: number;
@@ -114,6 +169,11 @@ export function HitlConversationPanel({
   // §X's one difference between the five readings, resolved here rather than at
   // any mount: the sentence in the empty field.
   const placeholder = RUN_WINDOW_PLACEHOLDERS[surface];
+  // §VI's own placement for this reading, resolved here rather than at any
+  // mount, exactly as the sentence is.
+  const placement = RUN_WINDOW_PLACEMENTS[surface];
+  // The window's own sentence, as the send control's accessible name.
+  const submitLabel = runWindowSendLabel(surface);
   const [convOpen, setConvOpen] = useState(false);
   const convContainerRef = useRef<HTMLDivElement>(null);
   const convScrollRef = useRef<HTMLDivElement>(null);
@@ -244,25 +304,59 @@ export function HitlConversationPanel({
   // nothing passes under it now. The inset it keeps is the window's own
   // breathing room inside the column it stands in.
   return createPortal(
-    <div data-conv-open={convOpen} className="px-5 pb-4 pt-6">
+    <div
+      data-conv-open={convOpen}
+      data-run-window-placement={placement}
+      // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
+      // context, and no fade: an element that is not taken out of flow and
+      // comes after the work in document order cannot draw over it at any
+      // width, which is the whole of §VI's "beneath the decision bar".
+      className="px-5 pb-4 pt-6"
+    >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
           <div className="mb-3 rounded-panel border border-line bg-surface p-3 shadow-sm">
-            <div ref={convScrollRef} className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            <div
+              ref={convScrollRef}
+              data-run-window-scroll
+              className="flex max-h-52 flex-col gap-2 overflow-y-auto"
+            >
               {conversation.map((entry) => (
                 <div
                   key={entry.id}
                   className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <div
-                    className={`rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap ${
-                      entry.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-surface-muted text-foreground"
-                    }`}
-                  >
-                    {entry.content}
-                  </div>
+                  {entry.role === "user" ? (
+                    /*
+                     * THE PERSON'S OWN LINE STAYS THEIR OWN CHARACTERS. What
+                     * they typed is not markup and is never read as any: a
+                     * message that says `**not bold**` is shown with its
+                     * asterisks, because the window is quoting them back.
+                     */
+                    <div
+                      data-run-window-entry="person"
+                      className="rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap bg-primary text-primary-foreground"
+                    >
+                      {entry.content}
+                    </div>
+                  ) : (
+                    /*
+                     * THE ASSISTANT'S LINE IS DRAWN, NOT PRINTED (cinatra#2934).
+                     * It is the same assistant /chat draws, through the same
+                     * renderer — bold reads bold, a list reads as a list, a
+                     * pipe table reads as a table. The markup is the shared
+                     * core's, which escapes every value it writes and
+                     * scheme-allowlists every URL, so untrusted model text
+                     * cannot reach the DOM as live markup here either.
+                     */
+                    <div
+                      data-run-window-entry="assistant"
+                      className="rounded-control px-3 py-2 text-sm max-w-[80%] bg-surface-muted text-foreground [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                      dangerouslySetInnerHTML={{
+                        __html: renderRunWindowMarkdown(entry.content),
+                      }}
+                    />
+                  )}
                 </div>
               ))}
               {promptPending && (
@@ -276,14 +370,17 @@ export function HitlConversationPanel({
             </div>
           </div>
         )}
-        <div onFocus={handleFocus} onClick={handleFocus}>
+        {/* THE WINDOW'S OWN BORDERED FIELD, marked so the read-only reading of
+            this window can draw the same block around its answer rather than a
+            paragraph on the page ground (cinatra#2934, the fourth capture). */}
+        <div data-run-window-field="" onFocus={handleFocus} onClick={handleFocus}>
           <PromptField
             ref={promptFieldRef}
             placeholder={placeholder}
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}
-            submitAriaLabel="Apply AI suggestion"
+            submitAriaLabel={submitLabel}
             canSubmitEmpty={false}
             pending={promptPending}
             fieldClassName="border-line shadow-lg"

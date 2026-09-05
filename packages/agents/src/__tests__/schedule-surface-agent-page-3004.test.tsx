@@ -47,6 +47,7 @@ import type {
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { RunScheduleTab } from "../run-schedule-tab";
+import { SAVE_SCHEDULE_REFUSALS } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -174,23 +175,51 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     );
 
     expect(container.querySelectorAll('[data-schedule-option]')).toHaveLength(3);
-    expect(isDisabled(container.querySelector('[data-field="schedule-run-at"]'))).toBe(true);
-    // "no controls at all" — not a disabled Save changes, not a disabled
-    // Cancel schedule: the floor is not drawn.
-    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
+    // "NO CONTROLS AT ALL" IS LITERAL, as the fifth graded proof set measured
+    // (cinatra#2934): the drawing's spent row keeps its edge, its ground and its
+    // radio and simply stops being pressable, and its value is legible text with
+    // the picker gone. A DISABLED picker is the drawing's other reading — the one
+    // a reader who may see but not act on a LIVE schedule is owed — so looking
+    // for one here asked this state to draw the other state's DOM.
+    expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
+    expect(
+      container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-schedule-option]')!.querySelectorAll("button, input, select, textarea"),
+    ).toHaveLength(0);
+    // "no controls at all" — not a disabled Save changes, not a disabled Cancel
+    // schedule, and no floor for either to stand on (cinatra#2934, the FOURTH
+    // graded capture; the drawing at the pin and plan (A) §7.2).
+    expect(
+      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+    ).toBeNull();
     expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
   });
 
-  it("a recurring schedule CANCELLED after a fire: the rows read-only, no controls, and no way to arm another", async () => {
+  it("a recurring schedule CANCELLED after a fire: the rows read-only, no floor, and no way to arm another", async () => {
     const container = await surfaceWithRows(
       settledBody({ stopped: true, canSave: false, canCancel: false }),
     );
 
     expect(container.querySelectorAll('[data-schedule-option]')).toHaveLength(3);
-    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
-    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
+    // Read as the drawing draws it since the fifth graded proof set
+    // (cinatra#2934) — the value legible, the picker gone, and nothing in any of
+    // the three rows that can be pressed.
+    expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(
+      container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
+    ).toBeTruthy();
+    for (const row of container.querySelectorAll('[data-schedule-option]')) {
+      expect(row.querySelectorAll("button, input, select, textarea")).toHaveLength(0);
+    }
+    expect(
+      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+    ).toBeNull();
     expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
     // The three-option form that STARTS a schedule does not take this
     // surface's place — the run is over, so there is nothing here that arms.

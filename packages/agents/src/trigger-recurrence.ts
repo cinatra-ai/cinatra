@@ -409,3 +409,311 @@ export function describeRecurrence(c: RecurringConfig): string {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE ARMED SCHEDULER FORM'S OWN ROWS, MOVED BY A DESCRIBED CHANGE
+// (cinatra#2934, lifecycle-b W5c — the armed-trigger tab).
+//
+// THE PLAN'S SENTENCE THIS EXISTS FOR (§X, the schedule reading): "Fills the
+// scheduler form's own rows — when the run starts, its time, its timezone —
+// whether the schedule is being set for the first time or changed once it
+// stands. The person presses the form's own button."
+//
+// "ONCE IT STANDS" IS THIS SECTION. The scheduling STEP holds its rows as a
+// react-hook-form state and moves them with `applyScheduleValues`; the ARMED
+// card holds them as ONE §VI selection and moves them with `setDraft`. Same
+// rows, two shapes — so the placement rule is written ONCE, against the
+// selection, and both the browser that must show the change and the server that
+// must save it read it from the same function. A second implementation on
+// either side is exactly the drift §VI's "the builder's selections are what the
+// reader sees and confirms" rules out.
+//
+// AND IT LIVES HERE, IN THE VOCABULARY, rather than in a leaf of its own — for
+// the reason this module already exists: it is the ONE module that says what a
+// selection means, and the placement rule is selection semantics. It is also a
+// measurement: the four routes carrying LOCKED first-party-graph budgets
+// (`/api/mcp`, `/api/a2a`, `/api/llm-bridge`, `/chat`) already reach this
+// module, so nothing new lands on any of them.
+//
+// The §VI selection is typed STRUCTURALLY through `RecurringConfig` — this
+// package is the one that owns the vocabulary and must keep no edge onto the
+// view layer, exactly as `SavedScheduleSelection` in the trigger service does.
+// ---------------------------------------------------------------------------
+
+/** §VI's selection rows, as this module sees them — the discriminated schedule
+ *  the armed card draws. Mirrors `ProposedSchedule` in the protocol package. */
+export type ArmedScheduleSelection =
+  | { kind: "immediate" }
+  | { kind: "scheduled"; runAt: string; timezone: string }
+  | { kind: "recurring"; selection: RecurringConfig; timezone: string };
+
+/**
+ * The recurrence rows the scheduler form draws, by the names the form's own
+ * schema declares. The list is the selection's own keys — never a second
+ * spelling of them.
+ */
+export const ARMED_SCHEDULE_RECURRENCE_ROWS: readonly (keyof RecurringConfig)[] =
+  Object.keys(DEFAULT_RECURRING_CONFIG) as (keyof RecurringConfig)[];
+
+/**
+ * WHAT THE ARMED FORM'S ROWS ARE HOLDING, as the fill road's closed set sees
+ * them.
+ *
+ * Read from the SELECTIONS the card is drawing — which the resolver reads back
+ * off the installed trigger row — rather than from the row a second time, so
+ * "what the fields show" has one source and a fill that changes nothing is
+ * dropped against exactly what the person can see.
+ */
+export function armedScheduleFormValues(
+  schedule: ArmedScheduleSelection,
+): Record<string, unknown> {
+  if (schedule.kind === "immediate") return { triggerType: "immediate" };
+  if (schedule.kind === "scheduled") {
+    return {
+      triggerType: "scheduled",
+      // The row is a local `YYYY-MM-DDTHH:mm` box, which is what the card's own
+      // datetime-local control holds and what a fill has to match to read as
+      // "no change".
+      scheduledAt: schedule.runAt.replace(" ", "T").slice(0, 16),
+      timezone: schedule.timezone,
+    };
+  }
+  return { triggerType: "recurring", timezone: schedule.timezone, ...schedule.selection };
+}
+
+/** Kept only when the placed value is a value the control could actually hold. */
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function coerceSelection(
+  base: RecurringConfig,
+  values: Record<string, unknown>,
+): RecurringConfig {
+  const next: RecurringConfig = { ...base };
+  if (typeof values.frequency === "string") {
+    next.frequency = values.frequency as RecurringConfig["frequency"];
+  }
+  const interval = num(values.interval);
+  if (interval !== undefined) next.interval = interval;
+  if (Array.isArray(values.weekdays)) {
+    next.weekdays = values.weekdays.filter((d): d is number => typeof d === "number");
+  }
+  const dayOfMonth = num(values.dayOfMonth);
+  if (dayOfMonth !== undefined) next.dayOfMonth = dayOfMonth;
+  if (values.monthlyMode === "date" || values.monthlyMode === "weekday") {
+    next.monthlyMode = values.monthlyMode;
+  }
+  const nthWeek = num(values.nthWeek);
+  if (nthWeek !== undefined) next.nthWeek = nthWeek as RecurringConfig["nthWeek"];
+  const monthlyWeekday = num(values.monthlyWeekday);
+  if (monthlyWeekday !== undefined) next.monthlyWeekday = monthlyWeekday;
+  if (values.quarterAnchor === "start" || values.quarterAnchor === "end") {
+    next.quarterAnchor = values.quarterAnchor;
+  }
+  const yearlyMonth = num(values.yearlyMonth);
+  if (yearlyMonth !== undefined) next.yearlyMonth = yearlyMonth;
+  const hour = num(values.hour);
+  if (hour !== undefined) next.hour = hour;
+  const minute = num(values.minute);
+  if (minute !== undefined) next.minute = minute;
+  return next;
+}
+
+/**
+ * Move the armed form's rows by the values a fill placed in them.
+ *
+ * THE SAME WRITE THE FORM'S OWN CONTROLS MAKE — row for row, and in the same
+ * order the scheduling step's `applyScheduleValues` makes it, so a described
+ * change lands identically whether the person is arming a schedule for the
+ * first time or changing one that stands:
+ *
+ *   · a repeat row described WITHOUT naming the kind IS the recurring row; a
+ *     message that named a kind keeps the one it named;
+ *   · the timezone is the one that was placed, else the one the form is already
+ *     showing — never the server's, and never the browser's guessed at here;
+ *   · a row the placed values cannot express is left exactly as it stood. A
+ *     one-off asked for with no moment to run at has no `Run at` to show, and a
+ *     form that silently invented one would be showing a time nobody chose.
+ *
+ * PURE and total: it returns a §VI selection the card can draw and the save road
+ * can validate, or the one it was given.
+ */
+export function applyArmedScheduleFill(
+  current: ArmedScheduleSelection,
+  values: Record<string, unknown>,
+): ArmedScheduleSelection {
+  const touchesRecurrence = ARMED_SCHEDULE_RECURRENCE_ROWS.some(
+    (row) => values[row] !== undefined,
+  );
+  const named =
+    values.triggerType === "immediate" ||
+    values.triggerType === "scheduled" ||
+    values.triggerType === "recurring"
+      ? values.triggerType
+      : null;
+  const kind = named ?? (touchesRecurrence ? "recurring" : current.kind);
+
+  const timezone =
+    typeof values.timezone === "string" && values.timezone.length > 0
+      ? values.timezone
+      : current.kind === "immediate"
+        ? "UTC"
+        : current.timezone;
+
+  if (kind === "immediate") return { kind: "immediate" };
+
+  if (kind === "scheduled") {
+    const placed =
+      typeof values.scheduledAt === "string" && values.scheduledAt.length > 0
+        ? values.scheduledAt.replace(" ", "T").slice(0, 16)
+        : null;
+    const runAt = placed ?? (current.kind === "scheduled" ? current.runAt : null);
+    // NOTHING TO SHOW, SO NOTHING MOVES. See the note above: an invented moment
+    // would be a time the person never chose.
+    if (!runAt) return current;
+    return { kind: "scheduled", runAt, timezone };
+  }
+
+  const base: RecurringConfig =
+    current.kind === "recurring" ? current.selection : { ...DEFAULT_RECURRING_CONFIG };
+  return { kind: "recurring", selection: coerceSelection(base, values), timezone };
+}
+
+// ---------------------------------------------------------------------------
+// AND THE SENTENCES A SCHEDULE THAT CANNOT BE CHANGED IS EXPLAINED WITH
+// (cinatra#2934, the armed-schedule change road).
+//
+// WHY THEY LIVE HERE, of all places. They were declared beside the write guard
+// that chooses between them, which is where the CHOICE belongs — but the card
+// now has to DRAW one: plan (A) §7.2 requires a schedule that has fired to
+// answer that it can no longer be changed, with the form locked, rather than to
+// withdraw its floor and say nothing. The card is a client component, and
+// pulling the trigger service into it would pull the store, the scheduler and
+// the whole write perimeter onto every surface that draws a schedule.
+//
+// THIS MODULE IS ALREADY BOTH SIDES' — it is the one place that says what a
+// placed value does to a §VI selection, imported by the card and by the service
+// alike, and it imports nothing itself. Putting the strings here is therefore
+// ONE definition with no new module on anybody's graph (the four locked routes
+// carry a first-party budget; a leaf of their own would have cost each of them
+// one). `trigger-service.ts` re-exports the table under its own name, so every
+// existing reader keeps its import.
+// ---------------------------------------------------------------------------
+
+/** What the card says when the schedule can no longer be changed. Reader-facing
+ *  copy: it names the state and what to do instead, exactly as the immediate
+ *  ladder's refusals do. */
+export const SAVE_SCHEDULE_REFUSALS = {
+  noTrigger:
+    "There is no armed schedule on this run to change.",
+  released:
+    "This trigger has already been released — its steps are eligible now, so there is no schedule left to change.",
+  firedOneOff:
+    "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
+  immediate:
+    "\u201cRun right after setup\u201d starts the run now rather than scheduling it, so it is not a change you can save here. Set a time or a recurrence instead.",
+  /**
+   * The schedule is still being INSTALLED (cinatra#2934, the armed-trigger
+   * tab's window). The write guard below deliberately says nothing about this
+   * state — the installer exposes a schedule to the scheduler BEFORE it marks
+   * the intent done, so refusing a write on it would take away an operation the
+   * server is still granting. `canSaveInstalled` DOES withhold **Save changes**
+   * for it, so a surface that has to explain a withheld control needs the
+   * sentence, and it belongs in this table with the others rather than in a
+   * second one.
+   */
+  arming:
+    "This schedule is still being installed, so it can't be changed yet. Try again in a moment.",
+  /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
+  stopped:
+    "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
+  /** cinatra#3004 — a schedule that is OVER, asked to be REMOVED rather than
+   *  changed. The row is the record of the ending, so it stays. */
+  overCannotRemove:
+    "This run's schedule is over, so it can't be changed or removed. Start a new run to schedule it again.",
+  /** The prior scheduler would not cancel, so the replacement was NOT installed
+   *  — the schedule the reader is looking at is still the live one. */
+  cancelFailed:
+    "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
+  /**
+   * THE CARD IS NOT THIS PERSON'S TO CHANGE (cinatra#2934, the fourth graded
+   * capture). Plan (A) §7.1: "Who may do what: Cancel is the run's owner or an
+   * administrator." Plan (A) §1.2: a card a person "may see but not act on" is
+   * "drawn in full with its buttons disabled and the reason on the card" — so
+   * this is a REASON, drawn beside a dead control, never an absence.
+   *
+   * It says whose it is in the only terms that are true and disclose nothing:
+   * the run belongs to somebody else. The fourth capture caught a second person
+   * on somebody else's card being answered with the OWNER's sentences instead —
+   * the fields-do-not-exist one, the nothing-placed one, and once "Saved." on a
+   * record that never moved.
+   */
+  notYours:
+    "This run belongs to someone else, so you can't change its schedule here. Ask the person who started the run, or an administrator.",
+  /** cinatra#2981 — another writer (a **Cancel schedule**, or another save)
+   *  held the trigger claim for longer than this call would wait. Nothing was
+   *  written, so the reader's schedule is exactly as they left it. */
+  busy:
+    "Something else is changing this schedule right now. Nothing was changed — please try again in a moment.",
+} as const;
+
+/**
+ * MAY THIS PERSON CHANGE THIS RUN'S SCHEDULE? (cinatra#2934, the fourth graded
+ * capture.)
+ *
+ * ONE PREDICATE, READ BY EVERY SIDE. Plan (A) §7.1 gives the schedule its own
+ * answer — "Cancel is the run's owner or an administrator" — and the write has
+ * always enforced exactly that. Nothing ELSE did: `canSaveInstalled` asks about
+ * the SCHEDULE (arming, stopped, released, still in the future) and nothing
+ * about the person, so the card drew a live **Save changes** for a second
+ * person, the window placed their described change into the owner's rows, and
+ * the only thing that refused was the write at the very end.
+ *
+ * So the rule lives here, beside the sentences, in the one module both the card
+ * and the service already import and which imports nothing itself. The write's
+ * own guard now reads it too, so the surface and the write cannot disagree
+ * about who may act.
+ *
+ * FAIL-CLOSED ON AN UNOWNED RUN, exactly as the write has always been: a run
+ * with no owner needs an administrator, because a trigger has permanent
+ * effects and "nobody owns it" is not "everybody may change it".
+ */
+export function mayChangeRunSchedule(input: {
+  readonly actorUserId: string | null | undefined;
+  readonly isAdmin: boolean;
+  readonly runOwnerId: string | null | undefined;
+}): boolean {
+  if (input.isAdmin) return true;
+  if (!input.actorUserId) return false;
+  if (!input.runOwnerId) return false;
+  return input.runOwnerId === input.actorUserId;
+}
+
+/**
+ * WHICH OF THOSE SENTENCES A CARD THAT IS OVER DRAWS (cinatra#2934; plan (A)
+ * §7.2 — "once a run set to Run right after setup or Schedule for later has
+ * fired, its schedule cannot be changed any more").
+ *
+ * WHY THE CARD CHOOSES RATHER THAN RELAYING THE GUARD'S CHOICE. The write guard
+ * asks a TRIGGER ROW and answers with the first refusal that row earns, in the
+ * order that keeps the write safe — a released stamp is its second question, so
+ * a one-off that has fired comes back as `released`, whose wording is about the
+ * trigger and its held steps. The card is not explaining a refused write; it is
+ * explaining, to the person looking at the form, why the form is locked. So it
+ * names the state THEY can see, from this same table: a one-off that has run, a
+ * schedule that was stopped, or a run whose schedule is simply over. Both sides
+ * refuse, both sides draw from one table, and neither invents a sentence.
+ *
+ * ITS WORDING IS THE SCHEDULE'S, THROUGHOUT — no reading here says "trigger",
+ * which is the surface rule the agent page's own suite pins.
+ */
+export function frozenScheduleReason(input: {
+  readonly triggerType?: string | null;
+  readonly stopped?: boolean;
+  readonly released?: boolean;
+}): string {
+  if (input.stopped) return SAVE_SCHEDULE_REFUSALS.stopped;
+  if (input.triggerType === "scheduled") return SAVE_SCHEDULE_REFUSALS.firedOneOff;
+  return SAVE_SCHEDULE_REFUSALS.overCannotRemove;
+}
