@@ -375,7 +375,7 @@
     {
       "packageName": "@cinatra-ai/screenshot-artifact",
       "repo": "cinatra-ai/screenshot-artifact",
-      "resolvedSha": "468be2a1ecbedb32d1331fb9b9cd7a7ea21cd389"
+      "resolvedSha": "742a0a6b903c1fed400c14e807cd8f04b2d0dc8f"
     },
     {
       "packageName": "@cinatra-ai/screenshot-matcher-skill",
