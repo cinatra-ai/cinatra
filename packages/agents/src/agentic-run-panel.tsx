@@ -1543,12 +1543,20 @@ export function AgenticRunPanel({
   // output linked to its artifact page, or a plain statement that the run
   // produced none.
   //
-  // What stays surface-bound is "Start new run": it navigates out of the
-  // conversation, so the chat mount withholds the template slug the button
-  // needs and the card leaves it out (its documented behaviour for callers
-  // without a slug). The rest of the card is identical on both surfaces.
+  // AND "START NEW RUN" IS NOT SURFACE-BOUND EITHER (cinatra#3002, fix leg 4).
+  // This panel used to zero the slug on the chat mount on the reasoning that
+  // the button navigates out of the conversation, and the fourth proof round
+  // read the control missing there on all four of its frames. The ratified
+  // drawing does not leave that to a host: "A host supplies the frame and the
+  // measure a card is laid out at; it never drops a region, a state or an
+  // affordance the card's own section draws, and never adds one" — and the
+  // card's own section draws "Run complete", the sentence, and "Start new run"
+  // (the completion-card example, after a one-off schedule fires). So the slug
+  // rides on both surfaces, and the card is now identical on both. A caller
+  // that genuinely has no slug still passes none, and the card still leaves the
+  // button out rather than mount one that routes nowhere.
   const showCompletionCard = status === "completed";
-  const completionAgentId = surface === "chat" ? undefined : agentId;
+  const completionAgentId = agentId;
 
   // ONE PLACE FOR A FINISHED RUN'S OUTPUT (cinatra#3002, fix leg 3).
   //
@@ -2278,7 +2286,12 @@ export function AgenticRunPanel({
               creates a fresh run with blank inputs (StartNewRunButton — orphaned
               since it was first exported, cinatra#2412 archaeology). Start new
               run needs the template slug, so it's omitted where the caller
-              doesn't have one (e.g. chat surfaces) rather than mounted broken. */}
+              doesn't have one rather than mounted broken — and "a caller
+              without one" no longer means "a conversation": the chat mount
+              passes the run's own slug since cinatra#3002 fix leg 4, so a
+              failed run recovers the same way on both surfaces (convergence
+              finding, 2026-09-05: this comment named chat as the slugless
+              example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
@@ -2354,6 +2367,12 @@ export function AgenticRunPanel({
           runId={runId}
           agentId={completionAgentId}
           outputHint="transcript"
+          // The panel already decided this synchronously, from its own
+          // `messages`, to stand the raw stream panels down. Handing the card
+          // the SAME fact is what keeps the two from disagreeing about where a
+          // finished run's output is during the paint before the card's own
+          // read lands (cinatra#3002, fix leg 4).
+          transcriptCarriesOutput={transcriptCarriesTheRunsOutput}
         />
       )}
 

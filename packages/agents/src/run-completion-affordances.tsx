@@ -99,12 +99,22 @@ export type RunOutputHint = "transcript" | "steps" | "no-steps";
 export type RunCompletionCardProps = {
   runId: string;
   /**
-   * Template slug, used by "Start new run". Omitted by callers that don't have
-   * one (chat surfaces) — the button is then left out rather than mounted
-   * broken, matching the failed-run recovery affordance's rule.
+   * Template slug, used by "Start new run". Omitted only by callers that do not
+   * HAVE one — the button is then left out rather than mounted broken, matching
+   * the failed-run recovery affordance's rule. A caller that holds the slug
+   * always passes it: the ratified drawing's host rule is that a host "never
+   * drops a region, a state or an affordance the card's own section draws, and
+   * never adds one", and this control is one the card's own section draws.
    */
   agentId?: string;
   outputHint: RunOutputHint;
+  /**
+   * THE HOST'S OWN SYNCHRONOUS FACT (cinatra#3002, fix leg 4): the host is
+   * already rendering rows that carry THIS run's produced output, right below
+   * this card, and knows it without a read. Purely additive — see the floor in
+   * the body. Callers that cannot know it leave it out.
+   */
+  transcriptCarriesOutput?: boolean;
   /**
    * Test seam: pre-resolved evidence. When provided (including as `null`) the
    * card renders it directly and performs no read.
@@ -117,6 +127,7 @@ export function RunCompletionCard({
   agentId,
   outputHint,
   initialEvidence,
+  transcriptCarriesOutput,
 }: RunCompletionCardProps) {
   // Evidence is stored WITH the run it was read for, and the effective value is
   // derived during render. Keying it this way means a card reused for a
@@ -161,7 +172,37 @@ export function RunCompletionCard({
         ? resolved.evidence
         : null;
 
-  const outcome = resolveRunTerminalOutcome({ status: "completed", evidence });
+  // THE FLOOR THE HOST ALREADY STANDS ON (cinatra#3002, fix leg 4).
+  //
+  // The read above is asynchronous, and while it is in flight `evidence` is
+  // null — which `resolveRunTerminalOutcome` reads as indeterminate, whose
+  // sentence is "its output could not be loaded here". That is the TRUE reading
+  // when nothing is known. It is false when the host mounting this card is
+  // already drawing the run's output directly beneath it, and the fourth proof
+  // round read exactly that: on the conversation, at the live completion
+  // instant, the card drew the fallback sentence with the run's Final response
+  // row present below it, and a reload — which bought the read nothing but time
+  // — turned the same card to the ratified sentence. The conversation mounts a
+  // completed run off the stream hand-off with no head start, so the window is
+  // a whole paint wide there.
+  //
+  // So a host that knows the fact states it, and the card takes it as a FLOOR:
+  // this can only ADD the transcript fact, never remove one the read
+  // established, and it touches nothing else. A genuinely indeterminate run —
+  // a read in flight, a failed read, only unlinkable rows — keeps the
+  // conservative branch, because the host has no rows to point at either.
+  const groundedEvidence: RunOutputEvidence | null = !transcriptCarriesOutput
+    ? evidence
+    : evidence === null
+      ? { outputs: [], hasTranscript: true, hasStepResults: false }
+      : evidence.hasTranscript
+        ? evidence
+        : { ...evidence, hasTranscript: true };
+
+  const outcome = resolveRunTerminalOutcome({
+    status: "completed",
+    evidence: groundedEvidence,
+  });
   if (outcome.kind === "not-terminal") return null;
 
   const producedNothing = outcome.kind === "completed-no-output";
