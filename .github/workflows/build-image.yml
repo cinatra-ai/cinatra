@@ -376,8 +376,8 @@ jobs:
     name: RBAC authz unit tests
     needs: detect
     if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    timeout-minutes: 15
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -427,8 +427,8 @@ jobs:
     name: context-resolve route response shape
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -472,8 +472,8 @@ jobs:
     name: Better Auth schema parity
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1319,8 +1319,8 @@ jobs:
     name: Canonical extension invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1566,8 +1566,8 @@ jobs:
     name: devperf invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1612,7 +1612,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, cinatra-ci]
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
     # same file already declare. Without it this job inherits the WORKFLOW-level
@@ -1637,7 +1637,7 @@ jobs:
     # have left four. Sequential would not have fit that judgement — ~215s of
     # vitest one suite after another is most of the remaining margin by itself,
     # which is why the concurrency below is pinned rather than optional.
-    timeout-minutes: 18
+    timeout-minutes: 30
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
@@ -3500,6 +3500,18 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-c-w3
+
+      # cinatra#3026 (epic #3023, lifecycle-c W2). THE EDITOR'S SAVE needs a real
+      # Postgres for the same reason: its whole subject is that the unique index
+      # on (organisation, artifact, revision) IS the compare-and-set — a save
+      # naming a base another save already built on has to be refused BY THE
+      # DATABASE — and that the edit's ledger row commits with the revision it
+      # describes or not at all. Wired here on arrival, in the same job and by
+      # the same convention as the tiers above.
+      - name: The editor's save with an expected base — real-DB tier (cinatra#3026, lifecycle-c W2)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-c-w2
 
       # cinatra#3031 (epic #3023 W7). Same reasoning as the four tiers above,
       # and the same harness: this tier's three suites need the postgres:18 this

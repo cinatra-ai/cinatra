@@ -24,6 +24,7 @@ import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixtur
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
+import { LifecycleReviewTargetHeaderFixtures } from "./lifecycle-review-target-header-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -230,6 +231,21 @@ export default function ConformanceHarnessPage() {
                 REAL chat-thread host declaration. The harness holds only the
                 reader's local marks; the shipped component draws everything. */}
             <LifecycleSuggestionChipFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation artifact-kind cards (surfaces: review-card-*)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3157, epic #3155: the REAL §IV target header the review
+                card draws, under the REAL chat-thread host declaration, one
+                mount per artifact kind. The harness seeds the answer's own
+                values and words none of them. */}
+            <LifecycleReviewTargetHeaderFixtures />
           </CardContent>
         </Card>
       </PageContent>

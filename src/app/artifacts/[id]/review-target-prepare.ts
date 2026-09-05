@@ -43,9 +43,15 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
-import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  absentArtifactContent,
+  buildArtifactRendererProps,
+  readOnlyArtifactEdit,
+} from "@/lib/artifacts/artifact-renderer-props";
+import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 import {
   buildArtifactContentProjection,
+  type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
@@ -288,6 +294,55 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
+  /**
+   * THE CONTENT READ, DEGRADED PER TARGET RATHER THAN PER CARD.
+   *
+   * The projection is a SERVER READ off the blob store, and this binder is the
+   * layer that introduced that read into the review path. The preparation core
+   * around it answers every artifact-level failure with the never-blank floor
+   * FOR THAT ONE TARGET — an absent artifact, a refused read, a revision that is
+   * not a member — because a card carries several targets and one bad row must
+   * not take the other rows down with it. A rejected read here would have been
+   * the one exception: it would have escaped `prepareOneTarget`, escaped the
+   * core, and left the whole card with nothing, which is precisely the class of
+   * blankness this wave exists to remove.
+   *
+   * The reader underneath already answers its OWN named absences — an
+   * unreadable blob, an over-ceiling file, a class it does not carry. This
+   * wrapper is for the class it cannot: a substrate resolver that THROWS. That
+   * becomes the channels own named absence — the same value a caller that has
+   * not wired the channel passes, and the value the display already draws its
+   * named `content-absent` reading from. The reviewer sees the card, the chrome
+   * and the pinned revision, and the display says in its own words that the
+   * document could not be carried; every sibling target on the card is
+   * unaffected.
+   *
+   * The failure is not swallowed silently: it is reported to the server log with
+   * the revision it belongs to, so an operator can tell a store fault from a
+   * revision that genuinely holds nothing.
+   */
+  const readPinnedContentOrAbsence = async (
+    input: {
+      orgId: string;
+      artifactId: string;
+      representationRevisionId: string;
+      form: ArtifactRepresentationForm;
+      mime: string;
+    },
+    ports: ArtifactContentChannelPorts,
+  ): Promise<ArtifactContentProjection> => {
+    try {
+      return await buildArtifactContentProjection(input, ports);
+    } catch (error) {
+      console.error(
+        "[artifacts] review card content read failed",
+        input.artifactId,
+        input.representationRevisionId,
+        error instanceof Error ? error.message : String(error),
+      );
+      return absentArtifactContent(input.representationRevisionId, "absent");
+    }
+  };
   const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
@@ -313,27 +368,43 @@ export function bindArtifactReviewPorts(ctx: {
       : null;
     return buildArtifactRendererProps({
       artifact,
+      // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
+      // NAMED REFUSAL rather than an edit capability, so the SAME display draws
+      // there with no editing affordance and no save address — and "a review's
+      // pinned revision never moves under an edit" holds because there is no road
+      // from this surface to a write at all.
+      edit: readOnlyArtifactEdit("read-only-surface"),
       representation: { revisionId: representationRevisionId, mime },
       previewHref,
       downloadHref,
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED.
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS
+      // CONSUMER. The review card is the second surface the display is drawn on,
+      // and a display draws from its props and never fetches — so the card has
+      // to read the revision on the server exactly as the artifact page does, or
+      // it draws a named floor over a document whose text was in the store all
+      // along. That is precisely what a reviewer saw: correct chrome, correct
+      // pinned revision, and "no markdown is available to show".
       //
-      // It used to pass the named absence here, and the consequence was the
-      // whole of the defect: a display that draws from `props.content` — the
-      // build-map renderer a text artifact resolves to — was handed "nothing is
-      // pinned" for a revision holding a real draft, and drew its own floor over
-      // it. The slot read as empty on a run whose work was right there.
+      // READ AT THE PINNED REVISION, never at a latest. `representationRevisionId`
+      // here is the revision the gate froze, which is what makes the card show
+      // what was approved rather than what the artifact has since become.
       //
-      // The read is the channel's own: the class comes from the FORM the
-      // substrate recorded (never from a caller claim), the caps are the
-      // channel's, and every failure comes back as a NAMED absence the display
-      // can tell apart from "too large to carry". Under the SAME bound the
-      // membership answer was made under, so a settled card keeps its work and a
-      // live reading never replays a tombstoned pin.
-      content: await buildArtifactContentProjection(
+      // THE FORM COMES FROM THE SUBSTRATES OWN RECORD on the member — never
+      // from a guess about the mime — and an absent form reads as `file`, which
+      // is what every caller written before enabler 0.10 meant. The builder
+      // resolves the class itself and names its own absence
+      // (`unsupported-form` for a class this port does not carry), so an
+      // unwired class still cannot read as a wired one that found nothing.
+      //
+      // The read is made under the SAME bound the membership answer was made
+      // under, so a settled card keeps its work and a live reading never
+      // replays a tombstoned pin; and the non-file membership answer already
+      // carried the pinned configuration record and its digest, so the channel
+      // takes THAT rather than resolving the same row a second time.
+      content: await readPinnedContentOrAbsence(
         {
           orgId,
           artifactId: artifact.artifactId,
@@ -343,9 +414,6 @@ export function bindArtifactReviewPorts(ctx: {
         },
         createPinnedSubstanceReader({
           liveOnly: input.member.historical !== true,
-          // The non-file membership answer already carried the pinned
-          // configuration record and its digest; the channel takes THAT rather
-          // than resolving the same row a second time.
           carriedConfiguration: fileBacked
             ? null
             : {
