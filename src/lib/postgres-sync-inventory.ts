@@ -336,6 +336,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact creation write on request paths. Migratable with the artifacts subsystem.",
   },
+  "src/lib/artifacts/artifact-revision-append.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The append-a-revision-to-an-EXISTING-artifact writer (cinatra#3080, fix leg 8): the sibling of artifact-creation.ts on the other side of the same road \u2014 creation mints an artifact, this one files the NEXT REVISION of an artifact the host already owns, which is what the change road needs when Regenerate must settle its successor over the SAME artifact rather than a second, unrelated piece of work. Four call sites, all four of them transactional writes or the guarded read immediately before one: the target row's liveness read, the bytes door's resource/blob/representation/pointer/witness transaction, the re-file door's source-revision read, and the re-file transaction itself. It is on the bridge for exactly the reason its three neighbours are (artifact-creation.ts, cms-content-snapshot-capture.ts, cms-preview-capture-store.ts): it composes into the SAME synchronous artifacts store graph and shares their query builders, so one writer of the group cannot move to the async pooled layer alone. Request/run-time write; migratable to async pooled access with the artifacts subsystem, as a unit with those three.",
+  },
   "src/lib/artifacts/local-disk-blob-store.ts": {
     class: "migratable-request-path",
     justification:

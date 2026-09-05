@@ -511,3 +511,35 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   );
   return { entries, activeOrdinal: active ? active.ordinal : null };
 }
+
+/**
+ * WHERE ONE ENTRY SITS ON THE RAIL (cinatra#3080, fix leg 8).
+ *
+ * The gate header's naming line reads "<agent> · run <run> · step N of M"
+ * (Lifecycle cards §XIII.1, whose drawn gate reads "Outreach agent · run
+ * rn_8f31… · step 4 of 6"). The run surface holds every one of those three at
+ * render time; the step position is the one that needed saying, and the rail is
+ * already the run's ordered series, so the position is READ OFF THE RAIL rather
+ * than counted a second way somewhere else. A key the rail does not carry
+ * answers null, and the header then draws the segments it can name truthfully.
+ *
+ * AND IT COUNTS THE RAIL'S NUMERALS, NOT ITS ROWS (a convergence finding on this
+ * leg). The rail beside the gate does not number its entries from one: the gate
+ * ROWS that head it — a recommendation hold, the run's input forms, an armed
+ * schedule — consume numerals first, and the rail's own panel draws each work
+ * entry as `index + 1 + stepOffset` for exactly that reason (cinatra#3047). A
+ * header counting `entries` alone therefore named "step 3 of 5" beside a rail
+ * row reading "4", which is the same disagreement between the line and the rail
+ * that this reading exists to make impossible. The offset is the rail's own, and
+ * it is passed in rather than recomputed here.
+ */
+export function railStepPosition(
+  entries: ReadonlyArray<{ key: string }>,
+  key: string | null,
+  stepOffset = 0,
+): { index: number; total: number } | null {
+  if (!key) return null;
+  const at = entries.findIndex((e) => e.key === key);
+  if (at < 0) return null;
+  return { index: at + 1 + stepOffset, total: entries.length + stepOffset };
+}

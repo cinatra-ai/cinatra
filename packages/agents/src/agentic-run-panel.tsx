@@ -227,6 +227,24 @@ export type AgenticRunPanelProps = {
    */
   railDrawsTheFrame?: boolean;
   /**
+   * THE GATE HEADER'S NAMING, FROM THE HOST THAT HOLDS IT (cinatra#3080, fix
+   * leg 8).
+   *
+   * The naming line "names the agent, the run and the step position", and
+   * `reviewGateNamingLine` already joins whatever it is given — "The naming is
+   * the HOST's to supply, not the wire's: the run surface that draws this gate
+   * already knows the agent, the run and the step". This panel is one of the
+   * two run surfaces that draw the gate, and it was passing the run alone, so
+   * the ninth proof round read `run 1551362…` where the drawing reads
+   * "Outreach agent · run rn_8f31… · step 4 of 6". The two facts it could not
+   * source itself now travel down from the screen that resolved them for the
+   * rail beside this column, so the line and the rail cannot disagree.
+   *
+   * Absent ⇒ the header draws the segments it can name, exactly as before.
+   */
+  reviewGateAgentLabel?: string | null;
+  reviewGateStep?: { index: number; total: number } | null;
+  /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
    *
@@ -442,6 +460,8 @@ export function AgenticRunPanel({
   readReviewSlot,
   inputStepInRail = false,
   railDrawsTheFrame = false,
+  reviewGateAgentLabel = null,
+  reviewGateStep = null,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -1669,6 +1689,11 @@ export function AgenticRunPanel({
         // §VI — the gate's conversational prompt window keeps its exchange with
         // the RUN (cinatra#3141 item 1).
         runId={runId}
+        // AND THE HEADER'S NAMING (cinatra#3080, fix leg 8). The same three
+        // segments the review page's own mount hands down; this panel takes the
+        // two it cannot source from its host.
+        agentLabel={reviewGateAgentLabel ?? null}
+        step={reviewGateStep ?? null}
       />
     </LifecycleCardSurfaceProvider>
   ) : null;

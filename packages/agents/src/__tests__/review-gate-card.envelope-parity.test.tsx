@@ -28,6 +28,23 @@
 // the redraw had to move exactly the states that carry suggestions and no
 // others, and that is what the regeneration diff showed.
 //
+// SIXTEEN ENTRIES WERE RE-TAKEN ON PURPOSE (cinatra#3080, fix leg 8). The
+// ninth proof round graded the decision floor's three affordances against the
+// ratified drawing and found all three off it: Comment carried a speech-bubble
+// glyph and the ghost variant's inherited ink where the drawing gives it
+// `.btn.ghost` in `var(--muted)` with no glyph; Regenerate stood on
+// `.btn.secondary`'s FILLED muted plate where the drawing gives it
+// `.btn.outline` — `var(--surface)` inside a `var(--line-strong)` stroke; and
+// Continue led with its arrow where the drawing sets it after the word. Moving
+// the three is the whole point of that leg, so the captures that DRAW the floor
+// had to move with them.
+//
+// EXACTLY SIXTEEN DID, and that is the guard doing its job: the four states that
+// carry a decision bar — pending, pending-no-comment, pending-with-suggestions
+// and restricted — on each of the four hosts. Every settled, blocked, loading
+// and absent capture is byte-identical to what it was, which is the proof that a
+// change to the floor's own controls touched the floor and nothing else.
+//
 // THE SAME FOUR ENTRIES WERE RE-TAKEN AGAIN (cinatra#3107). Raising the dark
 // `--input` boundary to the 3:1 contrast floor changed what `--input` means,
 // so the tinted control FILLS that used to draw from it were moved onto their

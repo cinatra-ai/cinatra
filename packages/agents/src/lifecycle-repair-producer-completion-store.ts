@@ -59,6 +59,7 @@ import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import { refileRevisionOntoArtifact } from "@/lib/artifacts/artifact-revision-append";
 
 /** The CMS-snapshot capture emitter — the one emitter this drain does not claim,
  * because the CMS completer matches it on a resource identity this one cannot
@@ -374,6 +375,74 @@ export async function completeDispatchedProducerRepairs(opts?: {
         repair.baseRepresentationRevisionId,
       );
 
+      // ── THE SUCCESSOR IS A REVISION OF THE REVIEWED ARTIFACT ────────────
+      //
+      // (cinatra#3080, fix leg 8. THIS is the seam the ninth proof round's real
+      // run went through, and where its defect lived.)
+      //
+      // A producing step is a generic agent run: it answers by writing its work
+      // the only way a run can, through the create road, which mints an artifact
+      // of its own. `claimProduction` above reads exactly that — "the LATEST
+      // artifact it wrote through the produced-event outbox" — and this seam used
+      // to pin that artifact straight into the successor gate. So the reviewer
+      // decided on one artifact and was handed another: gate `d6301eed` on
+      // artifact `90dbf854`, successor `096296ae` on artifact `d8eca6bd`, with
+      // nothing on either row joining them.
+      //
+      // The drawing gives one artifact and two revisions: Regenerate "files a
+      // new revision of the same artifact, and settles this gate superseded
+      // beneath a successor over that same artifact" (Agent run & review §VI).
+      // So the run's answer is RE-FILED onto the reviewed artifact before the
+      // response is submitted. The same `resource` row is bound — the same
+      // substance, already on disk — so nothing is copied and the producing run
+      // keeps its own output row exactly as it wrote it; what changes is which
+      // artifact the review's lineage runs through.
+      //
+      // A re-drive re-files nothing: the writer is idempotent on substance and
+      // hands back the revision already there.
+      //
+      // STATED RESIDUAL, not hidden — and stated CORRECTLY (a convergence
+      // finding on this leg corrected the first wording). The re-file lands
+      // before `submitRepairResponse` and in its own transaction, so a submit
+      // that is then refused (a base that moved, a successor pin already
+      // occupied) leaves the reviewed artifact carrying a revision no gate pins.
+      //
+      // THAT REVISION IS NOT INERT, and the first wording here said it was. The
+      // append moves the artifact's OWN pointer — `objects.data`'s
+      // `latestRepresentationRevisionId` — onto the new revision, which is what
+      // an append to an append-only series means: the artifact's current
+      // representation IS the regenerated one from that moment, on its own page
+      // and everywhere else that reads the envelope, whether or not a gate ever
+      // pins it. What a refused submit leaves behind is therefore an artifact
+      // one revision on with its review still open — not a hidden row.
+      //
+      // WHAT THAT COSTS, AND WHY IT IS TAKEN. Nothing is lost or overwritten:
+      // `representation` is append-only, the reviewed revision keeps its row and
+      // its number, and the gate still pins the revision the reviewer decided on
+      // (§VI — "a decided gate retains and displays the target it froze", and a
+      // pending gate's pin is immutable). The repair stays OPEN exactly as it
+      // did before, and the next drain re-files nothing — the writer is
+      // idempotent on THIS re-drive — and re-submits.
+      //
+      // Making the append and the successor pin ONE transaction is the honest
+      // fix and it is a change to the repair store's own seam, not this leg's;
+      // it is named here rather than papered over.
+      let successorTarget = production;
+      if (production.artifactId !== repair.baseArtifactId) {
+        const refiled = refileRevisionOntoArtifact({
+          orgId: repair.orgId,
+          targetArtifactId: repair.baseArtifactId,
+          sourceArtifactId: production.artifactId,
+          sourceRepresentationRevisionId: production.representationRevisionId,
+          createdBy: delivered.originatingRunBy ?? null,
+          createdByRunId: runId,
+        });
+        successorTarget = {
+          artifactId: refiled.artifactId,
+          representationRevisionId: refiled.representationRevisionId,
+        };
+      }
+
       const result = await submitRepairResponse({
         repairId: repair.id,
         currentBaseRevisionId,
@@ -385,8 +454,8 @@ export async function completeDispatchedProducerRepairs(opts?: {
             representationRevisionId: repair.baseRepresentationRevisionId,
           },
           successorTarget: {
-            artifactId: production.artifactId,
-            representationRevisionId: production.representationRevisionId,
+            artifactId: successorTarget.artifactId,
+            representationRevisionId: successorTarget.representationRevisionId,
           },
           // The producing step carries no per-finding "which one did I fix"
           // channel — it was handed the note and made the work again — so every

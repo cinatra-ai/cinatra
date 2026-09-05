@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CheckCheck, MessageSquare, RotateCcw } from "lucide-react";
+import { ArrowRight, CheckCheck, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -292,16 +292,25 @@ export function ReviewDecisionBar({
           <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 pb-3 pt-3">
             {/* COMMENT — the note that decides nothing. Ghost, on the reader's
                 own respond access, and the only one of the three that leaves the
-                gate pending. */}
+                gate pending.
+
+                ITS TREATMENT, OFF THE DRAWING (cinatra#3080, fix leg 8). The
+                ratified markup for this control is one line:
+                `<button class="btn ghost" style="…color:var(--muted);">Comment</button>`
+                — the ghost ground, the MUTED ink, and NO GLYPH. The shipped
+                control drew a speech bubble in front of the word and took the
+                ghost variant's inherited ink, which read as a third weight
+                beside Regenerate rather than as the quietest of the three. The
+                glyph is gone and the ink is the drawing's own token. */}
             <Button
               type="button"
               variant="ghost"
               size="sm"
+              className="text-muted-foreground"
               data-action="comment-review -> annotated"
               disabled={!permissions.canComment || pending}
               onClick={() => submit("comment")}
             >
-              <MessageSquare aria-hidden="true" />
               {REVIEW_FLOOR_LABELS.comment}
             </Button>
             <div className="flex items-center gap-2">
@@ -312,10 +321,30 @@ export function ReviewDecisionBar({
                   expected end of the review. It is NOT destructive: nothing is
                   turned back or thrown away, and drawing it in the retired
                   Reject's colour would say otherwise. */}
+              {/* ITS GROUND IS OUTLINED, NOT FILLED (cinatra#3080, fix leg 8).
+                  The drawing gives this control `class="btn outline"`, and the
+                  page's own rule for that class is
+                  `background: var(--surface); color: var(--ink);
+                   border-color: var(--line-strong)` — a page-surface fill inside
+                  a strong stroke. The shipped control took `.btn.secondary`'s
+                  shape instead (`background: var(--surface-muted);
+                  border-color: transparent`), a FILLED muted plate, which is
+                  what the ninth round's pixels caught. The stock outline variant
+                  strokes `--border` (= `--line`) on `--background`, so the two
+                  tokens the drawing actually names are asked for by name. */}
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
                 size="sm"
+                // AND IN BOTH PALETTES. The shared outline variant carries
+                // its own DARK ground and stroke (`dark:border-input`,
+                // `dark:bg-input-fill/30`), which would take this control
+                // off the drawing's tokens in the dark reading only. The
+                // drawing names one pair for both — `.btn.outline` is
+                // `var(--surface)` inside `var(--line-strong)`, and those two
+                // tokens are themselves redefined per palette — so the same
+                // two are asked for in the dark reading as well.
+                className="border-line-strong bg-surface text-foreground dark:border-line-strong dark:bg-surface"
                 data-action="regenerate-review -> changes-requested"
                 disabled={!permissions.canDecide || pending}
                 aria-disabled={!permissions.canDecide}
@@ -331,13 +360,27 @@ export function ReviewDecisionBar({
                 type="button"
                 variant="default"
                 size="sm"
+                // AND ITS STROKE IS THE BLUE (cinatra#3080, fix leg 8). The
+                // drawing's `.btn.primary` is `background: var(--blue); color:
+                // var(--surface-strong); BORDER-COLOR: var(--blue)` — one
+                // colour, edge to edge. The shared default variant strokes
+                // `--line-strong` (the product's ordinary primary edge), which
+                // draws a dark rule around the indigo plate. Asked for here,
+                // on this one control, rather than by moving every primary
+                // button in the product.
+                className="border-primary"
                 data-action="continue-review -> resolved"
                 disabled={!permissions.canDecide || pending}
                 aria-disabled={!permissions.canDecide}
                 onClick={() => submit("continue")}
               >
-                <ArrowRight aria-hidden="true" />
+                {/* THE ARROW FOLLOWS THE WORD (cinatra#3080, fix leg 8). The
+                    drawing sets it after the label —
+                    `<button class="btn primary">Continue<svg …/></button>` —
+                    which is what an arrow means here: the run goes ON from this
+                    word. The shipped control led with it. */}
                 {REVIEW_FLOOR_LABELS.continue}
+                <ArrowRight aria-hidden="true" />
               </Button>
             </div>
           </div>

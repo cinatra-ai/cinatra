@@ -61,6 +61,11 @@ export default defineConfig({
       // repair's road, and leg 2 could only see that with the decision
       // mocked out.
       "src/app/api/context-resolve/__tests__/repair-real-road.integration.test.ts",
+      // AND THE PIN THE REGENERATE LEAVES BEHIND (cinatra#3080, fix leg 8): the
+      // successor is a new REVISION of the artifact the review pinned, never a
+      // second artifact. Read out of a real store, both pins, the way a proof
+      // round reads them off the two gate rows.
+      "src/lib/artifacts/__tests__/artifact-revision-append.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

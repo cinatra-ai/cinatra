@@ -413,8 +413,21 @@ describe("§IV — the decision: three affordances, one bar, atomic, re-validate
   });
 
   it("Continue is the primary act and Regenerate is structurally distinct from it (§IV/§VI)", () => {
-    expect(DECISION_BAR).toMatch(/variant="secondary"[\s\S]*?data-action="regenerate-review/);
+    // THE GROUND THE DRAWING NAMES (cinatra#3080, fix leg 8). §VI draws this
+    // control as `class="btn outline"` — the page's own rule for that class is
+    // `background: var(--surface); color: var(--ink); border-color:
+    // var(--line-strong)`, a page-surface fill inside a strong stroke. This
+    // assertion previously read `variant="secondary"`, which is the FILLED
+    // muted plate (`background: var(--surface-muted); border-color:
+    // transparent`) the ninth proof round's pixels caught. The claim the test
+    // makes is unchanged and still has its teeth — Continue is the one primary
+    // act, and Regenerate is drawn structurally apart from it — it is asserted
+    // against the ground the drawing gives rather than the one that shipped.
+    expect(DECISION_BAR).toMatch(/variant="outline"[\s\S]*?data-action="regenerate-review/);
     expect(DECISION_BAR).toMatch(/variant="default"[\s\S]*?data-action="continue-review/);
+    // And the filled muted plate the drawing does NOT give this control is
+    // gone from the bar altogether.
+    expect(stripComments(DECISION_BAR)).not.toMatch(/variant="secondary"/);
   });
 
   it("carries the one note field, in the drawing's own words, that travels to the audit trail", () => {

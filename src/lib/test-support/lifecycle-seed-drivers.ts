@@ -12,7 +12,7 @@ import "server-only";
 // nothing).
 //
 //   repairVerification  createSemanticArtifact -> emitArtifactReviewGate ->
-//                       recordChangesRequested -> createSemanticArtifact ->
+//                       recordChangesRequested -> appendSemanticArtifactRevision ->
 //                       submitRepairResponse
 //                       The last call's own trigger mints the
 //                       `artifact_verification_records` row the verification
@@ -202,8 +202,9 @@ async function authorizeSubjectForRun(subject: LifecycleSeedSubject): Promise<{
 /**
  * Drive the repair pipeline end to end and return what the writers returned.
  *
- * Every step is the shipped call. The two `createSemanticArtifact` calls make the
- * REVIEWED revision and the REPAIRED one; between them the gate is emitted and
+ * Every step is the shipped call. `createSemanticArtifact` makes the REVIEWED
+ * revision and `appendSemanticArtifactRevision` files the REPAIRED one onto the
+ * SAME artifact (cinatra#3080, fix leg 8); between them the gate is emitted and
  * the reviewer's `changes_requested` closes it and opens the repair; the response
  * pins the successor and, in its own trigger, mints the verification record.
  */
@@ -226,6 +227,11 @@ export async function seedRepairVerification(
   }
 
   const { createSemanticArtifact } = await import("@/lib/artifacts/artifact-creation");
+  // The repaired revision is a revision OF THE REVIEWED ARTIFACT
+  // (cinatra#3080, fix leg 8) — see step 4 below.
+  const { appendSemanticArtifactRevision } = await import(
+    "@/lib/artifacts/artifact-revision-append"
+  );
   const { emitArtifactReviewGate, readReviewGate } = await import(
     "@cinatra-ai/agents/artifact-review-gate-store"
   );
@@ -309,10 +315,17 @@ export async function seedRepairVerification(
     );
   }
 
-  // 4. THE REPAIRED REVISION — a second real artifact write, so the verification
-  //    has two genuinely different revisions to project and diff.
-  const successor = await createSemanticArtifact({
-    ...ownership,
+  // 4. THE REPAIRED REVISION — a real second revision OF THE SAME ARTIFACT
+  //    (cinatra#3080, fix leg 8), so the verification has two genuinely
+  //    different revisions to project and diff AND the fixture's lineage is the
+  //    one the drawing gives: "a new revision of the same artifact, and settles
+  //    this gate superseded beneath a successor over that same artifact" (Agent
+  //    run & review §VI). This used to mint a second artifact — the very shape
+  //    the lineage validator now refuses.
+  const successor = await appendSemanticArtifactRevision({
+    orgId: subject.orgId,
+    artifactId: base.artifactId,
+    declaredMime: "text/markdown",
     title: "S8f parity fixture — the repaired revision",
     stream: bytes(
       "cinatra#2683 S8f parity fixture.\nThis is the revision the producer repaired.\n" +

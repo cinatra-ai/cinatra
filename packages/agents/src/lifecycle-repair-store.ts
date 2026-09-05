@@ -447,6 +447,18 @@ export interface SubmitRepairResponseInput {
   reauthorized: boolean;
   /** Gate TTL for the successor gate (optional). */
   expiresAt?: Date | null;
+  /**
+   * THE HOST GRANTS THE RE-STAGED SUCCESSOR (cinatra#3080, fix leg 8).
+   *
+   * A successor over a DIFFERENT artifact than the one the review pinned is
+   * refused (`successor-different-artifact`) unless the IN-HOST caller grants it
+   * here. It sits on this input rather than inside `response` on purpose: the
+   * response is the payload a producing RUN submits, and an exception a producer
+   * could declare for itself is no exception at all. Exactly one caller grants
+   * it — the CMS production bridge, whose successor is a fresh snapshot of the
+   * remote page after the apply.
+   */
+  restagedSuccessorPermitted?: boolean;
 }
 
 export type SubmitRepairResponseResult =
@@ -524,6 +536,7 @@ export async function submitRepairResponse(
     request,
     response: input.response,
     currentBaseRevisionId: input.currentBaseRevisionId,
+    restagedSuccessorPermitted: input.restagedSuccessorPermitted === true,
   });
   if (!lineage.ok) {
     // A stale/tombstoned base marks the repair STALE (a moved target the review no

@@ -5,10 +5,11 @@ import "server-only";
 //
 // The FIRST repairing producer. The blog pipeline produces draft body artifacts;
 // when a reviewer returns `changes_requested`, this producer implements the typed
-// repair round-trip end-to-end: it materializes the repaired markdown into a
-// SUCCESSOR body artifact (a new pinned revision) and submits the typed repair
-// response through the repair store, which pins the successor in a NEW gate (never
-// repin under the reviewer) and re-points the held effect onto it.
+// repair round-trip end-to-end: it appends the repaired markdown as a NEW
+// REVISION OF THE REVIEWED BODY ARTIFACT (cinatra#3080, fix leg 8 — never a
+// fresh artifact) and submits the typed repair response through the repair
+// store, which pins that successor revision in a NEW gate (never repin under the
+// reviewer) and re-points the held effect onto it.
 //
 // A producer opts INTO the repair loop by declaring `repairCapable` in its
 // compiled manifest lifecycle (`agent_templates.lifecycle_config`); the review
@@ -20,7 +21,7 @@ import "server-only";
 // on and a policy fires a review gate on a blog draft.
 // ---------------------------------------------------------------------------
 
-import { materializeBlogPostBodyArtifact } from "@/lib/blog-post-artifact-materializer";
+import { appendBlogPostBodyRevision } from "@/lib/blog-post-artifact-materializer";
 import type { RepairFindingOutcome } from "@/lib/lifecycle/lifecycle-repair";
 
 import { BLOG_POST_LIFECYCLE } from "./lifecycle-repair-producer-registry";
@@ -81,10 +82,23 @@ export async function repairBlogPostDraft(
   const repair = await readRepair(input.repairId);
   if (!repair) return { ok: false, code: "not-found", error: `repair ${input.repairId} not found` };
 
-  // Materialize the repaired draft into a NEW body artifact (the successor pinned
-  // revision). createSemanticArtifact under the hood produces a fresh artifact +
-  // representation revision.
-  const successor = await materializeBlogPostBodyArtifact({
+  // A NEW REVISION OF THE ARTIFACT THE REVIEW PINNED (cinatra#3080, fix leg 8).
+  //
+  // This call used to mint a fresh artifact through the create road, so the
+  // successor gate pinned a piece of work the reviewer had never seen — the
+  // shape the ninth proof round read off a real run: gate `d6301eed` on artifact
+  // `90dbf854`, successor `096296ae` on artifact `d8eca6bd`.
+  //
+  // The drawing: Regenerate "runs the same producing step again from the words
+  // in the note field, files a new revision of the same artifact, and settles
+  // this gate superseded beneath a successor over that same artifact" (Agent run
+  // & review §VI); issue #3080's acceptance 4 says the same about the road —
+  // the change road's canonical operation, aimed at the step that produced the
+  // target, never a parallel endpoint. The operation is unchanged (this is still
+  // `submitRepairResponse`); what changed is that the revision it pins now
+  // belongs to the reviewed artifact.
+  const successor = await appendBlogPostBodyRevision({
+    artifactId: repair.baseArtifactId,
     content: input.repairedMarkdown,
     title: input.title,
     createdByRunId: input.producerRunId ?? null,
