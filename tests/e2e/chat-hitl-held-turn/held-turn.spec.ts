@@ -646,6 +646,32 @@ async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAncho
   return last!;
 }
 
+/**
+ * SET ONE PILL'S BOX, AND READ IT BACK (cinatra#3062, fix leg 4).
+ *
+ * Section V's decision act on this host is the checklist: "The reader sets the
+ * boxes and presses Continue beneath the list ... and the whole row is answered
+ * at once, every box together." A box OPENS on the scorer's verdict for this
+ * prompt -- ticked for a skill it recommends, clear for one it does not, which
+ * is why the drawing's own example draws two ticked pills beside a clear one. So
+ * a flow that toggles blindly answers whatever the environment opened with, and
+ * the decision it takes is not the decision it asserts.
+ *
+ * This states the box it means and reads it back, so the press's MEANING is a
+ * measured fact before the press happens.
+ */
+async function setSkillBox(page: Page, skillId: string, want: boolean): Promise<void> {
+  const box = page.locator(`${CARD_ROOT} ${SKILLS_BOX}[data-skill-id="${skillId}"]`).first();
+  await expect(box, "the pill's own box is on screen to be set").toHaveCount(1);
+  if ((await box.getAttribute("aria-checked")) !== String(want)) {
+    await box.click();
+  }
+  await expect(
+    box,
+    `the box states the reader's answer (${want ? "ticked" : "clear"}) before Continue`,
+  ).toHaveAttribute("aria-checked", String(want));
+}
+
 async function waitForDecidedCard(
   page: Page,
   want: string,
@@ -916,8 +942,20 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
     "the decision is taken on a thread route, which the first message created",
   ).not.toBe(threadUrl);
   await stripDevOverlay(page);
-  // The recommended skill's box is ticked by default, so Continue records the
-  // recommendation as offered — one act for the whole row.
+  // THE READER SETS THE BOX, THEN PRESSES CONTINUE (cinatra#3062, fix leg 4).
+  //
+  // This line used to press Continue on whatever the row opened with, on the
+  // assumption that the offered skill's box is ticked by default. It is not a
+  // default: it is the scorer's verdict on THIS prompt, and on this flow's own
+  // prompt the offered skill opens CLEAR. An all-clear Continue is the shipped
+  // skip, so the press this arm takes for a confirm went out as
+  // `skipRunRecommendationAction`, the run settled `skipped`, and the wait below
+  // spent its whole 120 s on a "confirmed" the run was never going to reach.
+  //
+  // Section V's act is "the reader sets the boxes and presses Continue", so the
+  // box is SET here and read back, and the decision this arm asserts is the
+  // decision it actually takes.
+  await setSkillBox(page, HELD_TURN_SKILL_ID, true);
   await page.locator(`${CARD_ROOT} ${SKILLS_CONTINUE}`).first().click();
 
   // ── (4) The same card settles IN PLACE, URL unchanged ───────────────────
@@ -1029,7 +1067,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   // §V: "clearing every box and pressing Continue is an ordinary answer to the
   // same question, and the run goes ahead with no recommended skill applied" —
   // which is the shipped skip, and the only way to reach it on this host.
-  await page.locator(`${CARD_ROOT} ${SKILLS_BOX}`).first().click();
+  // The box is STATED clear rather than toggled, for the reason the confirm arm
+  // gives: a blind toggle answers whatever the scorer opened the row with, so it
+  // is the all-clear arm only when the row happened to open ticked.
+  await setSkillBox(page, HELD_TURN_SKILL_ID, false);
   await page.locator(`${CARD_ROOT} ${SKILLS_CONTINUE}`).first().click();
 
   const skipped = await waitForDecidedCard(page, "skipped", runId2);
