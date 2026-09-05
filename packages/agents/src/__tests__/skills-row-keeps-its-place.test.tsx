@@ -388,3 +388,110 @@ describe("the memory belongs to the transcript, not to every host", () => {
     expect(rowOf(thread)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A REMEMBERED READING IS NOT AN ANSWER ABOUT NOW (cinatra#3062, fix leg 4 —
+// the regression the real-database tier caught on the forward).
+// ---------------------------------------------------------------------------
+// The memory closes the window where the authority has said NOTHING YET, and it
+// closes it for ONE purpose, stated in section V: the row "keeps its place in
+// the turn and states, box by box, that no recommended skill was applied". That
+// is the row PRESENT and its boxes READ. It is not the row DECIDABLE.
+//
+// The three readings section V draws are separated by one fact — has the run
+// started — and only the resolver holds it, asked of the run ROW on every read.
+// A remembered reading is a photograph of that answer taken at some earlier
+// moment, and the run can have started since. Replaying it with a live Continue
+// and open boxes hands the reader section V\x27s editable reading on a run that is
+// already executing: the read-only record of what the run applied, drawn as
+// though it were still a question. The real-database tier measured exactly that
+// — press Continue, let the run start, come back, and the row re-opened.
+//
+// So the row this memory redraws keeps its place and states its boxes, and the
+// editable window is the AUTHORITY\x27s to re-open, one read later. This is the
+// card\x27s own standing rule applied to its own memory: "ONLY AN EXPLICIT false
+// OPENS THE BOXES … no answer is not an answer of not-started".
+describe("a remembered reading keeps the row, never the editable window", () => {
+  for (const host of ["chat_thread", "site_widget"] as const) {
+    it(`redraws the settled row READ-ONLY while the authority is silent (${host})`, async () => {
+      authority.answer = { ...SETTLED, runStarted: false };
+      const restore = host === "site_widget" ? installBrokerStub() : () => {};
+      try {
+        const first = mount(RUN_ID, host);
+        await waitFor(() => expect(rowOf2(first, host)).not.toBeNull());
+        expect(rowOf2(first, host)!.getAttribute("data-skills-step-editable")).toBe("true");
+        first.unmount();
+
+        // The turn is re-created and this mount\x27s own read has not landed — the
+        // window the memory exists for. The run may have started in between, and
+        // this card cannot know that it has not.
+        authority.pending = new Promise<HoldState | null>(() => {});
+        const second = mount(RUN_ID, host);
+        await waitFor(() => expect(rowOf2(second, host)).not.toBeNull());
+        expect(
+          pillsOf(second).map((p) => p.getAttribute("data-skill-applied")),
+          "the row still states, box by box, what the run applied",
+        ).toEqual(["true"]);
+        expect(
+          rowOf2(second, host)!.getAttribute("data-skills-step-editable"),
+          "and it does not invite a change the authority has not authorized",
+        ).toBe("false");
+        expect(continueOf(second)).toBeNull();
+        // The marker is the reading; the CONTROLS are what the reader can do.
+        // Both are pinned, so a row that only relabels itself cannot pass.
+        for (const pill of pillsOf(second)) {
+          const box = pill.querySelector<HTMLElement>('[role="checkbox"]')!;
+          expect(box.hasAttribute("disabled")).toBe(true);
+        }
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  it("closes the replayed SKIPPED reading the same way", async () => {
+    // The card writes the same run-start fact through two arms; the skipped arm
+    // is the one a reader reaches by pressing the all-clear, and it is pinned
+    // here so neither arm can be re-opened on its own.
+    authority.answer = {
+      ...SETTLED,
+      state: "skipped",
+      decided: [],
+      skillNames: [],
+      runStarted: false,
+    };
+    const first = mount();
+    await waitFor(() => expect(rowOf(first)).not.toBeNull());
+    await waitFor(() =>
+      expect(rowOf(first)!.getAttribute("data-skills-step-editable")).toBe("true"),
+    );
+    first.unmount();
+
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const second = mount();
+    await waitFor(() => expect(rowOf(second)).not.toBeNull());
+    expect(rowOf(second)!.getAttribute("data-skills-step-editable")).toBe("false");
+    expect(continueOf(second)).toBeNull();
+    for (const pill of pillsOf(second)) {
+      const box = pill.querySelector<HTMLElement>('[role="checkbox"]')!;
+      expect(box.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("and the AUTHORITY re-opens it, one read later, when the run has not started", async () => {
+    // The other half: the window is not lost, it is deferred to the one reader
+    // of the run row. Section V\x27s returning reader gets it back as soon as the
+    // read lands.
+    const first = mount();
+    await waitFor(() => expect(rowOf(first)).not.toBeNull());
+    first.unmount();
+
+    authority.answer = { ...SETTLED, runStarted: false };
+    const second = mount();
+    await waitFor(() => expect(rowOf(second)).not.toBeNull());
+    await waitFor(() =>
+      expect(rowOf(second)!.getAttribute("data-skills-step-editable")).toBe("true"),
+    );
+    expect(continueOf(second)).not.toBeNull();
+  });
+});

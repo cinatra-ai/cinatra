@@ -523,7 +523,19 @@ describe.skipIf(!HAS_DB)("cinatra#3062 fix leg 3 — the freeze follows the run,
     cleanup();
     const second = reload(runId, "chat_thread");
     await drawn(second.container);
-    expect(step(second.container)?.getAttribute("data-skills-step-editable")).toBe("true");
+    // THE AUTHORITY IS WHAT RE-OPENS THE WINDOW (fix leg 4). A conversation
+    // redraws the row it already showed this reader the moment it remounts, so
+    // the row is on screen before any read lands — and that replayed reading
+    // withholds the one fact it cannot still vouch for, "the run has not
+    // started". §V's editable reading is therefore the one the RESOLVER gives,
+    // one read later, from the run row itself; waiting for it here is waiting
+    // for exactly the answer this file is about.
+    await waitFor(
+      () => {
+        expect(step(second.container)?.getAttribute("data-skills-step-editable")).toBe("true");
+      },
+      { timeout: 20_000 },
+    );
     expect(continues(second.container)).toHaveLength(1);
     for (const b of boxes(second.container)) expect(b.hasAttribute("disabled")).toBe(false);
 

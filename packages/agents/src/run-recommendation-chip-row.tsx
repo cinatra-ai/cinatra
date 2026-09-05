@@ -2483,6 +2483,32 @@ export function RecommendationHoldCard({
    */
   const authoritySaysNone = authoritative !== null && authoritative.state === "none";
   const state = authoritySaysNone ? null : (authoritative ?? remembered);
+  /**
+   * AND A REMEMBERED READING IS NOT AN ANSWER ABOUT NOW (cinatra#3062, fix leg
+   * 4 — the seam the real-database tier measured on the forward).
+   *
+   * The memory redraws the row a reader was already shown, for the one clause
+   * section V gives it: the row "keeps its place in the turn and states, box by
+   * box, that no recommended skill was applied". That is the row PRESENT and its
+   * boxes READ. It is not the row DECIDABLE.
+   *
+   * Section V separates its settled readings by ONE fact — has the run started —
+   * and only the resolver holds it, asked of the run ROW on every read
+   * (`recommendationRunHasStartedForRow`). A remembered reading carries that fact
+   * as it stood when the row was drawn, and the run can have started since: press
+   * Continue, let the run start, come back to a re-created turn, and the replayed
+   * reading re-opened the boxes and the Continue on a run that was already
+   * executing — section V's read-only record of what the run APPLIED, drawn as
+   * though it were still the question.
+   *
+   * So the replay withholds that one fact and nothing else, which lands it on the
+   * card's own standing rule for it: "ONLY AN EXPLICIT `false` OPENS THE BOXES …
+   * no answer is not an answer of not-started". The window is not lost, it is the
+   * AUTHORITY's to re-open — one read later, from the run row itself. What the
+   * register remembers and what the card publishes are unchanged: both are the
+   * reading as it was DRAWN.
+   */
+  const replayed = !authoritySaysNone && authoritative === null && remembered !== null;
   // Written from what is DRAWN, never from what merely arrived: the register
   // ignores `none` and anything it cannot classify, so the memory can only hold
   // a row that was on screen.
@@ -2581,13 +2607,13 @@ export function RecommendationHoldCard({
                 // The resolver's own answer, never the screen's, and re-asked of
                 // the run ROW on every mount — see
                 // `recommendationRunHasStartedForRow`.
-                runStarted: state.runStarted,
+                runStarted: replayed ? undefined : state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
             : {
                 kind: "skipped",
                 decided: state.decided,
-                runStarted: state.runStarted,
+                runStarted: replayed ? undefined : state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
       }
