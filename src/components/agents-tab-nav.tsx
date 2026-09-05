@@ -12,8 +12,9 @@ type AgentsTabNavProps = {
    * directly below the page header and replaces the section rule for that
    * view — never stack a toolbar and the etched paired rule." So the strip
    * keeps its tabs and stops drawing its trailing rule; the toolbar takes the
-   * position directly under it. A view with no toolbar (the executions tab,
-   * the empty state) keeps the rule exactly as before.
+   * position directly under it. Both the All Agents list and the Executions
+   * dashboard mount a toolbar and pass this; a view with no toolbar (the All
+   * Agents empty state, the Reviews tab) keeps the rule.
    */
   toolbarBelow?: boolean;
 };

@@ -11,8 +11,16 @@
  * tab strip (whose trailing rule stands in for the suppressed header divider)
  * → toolbar. The elected resolution: the strip keeps its tabs and stops
  * drawing its trailing rule when a toolbar is mounted beneath it; a view of the
- * same strip with no toolbar (the executions tab, the empty state) keeps its
- * rule exactly as today. Exactly one of {rule, toolbar} is drawn per view.
+ * same strip with no toolbar (the All Agents empty state, the Reviews tab)
+ * keeps its rule exactly as today. Exactly one of {rule, toolbar} is drawn per
+ * view.
+ *
+ * The Executions tab mounts a toolbar too (cinatra#3237 fix leg 2 — the first
+ * proof round photographed the rule and that toolbar stacked there), so it is
+ * the toolbar-replaces-rule reading as well; its own composition is driven in
+ * `packages/dashboards/src/components/__tests__/executions-toolbar-replaces-rule-3228.test.tsx`,
+ * and the Reviews tab's rule-keeping reading in
+ * `src/app/agents/reviews/__tests__/reviews-tab-keeps-its-rule-3228.test.tsx`.
  *
  * Renders the REAL page composition (NewAgentPage → AgentsTabNav →
  * AgentRunClient → Toolbar) with the data reads mocked; the per-row card is
@@ -127,20 +135,20 @@ describe("/agents — the toolbar replaces the strip's trailing rule (cinatra#32
     expect(between.some((el) => el.matches(RULE))).toBe(false);
   });
 
-  it("3. a view of the same strip with no toolbar keeps its trailing rule — the executions tab", () => {
-    // The executions tab mounts the strip exactly as agents-dashboard.tsx
-    // does: no toolbar on that view, so the strip is not told to give its rule
-    // up. Pin the mount, then render it.
+  it("3. the executions tab hands its rule over too — its view always mounts a toolbar", () => {
+    // The executions view (agents-dashboard.tsx) mounts the dashboard toolbar
+    // beneath this strip for every reader, so the strip must be told to give
+    // its rule up there as well. Pin that mount, then render the strip as it
+    // mounts it; the view's own composition — the toolbar really standing
+    // where the rule was — is driven in the dashboards package's
+    // executions-toolbar-replaces-rule-3228 suite.
     const dashboard = readFileSync(
       path.resolve(__dirname, "..", "..", "..", "dashboards", "src", "screens", "agents-dashboard.tsx"),
       "utf8",
     );
-    expect(dashboard).toMatch(/<AgentsTabNav activeTab="executions" \/>/);
-    expect(dashboard).not.toMatch(/toolbarBelow/);
-    expect(dashboard).not.toMatch(/<Toolbar\b/);
-    const { container } = render(<AgentsTabNav activeTab="executions" />);
-    expect(container.querySelectorAll(RULE).length).toBe(1);
-    expect(container.querySelectorAll(TOOLBAR).length).toBe(0);
+    expect(dashboard).toMatch(/<AgentsTabNav activeTab="executions" toolbarBelow \/>/);
+    const { container } = render(<AgentsTabNav activeTab="executions" toolbarBelow />);
+    expect(container.querySelectorAll(RULE).length).toBe(0);
   });
 
   it("3b. the All-Agents empty state (no toolbar) keeps the strip's rule too", async () => {
@@ -157,8 +165,11 @@ describe("/agents — the toolbar replaces the strip's trailing rule (cinatra#32
     expect(listToolbars).toBe(1);
     cleanup();
 
-    const executions = render(<AgentsTabNav activeTab="executions" />).container;
-    expect(executions.querySelectorAll(RULE).length + executions.querySelectorAll(TOOLBAR).length).toBe(1);
-    expect(executions.querySelectorAll(RULE).length).toBe(1);
+    // The executions view mounts the strip WITH a toolbar beneath it, so the
+    // strip draws no rule; the toolbar is that view's one mark (counted on the
+    // real composition in the dashboards package's suite).
+    const executions = render(<AgentsTabNav activeTab="executions" toolbarBelow />).container;
+    expect(executions.querySelectorAll(RULE).length).toBe(0);
+    expect(executions.querySelectorAll(TOOLBAR).length).toBe(0);
   });
 });
