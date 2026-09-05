@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 // mention of it in a comment.
 
 import {
+  readOnlyArtifactEdit,
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
   absentArtifactContent,
@@ -59,7 +60,8 @@ const repoFile = (rel: string) => readFileSync(path.join(process.cwd(), rel), "u
 describe("wave 3 — a display still on v1 mounts, it does not go dark", () => {
   it("narrows a v2 snapshot to the version the display negotiated", () => {
     const built = buildArtifactRendererProps({
-      ...FILE_BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...FILE_BASE,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
     });
     expect(built.bytes).toBeDefined();
@@ -77,7 +79,7 @@ describe("wave 3 — a display still on v1 mounts, it does not go dark", () => {
   });
 
   it("never widens: a request at or above the snapshot's own version is the snapshot", () => {
-    const built = buildArtifactRendererProps({ ...FILE_BASE, propsApiVersion: 1 });
+    const built = buildArtifactRendererProps({ ...FILE_BASE, propsApiVersion: 1, edit: readOnlyArtifactEdit("read-only-surface") });
     expect(artifactRendererPropsAtVersion(built, 1)).toBe(built);
     expect(
       artifactRendererPropsAtVersion(built, ARTIFACT_RENDERER_PROPS_API_VERSION),
@@ -89,7 +91,8 @@ describe("wave 3 — a display still on v1 mounts, it does not go dark", () => {
 
   it("holds for every version in the host's window", () => {
     const built = buildArtifactRendererProps({
-      ...FILE_BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...FILE_BASE,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
     });
     for (const version of hostSupportedPropsApiVersions()) {
@@ -127,7 +130,8 @@ describe("wave 3 — a display still on v1 mounts, it does not go dark", () => {
 describe("wave 3 — a revision with no bytes is given no byte road", () => {
   it("omits the field entirely for a non-file revision, at the byte-reference version", () => {
     const props = buildArtifactRendererProps({
-      artifact: ARTIFACT,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+artifact: ARTIFACT,
       representation: { revisionId: "rev_dash", mime: "application/json" },
       previewHref: null,
       downloadHref: null,
@@ -142,7 +146,8 @@ describe("wave 3 — a revision with no bytes is given no byte road", () => {
 
   it("still names the session road for a file revision on a cookie surface", () => {
     const props = buildArtifactRendererProps({
-      ...FILE_BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...FILE_BASE,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
     });
     expect(props.bytes).toEqual({

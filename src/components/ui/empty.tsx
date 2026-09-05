@@ -55,6 +55,10 @@ function EmptyMedia({
   )
 }
 
+// The pattern's own type scale, fixed by the ratified drawing in one line:
+// "centred / dashed circle icon / 14px headline over a 12px helper / primary
+// action". `text-sm` is the app's 14px step (globals.css `--text-sm`), so the
+// headline sits on it, and the helper one step below.
 function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -68,12 +72,15 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+// The helper is the 12px step of that same line - `text-xs` (0.75rem). It
+// read `text-sm` before, which rendered headline and helper at ONE size and
+// collapsed the pattern's two-step scale (measured on the second proof round).
 function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <div
       data-slot="empty-description"
       className={cn(
-        "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "text-xs/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className
       )}
       {...props}

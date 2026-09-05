@@ -43,7 +43,12 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
-import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  absentArtifactContent,
+  buildArtifactRendererProps,
+  readOnlyArtifactEdit,
+} from "@/lib/artifacts/artifact-renderer-props";
+import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 // THE CHANNEL'S OWN READ STAYS THE DEFAULT OF THIS BINDER (enabler 0.3,
 // cinatra#3027 / cinatra#3047). Wave 3 adds a road a surface MAY hand in, and
 // a road that is handed in wins; but a caller that names none must still get
@@ -57,6 +62,7 @@ import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-pr
 // that costs the four locked routes.
 import {
   buildArtifactContentProjection,
+  type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
@@ -315,6 +321,55 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
+  /**
+   * THE CONTENT READ, DEGRADED PER TARGET RATHER THAN PER CARD.
+   *
+   * The projection is a SERVER READ off the blob store, and this binder is the
+   * layer that introduced that read into the review path. The preparation core
+   * around it answers every artifact-level failure with the never-blank floor
+   * FOR THAT ONE TARGET — an absent artifact, a refused read, a revision that is
+   * not a member — because a card carries several targets and one bad row must
+   * not take the other rows down with it. A rejected read here would have been
+   * the one exception: it would have escaped `prepareOneTarget`, escaped the
+   * core, and left the whole card with nothing, which is precisely the class of
+   * blankness this wave exists to remove.
+   *
+   * The reader underneath already answers its OWN named absences — an
+   * unreadable blob, an over-ceiling file, a class it does not carry. This
+   * wrapper is for the class it cannot: a substrate resolver that THROWS. That
+   * becomes the channels own named absence — the same value a caller that has
+   * not wired the channel passes, and the value the display already draws its
+   * named `content-absent` reading from. The reviewer sees the card, the chrome
+   * and the pinned revision, and the display says in its own words that the
+   * document could not be carried; every sibling target on the card is
+   * unaffected.
+   *
+   * The failure is not swallowed silently: it is reported to the server log with
+   * the revision it belongs to, so an operator can tell a store fault from a
+   * revision that genuinely holds nothing.
+   */
+  const readPinnedContentOrAbsence = async (
+    input: {
+      orgId: string;
+      artifactId: string;
+      representationRevisionId: string;
+      form: ArtifactRepresentationForm;
+      mime: string;
+    },
+    ports: ArtifactContentChannelPorts,
+  ): Promise<ArtifactContentProjection> => {
+    try {
+      return await buildArtifactContentProjection(input, ports);
+    } catch (error) {
+      console.error(
+        "[artifacts] review card content read failed",
+        input.artifactId,
+        input.representationRevisionId,
+        error instanceof Error ? error.message : String(error),
+      );
+      return absentArtifactContent(input.representationRevisionId, "absent");
+    }
+  };
   const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
@@ -397,7 +452,11 @@ export function bindArtifactReviewPorts(ctx: {
     // the byte road's.
     const content = buildContent
       ? await buildContent(contentInput)
-      : await buildArtifactContentProjection(
+      : // THROUGH THE STORE-FAULT GUARD, which main added on this same arm: a
+        // read that throws is logged against its revision and comes back as the
+        // channel's named absence, so a store fault draws the floor instead of
+        // failing the whole card.
+        await readPinnedContentOrAbsence(
           contentInput,
           createPinnedSubstanceReader({
             liveOnly: contentInput.liveOnly,
@@ -407,6 +466,12 @@ export function bindArtifactReviewPorts(ctx: {
 
     return buildArtifactRendererProps({
       artifact,
+      // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
+      // NAMED REFUSAL rather than an edit capability, so the SAME display draws
+      // there with no editing affordance and no save address — and "a review's
+      // pinned revision never moves under an edit" holds because there is no road
+      // from this surface to a write at all.
+      edit: readOnlyArtifactEdit("read-only-surface"),
       representation: { revisionId: representationRevisionId, mime },
       previewHref,
       downloadHref,

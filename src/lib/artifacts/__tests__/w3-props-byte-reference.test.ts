@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 // work can never be carried in its place.
 
 import {
+  readOnlyArtifactEdit,
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
   assertNoInlineBytesInRendererProps,
@@ -82,7 +83,8 @@ describe("wave 3 — the new props version", () => {
 describe("wave 3 — the snapshot carries the byte REFERENCE at the new version only", () => {
   it("emits the island reference for a display that negotiated the new version", () => {
     const props = buildArtifactRendererProps({
-      ...BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...BASE,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
       bytes: {
         road: "island",
@@ -102,7 +104,8 @@ describe("wave 3 — the snapshot carries the byte REFERENCE at the new version 
 
   it("emits NO byte field at all for a display still on v1", () => {
     const props = buildArtifactRendererProps({
-      ...BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...BASE,
       propsApiVersion: 1,
       bytes: {
         road: "island",
@@ -116,7 +119,8 @@ describe("wave 3 — the snapshot carries the byte REFERENCE at the new version 
 
   it("says which road it is on when the caller is a cookie surface", () => {
     const props = buildArtifactRendererProps({
-      ...BASE,
+            edit: readOnlyArtifactEdit("read-only-surface"),
+...BASE,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
     });
     expect(props.bytes).toEqual({
@@ -129,7 +133,8 @@ describe("wave 3 — the snapshot carries the byte REFERENCE at the new version 
 
 describe("wave 3 — nothing passes a byte through the snapshot", () => {
   const props = buildArtifactRendererProps({
-    ...BASE,
+        edit: readOnlyArtifactEdit("read-only-surface"),
+...BASE,
     propsApiVersion: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
   });
 

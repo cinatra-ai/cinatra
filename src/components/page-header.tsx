@@ -153,7 +153,12 @@ export function PageHeader({
             </p>
           )}
           {description && (
-            <p className="mt-1 max-w-[64ch] text-sm text-pretty leading-[1.55] text-muted-foreground">{description}</p>
+            /* The components drawing gives the header "an optional one-line
+               description below it", so the shared component holds it to one
+               line for every page rather than each caller shortening its own
+               string (cinatra#2807 fix leg 5 — the project landing's wrapped to
+               two). */
+            <p className="mt-1 line-clamp-1 max-w-[64ch] text-sm text-pretty leading-[1.55] text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && (

@@ -1,5 +1,9 @@
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
+import type {
+  ArtifactEditCapability,
+  ArtifactEditRefusal,
+} from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 
 /**
@@ -99,6 +103,53 @@ export function absentArtifactContent(
   };
 }
 
+/**
+ * The EDIT-CHANNEL ABI version (enabler 0.20 of `PLAN: Agents Lifecycle (C)`,
+ * cinatra#3026), mirrored here for the same route-budget reason the content
+ * channel's version is mirrored above: this module imports NOTHING at value
+ * level, and the enabler's suite pins the two integers equal.
+ */
+export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
+
+/**
+ * The NAMED REFUSAL of an edit — what every surface that is not the artifact's
+ * own page mints, so a display drawn there is read-only BY CONSTRUCTION.
+ *
+ * The plan: "the review card shows the same display read-only, and a review's
+ * pinned revision never moves under an edit". The card does not take a second
+ * code path to be read-only; it hands the same display a capability that says
+ * no, with the reason it said no.
+ */
+export function readOnlyArtifactEdit(reason: ArtifactEditRefusal): ArtifactEditCapability {
+  return { kind: "read-only", channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION, reason };
+}
+
+/**
+ * The GRANT — minted by the artifact page alone, for a reader the write-rights
+ * check admitted, on a text revision the content channel carried whole.
+ *
+ * The base is the revision the editor OPENS, and every save under this
+ * capability names it: that is the compare-and-set's expected base, carried to
+ * the display so the display never has to ask what it is editing.
+ */
+export function grantArtifactEdit(input: {
+  artifactId: string;
+  baseRevisionId: string;
+  saveUrl: string;
+  idlePauseMs: number;
+  capBytes: number;
+}): ArtifactEditCapability {
+  return {
+    kind: "editable",
+    channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION,
+    artifactId: input.artifactId,
+    baseRevisionId: input.baseRevisionId,
+    saveUrl: input.saveUrl,
+    idlePauseMs: input.idlePauseMs,
+    capBytes: input.capBytes,
+  };
+}
+
 export interface ArtifactRendererProps {
   /** The props-contract version this snapshot conforms to. A renderer declares
    * the `propsApiVersion` it expects; the host refuses to mount a renderer whose
@@ -189,6 +240,13 @@ export interface ArtifactRendererProps {
     preview: string | null;
     download: string | null;
   };
+  /**
+   * THE EDIT CAPABILITY (enabler 0.20). A host-minted grant, or a named
+   * refusal. REQUIRED and deliberately not defaulted, for the same reason
+   * `content` is: a surface that has not thought about editing must say so by
+   * name rather than read as one that considered it and found nothing.
+   */
+  edit: ArtifactEditCapability;
 }
 
 function identityExtension(identity: EffectiveIdentity): string | null {
@@ -224,6 +282,12 @@ export function buildArtifactRendererProps(input: {
    * named as the `session` road so the snapshot always says which one it is on.
    */
   bytes?: { road: "session" | "island"; preview: string | null; download: string | null };
+  /**
+   * The edit capability this surface mints (enabler 0.20). REQUIRED: the
+   * artifact page passes `grantArtifactEdit(...)` for a reader with write
+   * rights, and every other surface passes `readOnlyArtifactEdit(reason)`.
+   */
+  edit: ArtifactEditCapability;
 }): ArtifactRendererProps {
   const { artifact } = input;
   const propsApiVersion = input.propsApiVersion ?? ARTIFACT_RENDERER_PROPS_API_VERSION;
@@ -280,6 +344,7 @@ export function buildArtifactRendererProps(input: {
     },
     content: input.content,
     ...(bytes ? { bytes } : {}),
+    edit: input.edit,
   };
   // THE RULE IS CHECKED WHERE THE SNAPSHOT IS MADE, not only where one is
   // serialized. `assertSerializableRendererProps` is a test-time pin with no
