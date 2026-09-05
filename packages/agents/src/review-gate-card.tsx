@@ -927,11 +927,10 @@ function renderState(args: {
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          {/* §XIII.1's ONE settled marker — "Continued is the only settled
+              reading; there is no second status after it". It names nobody
+              (§VI); the disposition rides the element as a record. */}
+          <ReviewGateSettled outcome={state.outcome} />
         </>
       ) : (
         <>

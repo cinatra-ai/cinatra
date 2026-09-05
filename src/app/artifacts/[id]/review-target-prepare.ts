@@ -60,7 +60,8 @@ import {
   isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
 
-import { pickArtifactRenderer } from "./renderer-dispatch";
+import { pickReviewTargetRenderer } from "./renderer-dispatch";
+import { pickHandler } from "./pick-handler";
 import {
   resolveArtifactDispatchInputs,
   classifyLoadablePath,
@@ -235,14 +236,33 @@ export function bindArtifactReviewPorts(ctx: {
     await ensureActivatedRepresentationProviders(orgId);
 
     // THE PAGE'S OWN LADDER, called rather than copied: semantic winner →
-    // representation provider → the first-party form arm → the fallback.
-    const dispatch = pickArtifactRenderer(
+    // representation provider → the first-party form arm → the fallback — with
+    // the ONE rule a review target adds to it (cinatra#2934, fix leg 12).
+    //
+    // The drawing fixes which display a reviewed text/markdown representation is
+    // drawn by: "For a text/markdown target the renderer that mounts here is the
+    // markdown display" (§IV), and that display "carries two tabs — Code and
+    // Preview", drawn read-only on a target and opening on Preview (§V.1). The
+    // MIME-BOUND representation rung answered a weaker question — "something can
+    // show text/markdown" — and a display bound to a media type won the slot the
+    // drawing had already assigned, so the target drew a panel with no tab strip
+    // in it at all. `pickReviewTargetRenderer` composes the rule over the page's
+    // ladder; the SEMANTIC rung, a type's own display, is untouched.
+    //
+    // The form is the host's OWN declared one for this representation — the same
+    // `pickHandler` the form rung below dispatches on — so no package is named
+    // here or in the rule. Only MARKDOWN is redirected: that is the one form the
+    // drawing's two-tab sentence names, and a registered text/plain viewer keeps
+    // the slot the host has made no claim on.
+    const declaredForm = pickHandler(input.mime);
+    const dispatch = pickReviewTargetRenderer(
       resolveArtifactDispatchInputs({
         orgId,
         baseType: input.artifact.objectType,
         identity: input.artifact.presentationIdentity,
         mime: input.mime,
       }),
+      declaredForm === "markdown" ? declaredForm : null,
     );
 
     switch (dispatch.kind) {

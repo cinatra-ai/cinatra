@@ -140,6 +140,66 @@ export function pickArtifactRenderer(
   return { kind: "fallback" };
 }
 
+/** The ONE declared form a review target can be redirected to by the rule
+ *  below. NARROWED to markdown on the convergence round of fix leg 12: the
+ *  ratified drawing fixes the two-tab display for MARKDOWN (Artifact review
+ *  §IV/§V.1) and says nothing of the kind for plain text, so a registered
+ *  text/plain representation viewer KEEPS the slot it already had. A plain-text
+ *  target with no such viewer still reaches the host's text arm through the
+ *  unchanged form rung below — its road is untouched either way. */
+export type DeclaredMarkdownForm = Extract<HandlerKind, "markdown">;
+
+/**
+ * THE REVIEW TARGET'S OWN PRECEDENCE (cinatra#2934, fix leg 12).
+ *
+ * `pickArtifactRenderer` above is the ARTIFACT PAGE's ladder and stays exactly
+ * as it is. A review target reuses it — one resolution, called rather than
+ * copied — with ONE rule of its own, which the ratified drawing states outright.
+ *
+ *   Artifact review §IV: "For a text/markdown target the renderer that mounts
+ *   here is the markdown display, drawn on a target exactly as §V.1 fixes it."
+ *   §V.1: "Markdown is drawn by a display of its own, and that display carries
+ *   two tabs — Code and Preview … On a review target the same display is drawn
+ *   read-only — both tabs, neither editable … That holds wherever the target is
+ *   drawn."
+ *
+ * So on a review target, where the representation is text/markdown — the one
+ * form the drawing names — the host's own display draws it, and the rung that
+ * gives way is rung 2, the REPRESENTATION viewer. That rung binds a display to a
+ * MEDIA TYPE rather than to the artifact's type: it answers "something in this
+ * tree can show text/markdown", which is a weaker claim than the drawing's, and
+ * on a review target the drawing has already said which display shows it.
+ *
+ * WHAT IS DELIBERATELY UNTOUCHED.
+ *
+ *   RUNG 1, the SEMANTIC renderer — the display a type's OWN package ships —
+ *     still wins, and must: Lifecycle cards §XIII.1 draws an email body, a
+ *     text/markdown artifact, as the email extension's mail reading pane on its
+ *     own review card. A type that ships its display keeps it.
+ *   PLAIN TEXT is unchanged. The drawing's two-tab sentence is about markdown;
+ *     it fixes nothing for text/plain, so a registered text/plain viewer keeps
+ *     the slot and the host makes no precedence claim the drawing has not made.
+ *     A plain-text target with no viewer still reaches the form rung's text arm.
+ *   Any other MIME is unchanged: it reaches its representation provider exactly
+ *     as before (a CMS snapshot, an image, a pdf), and the floor is still
+ *     reached only where nothing renders the row.
+ *   A never-built claimant still degrades to `requires-rebuild` from whichever
+ *     rung resolved it; that reading is its own and is not this rule's subject.
+ *
+ * NO PACKAGE IS NAMED, here or at the call site: the rule keys on the host's own
+ * declared form for the representation, which is what the drawing keys on.
+ */
+export function pickReviewTargetRenderer(
+  input: ArtifactRenderDispatchInput,
+  /** The host's own declared MARKDOWN form for this representation, or null. */
+  declaredMarkdownForm: DeclaredMarkdownForm | null,
+): ArtifactRenderDispatch {
+  const dispatch = pickArtifactRenderer(input);
+  if (declaredMarkdownForm === null) return dispatch;
+  if (dispatch.kind !== "representation") return dispatch;
+  return { kind: "mime", handler: declaredMarkdownForm };
+}
+
 /**
  * The §III activation barrier for a row's selection affordance. RETIRED under
  * type-driven identity (epic #1785): identity is now a pure function of the
