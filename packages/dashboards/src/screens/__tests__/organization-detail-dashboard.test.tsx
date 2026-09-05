@@ -46,9 +46,16 @@ vi.mock("@/lib/auth-session", () => ({
 // `src/components/dashboards/__tests__/scope-dashboards-section-error-containment.test.ts`
 // and the §IX conformance suite.
 vi.mock("@/components/dashboards/scope-dashboards-section", () => ({
-  ScopeDashboardsSection: (props: { scope: { orgId: string } }) => {
+  ScopeDashboardsSection: (props: {
+    scope: { orgId: string };
+    entityLabel: string;
+  }) => {
     h.scopeSection(props);
-    return <div data-testid="scope-dashboards-panel" />;
+    // The stub renders the entity label the landing hands down, so the drawn
+    // caption's own words ("The dashboards in Organization: Acme Inc.") are
+    // readable back off this screen's markup without pulling the section's
+    // whole I/O graph into this test.
+    return <div data-testid="scope-dashboards-panel">{props.entityLabel}</div>;
   },
 }));
 // The §IX.1 add-to-scope binder (cinatra#2474 PR3) reaches the same #1897
@@ -135,12 +142,25 @@ beforeEach(() => {
   h.state.queue = [];
 });
 
-describe("the folded #1897 collection panel is fenced to the ACTIVE org (cinatra#2474 PR2)", () => {
+describe("the Dashboards tab body on the organization landing (cinatra#2807 fix leg 5)", () => {
   // The retired `/organizations/[id]/dashboards` route refused any request whose
-  // target org was not the session's ACTIVE org. This landing admits a member of
-  // ANY of their orgs, so the panel must re-apply that fence or folding the
-  // collection here would widen the read (codex convergence on the PR2 diff).
-  test("active org matches the target: the panel renders, scoped to THIS org", async () => {
+  // target org was not the session's ACTIVE org, and cinatra#2474 PR2 carried
+  // that fence over the whole folded panel. The fourth proof round graded the
+  // consequence: a member viewing an org that is not their active one gets NO
+  // tab body at all — no caption, no empty reading, no Add — where personal,
+  // team, project and Workspace all draw one.
+  //
+  // The drawing rules the read universal and gates only management: "A member
+  // without write authority still sees the Dashboards tab and every row —
+  // homed and listed alike — and opens any of them; they simply get no Add
+  // affordance and no Remove control. Suppression, not a disabled control: a
+  // management action the member cannot take is not rendered."
+  //
+  // So the fence stays exactly where the widening risk is — the §IX.1 add
+  // source and the installed-catalog node, both of which BIND a mutation to the
+  // ambient tenant — and comes off the read, which is already scoped by the
+  // viewed org's own id behind the `readUserIsOrgMember` gate above.
+  test("active org matches the target: the body renders, scoped to THIS org, naming the entity", async () => {
     primeSession("u1", "org-1");
     h.isMember.mockResolvedValue(true);
     h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
@@ -151,24 +171,87 @@ describe("the folded #1897 collection panel is fenced to the ACTIVE org (cinatra
     expect(h.scopeSection).toHaveBeenCalledTimes(1);
     expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
       scope: { kind: "organization", scopeId: "org-1", orgId: "org-1" },
+      entityLabel: "Organization: Acme Inc",
     });
+    expect(html).toContain("Organization: Acme Inc");
   });
 
-  test("member of this org but ACTIVE elsewhere: the panel is suppressed, the landing still renders", async () => {
+  test("member of this org but ACTIVE elsewhere: the tab body STILL renders — only the add source is withheld", async () => {
     primeSession("u1", "org-2");
     h.isMember.mockResolvedValue(true);
     h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
     h.listTeams.mockResolvedValue([]);
 
     const html = await renderScreen();
-    expect(html).not.toContain('data-testid="scope-dashboards-panel"');
-    expect(h.scopeSection).not.toHaveBeenCalled();
-    // cinatra#2474 PR3 — the unified popup's add source rides the SAME fence.
-    // An add path into a merely-member org would widen exactly what this fence
-    // closes, so the binder is not even consulted.
+    // The read is universal to the scope's members: the body draws.
+    expect(html).toContain('data-testid="scope-dashboards-panel"');
+    expect(h.scopeSection).toHaveBeenCalledTimes(1);
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      scope: { kind: "organization", scopeId: "org-1", orgId: "org-1" },
+      entityLabel: "Organization: Acme Inc",
+    });
+    expect(html).toContain("Organization: Acme Inc");
+    // cinatra#2474 PR3 — the unified popup's add source rides the tenant fence
+    // still. An add path into a merely-member org would widen exactly what that
+    // fence closes, so the binder is not even consulted: the Add is suppressed,
+    // never rendered disabled.
     expect(h.buildScopeReferenceSource).not.toHaveBeenCalled();
-    // Suppression only — the landing itself stays reachable for every member.
-    expect(html).toContain('data-testid="org-dashboards"');
+    // The landing itself stays reachable for every member.
+    expect(html).toContain("Acme Inc");
+    expect(html).toContain('href="/organizations/org-1/settings"');
+  });
+
+  // CONVERGENCE round. Widening the READ must not also widen the WRITE surface.
+  // `actorMayWriteScope` cannot be relied on to keep Remove suppressed out
+  // here: its FIRST arm is `if (actor.platformRole === "platform_admin") return
+  // true`, ahead of every tenant check, so a platform admin viewing a member
+  // org that is not their active one would get `canRemove` true on every listed
+  // row — an affordance this landing never offered, because the whole panel
+  // used to be withheld. The mount therefore withholds the removal source
+  // itself outside the active tenant: suppression, not a disabled control.
+  test("ACTIVE elsewhere: the mount withholds removal, so no row can offer Remove", async () => {
+    primeSession("u1", "org-2");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    await renderScreen();
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: false,
+    });
+  });
+
+  test("ACTIVE elsewhere as a PLATFORM ADMIN: removal is still withheld", async () => {
+    h.getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    h.getActorContext.mockResolvedValue({
+      principalId: "u1",
+      organizationId: "org-2",
+      // The cross-tenant writer the scope-ratchet convention grants. The read
+      // widens for them like any member; the Remove affordance does not.
+      platformRole: "platform_admin",
+    });
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    const html = await renderScreen();
+    // The drawn read still lands — that is fix leg 5's whole point.
+    expect(html).toContain('data-testid="scope-dashboards-panel"');
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: false,
+    });
+  });
+
+  test("active org matches: removal IS offered (the shipped behaviour is untouched)", async () => {
+    primeSession("u1", "org-1");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    await renderScreen();
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      allowRemoval: true,
+    });
   });
 
   test("active org matches: the §IX.1 add source IS built, for THIS org's scope (cinatra#2474 PR3)", async () => {

@@ -142,6 +142,46 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
     const owner = read("packages/agents/src/run-recommendation-chip-row.tsx");
     expect(owner).toMatch(/<\s*RunRecommendationChipRow\b/);
   });
+
+  // THE DISTINCTION THIS RULE KEEPS, pinned after cinatra#3160 hit it: a HARNESS
+  // is not an exemption. A design-fixture module that declares the host and then
+  // draws the row itself is the same second renderer as a page that does — it
+  // hands the row a reading the card would have RESOLVED, so the two can
+  // disagree, and a harness that draws its own reading is asserting the harness.
+  // The three cases below pin the whole distinction: the host declaration buys
+  // nothing, the CARD is the way through, and the allowlist stays the owner's
+  // definition module alone.
+  it("a DESIGN-FIXTURE mount is NOT an exemption: declaring the host does not license the row", () => {
+    const src = [
+      '<LifecycleCardSurfaceProvider host="chat_thread">',
+      "  <RunRecommendationChipRow runId={id} initialRecommendations={fixture} />",
+      "</LifecycleCardSurfaceProvider>",
+    ].join("\n");
+    const hits = scanModule(
+      "src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx",
+      src,
+    );
+    expect(hits.map((h) => h.rule)).toContain("R2");
+    expect(hits.find((h) => h.rule === "R2").detail).toContain("direct-chip-row-mount");
+  });
+
+  it("…and the way through is the CARD, on that same harness path", () => {
+    const src = [
+      '<LifecycleCardSurfaceProvider host="chat_thread">',
+      "  <RecommendationHoldCard runId={id} />",
+      "</LifecycleCardSurfaceProvider>",
+    ].join("\n");
+    const hits = scanModule(
+      "src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx",
+      src,
+    );
+    expect(hits.filter((h) => h.rule === "R2")).toEqual([]);
+  });
+
+  it("the row's allowlist is the OWNER module and nothing else — no harness may join it", () => {
+    const entry = RETIRED_PARALLELS.find((p) => p.id === "direct-chip-row-mount");
+    expect(entry.allow).toEqual(["packages/agents/src/run-recommendation-chip-row.tsx"]);
+  });
 });
 
 describe("R3 — a card mount must be host-declared", () => {
