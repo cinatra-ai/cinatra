@@ -47,7 +47,23 @@ import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  grantArtifactEdit,
+  readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  buildArtifactContentProjection,
+  resolveArtifactContentClass,
+} from "@/lib/artifacts/artifact-content-channel";
+import { artifactTextChannelPorts } from "@/lib/artifacts/artifact-pinned-text";
+import {
+  getRepresentationByIdForReplay,
+  resolveEditorRevisionId,
+} from "@/lib/artifacts/representation-store";
+import { can } from "@/lib/authz/enforce";
+import {
+  ARTIFACT_EDIT_IDLE_PAUSE_MS,
+  ARTIFACT_EDIT_TEXT_CAP_BYTES,
+} from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
@@ -124,7 +140,25 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     );
   }
 
-  const revisionId = artifact.latestRepresentationRevisionId;
+  // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
+  //
+  // The artifact row's own `latestRepresentationRevisionId` is a pointer cached
+  // at creation, and the edit-save road appends revisions without moving it —
+  // so on this page, the one surface that edits, it names revision 1 forever
+  // after the first save. Opening there hands the next save a base the store has
+  // already built on, and the save is refused as stale: the reader is told their
+  // first change collided with someone else, on a document nobody else touched.
+  //
+  // The REVIEW surfaces keep their own reading and are not touched by this: a
+  // review is handed the revision its gate pinned and never asks for a latest,
+  // which is the whole point of the pin. The two readings differ by design —
+  // this page shows what the artifact has become, a review shows what was
+  // approved.
+  const revisionId = await resolveEditorRevisionId(
+    orgId,
+    id,
+    artifact.latestRepresentationRevisionId,
+  );
   // Latest representation is required for any in-page rendering. Without
   // it (rare — artifact metadata without a materialized representation),
   // fall through to the fallback handler.
@@ -137,6 +171,15 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     : null;
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
+  // THE HEADER DESCRIBES THE REVISION UNDER IT, both halves of the sentence.
+  // `artifact.size` is cached on the object row when the artifact is created,
+  // and the append-with-expected-base save road deliberately does not touch that
+  // row (see `resolveEditorRevisionId`'s note in representation-store) — so a
+  // header served from it kept reporting the FIRST revision's size while the
+  // editor above it saved a fifth. The resolved head revision carries its own
+  // size beside the form already read from it; the row stays the floor for an
+  // artifact with no materialized representation to resolve.
+  const sizeBytes = resolved?.sizeBytes ?? artifact.size;
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
@@ -182,6 +225,66 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
 
   const title = artifact.title ?? artifact.artifactId;
 
+  // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS CONSUMER
+  // (enabler 0.20, cinatra#3026). The markdown editor draws the document from
+  // the props and never fetches, so the page has to read the pinned revision on
+  // the server and carry it. The class comes from the FORM the substrate
+  // recorded, never from a guess about the mime.
+  const representationForm = revisionId
+    ? (getRepresentationByIdForReplay(orgId, revisionId)?.form ?? null)
+    : null;
+  const contentClass =
+    revisionId && representationForm && mime
+      ? resolveArtifactContentClass({ form: representationForm, mime })
+      : null;
+  const content =
+    contentClass === "text" && revisionId && representationForm
+      ? await buildArtifactContentProjection(
+          {
+            orgId,
+            artifactId: id,
+            representationRevisionId: revisionId,
+            form: representationForm,
+            mime,
+          },
+          artifactTextChannelPorts,
+        )
+      : // The other two classes have their own readers and their own consumers;
+        // this page carries the text class and says so by name for the rest,
+        // rather than letting an unwired class read as an empty document.
+        absentArtifactContent(revisionId ?? null, contentClass ? "unsupported-form" : "absent");
+
+  // THE EDIT CAPABILITY (enabler 0.20). Minted HERE and nowhere else: this is
+  // the artifact's own page, the one surface the plan makes editable. The
+  // affordance question is the pure decision (`can`) so a page view is not an
+  // authorization event; the SAVE ENDPOINT asks the same question through
+  // `requireAccess`, which is the boundary and audits. They ask it of the same
+  // permission and the same resource, so the drawn affordance and the enforced
+  // right can never disagree.
+  const mayEditArtifact = can(actor, "artifact.update", {
+    resourceType: "artifact",
+    resourceId: id,
+    organizationId: orgId,
+  });
+  const edit =
+    revisionId && content.kind === "text" && !content.truncated && mayEditArtifact
+      ? grantArtifactEdit({
+          artifactId: id,
+          baseRevisionId: revisionId,
+          saveUrl: `/api/artifacts/${id}/edit`,
+          idlePauseMs: ARTIFACT_EDIT_IDLE_PAUSE_MS,
+          capBytes: ARTIFACT_EDIT_TEXT_CAP_BYTES,
+        })
+      : readOnlyArtifactEdit(
+          !revisionId
+            ? "no-representation"
+            : content.kind !== "text"
+              ? "unsupported-form"
+              : content.truncated
+                ? "content-truncated"
+                : "no-write-rights",
+        );
+
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
   const rendererProps = buildArtifactRendererProps({
@@ -189,11 +292,8 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     representation: revisionId ? { revisionId, mime } : null,
     previewHref,
     downloadHref,
-    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). This consumer is not
-    // wired to it yet — "each a contract defined here and wired for its
-    // consumers in the sibling plan" — so it says so, by name, instead of
-    // letting an absent projection read as a wired one that found nothing.
-    content: absentArtifactContent(revisionId ?? null),
+    content,
+    edit,
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.
@@ -209,7 +309,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
         // line reads the same function on the same objectType, so the two
         // surfaces cannot name one pack two ways.
         label={artifact.objectType ? artifactKindLabelFor(artifact.objectType) : undefined}
-        description={`${mime || "unknown"} · ${artifact.size} bytes`}
+        description={`${mime || "unknown"} · ${sizeBytes} bytes`}
         divider={false}
         actions={
           downloadHref || artifact.sourceUrl ? (
