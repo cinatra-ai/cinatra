@@ -1074,7 +1074,7 @@ function renderState(args: {
  * this reader may not comment on. A control that named a composer that is not
  * there, or a comment that would be refused, is a control that fails on press.
  */
-function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): ReactElement | null {
+export function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): ReactElement | null {
   if (!binding.available) return null;
   return (
     <div
@@ -1087,7 +1087,15 @@ function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): React
         type="button"
         variant={binding.bound ? "secondary" : "ghost"}
         size="sm"
-        data-action="focus-review-composer"
+        // §I NAMES THE CONTROL BY THE READING IT IS DRAWN IN, and the name is
+        // read by the functional-acceptance driver, so it carries the outcome as
+        // well as the act. One control, two names — the same shape §VIII gives a
+        // suggestion chip: bound, the press GIVES THE BINDING BACK; not bound, the
+        // press TAKES IT. One name for both readings said the opposite of what
+        // the press does in one of them.
+        data-action={
+          binding.bound ? "release-review-composer -> unbound" : "focus-review-composer -> bound"
+        }
         aria-pressed={binding.bound}
         onClick={binding.toggleFocus}
       >

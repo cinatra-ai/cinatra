@@ -404,3 +404,94 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     ).toBeUndefined();
   });
 });
+
+/**
+ * cinatra#3208 — the OTHER half of the drifted-declaration proof. The
+ * materializer's own suite
+ * (src/lib/artifacts/__tests__/run-artifact-executed-declaration.test.ts) pins
+ * WHICH declaration is resolved; these two pin what the run then STORES, over
+ * the exact outcome arrays that suite records for the same fixture — the
+ * blog-idea run whose executed declaration is the fan-out one while the package
+ * registry still serves the retired scalar one.
+ *
+ * The composed sentence itself is built by module-private
+ * `describeMaterializationFailure`, deliberately so: the honesty suites assert
+ * it through the persisted `error`, which is the surface that actually matters.
+ */
+describe("cinatra#3208 — the stored run outcome follows the declaration that was resolved", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+  });
+
+  it("the drifted registry declaration lands `failed` with the retired identifiers in agent_runs.error", async () => {
+    // Verbatim the outcome the materializer produced for this run before
+    // cinatra#3208 — and still produces for a template row that carries no
+    // persisted declaration.
+    materializeRunArtifactsSpy.mockResolvedValue([
+      {
+        ok: false,
+        outputId: "ideaBatchDocument",
+        nodeId: "endNode",
+        extension: "@cinatra-ai/blog-idea-artifact",
+        error: 'titleFrom output "ideaBatchTitle" did not resolve to a non-empty string',
+      },
+    ]);
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-mat-1",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask({ title: "T", content: "C" }),
+    });
+
+    const [, , to, meta] = lastTransition();
+    expect(to).toBe("failed");
+    const error = String(meta?.error);
+    expect(error).toContain(
+      "artifact materialization failed — the run declared artifact output(s) it did not produce (1 of 1 failed)",
+    );
+    expect(error).toContain("ideaBatchDocument [@cinatra-ai/blog-idea-artifact]");
+    expect(error).toContain('titleFrom output "ideaBatchTitle" did not resolve to a non-empty string');
+  });
+
+  it("the EXECUTED fan-out declaration lands `completed` with no error and one row per idea", async () => {
+    materializeRunArtifactsSpy.mockResolvedValue([
+      {
+        ok: true,
+        outputId: "ideas[0]",
+        nodeId: "endNode",
+        extension: "@cinatra-ai/blog-idea-artifact",
+        artifactId: "art-1",
+        representationRevisionId: "rep-1",
+        deduped: false,
+      },
+      {
+        ok: true,
+        outputId: "ideas[1]",
+        nodeId: "endNode",
+        extension: "@cinatra-ai/blog-idea-artifact",
+        artifactId: "art-2",
+        representationRevisionId: "rep-2",
+        deduped: false,
+      },
+    ]);
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-mat-1",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask({ title: "T", content: "C" }),
+    });
+
+    const [, , to, meta] = lastTransition();
+    expect(to).toBe("completed");
+    expect(meta?.error).toBeUndefined();
+    expect(
+      (meta?.stepResults as Array<Record<string, unknown>>)[0]?.artifact_materializations,
+    ).toHaveLength(2);
+    expect(agUiEventTypes()).toContain("RUN_FINISHED");
+  });
+});
