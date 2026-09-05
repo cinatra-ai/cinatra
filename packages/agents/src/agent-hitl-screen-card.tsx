@@ -1001,7 +1001,17 @@ export function AgentHitlScreenCard({
         // THE COOKIE DOOR, unchanged.
         landed = true;
         try {
-          await approveReviewTask(gate.reviewTaskId, payload, payloadFieldName);
+          const outcome = await approveReviewTask(
+            gate.reviewTaskId,
+            payload,
+            payloadFieldName,
+          );
+          // cinatra#3219 — a gate that is no longer pending arrives as a typed
+          // outcome now, not a throw. It settles the same way "already
+          // resolved" does below: the question IS answered (elsewhere, or the
+          // run moved past it), so the screen settles and re-reads rather than
+          // holding an answer for a gate that is gone.
+          landed = outcome.ok || outcome.blocked === "no-longer-pending";
         } catch (error) {
           // "already resolved" is the expected race (a double press, the same
           // gate answered on another surface). Every other failure leaves the

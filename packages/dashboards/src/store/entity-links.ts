@@ -105,10 +105,61 @@ export async function listScopeHomedDashboards(
 }
 
 /**
+ * The dashboards the ACTING USER owns — the personal scope's own home tier
+ * (§VIII: owner_level='user'). The ratified drawing's Dashboards tab section
+ * rules that "On a personal scope the tab shows the acting user's own
+ * dashboards", so this is that read: the caller's OWN rows, tenant-fenced to the
+ * organization the caller is acting in, exactly as every other home read is.
+ *
+ * No authorization lives here (this store is authz-free by design): the caller
+ * has already established WHO the acting user is, and a user's own rows are
+ * theirs by the owner axis itself.
+ */
+export async function listUserHomedDashboards(input: {
+  readonly orgId: string;
+  readonly userId: string;
+}): Promise<ScopeDashboardRow[]> {
+  const db = getDashboardsDb();
+  const rows = await db
+    .select({
+      dashboardId: dashboards.id,
+      name: dashboards.name,
+      updatedAt: dashboards.updatedAt,
+      extensionId: dashboards.extensionId,
+      ownerLevel: dashboards.ownerLevel,
+      ownerId: dashboards.ownerId,
+      projectId: dashboards.projectId,
+      entityType: dashboards.entityType,
+      entityId: dashboards.entityId,
+      organizationId: dashboards.organizationId,
+    })
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.organizationId, input.orgId),
+        eq(dashboards.ownerLevel, "user"),
+        eq(dashboards.ownerId, input.userId),
+        isNull(dashboards.projectId),
+        NOT_ARCHIVED_LIVE(dashboards),
+      ),
+    );
+  return rows.map((r) => ({ ...r, relation: "home" as const }));
+}
+
+/**
  * The dashboards LISTED in `scope` (the secondary-listing junction join). Each
  * row carries the dashboard's OWN owner axis + entity anchor so the host can
  * render "home: <its canonical home>" in the meta line (§IX) and derive its
- * canonical href. Tenant-fenced by the junction's denormalized org.
+ * canonical href.
+ *
+ * TENANT-FENCED ON BOTH SIDES (cinatra#2807 fix leg 5, convergence round). The
+ * junction's denormalized `organization_id` is filtered, AND the joined
+ * dashboard's own `organization_id` must equal the scope's tenant. The
+ * denormalized column alone is not a boundary: no composite constraint ties it
+ * to `dashboards.organization_id`, so a malformed, migrated or directly
+ * inserted link row would otherwise surface another tenant's dashboard id, name
+ * and canonical path to members of the viewed scope. The homed read has always
+ * filtered `dashboards.organization_id`; this makes the listed read agree.
  */
 export async function listScopeListedDashboards(
   scope: ListingScope,
@@ -134,6 +185,8 @@ export async function listScopeListedDashboards(
         eq(dashboardEntityLinks.entityType, scope.kind),
         eq(dashboardEntityLinks.entityId, scope.scopeId),
         eq(dashboardEntityLinks.organizationId, scope.orgId),
+        // The joined dashboard's OWN tenant must match too — see the header.
+        eq(dashboards.organizationId, scope.orgId),
         NOT_ARCHIVED_LIVE(dashboards),
       ),
     );

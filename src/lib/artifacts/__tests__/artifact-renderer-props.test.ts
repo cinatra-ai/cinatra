@@ -81,6 +81,7 @@ describe("buildArtifactRendererProps", () => {
       previewHref: "/api/artifacts/art_1/versions/rev_1/preview",
       downloadHref: "/api/artifacts/art_1/versions/rev_1/content",
       content: absentArtifactContent(null),
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     });
     expect(props.propsApiVersion).toBe(ARTIFACT_RENDERER_PROPS_API_VERSION);
     expect(props.artifact).toMatchObject({
@@ -114,6 +115,7 @@ describe("buildArtifactRendererProps", () => {
       previewHref: null,
       downloadHref: null,
       content: absentArtifactContent(null),
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     });
     expect(props.identity).toEqual({ kind: "no-primary", extension: null });
     expect(props.representation).toBeNull();
@@ -126,6 +128,7 @@ describe("buildArtifactRendererProps", () => {
       previewHref: "/p",
       downloadHref: "/d",
       content: absentArtifactContent(null),
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     });
     expect(() => assertSerializableRendererProps(props)).not.toThrow();
     expect(JSON.parse(JSON.stringify(props))).toEqual(props);
@@ -154,6 +157,7 @@ describe("SDK re-export parity (cinatra#1627 AC3)", () => {
       previewHref: "/p",
       downloadHref: "/d",
       content: absentArtifactContent(null),
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     });
     // Compile-time: the value the host builds satisfies the type an extension
     // renderer imported from the SDK expects.

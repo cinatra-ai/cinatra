@@ -43,7 +43,12 @@ import {
   resolveArtifactVersionForServe,
   resolveNonFileArtifactRevision,
 } from "@/lib/artifacts/artifact-read";
-import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  absentArtifactContent,
+  buildArtifactRendererProps,
+  readOnlyArtifactEdit,
+} from "@/lib/artifacts/artifact-renderer-props";
+import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -62,7 +67,7 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
-import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 
 import { pickArtifactRenderer } from "./renderer-dispatch";
 import {
@@ -164,43 +169,33 @@ export function reviewTargetSubstancePorts(
 ): ArtifactContentChannelPorts {
   const liveOnly = member.historical !== true;
 
+  // THE CONFIGURATION AND `page` ARMS ARE THE CANONICAL SHARED READER'S
+  // (resolved at the 2026-09-05 forward). The default branch extracted exactly
+  // this behaviour into `createPinnedSubstanceReader` — the carried record
+  // preferred, the row resolved when the member carries none, and a
+  // configuration with no recorded digest answered as an absence rather than
+  // sealed to a digest the gate never wrote — so a second copy here was one
+  // behaviour with two places to drift.
+  //
+  // THE TEXT ARM STAYS THIS SURFACE'S OWN. The shared reader answers a named
+  // ABSENCE for anything past its read ceiling; a review card must draw as much
+  // of the work as the channel can carry, so the read below stops one byte past
+  // the channel's own cap and lets the projection report itself `truncated`.
+  // That is what a reviewer sees on a long document, and it is pinned by
+  // `review-target-content-wiring-converge.test.ts`.
+  const shared = createPinnedSubstanceReader({
+    liveOnly,
+    carriedConfiguration:
+      member.configuration === undefined || member.configuration === null
+        ? null
+        : {
+            configuration: member.configuration,
+            digest: member.configurationDigest ?? null,
+          },
+  });
+
   return {
     async readPinnedSubstance(input) {
-      if (input.contentClass === "configuration") {
-        const configuration = member.configuration;
-        if (configuration === undefined || configuration === null) {
-          // THE MEMBER CARRIED NOTHING, so the row is resolved rather than
-          // answered away (absorbed from the default branch at the 2026-09-04
-          // forward). The membership answer normally CARRIES the pinned record
-          // and its digest and the read takes that — one row, read once, with no
-          // second place for the two answers to disagree. A caller that holds
-          // none still gets a projection instead of a floor.
-          const nonFile = resolveNonFileArtifactRevision({
-            orgId: input.orgId,
-            artifactId: input.artifactId,
-            representationRevisionId: input.representationRevisionId,
-            liveOnly,
-          });
-          if (!nonFile || nonFile.configuration === null || nonFile.configurationDigest === null) {
-            return null;
-          }
-          return {
-            class: "configuration",
-            configuration: nonFile.configuration,
-            digest: nonFile.configurationDigest,
-          };
-        }
-        // A configuration with no recorded digest is not a configuration this
-        // channel can project: the digest is what a data capability is sealed
-        // to, and minting one here would seal it to a value the gate never
-        // recorded. It answers an absence, which the display floors on.
-        if (!member.configurationDigest) return null;
-        return {
-          class: "configuration",
-          configuration,
-          digest: member.configurationDigest,
-        };
-      }
       if (input.contentClass === "text") {
         const text = await readPinnedRevisionText({
           orgId: input.orgId,
@@ -210,7 +205,7 @@ export function reviewTargetSubstancePorts(
         });
         return text === null ? null : { class: "text", text };
       }
-      return null;
+      return shared.readPinnedSubstance(input);
     },
   };
 }
@@ -434,6 +429,55 @@ export function bindArtifactReviewPorts(ctx: {
     }
   };
 
+  /**
+   * THE CONTENT READ, DEGRADED PER TARGET RATHER THAN PER CARD.
+   *
+   * The projection is a SERVER READ off the blob store, and this binder is the
+   * layer that introduced that read into the review path. The preparation core
+   * around it answers every artifact-level failure with the never-blank floor
+   * FOR THAT ONE TARGET — an absent artifact, a refused read, a revision that is
+   * not a member — because a card carries several targets and one bad row must
+   * not take the other rows down with it. A rejected read here would have been
+   * the one exception: it would have escaped `prepareOneTarget`, escaped the
+   * core, and left the whole card with nothing, which is precisely the class of
+   * blankness this wave exists to remove.
+   *
+   * The reader underneath already answers its OWN named absences — an
+   * unreadable blob, an over-ceiling file, a class it does not carry. This
+   * wrapper is for the class it cannot: a substrate resolver that THROWS. That
+   * becomes the channels own named absence — the same value a caller that has
+   * not wired the channel passes, and the value the display already draws its
+   * named `content-absent` reading from. The reviewer sees the card, the chrome
+   * and the pinned revision, and the display says in its own words that the
+   * document could not be carried; every sibling target on the card is
+   * unaffected.
+   *
+   * The failure is not swallowed silently: it is reported to the server log with
+   * the revision it belongs to, so an operator can tell a store fault from a
+   * revision that genuinely holds nothing.
+   */
+  const readPinnedContentOrAbsence = async (
+    input: {
+      orgId: string;
+      artifactId: string;
+      representationRevisionId: string;
+      form: ArtifactRepresentationForm;
+      mime: string;
+    },
+    ports: ArtifactContentChannelPorts,
+  ): Promise<ArtifactContentProjection> => {
+    try {
+      return await buildArtifactContentProjection(input, ports);
+    } catch (error) {
+      console.error(
+        "[artifacts] review card content read failed",
+        input.artifactId,
+        input.representationRevisionId,
+        error instanceof Error ? error.message : String(error),
+      );
+      return absentArtifactContent(input.representationRevisionId, "absent");
+    }
+  };
   const buildProps = async (input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
@@ -459,22 +503,36 @@ export function bindArtifactReviewPorts(ctx: {
       : null;
     return buildArtifactRendererProps({
       artifact,
+      // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
+      // NAMED REFUSAL rather than an edit capability, so the SAME display draws
+      // there with no editing affordance and no save address — and "a review's
+      // pinned revision never moves under an edit" holds because there is no road
+      // from this surface to a write at all.
+      edit: readOnlyArtifactEdit("read-only-surface"),
       representation: { revisionId: representationRevisionId, mime },
       previewHref,
       downloadHref,
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED (fix leg 7).
-      // See `buildReviewTargetContentProjection` above for what each class
-      // reads and which one still answers an honest absence.
-      content: await buildReviewTargetContentProjection({
-        orgId: ctx.orgId,
-        artifactId: artifact.artifactId,
-        representationRevisionId,
-        mime,
-        member: input.member,
-      }),
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED (fix leg 7),
+      // under the default branch's throw-degrade wrapper (2026-09-05 forward).
+      // `reviewTargetSubstancePorts` above says what each class reads and which
+      // one still answers an honest absence; the wrapper adds the one absence
+      // the ports cannot name themselves — a substrate resolver that THROWS —
+      // so one target's store fault floors THAT card and no other.
+      // `buildReviewTargetContentProjection` is the same read without the
+      // wrapper, kept for the seam its own tests drive.
+      content: await readPinnedContentOrAbsence(
+        {
+          orgId: ctx.orgId,
+          artifactId: artifact.artifactId,
+          representationRevisionId,
+          form: memberForm(input.member),
+          mime,
+        },
+        reviewTargetSubstancePorts(input.member),
+      ),
     });
   };
 
