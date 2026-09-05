@@ -64,24 +64,23 @@ function registersColourToken(name: string): boolean {
   return new RegExp(`--color-${name}\\s*:`).test(GLOBALS);
 }
 
-/** The wrapper the shared spinner takes its `currentColor` from. */
-function arcWrapper(root: HTMLElement): HTMLElement {
+/** The arc's own class list. The drawn placeholder gives the arc no wrapper
+ *  tile to inherit a colour from, so the token is read off the arc itself. */
+function arcClasses(root: HTMLElement): string {
   const placeholder = root.querySelector<HTMLElement>(
     '[data-conformance-id="review-gate-placeholder"]',
   );
   expect(placeholder).not.toBeNull();
   const svg = placeholder!.querySelector("svg");
   expect(svg).not.toBeNull();
-  const wrapper = svg!.parentElement;
-  expect(wrapper).not.toBeNull();
-  return wrapper as HTMLElement;
+  return svg!.getAttribute("class") ?? "";
 }
 
 describe("the placeholder's spinning icon", () => {
   it("is drawn with a colour token the theme actually registers", () => {
     const { container } = render(<ReviewGatePlaceholder />);
 
-    const classes = arcWrapper(container).className.split(/\s+/);
+    const classes = arcClasses(container).split(/\s+/);
     const colourUtility = classes.find((c) => c.startsWith("text-"));
     expect(colourUtility).toBeDefined();
     const token = colourUtility!.replace(/^text-/, "").replace(/\/.*$/, "");
@@ -91,7 +90,7 @@ describe("the placeholder's spinning icon", () => {
   it("takes the indigo arc's own token, not the inherited foreground", () => {
     const { container } = render(<ReviewGatePlaceholder />);
 
-    const classes = arcWrapper(container).className;
+    const classes = arcClasses(container);
     expect(classes).toMatch(/\btext-primary\b/);
     // The unregistered utility that painted the measured foreground.
     expect(classes).not.toMatch(/\btext-mustard-ink\b/);
@@ -117,16 +116,25 @@ describe("the token the arc now takes", () => {
     expect(registersColourToken("mustard-ink")).toBe(true);
     expect(GLOBALS).toMatch(/--color-mustard-ink:\s*var\(--mustard-ink\)/);
 
-    // What the absence exposed, and what still has to hold: the mustard token
-    // reaches this wrapper only as a BACKGROUND. The arc's own colour utility
-    // is never built on it, so no later tint can take the arc back to
-    // `currentColor`.
+    // What the absence exposed, and what still has to hold: the arc's own
+    // colour utility is never built on the mustard token, so no later tint can
+    // take the arc back to `currentColor`.
+    //
+    // RETIRED HERE, BY THE DRAWING'S OWN SENTENCE: this suite used to also pin
+    // that the mustard token reached the arc's WRAPPER as a background. The
+    // ratified `app-lifecycle-cards` names the placeholder's anatomy in full and
+    // it has no such wrapper in it — "while the run is working that card is a
+    // placeholder for the review screen: the card frame, and a spinning icon,
+    // the indigo arc of Components § Skeleton / Spinner". The card frame and the
+    // arc are the whole of it, so the coloured tile that assertion measured is
+    // not drawn at all, and a pin on its background colour would pin a shape the
+    // drawing does not have. What that assertion was FOR — the arc's own colour
+    // can never fall back to `currentColor` — is pinned above and below it, on
+    // the arc itself, where the drawing puts the colour.
     const { container } = render(<ReviewGatePlaceholder />);
-    const classes = arcWrapper(container).className.split(/\s+/);
-    const mustard = classes.filter((c) => /mustard-ink(\/|$)/.test(c));
-    expect(mustard.length).toBeGreaterThan(0);
-    expect(mustard.every((c) => c.startsWith("bg-"))).toBe(true);
+    const classes = arcClasses(container).split(/\s+/);
     expect(classes.some((c) => c.startsWith("text-mustard-ink"))).toBe(false);
+    expect(classes).toContain("text-primary");
   });
 });
 

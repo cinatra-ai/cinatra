@@ -42,7 +42,12 @@ import {
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
   useComposerFocusStore,
+  RUN_WORK_IS_OVER_STATUSES,
+  UNTIL_TERMINAL_TICK_LIMIT,
+  inPlaceRunReviewRef,
   useComposerTarget,
+  useLifecycleCardAuth,
+  useLifecycleCardFrame,
   useLifecycleCardHost,
   useRunReviewSlot,
   type RunReviewSlot,
@@ -273,6 +278,15 @@ export type AgenticRunPanelProps = {
    * otherwise answer as whoever else is signed in on that browser.
    */
   readReviewSlot?: RunReviewSlotReader;
+  /**
+   * HOW THIS SURFACE READS THE RUN ITSELF (cinatra#3051). Same rule as the slot
+   * above, one level out: a first-party, same-origin surface passes none and
+   * this panel's own tick asks the run's seed route with the ambient session.
+   * The embedded widget passes its own reader, which travels on the broker
+   * credential with `credentials: "omit"` — the same one its seed and its slot
+   * already ask with.
+   */
+  readRunSnapshot?: () => Promise<RunPollResponse | null>;
 };
 
 export type ChatGateField = {
@@ -328,7 +342,7 @@ export type ChatGateDescriptor = {
 // from ./run-surface-status — the poll endpoint already returns it and
 // SSE INTERRUPT frames are mapped into it via mapInterruptToHitlContext.
 
-type RunPollResponse = {
+export type RunPollResponse = {
   status: string;
   error: string | null;
   startedAt: string | null;
@@ -442,6 +456,7 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  readRunSnapshot,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -457,11 +472,30 @@ export function AgenticRunPanel({
   // this panel is being drawn INSIDE a conversation transcript that mounts the
   // HITL screen card itself — see that mount below for what it decides.
   const ambientLifecycleHost = useLifecycleCardHost();
+  // AND THE CREDENTIAL THAT HOST DECLARED, read at the same point and for the
+  // review slot's mount below: a host whose identity does not travel by cookie
+  // has to hand its own proof down to the card it contains, or the card asks
+  // the server with whatever cookie the browser happens to hold.
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const ambientLifecycleFrame = useLifecycleCardFrame();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
   // independent guard for the polling useEffect firing condition.
   const [pollStatus, setPollStatus] = useState(initialStatus);
+  // THE BELT ON THE UNTIL-TERMINAL TICK (cinatra#3051, convergence). Counted
+  // only while the stream has stood down and the run is neither live nor
+  // waiting on the reader — see the schedule below. Reset whenever the run's
+  // status actually moves, so a row that is still travelling is never cut off
+  // by looks it spent in an earlier state.
+  const [untilTerminalTicks, setUntilTerminalTicks] = useState(0);
+  const [beltedFromStatus, setBeltedFromStatus] = useState(initialStatus);
+  if (beltedFromStatus !== pollStatus) {
+    setBeltedFromStatus(pollStatus);
+    setUntilTerminalTicks(0);
+  }
+  // One read in flight at a time on the polling schedule.
+  const pollInFlightRef = useRef(false);
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   // Seeded from the server when the caller already derived the gate (see
@@ -653,7 +687,23 @@ export function AgenticRunPanel({
 
   // AG-UI SSE hook — provides live status + presentationHint when agUiEnabled=true.
   // When disabled (agUiEnabled != true), hook opens no EventSource — zero network overhead.
-  const streamEnabled = agUiEnabled === true;
+  //
+  // AND IT IS A COOKIE-SESSION TRANSPORT (cinatra#3051). The stream is an
+  // `EventSource` to a same-origin route that authenticates a session cookie and
+  // nothing else: a request the browser builds, with no place to put a broker
+  // credential. Inside the site widget there is no such session, so the stream
+  // never delivers a status — and while it is enabled the tick's status write
+  // stands aside for it, so the run's status stayed frozen at the value the
+  // mount was seeded with. A run that parked for review while the page was open
+  // therefore never read `completed`, the review slot was never asked for, and
+  // the slot stayed empty until the page was re-opened onto a fresh seed.
+  //
+  // So on a host whose identity does not travel by cookie the stream stands
+  // down and the tick is authoritative, exactly as it is for a run that predates
+  // the stream. What that host loses is the live text of an external run; what
+  // it gains is a run that reaches its own review.
+  const streamAuthenticates = ambientLifecycleHost !== "site_widget";
+  const streamEnabled = agUiEnabled === true && streamAuthenticates;
   const streamResult = useAgUiRunStream(runId, {
     enabled: streamEnabled,
     initialStatus,
@@ -683,6 +733,40 @@ export function AgenticRunPanel({
   // messages + hitlContext continue to be fetched even when SSE has advanced status.
   const isPollLive = pollStatus === "running" || pollStatus === "queued";
   const isPollPendingApproval = pollStatus === "pending_approval";
+  // AND WHERE THE STREAM STANDS DOWN, THE TICK RUNS UNTIL THE RUN ENDS
+  // (cinatra#3051).
+  //
+  // The two guards above are the stream's own division of labour: the wire
+  // carries every other status, so the tick only has to cover the two shapes
+  // that need messages and gates. On a host whose identity does not travel by
+  // cookie there IS no wire — the tick is the only transport — and those same
+  // two guards then stop it dead at any OTHER non-terminal status. A run that
+  // was released into its schedule is the case that matters here: it reads
+  // `pending_trigger`, the tick stops, and the run afterwards runs, produces its
+  // output and ends with nobody on that host ever hearing about it. The surface
+  // sits on the last status it was told, which is why a widget column could hold
+  // the working placeholder while the row had long since ended.
+  //
+  // So where the stream stands down the tick keeps its own schedule until the
+  // run reaches a TERMINAL status, at the same two cadences and with the same
+  // per-tick work — nothing new is asked for, and a run that has ended is still
+  // asked nothing at all.
+  //
+  // AND THE TICK IS BELTED, because "until the run ends" is not the same
+  // sentence as "for ever" (convergence finding). A run can stay non-terminal
+  // by design and not because anyone is waiting on it: a recurring schedule's
+  // defining run keeps its status while every cron tick launches a clone, so a
+  // panel mounted on that row would otherwise ask the route every five seconds
+  // for as long as the tab is open, learning nothing each time. The belt is the
+  // same idiom the slot reader already uses — a bounded number of looks, after
+  // which the surface holds what it was last told rather than keeping a hot
+  // loop nobody asked for. It is sized in TIME so it survives a cadence change:
+  // long enough to hear a released run run, produce and end, short enough that
+  // a parked row costs a bounded number of reads.
+  const pollRunsUntilTerminal =
+    !streamEnabled &&
+    !RUN_WORK_IS_OVER_STATUSES.has(pollStatus) &&
+    untilTerminalTicks < UNTIL_TERMINAL_TICK_LIMIT;
 
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -1075,7 +1159,14 @@ export function AgenticRunPanel({
   const refetchDerivedContext = useCallback(async () => {
     let outcome: HitlDerivationOutcome;
     try {
-      if (taskId) {
+      // A SURFACE THAT BROUGHT ITS OWN READER IS ASKED WITH IT, TASK OR NO TASK
+      // (cinatra#3051, convergence). The A2A action below is a cookie-session
+      // server action; a run drawn on a host whose identity does not travel by
+      // cookie carries an a2a task id just like any other, so keying the
+      // transport on the task id alone would send exactly those runs back down
+      // the ambient-cookie path and leave their status frozen. The credential
+      // decides first; the task id decides only among cookie surfaces.
+      if (taskId && !readRunSnapshot) {
         // A2A transport path
         const snapshot = await getAgentBuilderTask(taskId);
         if (!snapshot || !("cinatraStatus" in snapshot)) {
@@ -1105,17 +1196,26 @@ export function AgenticRunPanel({
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
-        const response = await fetch(
-          `/api/agents/runs/${encodeURIComponent(runId)}`,
-          { cache: "no-store" },
-        );
-        if (!response.ok) {
+        //
+        // WHICH CREDENTIAL THIS ASKS WITH is the caller's to say, exactly as it
+        // is for the review slot (cinatra#3051): a surface that holds a broker
+        // credential passes its own reader, and this route is never asked with
+        // an ambient cookie from a frame that is same-origin to the app.
+        const data = readRunSnapshot
+          ? await readRunSnapshot()
+          : await (async () => {
+              const response = await fetch(
+                `/api/agents/runs/${encodeURIComponent(runId)}`,
+                { cache: "no-store" },
+              );
+              return response.ok ? ((await response.json()) as RunPollResponse) : null;
+            })();
+        if (!data) {
           outcome = {
             kind: "transport_failed",
-            reason: `the run could not be read (HTTP ${response.status})`,
+            reason: "the run could not be read",
           };
         } else {
-          const data = (await response.json()) as RunPollResponse;
           if (!streamEnabled) {
             if (data?.status) {
               setPollStatus(data.status);
@@ -1142,10 +1242,16 @@ export function AgenticRunPanel({
       };
     }
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
-  }, [runId, taskId, streamEnabled]);
+  }, [runId, taskId, streamEnabled, readRunSnapshot]);
+
+  // Whether the polling schedule below is the BELTED one — the stream stood
+  // down and the run is neither live nor waiting on the reader, so nothing but
+  // the belt ends it. A live run and a run waiting on the reader keep their own
+  // unbelted schedules, exactly as they shipped.
+  const beltedByTicks = !isPollLive && !isPollPendingApproval;
 
   useEffect(() => {
-    if (!isPollLive && !isPollPendingApproval) return;
+    if (!isPollLive && !isPollPendingApproval && !pollRunsUntilTerminal) return;
     const intervalMs = isPollLive ? 2000 : 5000;
     // NO leading tick on purpose. A run that is already paused when its surface
     // mounts is handed its gate as a seed (`initialHitlContext`), so the first
@@ -1153,10 +1259,26 @@ export function AgenticRunPanel({
     // recovery state's "has it even tried yet?" tolerance on the very first
     // frame, which is the one moment a paused run must not be called degraded.
     const interval = window.setInterval(() => {
-      void refetchDerivedContext();
+      // ONE READ IN FLIGHT AT A TIME. The tick fires on a clock, not on the
+      // answer, so a slow or hung read would otherwise stack a second request
+      // on top of the first every interval — the shape that turns one degraded
+      // read into a queue of them. A tick that finds the previous read still
+      // out simply skips: the next one is only an interval away.
+      if (pollInFlightRef.current) return;
+      if (beltedByTicks) setUntilTerminalTicks((prev) => prev + 1);
+      pollInFlightRef.current = true;
+      void refetchDerivedContext().finally(() => {
+        pollInFlightRef.current = false;
+      });
     }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [isPollLive, isPollPendingApproval, refetchDerivedContext]);
+  }, [
+    beltedByTicks,
+    isPollLive,
+    isPollPendingApproval,
+    pollRunsUntilTerminal,
+    refetchDerivedContext,
+  ]);
 
   // -------------------------------------------------------------------------
   // THE REVIEW SLOT (cinatra#2997) — kept current by the ONE shared reader both
@@ -1646,30 +1768,45 @@ export function AgenticRunPanel({
   // is about ("once the agent is done and the output generated"); a parked
   // marked gate draws from its own ref, whatever the rest of the run is doing.
   //
-  // AND THE SLOT'S REVIEW IS WITHHELD ON THE SITE WIDGET, which is a containment
-  // rather than a rule about the widget. The card's host declaration here is
-  // `run_card`, a COOKIE-session host: the runtime refuses a broker credential
-  // on it, so a card mounted inside a widget frame resolves and decides with the
-  // frame's ambient cookie instead of the reader's own credential. That is a
-  // PRE-EXISTING property of the marked-gate mount at the base of this branch,
-  // and it is left exactly as it was; what this change must not do is carry the
-  // COMPLETED-run review down the same wrong wall for the first time. The widget
-  // keeps the terminal rendering it has today, and this branch's own evidence
-  // already records the widget's run panel as blocked pending that work.
-  const widgetHostedPanel = ambientLifecycleHost === "site_widget";
+  // AND IT DRAWS ON EVERY HOST, INCLUDING THE ONE INSIDE A THIRD-PARTY PAGE
+  // (cinatra#3051). The slot's review used to be withheld when the ambient host
+  // was the site widget, and the withholding was a CONTAINMENT rather than a
+  // rule: the mount below declared `run_card`, a COOKIE-session host, so a card
+  // drawn inside a widget frame would have resolved and decided with the frame's
+  // ambient cookie instead of the reader's own proof. Withholding it made a
+  // second rule true by accident — the injected delivery is suppressed for a
+  // turn that draws the run card, on the ground that the run card shows the
+  // gate — so on that one host NOTHING drew the review and a finished run read
+  // as an output that could not be loaded.
+  //
+  // THE CONTAINMENT IS ANSWERED WHERE IT CAME FROM, at the mount: the nested
+  // provider re-declares the AMBIENT host and hands down the credential that
+  // host declared, so the card that draws inside a widget frame is a
+  // `site_widget` card asking with the reader's own broker proof and
+  // `credentials: "omit"`. The suppression is therefore gone from both
+  // readings, and it is gone for the marked-gate path too, which never had it.
+  //
+  // AND "FINISHED" IS EVERY WAY THE WORK CAN END (cinatra#3051). The rule above
+  // said `status === "completed"`, and the ratified drawing says the condition
+  // is the OUTPUT: "when the run's output is generated, the placeholder becomes
+  // the Review requested screen — the same slot, in the same turn". A run can
+  // generate its output and then fail — the gate is minted on the produced
+  // artifact and pins a real revision — and on that run the slot's review was
+  // withheld while the injected delivery was suppressed for the very turn that
+  // draws this card, so nothing anywhere drew the question. The condition is
+  // now the slot's own, in one shared place both run panels read it from
+  // (`inPlaceRunReviewRef`): the work is over, and for a run that ended any way
+  // other than `completed` the gate is still OPEN — a settled gate never takes
+  // the slot back from the run's own current reading.
   const inPlaceReviewRef = blockedOnInputGate
     ? null
     : markedReviewGate
       ? reviewGateCardRef
-      : status === "completed" && !widgetHostedPanel
-        ? reviewSlot.ref
-        : null;
+      : inPlaceRunReviewRef(status, reviewSlot);
   const runIsWorking =
     inPlaceReviewRef === null &&
     !blockedOnInputGate &&
-    (status === "queued" ||
-      status === "running" ||
-      (reviewMayStillOpen && !widgetHostedPanel));
+    (status === "queued" || status === "running" || reviewMayStillOpen);
 
   // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
   //
@@ -1694,8 +1831,40 @@ export function AgenticRunPanel({
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
+  //
+  // WHICH HOST THE CARD IS MOUNTED ON (cinatra#3051). `run_card` everywhere the
+  // panel stands on its own, unchanged. Inside a host that proves its reader
+  // with a credential rather than a cookie — the site widget — the card
+  // re-declares THAT host and carries its proof down, because a `run_card`
+  // declaration there would make the runtime drop the credential and send the
+  // resolve and the decision on the frame's ambient cookie. A conversation host
+  // whose identity really does travel by cookie keeps `run_card`: it is the
+  // panel's own host and nothing about it needs to change.
+  //
+  // A `site_widget` READING ALWAYS CARRIES ITS PROOF. The runtime publishes the
+  // host only for a declaration it accepted, and it accepts a non-cookie host
+  // only with `credentials: "omit"` — so wherever this reads `site_widget` the
+  // credential beside it is the one that made that declaration well-formed.
+  //
+  // AND A DECLARATION IT REFUSED IS NOT A WIDGET HERE. A widget mount that
+  // dropped its `auth` publishes no host and no credential, which is exactly
+  // what the run page publishes, so this reads `run_card` for both. That is the
+  // honest reading rather than a guess — the panel cannot invent a distinction
+  // the runtime deliberately does not draw — and the refusal is contained where
+  // it can act: the wrapper that mounts this panel inside a conversation asks
+  // the same question with the three-state answer and, on a refusal, issues no
+  // request and mounts no panel at all.
+  const reviewCardOnWidget = ambientLifecycleHost === "site_widget";
   const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider
+      host={reviewCardOnWidget ? "site_widget" : "run_card"}
+      {...(reviewCardOnWidget && ambientLifecycleAuth
+        ? { auth: ambientLifecycleAuth }
+        : {})}
+      {...(reviewCardOnWidget && ambientLifecycleFrame
+        ? { frame: ambientLifecycleFrame }
+        : {})}
+    >
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",

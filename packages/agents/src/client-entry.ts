@@ -42,6 +42,9 @@ export { AgenticRunPanel } from "./agentic-run-panel";
 export type { SerializedAgentRunMessage } from "./agentic-run-panel";
 // Chat prompt-window HITL gate descriptor types.
 export type { ChatGateDescriptor, ChatGateField } from "./agentic-run-panel";
+// The run snapshot a surface's own reader answers with (cinatra#3051): the
+// widget builds one on its broker credential and hands it to the panel.
+export type { RunPollResponse } from "./agentic-run-panel";
 // The panel's gate-context shape, so the chat wrapper can type the run API's
 // `hitlContext` it forwards as the panel's first-paint seed. TYPE-only, and
 // from the pure leaf `agentic-run-panel` already imports — no module joins the

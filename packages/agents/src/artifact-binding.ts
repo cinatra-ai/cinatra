@@ -212,6 +212,61 @@ export function producesObjectTypeIdForExtension(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// A PROMISE WITH NO ROAD (cinatra#3051).
+//
+// Binding parity is checked in ONE direction: every `outputs[].cinatra.artifact`
+// binding must name an extension the sibling manifest's `cinatra.produces`
+// promises. Nothing checked the reverse. So a manifest can declare it produces
+// an artifact while the service description wires no way to make one — no output
+// binding, no `artifact_materialize` node — and the package compiles, installs,
+// runs and completes owing nothing, without a word anywhere.
+//
+// FOUND WHILE DIAGNOSING A DIFFERENT SILENCE, and kept because it is the same
+// shape: a declaration nobody can act on, and no line naming it. It is not the
+// cause of the eighth proof round's empty runs — that cause is a disagreement
+// between two readings of one package, closed in
+// `@/lib/artifacts/run-artifact-materializer` — but one agent in this fleet is
+// in exactly this state today, and it says so nowhere.
+//
+// NAMED, NOT REFUSED. The compiler warns rather than refusing the package: a
+// refusal would take a working install road away from a package whose only fault
+// is an unkept promise, which tells its author nothing they could not be told
+// with a line. Whether an unkept promise should later be refused outright is a
+// separate, wider decision, deliberately not taken here.
+// ---------------------------------------------------------------------------
+
+/** The roads a service description can wire for a produced artifact. Both
+ *  collectors' results are structurally assignable, so the caller passes what it
+ *  already collected rather than re-walking the document. */
+export type DeclaredArtifactRoads = {
+  /** `outputs[].cinatra.artifact` bindings — `{ binding: { extension } }`. */
+  bindings: ReadonlyArray<{ binding: { extension: string } }>;
+  /** `artifact_materialize` passthrough nodes — `{ extension }`. */
+  materializeNodes: ReadonlyArray<{ extension: string }>;
+};
+
+/**
+ * The `cinatra.produces` extensions this document wires NO road for, sorted and
+ * de-duplicated. `[]` when the produces set is unknown/absent (nothing was
+ * promised, so nothing is unkept) or when every promised extension has at least
+ * one binding or one materialize node.
+ */
+export function producesWithoutMaterializationRoad(
+  producesRefs: readonly SemanticArtifactProducesRef[] | null | undefined,
+  roads: DeclaredArtifactRoads,
+): string[] {
+  if (producesRefs == null || producesRefs.length === 0) return [];
+  const wired = new Set<string>();
+  for (const b of roads.bindings) wired.add(b.binding.extension);
+  for (const n of roads.materializeNodes) wired.add(n.extension);
+  const unkept = new Set<string>();
+  for (const ref of producesRefs) {
+    if (!wired.has(ref.extension)) unkept.add(ref.extension);
+  }
+  return [...unkept].sort();
+}
+
 export type CollectedArtifactBinding = {
   /** EndNode component id the annotated output lives on. */
   nodeId: string;

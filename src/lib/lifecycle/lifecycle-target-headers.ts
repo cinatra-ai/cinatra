@@ -72,7 +72,10 @@ import {
   reviewTargetRowFacts,
   reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
-import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  decodeLifecycleGateRef,
+  type LifecycleGateRefPayload,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 /**
@@ -90,6 +93,17 @@ export async function readReviewTargetHeaders(input: {
   ref: string;
   state: LifecycleCardState;
   actorCtx: ReviewActorContext;
+  /** The ref ALREADY DECODED, where the caller had to decode it anyway. The ref
+   *  is opaque and its decode is a pure read, so a second one is not unsafe —
+   *  only redundant, and a second place two readings of the same answer could
+   *  disagree about which gate the answer is about.
+   *
+   *  PASSING THE KEY AT ALL — including as `null` — says the caller decoded and
+   *  this is the answer: `null` means the ref did not decode, and there is
+   *  nothing to gain by decoding it a second time to be told so again. Only an
+   *  input that OMITS the key decodes its own, so the module still stands on
+   *  its own for every other caller. */
+  gate?: LifecycleGateRefPayload | null;
 }): Promise<LifecycleTargetHeader[] | null> {
   const { viewType, ref, state, actorCtx } = input;
   // Only the review kind has a target, and only the three states that draw one
@@ -108,10 +122,31 @@ export async function readReviewTargetHeaders(input: {
   // them; the answer stops where the drawing stops.
   if (state.state === "settled" && state.outcome === undefined) return null;
   try {
-    const payload = decodeLifecycleGateRef(ref);
+    const payload = "gate" in input ? (input.gate ?? null) : decodeLifecycleGateRef(ref);
     if (!payload) return null;
     const gate = await readReviewGate(payload.runId, payload.reviewTaskId);
     if (!gate || gate.pinnedTargets.length === 0) return null;
+    // THE CEILING REFUSES THE READING; IT DOES NOT TRIM IT (cinatra#3058, fix
+    // leg 8; the convergence round on the reconciled merge).
+    //
+    // The wire bounds how many headers one answer may carry, and a gate may pin
+    // more targets than that. Composing the first `LIFECYCLE_TARGET_HEADERS_MAX`
+    // of them would hand the card a PREFIX — and the card draws this gate's
+    // whole pinned set through ONE island under these headers, so a prefix does
+    // not say "some of them", it says "these are the artifacts you are deciding
+    // about". §IV's sentence is "EVERY target opens with a header that names
+    // what is under review and fixes it in place", and a prefix names the
+    // reader's decision short. It would also make §V's floor lie: the card names
+    // the floor's `package` half only where one name is true of the whole
+    // island, and off a prefix that name can be true of the prefix and false of
+    // the gate — exactly the invented value "never a raw error or manifest
+    // value" keeps off that line.
+    //
+    // So an over-ceiling gate composes NOTHING and the card draws §IV's header
+    // with no facts in it, which names the READING truthfully. This is the same
+    // whole-or-factless rule the unreadable row below takes, applied to the one
+    // other way this set can come back short.
+    if (gate.pinnedTargets.length > LIFECYCLE_TARGET_HEADERS_MAX) return null;
 
     const actor = buildActorContextFromPrimitive(
       actorCtx.actor,
@@ -149,7 +184,29 @@ export async function readReviewTargetHeaders(input: {
               orgId: actorCtx.orgId,
               actor,
             });
-      if (read.kind !== "ok") continue;
+      // THE WHOLE READING OR THE FACTLESS ONE, never a true half of it
+      // (cinatra#3058, fix leg 8; codex round on the reconciled merge).
+      //
+      // The review drawing's target section opens "Every target opens with a
+      // header that names what is under review and fixes it in place" — EVERY
+      // target. A gate pins a SET, and the card draws that whole set through ONE
+      // island under the headers composed here; so a reading that names two of a
+      // gate's three targets does not name a set short by one, it tells the
+      // reader they are deciding about two artifacts. That is the card's own
+      // sentence applied to the reading rather than to a row: naming the wrong
+      // artifact over a review is worse than naming none, and the card already
+      // draws the drawing's header with NO facts in it for an answer that
+      // carried none.
+      //
+      // It is also what keeps the floor's `package` half true. The card reads
+      // that half off the headers it was given and names it only where one name
+      // is true of the whole island; a package agreed on by the readable half of
+      // a two-package gate would be exactly the invented value the drawing's
+      // "never a raw error or manifest value" keeps off that line.
+      //
+      // The gate's own ceiling, answered above before any row was read, is the
+      // other way this set can come back short, and it takes the same answer.
+      if (read.kind !== "ok") return null;
       const artifact = read.artifact;
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
@@ -168,7 +225,6 @@ export async function readReviewTargetHeaders(input: {
           .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
           .map((fact) => clamp(fact, "—")),
       });
-      if (headers.length === LIFECYCLE_TARGET_HEADERS_MAX) break;
     }
     return headers.length > 0 ? headers : null;
   } catch {

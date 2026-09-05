@@ -377,6 +377,59 @@ describe("a target header belongs to the review gate and to no other kind", () =
     expect(parsed?.targetHeaders).toEqual([HEADER]);
   });
 
+  it("an answer that carries NONE is legal, and says nothing by carrying none", () => {
+    // `null`, omitted, and "the composer could not name this target" are ONE
+    // answer on this wire and must stay one: a gate whose rows could not be
+    // read, an answer composed before the field existed and a resolver that was
+    // not asked all leave the card with no header to draw, and the card draws
+    // its factless reading rather than an invented one.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "pending" as const, canDecide: true, canComment: true },
+      body: null,
+    };
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", answer)?.targetHeaders).toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: null })
+        ?.targetHeaders,
+    ).toBeNull();
+  });
+
+  it("REFUSES a MALFORMED header rather than drawing part of one", () => {
+    // The control first: this exact answer, with a well-formed header, parses.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "pending" as const, canDecide: true, canComment: true },
+      body: null,
+    };
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: [HEADER] }),
+    ).not.toBeNull();
+    for (const bad of [
+      // Not an array of headers at all.
+      { targetHeaders: HEADER },
+      // A field the header does not carry — a producer this card does not trust.
+      { targetHeaders: [{ ...HEADER, artifactId: "artifact-1" }] },
+      // The one field that may be empty is `objectType`; a title that is not a
+      // string, and one that is empty, are both refused.
+      { targetHeaders: [{ ...HEADER, title: 7 }] },
+      { targetHeaders: [{ ...HEADER, title: "" }] },
+      // Facts are display strings, never a shape the card would have to word.
+      { targetHeaders: [{ ...HEADER, facts: [{ label: "Team" }] }] },
+      // OVER THE WIRE'S OWN CEILINGS. Bounded like every other field here: one
+      // header's text and the number of headers a gate may carry are both
+      // capped, and an answer over either cap is refused rather than trimmed —
+      // a trimmed header would name the target with a value nobody composed.
+      { targetHeaders: [{ ...HEADER, title: "T".repeat(500) }] },
+      { targetHeaders: Array.from({ length: 13 }, () => HEADER) },
+    ]) {
+      expect(
+        parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, ...bad }),
+        JSON.stringify(bad),
+      ).toBeNull();
+    }
+  });
+
   it("REFUSES one on another kind — an answer to a question that kind never asks", () => {
     // The control first: this exact answer, WITHOUT the header, parses. So the
     // refusal below is the header's doing and not a body that was wrong anyway.
@@ -438,6 +491,42 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: SCHEDULE_SETTLED_BODY,
       }),
+    ).toBeNull();
+  });
+
+  it("REFUSES an `absent` that arrives with a target header — a denial NAMES nothing", () => {
+    // `absent` is the collapse of every denial into one answer, and a header is
+    // the one field on this wire that NAMES an artifact. An `absent` carrying
+    // one would therefore be the oracle the collapse exists to close: it would
+    // tell a reader who may not know the gate exists what the gate is about.
+    // The refusal is the whole envelope's, not the header's — a producer that
+    // attached it is a producer whose other answers cannot be trusted either.
+    //
+    // The control first: this exact `absent`, WITHOUT the header, parses.
+    const answer = {
+      kind: "artifact_review_gate" as const,
+      state: { state: "absent" as const },
+      body: null,
+    };
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        ...answer,
+        targetHeaders: [
+          {
+            title: "Q3 re-engagement email",
+            typeLabel: "Email",
+            objectType: "@cinatra-ai/email:draft",
+            revisionId: "rev_8f3a1c2d4e5f6a7b",
+            facts: ["Team", "Private"],
+          },
+        ],
+      }),
+    ).toBeNull();
+    // An EMPTY set is refused on the same reading: it is still a `targetHeaders`
+    // key on a denial, and `null`/omitted is the one shape `absent` may carry.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", { ...answer, targetHeaders: [] }),
     ).toBeNull();
   });
 });
@@ -610,6 +699,10 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
 // this origin — and refuses the whole answer for anything else. `absent` may
 // not carry one at all: it is the collapse of every denial, and a URL addressed
 // to a gate beside it would be the oracle the collapse exists to close.
+
+// ---------------------------------------------------------------------------
+// The gate's own TARGET ROWS ride the answer (cinatra#3051)
+// ---------------------------------------------------------------------------
 
 describe("the island URL rides the answer", () => {
   const pending = (islandSrc: unknown) => ({

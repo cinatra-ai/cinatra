@@ -10,6 +10,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const deriveFrameBinding = vi.fn();
 const createAuthTransaction = vi.fn();
 const redeemUserAuthCode = vi.fn();
+const renewUserWidgetToken = vi.fn();
+const mintWidgetTokenScope = vi.fn();
+const mintWidgetTokenAudience = vi.fn();
 const mintWidgetStreamToken = vi.fn();
 const allowConnectTokenRequest = vi.fn();
 const allowNamedRateLimit = vi.fn();
@@ -27,7 +30,20 @@ vi.mock("@/lib/widget-frame-auth", async () => {
 vi.mock("@/lib/widget-user-auth", () => ({
   createAuthTransaction: (...a: unknown[]) => createAuthTransaction(...a),
   redeemUserAuthCode: (...a: unknown[]) => redeemUserAuthCode(...a),
+  renewUserWidgetToken: (...a: unknown[]) => renewUserWidgetToken(...a),
 }));
+// The two GRANT-COMPOSING mints. They are mocked here for one reason only: so
+// the renewal arm below can assert that the route never reaches either of them.
+vi.mock("@/lib/widget-lifecycle-scope", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/widget-lifecycle-scope")>(
+    "@/lib/widget-lifecycle-scope",
+  );
+  return {
+    ...actual,
+    mintWidgetTokenScope: (...a: unknown[]) => mintWidgetTokenScope(...a),
+    mintWidgetTokenAudience: (...a: unknown[]) => mintWidgetTokenAudience(...a),
+  };
+});
 vi.mock("@/lib/widget-token-broker", () => ({
   mintWidgetStreamToken: (...a: unknown[]) => mintWidgetStreamToken(...a),
 }));
@@ -51,6 +67,7 @@ vi.mock("@/lib/widget-stream-agents.server", () => ({
 
 import { POST as frameInit } from "../init/route";
 import { POST as frameToken } from "../token/route";
+import { POST as frameRenew, WIDGET_USER_TOKEN_HEADER } from "../renew/route";
 
 const SELF = "https://app.cinatra.test";
 const SITE = {
@@ -94,6 +111,13 @@ beforeEach(() => {
   redeemUserAuthCode.mockReturnValue({
     ok: true,
     token: "cwu_the_user_bearer",
+    tokenType: "Bearer",
+    expiresIn: 900,
+    scope: "wordpress-content-editor.user lifecycle.read",
+  });
+  renewUserWidgetToken.mockReturnValue({
+    ok: true,
+    token: "cwu_the_successor_bearer",
     tokenType: "Bearer",
     expiresIn: 900,
     scope: "wordpress-content-editor.user lifecycle.read",
@@ -299,5 +323,143 @@ describe("POST /api/widget-auth/frame/token", () => {
     );
     expect(res.status).toBe(400);
     expect(redeemUserAuthCode).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3051 — POST /api/widget-auth/frame/renew
+//
+// The road that keeps an ALREADY-OPEN column working. It is the mint's road
+// walked a second time, so the properties worth asserting are the same ones:
+// the frame and nobody else reaches it, the server decides the binding, the
+// credential travels where a credential should, both halves or neither, and one
+// refusal shape for every reason.
+// ---------------------------------------------------------------------------
+describe("POST /api/widget-auth/frame/renew", () => {
+  const body = { ...SELECTORS, grantType: "widget_token_renewal" };
+  const HELD = "cwu_the_held_bearer";
+
+  function renewRequest(
+    overrides: { body?: Record<string, unknown>; headers?: Record<string, string> } = {},
+  ) {
+    return frameRequest("/api/widget-auth/frame/renew", overrides.body ?? body, {
+      [WIDGET_USER_TOKEN_HEADER]: HELD,
+      ...overrides.headers,
+    });
+  }
+
+  it("returns the FRESH PAIR to the frame, through no other origin", async () => {
+    const res = await frameRenew(renewRequest());
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.userToken).toBe("cwu_the_successor_bearer");
+    expect(json.transportToken).toBe("cit_the_site_transport");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+  });
+
+  it("renews against the SERVER-DERIVED site, origin and agent, whatever the caller names", async () => {
+    await frameRenew(
+      renewRequest({
+        body: { ...body, siteId: "some-other-site", origin: "https://not.ours.test", agentSlug: "some-other-agent" },
+      }),
+    );
+    expect(renewUserWidgetToken).toHaveBeenCalledWith({
+      token: HELD,
+      agentSlug: AGENT_SLUG,
+      requestOrigin: SITE.siteOrigin,
+    });
+    // The transport half is minted for that same derived site and generation.
+    expect(mintWidgetStreamToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSlug: AGENT_SLUG,
+        origin: SITE.siteOrigin,
+        connectSite: { siteId: SITE.siteId, credentialVersion: SITE.credentialVersion },
+      }),
+    );
+  });
+
+  it("reads the bearer from the HEADER — a bearer in the body is not a bearer", async () => {
+    const res = await frameRenew(
+      frameRequest("/api/widget-auth/frame/renew", { ...body, userToken: "cwu_in_the_body" }),
+    );
+    expect(res.status).toBe(400);
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+    expect(await res.text()).not.toContain("cwu_");
+  });
+
+  it("BOTH OR NOTHING: a failed transport mint returns no user bearer either — and never SPENDS the held one", async () => {
+    mintWidgetStreamToken.mockReturnValue(null);
+    const res = await frameRenew(renewRequest());
+    expect(res.status).toBe(400);
+    expect(await res.text()).not.toContain("cwu_");
+    // The convergence round's second finding: the rotation deletes the bearer
+    // the frame is holding, so a transport mint that failed AFTER it would leave
+    // the column with a credential that no longer exists and no pair to replace
+    // it. The half that can fail cheaply is minted FIRST, so a refusal here has
+    // spent nothing at all.
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a cross-origin caller before the module is asked anything", async () => {
+    const res = await frameRenew(
+      renewRequest({ headers: { Origin: "https://wp.example.test" } }),
+    );
+    expect(res.status).toBe(401);
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+    expect(await res.text()).not.toContain("cwu_");
+  });
+
+  it("answers ONE generic shape for every reason the module can refuse for", async () => {
+    const bodies: string[] = [];
+    for (const reason of [
+      "not_cwu_token",
+      "not_found",
+      "expired",
+      "agent_mismatch",
+      "origin_mismatch",
+      "session_revoked",
+      "site_revoked",
+      // The racer that lost: two presentations of one bearer, one successor.
+      "already_rotated",
+    ]) {
+      renewUserWidgetToken.mockReturnValue({ ok: false, reason });
+      const res = await frameRenew(renewRequest());
+      expect(res.status).toBe(400);
+      bodies.push(await res.text());
+    }
+    // A signed-out person and an unknown bearer must be indistinguishable from
+    // here: the reason reaches the audit trail and nothing else.
+    expect(new Set(bodies).size).toBe(1);
+  });
+
+  it("refuses a grant type other than widget_token_renewal, before the module is asked", async () => {
+    const res = await frameRenew(
+      renewRequest({ body: { ...body, grantType: "authorization_code" } }),
+    );
+    expect(res.status).toBe(400);
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits on the bearer's HASH, never on the bearer itself", async () => {
+    await frameRenew(renewRequest());
+    const [charged] = allowConnectTokenRequest.mock.calls.at(-1) as [
+      { ip: string; codeKey: string },
+    ];
+    // The key is what the HASHER answered, never the value handed to it. (The
+    // hasher is doubled as `h(x)` in this suite, so the double's answer is what
+    // the assertion names; the point is that the route passes the digest and
+    // does not key the bucket on the credential.)
+    expect(charged.codeKey).toBe(`h(${HELD})`);
+    expect(charged.codeKey).not.toBe(HELD);
+  });
+
+  it("composes NO grant of its own — neither grant-composing mint is reached", async () => {
+    await frameRenew(renewRequest());
+    // The successor's claims are copied off the row the module reads. A route
+    // that could compose a scope or an audience here would be a route through
+    // which a renewal could be wider than the sign-in that authorized it.
+    expect(mintWidgetTokenScope).not.toHaveBeenCalled();
+    expect(mintWidgetTokenAudience).not.toHaveBeenCalled();
   });
 });

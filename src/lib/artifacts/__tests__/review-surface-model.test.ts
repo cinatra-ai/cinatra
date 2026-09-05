@@ -356,13 +356,49 @@ describe("the settled copy names the outcome and its decider", () => {
 });
 
 describe("reviewTargetRowFacts — the header meta line's read-only row facts", () => {
-  // THE DRAWING DRAWS THE PAIR BARE. §IV names the facts — "the read-only row
-  // facts the host authorized — owner level / visibility, MIME, and updated
-  // time" — and every example line in the ratified drawings prints them with no
-  // label at all: "… · Team · Private · text/html · updated 8 min ago" (§IV, and
-  // the same line again in §V.1's read-only review target). The labelled form
-  // shipped here was a local reading of a plan sentence; the drawing decides, so
-  // the labels go and both facts stay.
+  // THE LINE IS THE DRAWING'S LINE. The header's meta line is drawn as
+  // "… · Team · Private · text/html · updated 8 min ago" (§IV, and §II's own
+  // example): the two scope facts as BARE words in the host's own vocabulary,
+  // and the instant as a RELATIVE time. The line used to print labelled raw
+  // enum values and the raw ISO instant, which is neither.
+  const NOW = new Date("2026-08-29T03:15:00.000Z");
+  const EIGHT_MINUTES_EARLIER = "2026-08-29T03:07:00.000Z";
+
+  it("writes the scope words bare, in the host's own vocabulary", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: EIGHT_MINUTES_EARLIER,
+      },
+      NOW,
+    );
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 minutes ago"]);
+  });
+
+  it("never prints a raw instant", () => {
+    const line = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: EIGHT_MINUTES_EARLIER,
+      },
+      NOW,
+    ).join(" · ");
+    expect(line).not.toContain(EIGHT_MINUTES_EARLIER);
+    expect(line).not.toContain("T03:07");
+    expect(line).not.toContain("Z");
+    expect(line).toBe("Organization · Organization · text/markdown · updated 8 minutes ago");
+  });
+
+  // THE DRAWING DRAWS THE PAIR BARE. Section IV names the facts and every
+  // example line in the ratified drawing prints them with no label at all:
+  // "... Team / Private / text/html / updated 8 min ago". The labelled form
+  // shipped here was a local reading of a plan sentence; the drawing decides,
+  // so the labels go and both facts stay. The drawing writes the two scope
+  // words CAPITALISED, which is what the host's own vocabulary prints.
   it("prints the two scope facts BARE, in the drawing's order", () => {
     const facts = reviewTargetRowFacts(
       {
@@ -374,7 +410,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    expect(line).toBe("Organization · Organization · text/markdown · updated 8 minutes ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -389,13 +425,13 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 minutes ago"]);
   });
 
-  // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
-  // time on the header's mono line ("… · text/html · updated 8 min ago"); the
-  // line printed the raw ISO timestamp the row carries instead.
-  it("draws a relative updated time, never the raw ISO timestamp (the drawing: \u201cupdated 8 min ago\u201d)", () => {
+  // The drawing draws a RELATIVE time on the header's mono line
+  // ("... text/html / updated 8 min ago"); the line printed the raw ISO
+  // timestamp the row carries instead.
+  it("draws a relative updated time, never the raw ISO timestamp", () => {
     const now = new Date("2026-08-31T08:27:26.458Z");
     const facts = reviewTargetRowFacts(
       {
@@ -421,7 +457,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 minutes ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {
@@ -434,9 +470,47 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     expect(facts[3]).toBe("updated not-an-instant");
   });
 
-  it("carries no type keying — every artifact type reads the same line", () => {
-    const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
-    const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
+  it("keeps every fact the drawing draws, in the drawing's order", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "user",
+        visibility: "private",
+        mime: "application/pdf",
+        updatedAt: EIGHT_MINUTES_EARLIER,
+      },
+      NOW,
+    );
+    expect(facts).toEqual(["User", "Private", "application/pdf", "updated 8 minutes ago"]);
+  });
+
+  it("passes a value that is ALREADY a relative reading through untouched", () => {
+    // The card draws the same line from the gate's own rows, and a row that
+    // already carries a phrase rather than an instant must not be re-read as a
+    // date and printed as "Invalid Date".
+    const facts = reviewTargetRowFacts(
+      { ownerLevel: "team", visibility: "private", mime: null, updatedAt: "8 min ago" },
+      NOW,
+    );
+    expect(facts).toEqual(["Team", "Private", "updated 8 min ago"]);
+  });
+
+  it("drops an absent fact rather than printing an absence", () => {
+    const facts = reviewTargetRowFacts(
+      { ownerLevel: null, visibility: null, mime: null, updatedAt: null },
+      NOW,
+    );
+    expect(facts).toEqual([]);
+  });
+
+  it("carries no type keying — every artifact type reads the same scope words", () => {
+    const a = reviewTargetRowFacts(
+      { ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: null },
+      NOW,
+    );
+    const b = reviewTargetRowFacts(
+      { ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: null },
+      NOW,
+    );
     expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
   });
 });

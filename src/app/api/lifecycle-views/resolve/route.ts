@@ -8,7 +8,10 @@ import {
   type LifecycleCardState,
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
-import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  decodeLifecycleGateRef,
+  type LifecycleGateRefPayload,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
@@ -161,22 +164,32 @@ async function resolveWidgetBranchActor(
  * resolve that produced it. That is also why the credentialed frame drops
  * `loading="lazy"` — a URL that expires cannot wait for a scroll.
  */
-function mintIslandSrcForWidget(
-  branch: WidgetBranch,
-  viewType: LifecycleDataPartViewType,
-  ref: string,
-  state: LifecycleCardState,
-): string | null {
-  if (viewType !== "artifact_review_gate") return null;
-  // Exactly the states whose card frames an island — read off the same
-  // discriminant the card branches on, so the two cannot disagree about which
-  // reading has a frame to authenticate.
-  const framesIsland =
+/**
+ * THE ONE DISCRIMINANT — which answers draw a target at all.
+ *
+ * Exactly the states whose card draws a target, read off the same discriminant
+ * the card branches on. Two readings of this answer hang off it — §IV's target
+ * HEADER, which the card draws in every island state, and (on the widget arm)
+ * the island's own CREDENTIAL — and asking it once is what keeps the two from
+ * disagreeing about which answer has a target to name. `absent` above all
+ * carries neither.
+ */
+function drawsATarget(viewType: LifecycleDataPartViewType, state: LifecycleCardState): boolean {
+  if (viewType !== "artifact_review_gate") return false;
+  return (
     state.state === "pending" ||
     state.state === "restricted" ||
-    (state.state === "settled" && state.outcome !== undefined);
-  if (!framesIsland) return null;
-  const gate = decodeLifecycleGateRef(ref);
+    (state.state === "settled" && state.outcome !== undefined)
+  );
+}
+
+function mintIslandSrcForWidget(
+  branch: WidgetBranch,
+  ref: string,
+  gate: LifecycleGateRefPayload | null,
+): string | null {
+  // The ref is decoded ONCE, by the caller, and both readings are handed the
+  // same payload (cinatra#3058, fix leg 8).
   if (!gate) return null;
   return mintWidgetReviewIslandUrl({
     claims: branch.claims,
@@ -302,19 +315,32 @@ export async function POST(request: Request): Promise<Response> {
   // top of that. The header rides the resolve answer rather than the wire
   // payload, so the DATA_PART in the persisted, LLM-visible transcript still
   // carries a ref and nothing else.
+  // ONE DECODE, FOR BOTH READINGS. The header is addressed by the gate the ref
+  // names, and so is the island credential minted for the same gate on the
+  // widget arm; the answer decodes the ref once, for the states that have a
+  // target at all, and hands the same payload to each.
+  const gateRef = drawsATarget(parsed.data.viewType, withOutcome)
+    ? decodeLifecycleGateRef(parsed.data.ref)
+    : null;
   const targetHeaders = await readReviewTargetHeaders({
     viewType: parsed.data.viewType,
     ref: parsed.data.ref,
     state: withOutcome,
     actorCtx,
+    gate: gateRef,
   });
 
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
-  // only on the widget arm. A first-party answer omits the key entirely, so the
-  // three cookie hosts receive the byte-identical response they received
-  // before this slice and keep composing their own island URL.
+  // only on the widget arm. A first-party answer omits the key entirely and the
+  // three cookie hosts keep composing their own island URL.
+  //
+  // (Their response is no longer byte-identical to the pre-#2754 one, and has
+  // not been since cinatra#3141 item 7 above: every host's answer now also
+  // carries §IV's target header, because every host draws it. What is still
+  // true is the sentence this comment was written for — the CREDENTIAL is the
+  // widget arm's alone, and a cookie host receives no island key at all.)
   const islandSrc = widgetBranch
-    ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
+    ? mintIslandSrcForWidget(widgetBranch, parsed.data.ref, gateRef)
     : null;
 
   return Response.json(

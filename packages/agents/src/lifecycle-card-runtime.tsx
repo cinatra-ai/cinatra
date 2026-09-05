@@ -756,6 +756,81 @@ export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * How many further looks a card that is KEEPING LOOKING may take, and how far
+ * apart. Same shape, and the same reasoning, as the run review slot's reader
+ * further down this file: brisk while the answer is likely seconds away, wider
+ * once it plainly is not, and a COUNT that ends it either way.
+ *
+ * At this cadence the belt is reached after roughly eight and a half minutes of
+ * an uninterrupted open page. That is the bound on the LOOKING, not on the
+ * card: `focus` still refreshes it afterwards, which is the same backstop every
+ * lifecycle card has always had.
+ */
+/**
+ * THE CADENCE ITSELF, EXPORTED (cinatra#3051).
+ *
+ * It was module-private, and then a second reader needed it: the embedded
+ * column on a third-party page has to keep re-reading its own conversation
+ * while it is open, for exactly the reason a card keeps looking — the answer it
+ * wants may arrive minutes after it asked the first time. Two hand-tuned sets of
+ * numbers for the same discipline would drift apart the first time either was
+ * touched, and neither reader would know. So there is ONE statement of it, here,
+ * where the first reader that needed it already lives, and both spend it.
+ *
+ * It stays in THIS file rather than moving to a leaf of its own on purpose: a
+ * new module reachable from the locked route graphs costs a module in each of
+ * them, and those ceilings may only ever shrink.
+ */
+export const BOUNDED_LOOK_LIMIT = 60;
+
+export function boundedLookDelay(reads: number): number {
+  if (reads < 5) return 2000;
+  if (reads < 15) return 5000;
+  return 10_000;
+}
+
+/** This file's own names for them, unchanged, so the poll below reads as it
+ *  always did. Aliases — not a second set of numbers. */
+const RESOLVE_POLL_LIMIT = BOUNDED_LOOK_LIMIT;
+const resolvePollDelay = boundedLookDelay;
+
+/**
+ * The readings a further look could not improve on.
+ *
+ * `settled` is the obvious one: a resolved gate does not un-resolve. `absent`
+ * and `advisory` join it because BOTH draw no card at all — `absent` is every
+ * denial path's answer and a ref that does not resolve, `advisory` is not a
+ * review state — so a card holding either is invisible, and an invisible card
+ * that keeps asking is pure cost. A reading that arrives at one of these is
+ * where the looking stops; `focus` remains the backstop for the rare read whose
+ * standing genuinely changes underneath it.
+ */
+const TERMINAL_RESOLVE_READINGS: ReadonlySet<unknown> = new Set([
+  "settled",
+  "absent",
+  "advisory",
+]);
+
+/**
+ * Is this answer still OPEN — that is, could the server's next answer differ?
+ *
+ * NO ANSWER AT ALL IS OPEN, and that is load-bearing: a refused request leaves
+ * the answer null (a 401 on a widget whose bearer has aged out, a 5xx, a body
+ * that did not parse), and that is exactly the state a further look exists to
+ * climb out of.
+ *
+ * Written against the answer's shape rather than a kind-specific type so a card
+ * kind that carries no state at all simply never polls, instead of polling on a
+ * field this cannot read.
+ */
+function resolveAnswerIsStillOpen(envelope: unknown): boolean {
+  if (envelope === null || typeof envelope !== "object") return true;
+  const state = (envelope as { state?: unknown }).state;
+  if (state === null || typeof state !== "object") return false;
+  return !TERMINAL_RESOLVE_READINGS.has((state as { state?: unknown }).state);
+}
+
+/**
  * Resolve the authoritative ANSWER for one lifecycle ref: the state ladder and
  * the body this kind is authorized to carry. Returns `null` until the first
  * resolve completes — the caller renders nothing while it is null.
@@ -779,14 +854,28 @@ export function useLifecycleCardColorScheme(): LifecycleColorScheme | null {
  * decision lands, or when the reader presses the §IV "no longer open" Refresh,
  * the card bumps the token and the SAME identity is re-resolved through the
  * same monotonic-request guard.
+ *
+ * `keepLookingWhileOpen` (cinatra#3051) adds a BOUNDED poll for as long as the
+ * reading is still open. It is OPT-IN, and deliberately so: mount + focus is the
+ * right shape for a card whose answer only ever changes because the reader
+ * themself changed it, and every card that had that shape keeps it byte for
+ * byte. It is wrong for a gate that ANOTHER PERSON, on another page, can settle
+ * out from under this one — see the effect below for the measurement.
  */
 export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(params: {
   viewType: K;
   ref: string;
   enabled: boolean;
   reloadToken?: number;
+  keepLookingWhileOpen?: boolean;
 }): LifecycleResolveAnswerFor<K> | null {
-  const { viewType, ref, enabled, reloadToken = 0 } = params;
+  const {
+    viewType,
+    ref,
+    enabled,
+    reloadToken = 0,
+    keepLookingWhileOpen = false,
+  } = params;
   // The host's credential declaration (cinatra#2577). Read here so the resolve
   // callback closes over ONE value; a host that declares none keeps S1's exact
   // same-origin cookie request.
@@ -876,6 +965,74 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
       window.removeEventListener("focus", onFocus);
     };
   }, [enabled, resolve, reloadToken]);
+
+  // ---------------------------------------------------------------------
+  // AND IT KEEPS LOOKING WHILE THE READING IS OPEN (cinatra#3051).
+  //
+  // THE MEASUREMENT. Two third-party pages open on one review gate. Approve was
+  // pressed in one; the gate row resolved and that column settled from its own
+  // decide answer. SIX MINUTES LATER the other column still drew a pending card
+  // with a live decision bar — a terminal control offered on a gate the store
+  // had already closed — and only settled when the page was reloaded.
+  //
+  // WHY MOUNT + FOCUS COULD NOT SEE IT. Both are events about THIS reader: one
+  // says "you arrived", the other "you came back". Neither fires for a page that
+  // is simply sitting open while somebody ELSE decides, which is the ordinary
+  // shape of a gate two people can reach.
+  //
+  // THE BOUND, AND WHY IT IS NOT A HEARTBEAT. The cadence backs off exactly as
+  // the run's review-slot reader below does, and the COUNT is the belt that ends
+  // it — a page left open all day does not poll all day. Focus remains the
+  // backstop past the bound. And a SETTLED reading stops it outright: a terminal
+  // answer cannot change, so looking again could only ever cost.
+  const openReading = resolveAnswerIsStillOpen(
+    resolved !== null && resolved.identity === identity ? resolved.envelope : null,
+  );
+  const pollGeneration = `${identity}\u0000${reloadToken}`;
+  const pollReadsRef = useRef({ generation: pollGeneration, reads: 0 });
+  if (pollReadsRef.current.generation !== pollGeneration) {
+    pollReadsRef.current = { generation: pollGeneration, reads: 0 };
+  }
+  // THE LINK THAT KEEPS THE CHAIN WHOLE.
+  //
+  // Each look re-arms the next one by CHANGING SOMETHING THIS EFFECT DEPENDS ON.
+  // Re-arming off `resolved` alone was a chain with a break in it: a look that
+  // does not reach state — a non-2xx, a body that did not parse, an offline
+  // moment — left every dependency exactly as it was, so no further look was
+  // ever armed and the column stayed pending for the rest of the page's life,
+  // which is the very defect this poll exists to close. So a completed look
+  // announces itself here whatever it answered, and the belt (not the answer)
+  // is what ends the looking.
+  const [pollTick, setPollTick] = useState(0);
+  useEffect(() => {
+    if (!enabled || !keepLookingWhileOpen || !openReading) return;
+    const counter = pollReadsRef.current;
+    if (counter.reads >= RESOLVE_POLL_LIMIT) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      counter.reads += 1;
+      void resolve(controller.signal).finally(() => {
+        // Not after an abort: the cleanup that aborted has already re-armed
+        // this effect, and a tick on top of it would arm a second timer.
+        if (!controller.signal.aborted) setPollTick((tick) => tick + 1);
+      });
+    }, resolvePollDelay(counter.reads));
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // This is a chain of single timeouts, never a standing interval that could
+    // outlive its own card: exactly one further look is armed per completed
+    // look, and only while the reading is still open and the belt still holds.
+  }, [
+    enabled,
+    keepLookingWhileOpen,
+    openReading,
+    resolve,
+    reloadToken,
+    resolved,
+    pollTick,
+  ]);
 
   return resolved !== null && resolved.identity === identity ? resolved.envelope : null;
 }
@@ -1315,7 +1472,21 @@ export function useRunMomentCard({
 
 /** The run's review slot: the server-minted ticket for its review screen, and
  *  whether a produced output's review question is still open. */
-export type RunReviewSlot = { ref: string | null; awaiting: boolean };
+export type RunReviewSlot = {
+  ref: string | null;
+  awaiting: boolean;
+  /**
+   * IS THE GATE THE REF NAMES STILL OPEN? (cinatra#3051.)
+   *
+   * The slot names the run's MOST RECENT gate whether it is pending or settled
+   * — a reader who decided one must keep seeing what they decided — so the ref
+   * alone cannot answer "is there a question waiting here". Optional because a
+   * seed written before this field existed carries no answer, and the absence
+   * reads as "not known to be open", which is the reading those seeds already
+   * had.
+   */
+  pending?: boolean;
+};
 
 /**
  * Reads the slot with the surface's OWN credential, and with the caller's abort
@@ -1327,7 +1498,111 @@ export type RunReviewSlotReader = (
   signal: AbortSignal,
 ) => Promise<RunReviewSlot | null>;
 
-export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = { ref: null, awaiting: false };
+export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = {
+  ref: null,
+  awaiting: false,
+  pending: false,
+};
+
+/**
+ * THE STATUSES IN WHICH THE RUN'S WORK IS OVER.
+ *
+ * Kept equal to `TERMINAL_STATUSES` in `orchestrator-execution.ts`, and named
+ * here because THIS is the module both run panels read the review slot through.
+ */
+export const RUN_WORK_IS_OVER_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * THE BELT ON A RUN PANEL'S UNTIL-TERMINAL POLL (cinatra#3051, convergence).
+ *
+ * Where the run stream stands down, the panel's own tick is the only transport
+ * and it has to keep its schedule until the run ends — but "until the run ends"
+ * is not the same sentence as "for ever". A run can stay non-terminal BY
+ * DESIGN and not because anyone is waiting on it: the defining run of a
+ * recurring schedule keeps its status while each cron tick launches a clone. A
+ * panel mounted on that row would otherwise ask the route every five seconds
+ * for as long as the tab is open and learn nothing each time.
+ *
+ * So the tick is belted the way the slot reader above is belted — a bounded
+ * number of looks, after which the surface holds what it was last told. It is
+ * sized as a WINDOW over the slow cadence, so it stays the same amount of
+ * patience if the cadence is ever retuned. Only the parked shapes are counted:
+ * a live run and a run waiting on the reader keep their own unbelted
+ * schedules, and the count is reset whenever the run's status actually moves.
+ */
+const UNTIL_TERMINAL_POLL_WINDOW_MS = 30 * 60 * 1000;
+const UNTIL_TERMINAL_POLL_CADENCE_MS = 5000;
+export const UNTIL_TERMINAL_TICK_LIMIT = Math.floor(
+  UNTIL_TERMINAL_POLL_WINDOW_MS / UNTIL_TERMINAL_POLL_CADENCE_MS,
+);
+
+/**
+ * THE STATUSES IN WHICH THE RUN'S OWN GATE MAY TAKE THE REVIEW SCREEN'S PLACE.
+ *
+ * A STRICT SUBSET of `RUN_WORK_IS_OVER_STATUSES`, and the difference is
+ * `stopped`, on purpose. Looking for the slot is one question and drawing the
+ * review in its place is another: a run the reader PAUSED must keep the
+ * affordance that resumes it, and both run panels have their own paused
+ * reading built on exactly that (the stepper's pause branch, the panel's own
+ * stopped rendering). Admitting the review here for `stopped` would have taken
+ * the slot on one panel and not the other — the same run answered two ways on
+ * two hosts, which the ratified drawing forbids in as many words: "Every card
+ * appears on every host, and it is the same card wherever it appears." Nothing
+ * measured says a paused run was hiding a pending gate, so the two panels are
+ * made to agree the conservative way, and `stopped` keeps the branches it
+ * shipped with on BOTH.
+ */
+export const RUN_REVIEW_TAKES_THE_SLOT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+]);
+
+/**
+ * PURE. WHICH REF THE RUN'S OWN SLOT PUTS IN THE REVIEW SCREEN'S PLACE, IF ANY.
+ *
+ * THE RATIFIED DRAWING FIXES THE CONDITION, and it is not a status:
+ *
+ *   "The placeholder is replaced, in place, by the review. WHEN THE RUN'S
+ *    OUTPUT IS GENERATED, the placeholder becomes the Review requested screen —
+ *    the same slot, in the same turn. It happens on its own: the reader neither
+ *    asks for the card nor presses anything to bring it."
+ *
+ * and, of the four hosts the card appears on:
+ *
+ *   "What holds a card back is the reader, not the host."
+ *
+ * WHAT WENT WRONG. Both panels asked `status === "completed"` instead. A run
+ * can generate its output and NOT reach `completed`: the produced-artifact
+ * outbox is drained on the artifact, and the gate it mints pins a real revision
+ * (`emitArtifactReviewGate` refuses an empty target set), so a run whose task
+ * fails after its output was produced carries a PENDING gate on a `failed` row.
+ * On that run the slot's review was withheld — and because the injected
+ * delivery is suppressed for exactly the turn that draws the run card, on the
+ * ground that the run card shows the gate, NOTHING drew the question on ANY
+ * host. That is the shape the sixth proof round measured.
+ *
+ * WHAT REPLACES IT, and why it is not simply "any terminal status". The panel's
+ * own reason for the narrow rule stands and is kept: a run carries its gate for
+ * ever, so a SETTLED gate must not take the slot back from the run's current
+ * reading — the error block with its Retry, the scheduling step, the spinner.
+ * So for a run that ended in any way other than `completed` the review draws
+ * only while its question is genuinely OPEN. `completed` is unchanged in both
+ * directions: it draws whatever gate the slot names, settled or not, exactly as
+ * it shipped.
+ */
+export function inPlaceRunReviewRef(
+  status: string,
+  slot: RunReviewSlot,
+): string | null {
+  if (slot.ref === null) return null;
+  if (!RUN_REVIEW_TAKES_THE_SLOT_STATUSES.has(status)) return null;
+  if (status !== "completed" && slot.pending !== true) return null;
+  return slot.ref;
+}
 
 /**
  * How often the slot is re-read while it is waiting for a gate, how many times,
@@ -1365,12 +1640,16 @@ function slotReadDelay(reads: number): number {
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
-  const slot = (data as { reviewGate?: { ref?: unknown; awaiting?: unknown } })
-    ?.reviewGate;
+  const slot = (
+    data as {
+      reviewGate?: { ref?: unknown; awaiting?: unknown; pending?: unknown };
+    }
+  )?.reviewGate;
   if (!slot) return null;
   return {
     ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
     awaiting: Boolean(slot.awaiting),
+    pending: Boolean(slot.pending),
   };
 }
 
@@ -1436,7 +1715,15 @@ export function useRunReviewSlot({
   useEffect(() => {
     // Only after the work is done. While the run is still working there is
     // nothing to find, and the placeholder is already the right drawing.
-    if (status !== "completed") return;
+    //
+    // AND "DONE" IS EVERY WAY A RUN CAN END, not only the successful one
+    // (cinatra#3051). A run whose output was generated and whose task then
+    // failed has a real, pending gate on its row; asking only under `completed`
+    // meant this surface never even LOOKED for it, so the question could not be
+    // drawn however the drawing rule read. The belt and the backoff below are
+    // unchanged, so a terminal run with no gate costs the same bounded look a
+    // completed one with no gate already cost.
+    if (!RUN_WORK_IS_OVER_STATUSES.has(status)) return;
     // Answered under this status, with nothing further owed.
     if (answered && !slot.awaiting) return;
     if (probe.reads >= SLOT_READ_LIMIT) return;

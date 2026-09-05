@@ -682,6 +682,62 @@ export async function writeClaimedArtifact(input: {
 }
 
 /**
+ * Was this template row REWRITTEN after the run began? (convergence round of
+ * cinatra#3051.)
+ *
+ * The binding-presence flag is trusted only when it still names this run's own
+ * pinned version — but a recompile of unbumped local source rewrites the flag at
+ * that SAME version string, so version equality alone cannot tell "the two
+ * readings of one package disagree" apart from "someone edited the package under
+ * a run already in flight". The template's `updated_at` and the run's immutable
+ * `created_at` tell them apart exactly.
+ *
+ * `true` ONLY when both timestamps read and the row is the newer of the two.
+ * Anything else — a missing row, an unreadable column, a failed read — proves no
+ * rewrite and returns `false`, which keeps the caller loud (fail-closed, the
+ * #2486 direction). Never throws: it runs inside the materializer's
+ * never-throws contract and must not be mistaken for a binding-resolution
+ * failure.
+ */
+async function templateRewrittenSinceRunStarted(
+  templateId: string,
+  runId: string,
+): Promise<boolean> {
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const res = await pool().query(
+      `SELECT t.updated_at AS template_updated_at, r.created_at AS run_created_at
+         FROM "${s}"."agent_templates" t, "${s}"."agent_runs" r
+        WHERE t.id = $1 AND r.id = $2 LIMIT 1`,
+      [templateId, runId],
+    );
+    const row = res.rows[0] as
+      | { template_updated_at?: unknown; run_created_at?: unknown }
+      | undefined;
+    const templateUpdatedAt = toEpochMsOrNull(row?.template_updated_at);
+    const runCreatedAt = toEpochMsOrNull(row?.run_created_at);
+    if (templateUpdatedAt === null || runCreatedAt === null) return false;
+    return templateUpdatedAt > runCreatedAt;
+  } catch {
+    return false;
+  }
+}
+
+/** A timestamptz as the driver hands it back (Date, or a string), in epoch ms. */
+function toEpochMsOrNull(value: unknown): number | null {
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+/**
  * Materialize every declared artifact binding of a terminally-successful
  * run. Never throws; returns one outcome per binding (plus one synthetic
  * failed outcome per binding-collection error). Empty array when the run's
@@ -759,6 +815,68 @@ export async function materializeRunArtifacts(input: {
         nodeId: null,
         extension: null,
         error,
+      });
+    }
+    // cinatra#3051 — THE TWO READINGS DISAGREED, AND THE SILENCE WAS THE BUG.
+    //
+    // The locally-persisted authority was compiled from this package's own
+    // service description at install and says, at THIS run's pin, that the
+    // package declares at least one artifact binding. The read above resolved
+    // the package for the same pin and found none, with nothing to report: no
+    // grammar error, no parity error — an unreadable payload in the resolved
+    // copy, or a document the collector walks and finds nothing in, both come
+    // back as an empty, errorless result.
+    //
+    // Until now that returned an EMPTY outcome list, which the run-completion
+    // gate reads as "this run owed no artifact" and lands `completed`. The
+    // eighth proof round of cinatra#3051 measured what that costs: two real runs
+    // completed cleanly, wrote a full draft, materialized nothing, opened no
+    // review gate, and no line anywhere named a reason.
+    //
+    // It is the #2486 contract that decides this, in its own words: "We cannot
+    // prove the run owed no artifact, so we do not claim success." A registry
+    // that does not answer already fails the run for exactly this reason. A
+    // registry that answers with a copy declaring nothing, while the template
+    // says it declares something, is the same ignorance wearing a 200.
+    //
+    // NARROW ON PURPOSE. Only a PROVABLE disagreement is loud: `true` at this
+    // run's own version pin. `false` short-circuits above (the run owes nothing,
+    // provably, and never reads the registry at all); `null` — an unbackfilled
+    // legacy row, or a flag that no longer describes this pin — proves no
+    // disagreement and keeps the existing posture untouched.
+    //
+    // AND ONE MORE THING THE PIN ALONE DOES NOT PROVE (convergence round, this
+    // leg). The version-pin guard proves the flag was written FOR this run's
+    // version string; it does not prove the row has not been rewritten since
+    // this run began. The recompile road writes the flag together with the SAME
+    // version string when a dev edits local source without bumping it
+    // (packages/agents/src/mcp/handlers.ts — `packageVersion` and
+    // `hasArtifactBindings` move in one paired UPDATE, deliberately). So a dev
+    // who adds a binding to the source of an already-running agent flips the
+    // row to `true` at the unchanged version while the copy this run actually
+    // resolved — immutable at that version — still declares none. That is a
+    // disagreement the RUN did not cause and cannot be blamed for, so it is not
+    // proof of anything about the run: the template row carries an `updated_at`
+    // and the run an immutable `created_at` (cinatra#2911), and when the row was
+    // written after the run started we keep the prior posture and say nothing
+    // loud. Unreadable timestamps prove no rewrite, so they stay loud — the
+    // fail-closed direction.
+    if (
+      hasArtifactBindings === true &&
+      bindings.length === 0 &&
+      loaded.errors.length === 0 &&
+      !(await templateRewrittenSinceRunStarted(input.templateId, input.runId))
+    ) {
+      outcomes.push({
+        ok: false,
+        outputId: "(binding-disagreement)",
+        nodeId: null,
+        extension: null,
+        error:
+          `the template records has_artifact_bindings=true for ${packageName}@` +
+          `${input.packageVersion ?? "(unpinned)"}, but the package resolved for this run ` +
+          "declares no artifact binding at all. The two readings of one package disagree, " +
+          "so this run cannot be shown as a clean success having materialized nothing.",
       });
     }
   } catch (err) {

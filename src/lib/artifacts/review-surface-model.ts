@@ -16,11 +16,11 @@
  * renderer identity is host-resolved from the artifact TYPE upstream and reaches
  * this model only as the opaque `ReviewTargetMount` kind.
  */
-// THE DEEP ENTRY, DELIBERATELY. This module is reachable from the chat
-// surface's own module graph, and the package barrel pulls the whole library in
-// behind one function — enough extra graph that the conversation column's
-// timing-sensitive first paint measurably slowed. One function is what is used
-// and one module is what is imported.
+// THE APP'S OWN RELATIVE-TIME FORMATTER, taken from its per-function entry
+// rather than the package root. This module is a LEAF of the conversation
+// column's module graph, and the root entry re-exports the whole library: taking
+// it here cost roughly a second on every surface that mounts a transcript. The
+// function is the same one the library rows and the console rows print with.
 import { formatDistance } from "date-fns/formatDistance";
 
 import type {
@@ -219,60 +219,139 @@ export function reviewTypeLabel(objectType: string): string {
  * drawing names: "the read-only row facts the host authorized — owner level /
  * visibility, MIME, and updated time".
  *
- * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
- * meta line in the ratified drawings prints the two scope facts with no label at
- * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
- * line again over §V.1's read-only review target. The labelled form this line
- * carried came from a local reading of a plan sentence ("the line gets labels or
- * drops the storage fact") rather than from the drawing, and the graded proof frames
- * measured it as a departure. The drawing decides: the labels go, both facts
- * stay, and the order is the drawing's.
+ * THE LINE IS THE DRAWING'S LINE (cinatra#3051, re-shoot grade). The drawing
+ * draws "… · Team · Private · text/html · updated 8 min ago"
+ * (specs/app-lifecycle-cards.html §II, and §IV's own row-fact clause): the two
+ * scope facts as BARE words in the host's own vocabulary, and the instant as a
+ * RELATIVE reading. The line printed neither — it carried labelled raw enum
+ * values ("Ownership: organization · Visibility: organization") and the raw ISO
+ * instant the row was stored with ("updated 2026-08-29T03:07:18.778Z"), which
+ * is a machine's reading of a header a person reads.
+ *
+ * The earlier honesty concern — that two BARE scope words read as the same word
+ * twice for an organization-owned, organization-visible artifact — is answered
+ * by the vocabulary rather than by labels: the words are the ones the host's
+ * other cards already print for these two facts, and the drawing's own line is
+ * what a reader is entitled to see. Nothing is dropped; both facts stay, in the
+ * drawing's order.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
 export function reviewTargetRowFacts(
   artifact: {
-    ownerLevel: string;
-    visibility: string;
-    mime: string;
-    updatedAt: string;
+    ownerLevel: string | null;
+    visibility: string | null;
+    mime: string | null;
+    updatedAt: string | null;
   },
-  /** The instant the line is read against. An argument so the reading is
-   * deterministic under test; every caller omits it and reads the wall clock. */
+  /** The instant the line is read AT. Defaults to now; a caller passes one so a
+   *  rendering can be pinned. */
   now: Date = new Date(),
 ): string[] {
-  return [
-    artifact.ownerLevel,
-    artifact.visibility,
-    artifact.mime,
-    `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
-  ];
+  // NULLABLE SINCE cinatra#3051, and the fields are DROPPED rather than printed
+  // as absences. The page always has all four, so this is a no-op there; the
+  // card draws the same line from the gate's own rows, where a target whose
+  // artifact this reader may not read (or which is gone) carries ids and
+  // nothing else — and an empty scope word is worse than a shorter true line.
+  const facts: string[] = [];
+  if (artifact.ownerLevel) facts.push(reviewScopeWord(artifact.ownerLevel));
+  if (artifact.visibility) facts.push(reviewScopeWord(artifact.visibility));
+  if (artifact.mime) facts.push(artifact.mime);
+  if (artifact.updatedAt) {
+    facts.push(`updated ${reviewRelativeInstant(artifact.updatedAt, now)}`);
+  }
+  return facts;
+}
+
+/** A scope fact in the host's own vocabulary: the stored level/visibility word,
+ *  capitalized, exactly as the library's own rows print it
+ *  (`src/components/artifacts/library-mode.tsx`'s `ownerLabel`). */
+export function reviewScopeWord(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 /**
- * The updated fact as a RELATIVE reading, which is what the drawing draws
- * ("… · text/html · updated 8 min ago", specs/app-artifact-review.html §IV).
- * The line used to interpolate the row's raw stored instant, so the header read
- * "updated 2026-08-31T08:19:26.458Z" — a machine timestamp where the drawing
- * asks how long ago.
+ * An instant as the header reads it: a relative time, through the SAME
+ * formatter the host's other cards use for one (`date-fns`'s distance-to-now,
+ * with the suffix — the library rows, the console rows and the marketplace
+ * header all print it that way).
  *
- * It reuses the app's own relative-time reading (date-fns' distance wording
- * with a suffix), the same one the artifact library's rows read, so the two
- * surfaces cannot word the same fact differently. The base instant is an
- * argument rather than the wall clock so the reading is deterministic under
- * test — `formatDistanceToNow` is exactly this call against `Date.now()`.
- *
- * A VALUE THAT IS NOT AN INSTANT IS PASSED THROUGH UNCHANGED. The row's column
- * is an instant, but this function is pure and is fed by callers this module
- * does not own; formatting a value it cannot read would either throw or invent
- * one ("Invalid Date"), and printing back exactly what it was handed is the only
- * honest degrade.
+ * A value that does not parse as an instant is passed through UNTOUCHED. The
+ * card draws this line from the gate's own rows, and a row that already carries
+ * a phrase rather than a timestamp must read as that phrase, never as
+ * "Invalid Date".
  */
-function relativeUpdatedTime(updatedAt: string, now: Date): string {
-  const at = new Date(updatedAt);
-  if (Number.isNaN(at.getTime())) return updatedAt;
+export function reviewRelativeInstant(value: string, now: Date = new Date()): string {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
   return formatDistance(at, now, { addSuffix: true });
 }
+
+// ---------------------------------------------------------------------------
+// The PREVIEW floor (§V, cinatra#3051) — the never-blank line the CARD draws
+// under the target header while the representation is not on screen.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the representation is not on screen. A closed set, and every member is a
+ * state of the PREVIEW rather than of the gate: the gate is exactly as open as
+ * it was, and the floor never says otherwise.
+ *
+ *   `preview-loading`      — the frame has not painted yet.
+ *   `preview-unavailable`  — the frame's bound was reached.
+ */
+export type ReviewPreviewFloorReason =
+  | "preview-loading"
+  | "preview-unavailable"
+  // THE TWO READINGS OF A FRAME THAT ARRIVED AND IS NOT SHOWING THE WORK
+  // (cinatra#3051, fix leg 9). §V owes its one line "whenever a target does not
+  // resolve to a type renderer", and a frame that failed to ARRIVE is only one
+  // of the ways that happens. These two are the others, and they are separate
+  // because they are different facts: the host resolved no renderer at all and
+  // drew its own floor over the generic read-only view, or a renderer resolved
+  // and answered with its own named floor instead of the representation. Both
+  // are closed members of this set, sanitized by construction like the two above
+  // — a reason, never an error, a value or a manifest string.
+  | "renderer-unresolved"
+  | "representation-unavailable";
+
+/**
+ * The §V diagnostic, in the drawing's own shape: `package · slot · reason`, and
+ * nothing else. Sanitized and telemetry-safe by construction — it composes only
+ * a package name the host resolved, the slot literal, and a member of the closed
+ * set above. No error text, no value, no href.
+ */
+export function reviewPreviewFloorDiagnostic(
+  packageName: string | null,
+  slot: string,
+  reason: ReviewPreviewFloorReason,
+): string {
+  const pkg = packageName ? `package "${packageName}" · ` : "";
+  return `${pkg}slot "${slot}" · reason "${reason}"`;
+}
+
+/*
+ * REMOVED (cinatra#3058, fix leg 8; the convergence round on the reconciled
+ * merge): `reviewTargetPackageName`, which read the `package` half of §V's floor
+ * line off a host-resolved renderer package or, failing that, off the artifact
+ * type id.
+ *
+ * Its one caller was the review card, and it had exactly one honest argument to
+ * pass it: the RESOLVED package the branch's own target rows carried on the
+ * wire. The card-owned header wire this reading now stands on carries no such
+ * field, and §V fixes where that name may come from — "The resolution is
+ * host-derived, never a claim the client or the model can forge" — so the card
+ * can no longer name a package at all, and its floor line drops that half (the
+ * slot and the reason stay: the floor is never a blank). Inferring the package
+ * from the type id instead would report a package that had no part in the
+ * failure, which is the invented value "never a raw error or manifest value"
+ * keeps off this line.
+ *
+ * The package-NAMED floor is still drawn where the host resolved a renderer and
+ * can say so — `reviewTargetFloorDiagnostic` on the artifact page's own mount —
+ * and a card-side package would return the day the header wire carries the
+ * host's resolution as a fact rather than as a guess.
+ */
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
  * truncated for display, with the exact id preserved for the title attribute. */

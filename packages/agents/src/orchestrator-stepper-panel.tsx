@@ -78,6 +78,7 @@ import { RunCompletionCard } from "./run-completion-affordances";
 import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
+  inPlaceRunReviewRef,
   useRunReviewSlot,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
@@ -2053,9 +2054,37 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     read: slotReader,
   });
 
+  // AND THE WORK CAN END ANY WAY AND STILL OWE A REVIEW (cinatra#3051).
+  //
+  // The terminal branch far below asks `status === "completed"` for this run's
+  // review, and the FIRST branch here is `status === "failed"` — so a run that
+  // generated its output and whose task then failed reached the failure card
+  // and its PENDING gate was drawn nowhere on this page. The sixth proof round
+  // measured exactly that shape: the row read `failed`, the gate read
+  // `pending`, and no review card was drawn on any surface.
+  //
+  // The ratified drawing fixes the condition and it is not a status: "when the
+  // run's output is generated, the placeholder becomes the Review requested
+  // screen — the same slot, in the same turn." So this panel reads the
+  // condition from the SAME shared place the sibling run panel reads it from
+  // (`inPlaceRunReviewRef`), which also keeps the narrow rule that earned its
+  // place: for a run that ended any way other than `completed` the review draws
+  // only while its question is genuinely OPEN, so a SETTLED gate never takes
+  // the stage back from the run's own current reading.
+  //
+  // ONLY THE FAILURE READING IS ANSWERED HERE. `stopped` keeps its two branches
+  // untouched: a run the reader paused must keep the affordance that resumes
+  // it, and nothing measured says otherwise.
+  const failedRunReviewRef =
+    status === "failed" ? inPlaceRunReviewRef(status, reviewSlot) : null;
+
   let stageCard: ReactNode = null;
 
-  if (status === "failed") {
+  if (failedRunReviewRef !== null) {
+    stageCard = (
+      <ReviewGateStepCard cardRef={failedRunReviewRef} reviewSurfaceUrl={null} runId={runId} />
+    );
+  } else if (status === "failed") {
     stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.

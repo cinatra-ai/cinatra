@@ -750,6 +750,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      pending: false,
     });
   });
 
@@ -769,7 +770,77 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: true,
+      pending: false,
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // THE SIXTH PROOF ROUND'S OWN SHAPE (cinatra#3051): the run generated its
+  // output and its TASK then failed, and the gate was minted on the produced
+  // artifact afterwards. The question the surfaces asked was "is a gate minted
+  // after a failure a defect in the MINTING?" — and the store answers it: a
+  // gate cannot exist without at least one pinned target, i.e. without a real
+  // artifact revision, and this read never consults the run's status at all.
+  // The produced output's review question is a fact about the OUTPUT. So the
+  // gate is not the defect, and the slot says so plainly to whoever draws it.
+  // ---------------------------------------------------------------------------
+  it("SLOT: a gate minted on what a run produced is an OPEN question, whatever became of the run", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    // The produced-artifact row the drain mints from — the same shape the
+    // sibling case above inserts, and the reason a gate exists at all.
+    //
+    // THE IDS ARE THE SAME ONES THE GATE THEN PINS (convergence finding). An
+    // outbox row with one artifact and a gate targeting a different, random one
+    // would have proved only that ANY non-empty target set mints a gate; what
+    // is claimed here is narrower and is what the round measured — the gate
+    // this run carries names the revision this run PRODUCED.
+    const producedArtifactId = `art-${randomUUID()}`;
+    const producedRevisionId = `rev-${randomUUID()}`;
+    await client!.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_produced_outbox"
+         (event_id, org_id, artifact_id, representation_revision_id, emitter,
+          producer_run_id, origin_kind, destination_class, continuation_mode, status)
+       VALUES ($1, $2, $3, $4, 'createSemanticArtifact', $5, 'agent_produced', 'none', 'async_effects_gated', 'processed')`,
+      [`ev-${randomUUID()}`, ORG, producedArtifactId, producedRevisionId, runId],
+    );
+    // A gate with an EMPTY target set cannot be minted at all — which is the
+    // evidence that a gate on file means a real revision was produced.
+    await expect(
+      gateStore.emitArtifactReviewGate({
+        runId,
+        orgId: ORG,
+        reviewTaskId: `${reviewTaskId}-empty`,
+        targets: [],
+      }),
+    ).rejects.toThrow();
+
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [
+        {
+          artifactId: producedArtifactId,
+          representationRevisionId: producedRevisionId,
+        },
+      ],
+    });
+
+    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+      reviewTaskId,
+      awaiting: false,
+      pending: true,
+    });
+    // And the gate on file PINS the revision the run produced — the outbox
+    // row's own artifact and revision, read back off the gate itself.
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("pending");
+    expect(gate?.pinnedTargets).toEqual([
+      {
+        artifactId: producedArtifactId,
+        representationRevisionId: producedRevisionId,
+      },
+    ]);
   });
 
   it("SLOT: the run's own gate is the answer, and it survives being decided", async () => {
@@ -784,6 +855,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      // AND THE QUESTION IS OPEN (cinatra#3051). The slot has always carried
+      // the gate whether or not it was still pending; a surface that has to
+      // choose between drawing the gate and drawing the run's own current
+      // rendering cannot make that choice from the id alone.
+      pending: true,
     });
 
     // A RESOLVED gate is still the answer. The reader who decided in place must
@@ -803,6 +879,10 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      // …and the question is no longer open. The reader keeps seeing what they
+      // decided, drawn by the card's own settled state — not by a slot that
+      // still claims a decision is owed.
+      pending: false,
     });
   });
 
@@ -844,6 +924,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: true,
+      // The gate the slot NAMES is the decided one, so no question is open on
+      // it; `awaiting` is what says another review is still owed. The two facts
+      // are separate on purpose — a surface that conflated them would draw the
+      // reader's own settled decision as a live question.
+      pending: false,
     });
   });
 
@@ -874,6 +959,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: second,
       awaiting: false,
+      pending: true,
     });
   });
 
@@ -890,6 +976,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(mine.runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      pending: false,
     });
   });
 });

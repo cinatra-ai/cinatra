@@ -97,6 +97,9 @@ import type { EmbedContext } from "@/lib/embed/bridge-protocol";
 // widget where a credential is ever created, and it is created HERE, inside the
 // Cinatra-served document, from a PKCE verifier no other party sees.
 import {
+  frameCredentialRenewDelayMs,
+  frameCredentialRenewRetryDelayMs,
+  renewFrameCredential,
   runFrameSignIn,
   type FrameWidgetCredential,
 } from "@/lib/embed/frame-widget-session.client";
@@ -110,7 +113,52 @@ import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // rights as inside Cinatra. Only this frame differs. S8f passes the declaration
 // DOWN to the shared column instead of wrapping a provider here, so the one
 // column carries its host with it and a second mount cannot pick a different one.
-import type { LifecycleCardAuth } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import {
+  BOUNDED_LOOK_LIMIT,
+  boundedLookDelay,
+  type LifecycleCardAuth,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
+
+/** THE RESTING PACE past the bounded look (cinatra#3051 convergence). The
+ *  shared cadence spends sixty looks in about eight and a half minutes, which is
+ *  the right shape for "something is about to happen" and the wrong shape for a
+ *  panel somebody left open — and a review released twenty minutes after the
+ *  column opened is exactly the case this leg exists for. One look a minute
+ *  afterwards is the cheapest thing that still answers it: it is one request a
+ *  minute per open column, it stops the moment the frame unmounts, and the fast
+ *  cadence is armed again from the top whenever the person returns to the page.
+ *  It is a RESTING interval, not a second cadence — the bounded look's numbers
+ *  are still stated once, in the module both readers import them from. */
+const RESTING_LOOK_DELAY_MS = 60_000;
+
+/** How long ONE look may take before it counts as a look that answered nothing.
+ *  Without it a single request that never settles ends the chain. */
+const LOOK_TIMEOUT_MS = 15_000;
+
+/**
+ * WHAT THE NEXT LOOK IS: whether to read at all, and how long to wait first.
+ *
+ * Stated as one function rather than spread through the effect because it is the
+ * whole policy of the re-reading and every part of it is a rule somebody could
+ * otherwise change by accident:
+ *
+ *   • A LIVE TURN COSTS NO LOOK. The column's adoption rule refuses every server
+ *     reading while a turn is streaming into the list, so a look taken then is a
+ *     look thrown away — and, worse, one spent off a bounded belt.
+ *   • INSIDE THE BELT the shared cadence decides the wait, and the belt counts
+ *     looks that could actually have carried something.
+ *   • PAST THE BELT the column keeps asking at the resting pace. The belt is the
+ *     fast look, not the only look: a panel left open on a page outlives it by
+ *     hours, and the run this leg is about may be released long after it.
+ */
+export function planNextLook(
+  reads: number,
+  streaming: boolean,
+): { read: boolean; delay: number } {
+  if (streaming) return { read: false, delay: boundedLookDelay(reads) };
+  if (reads >= BOUNDED_LOOK_LIMIT) return { read: true, delay: RESTING_LOOK_DELAY_MS };
+  return { read: true, delay: boundedLookDelay(reads) };
+}
 
 type Phase =
   | { kind: "waiting" } // pre-context: neutral "waiting for host"
@@ -410,6 +458,84 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       });
     })();
   }, [props.instanceId, negotiateAndMount]);
+
+  // ---------------------------------------------------------------------------
+  // THE CREDENTIAL RENEWS ITSELF WHILE THE PERSON'S SESSION LIVES (cinatra#3051)
+  // ---------------------------------------------------------------------------
+  //
+  // The pair this frame minted has a fifteen-minute life. A widget column left
+  // open on somebody's page outlives it easily — and once it has, every read the
+  // column makes is refused, so a run released after that point can never reach
+  // it. Nobody closed the panel; there is nothing for a person to do about it and
+  // nothing on screen that says what happened.
+  //
+  // So the frame asks for the same authorization again, two thirds of the way
+  // through each life, for as long as the phase is active. The chain ends when
+  // the person's own sign-in ends — which is the bound that should end it — and
+  // it ends SILENTLY on any refusal: the column keeps the pair it has and
+  // degrades exactly as it did before this existed.
+  //
+  // THE CREDENTIAL IS WRITTEN IN PLACE, into the ref, and never into state. That
+  // is this file's standing invariant (§6i) and it is also what makes the
+  // renewal invisible: `authHeaders` reads the ref at call time, so the column,
+  // the transport, the lifecycle cards and any turn already in flight all pick
+  // the new pair up with no re-render, no remount and nothing lost. What enters
+  // state is a COUNTER, whose only job is to re-arm this effect against the life
+  // the server just stated.
+  const [renewTick, setRenewTick] = useState(0);
+  // HOW MANY ASKS IN A ROW HAVE FAILED (convergence). Zero means the next ask is
+  // the scheduled one; anything else means the chain is retrying inside the last
+  // third of the life it is trying to renew. A success puts it back to zero by
+  // moving the tick, which re-arms this effect against the life the server just
+  // stated.
+  const [renewFailures, setRenewFailures] = useState(0);
+  useEffect(() => {
+    if (phase.kind !== "active") return;
+    const credential = credentialRef.current;
+    const ctx = contextRef.current;
+    if (!credential || !ctx) return;
+    // A REFUSED ASK IS RETRIED, a few times, on a short fixed delay — a network
+    // that was down for one second and a person who signed out somewhere else
+    // look identical from here, and treating both as final ends a column that
+    // would have gone on working for hours. The tries are spent inside the third
+    // of the life the schedule deliberately leaves ahead of the first ask, and
+    // when they are spent the chain stops for good.
+    const delay =
+      renewFailures === 0
+        ? frameCredentialRenewDelayMs(credential.expiresIn)
+        : frameCredentialRenewRetryDelayMs(renewFailures);
+    // A server that stated no life gives nothing to schedule against; a spent
+    // retry budget gives nothing to wait for.
+    if (delay === null) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const result = await renewFrameCredential(
+          {
+            assistant: ctx.session.assistant,
+            instanceId: props.instanceId,
+            siteId: ctx.site?.siteId ?? null,
+          },
+          credential,
+        );
+        if (cancelled) return;
+        // SILENT EITHER WAY. Nothing on screen changes for a refusal: the column
+        // keeps the pair it has, and this counter decides whether there is one
+        // more ask to make or none.
+        if (!result.ok) {
+          setRenewFailures((failures) => failures + 1);
+          return;
+        }
+        credentialRef.current = result.credential;
+        setRenewFailures(0);
+        setRenewTick((tick) => tick + 1);
+      })();
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [phase.kind, props.instanceId, renewTick, renewFailures]);
 
   const onContext = useCallback((context: EmbedContext) => {
     // Selectors only — this cannot mount a wire on its own. The frame now needs
@@ -719,6 +845,101 @@ function EmbedConversation({
       if (landed) turns.confirmRemovedMessageIds(saveToken);
     });
   }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant, turns]);
+  // ---------------------------------------------------------------------------
+  // THE OPEN COLUMN KEEPS ASKING (cinatra#3051)
+  // ---------------------------------------------------------------------------
+  //
+  // The restore above reads this thread's transcript ONCE, before the column
+  // mounts. Everything after that used to come from a turn taken in this
+  // browser — so a run started from this widget and released a few minutes later
+  // arrived nowhere: the reader sat looking at a conversation the server had
+  // already added to, and only a reload would show it.
+  //
+  // So the column re-reads, through the SAME `fetchThreadMessages` the restore
+  // used and on the SAME bounded cadence the lifecycle cards use while they are
+  // waiting for an answer (`BOUNDED_LOOK_LIMIT` / `boundedLookDelay`, imported
+  // rather than re-stated — one cadence, two spenders). Each answer is handed to
+  // the column's own adoption rule, which is what decides whether anything in it
+  // may enter the list.
+  //
+  // A CHAIN OF SINGLE TIMEOUTS, not a standing interval: the next look is armed
+  // by the COMPLETION of the previous one, so a slow answer cannot stack looks on
+  // top of each other, and neither a refused read nor a hung one can break the
+  // chain. Past the belt the looking slows to the resting pace rather than
+  // stopping — a panel left open outlives eight and a half minutes easily, and
+  // the run this leg is about may be released long after them — and returning to
+  // the page arms the fast cadence again from the top (`planNextLook`).
+  const adoptServerMessages = turns.adoptServerMessages;
+  // A turn taken IN THIS BROWSER owns the list while it streams, and the
+  // adoption rule refuses everything for as long as it does. A look taken then
+  // is a look thrown away, so the chain does not spend one: it waits, and the
+  // belt below is a count of looks that could actually have carried something.
+  const streamingRef = useRef(0);
+  streamingRef.current = turns.streamingCount;
+  useEffect(() => {
+    let stopped = false;
+    let reads = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const armNextLook = () => {
+      if (stopped) return;
+      const plan = planNextLook(reads, streamingRef.current > 0);
+      timer = setTimeout(() => {
+        void (async () => {
+          // The plan was made when this look was ARMED; a turn that started in
+          // the meantime is asked about again here, so a look never reads into a
+          // list a turn has taken over.
+          if (!plan.read || streamingRef.current > 0) {
+            armNextLook();
+            return;
+          }
+          reads += 1;
+          // A HUNG READ IS A LOOK THAT ANSWERED NOTHING, not the end of the
+          // chain. `fetchThreadMessages` has no clock of its own, and one
+          // request that never settles would otherwise take every later look
+          // with it.
+          let bell: ReturnType<typeof setTimeout> | undefined;
+          const messages = await Promise.race([
+            fetchThreadMessages(session.threadId, serviceTransport),
+            new Promise<null>((resolve) => {
+              bell = setTimeout(() => resolve(null), LOOK_TIMEOUT_MS);
+            }),
+          ]);
+          if (bell) clearTimeout(bell);
+          if (stopped) return;
+          // A look that answered nothing at all — a refusal, an outage, a body
+          // that did not parse — is still a completed look, and the next one is
+          // armed all the same. That is the state a further look exists to climb
+          // out of.
+          if (messages) adoptServerMessages(messages);
+          armNextLook();
+        })();
+      }, plan.delay);
+    };
+    // COMING BACK TO THE PAGE STARTS THE FAST LOOK OVER. Returning focus is the
+    // moment a reader is most likely to be waiting on something, and it is the
+    // backstop this surface has always had — it just used to need a reload.
+    const restart = () => {
+      if (stopped) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      reads = 0;
+      if (timer) clearTimeout(timer);
+      armNextLook();
+    };
+    armNextLook();
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", restart);
+      document.addEventListener("visibilitychange", restart);
+    }
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", restart);
+        document.removeEventListener("visibilitychange", restart);
+      }
+    };
+  }, [session.threadId, serviceTransport, adoptServerMessages]);
+
   const host = useMemo(
     () => ({ lifecycleSurface, onApplyIntent }),
     [lifecycleSurface, onApplyIntent],

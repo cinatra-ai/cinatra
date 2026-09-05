@@ -161,6 +161,14 @@ import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
+// The header and floor projections the review PAGE has always used. Imported as
+// values (not re-implemented) so the reading this card draws before a frame has
+// painted is composed by the same functions that compose the one inside it.
+import {
+  reviewPreviewFloorDiagnostic,
+  reviewRevisionMarker,
+  type ReviewPreviewFloorReason,
+} from "@/lib/artifacts/review-surface-model";
 
 import {
   useComposerFocusBinding,
@@ -304,12 +312,117 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** The island's ONE height. §III of the ratified artifact-review drawing gives
- * the target no height control: "a wide representation scrolls inside its own
- * container rather than widening the page". The frame is that container, and it
- * scrolls; the Expand / Collapse toggle that used to sit under it was a control
- * the surface added of its own, which §IV forbids. */
-const ISLAND_HEIGHT = 380;
+/** Clamped island height (§ the issue's clamp + internal scroll + expand). */
+/**
+ * DID THE ISLAND ACTUALLY PAINT? (cinatra#3051)
+ *
+ * The island is same-origin by construction — the module header says so, and
+ * says why the sandbox is not an isolation boundary — so the card can read which
+ * of the island's two documents arrived. It answers on the island's OWN anchors
+ * and on nothing else:
+ *
+ * ONE ANCHOR SAYS PAINTED, AND NOTHING ELSE DOES. The island's own body carries
+ * `review-target-island-body`; that is the whole test. Every other document —
+ * the island's `review-target-island-empty` refusal, a framework error page, a
+ * response that did not parse, a document this card cannot read at all — is NOT
+ * a painted target, and the header, the floor and the retry all stay on screen.
+ *
+ * THE DEFAULT FAILS TOWARD THE NAMED PANEL, deliberately. The two ways to be
+ * wrong are not symmetric: reading an unpainted frame as painted puts the reader
+ * back in front of a box that names nothing, which is the defect this slice
+ * exists to close; reading a painted frame as unpainted leaves the header, the
+ * floor and a retry over a frame that is in fact fine — a worse-looking panel,
+ * not an unreadable one, and one press away from correct. So the fallback is
+ * "not painted", and the anchor is what has to be present.
+ *
+ * THE ANCHOR CANNOT SILENTLY GO AWAY: it is in the review surface's ratified
+ * conformance set and its own suite requires the island body to carry it.
+ *
+ * BOTH SERVER HALVES ARE HELD TO THIS. The island page renders both documents,
+ * and the request guard's own empty answer to a cross-site widget frame that
+ * presented no address is the anchored one too — it used to be a zero-byte body.
+ * `review-island-first-render` drives the REAL guard and asserts the document it
+ * returns is the one read here, so the two cannot drift.
+ *
+ * It learns nothing a denial must not disclose: it distinguishes "the preview is
+ * on screen" from "the preview is not on screen", never WHY — the card says the
+ * same sentence for every reason a frame did not paint.
+ */
+function islandReading(frame: HTMLIFrameElement): IslandReading {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return "unpainted";
+    // Read the anchors OFF the framed document rather than composing an
+    // attribute-VALUE selector here: the review surface's conformance gate scans
+    // this file's text for conformance-id attributes carrying a literal value
+    // and holds every one it finds to the ratified anchor set — and a selector
+    // is not an anchor this file renders. So the query names the attribute
+    // alone, and the values are compared as values.
+    const ids = new Set<string | null>(
+      Array.from(doc.querySelectorAll("[data-conformance-id]"), (el) =>
+        el.getAttribute("data-conformance-id"),
+      ),
+    );
+    if (!ids.has(ISLAND_BODY_ANCHOR)) return "unpainted";
+    // THE HOST'S OWN FLOOR, FIRST. Where the host resolved no usable renderer it
+    // draws the floor region itself, over the generic read-only structured-data
+    // view of the representation. That is a resolution the host made and can
+    // report; the card only has to stop calling it a painted target.
+    if (ids.has(ISLAND_FLOOR_ANCHOR)) return "host-floor";
+    // THEN THE DISPLAY'S OWN. A renderer that resolved and could not draw the
+    // work answers with its own named floor in the representation slot — the
+    // shape `data-floor` already carries on every shipped display and in the
+    // SDK's own shell. The card reads that and forks nothing: it neither words
+    // the display's sentence nor changes it, it only owes §V's own line above
+    // the generic view the display is drawing.
+    const slots = Array.from(doc.querySelectorAll("[data-review-representation-slot]"));
+    // NO SLOT IS NOT A FLOOR. A painted body this reader cannot find a slot in
+    // is the reading the card has always taken as painted, and the fail-safe
+    // direction is unchanged: the card does not invent a diagnostic for a frame
+    // that may well be showing the work in a shape this rule cannot see.
+    if (slots.length === 0) return "representation";
+    return slots.every((slot) => slot.querySelector("[data-floor]") !== null)
+      ? "display-floor"
+      : "representation";
+  } catch {
+    return "unpainted";
+  }
+}
+
+/**
+ * The island's own two documents, named by their conformance anchors.
+ *
+ * The server halves are `src/app/lifecycle/review-island/page.tsx` (both) and
+ * the request guard's own empty response in `src/lib/auth-route-guard.ts`, which
+ * answers the cross-site widget frame that presented no address. EXPORTED so the
+ * suites that drive the real guard and the real page can assert the documents
+ * they return are the ones this card reads, rather than files agreeing by
+ * coincidence. Only the BODY anchor decides `islandPainted`; the EMPTY one is
+ * named here because it is the refusal both server halves render, and because a
+ * test that asserts it is asserting the seam.
+ */
+export const ISLAND_BODY_ANCHOR = "review-target-island-body";
+export const ISLAND_EMPTY_ANCHOR = "review-target-island-empty";
+/** The island's OWN §V floor region, drawn by the review target panel where the
+ *  host resolved no usable renderer (`reviewProvenanceConformanceId`). Read here
+ *  so the card can tell a painted target that is showing the WORK from one that
+ *  is showing a floor. */
+export const ISLAND_FLOOR_ANCHOR = "review-target-floor";
+
+/**
+ * WHAT A FRAME IS SHOWING (cinatra#3051, fix leg 9) — three answers, because
+ * "painted" and "resolved" turned out to be two different questions and the card
+ * was only asking the first.
+ *
+ * The ninth proof round read the island as loaded and, in the same reading, the
+ * island's own document saying that no markdown was available for the revision
+ * being viewed: a resolved display drawing its own named floor where the work
+ * should be. The card called that a painted target and drew no §V line, so the
+ * one frame that most needed the diagnostic was the one frame without it.
+ */
+type IslandReading = "representation" | "display-floor" | "host-floor" | "unpainted";
+
+const ISLAND_HEIGHT_CLAMPED = 380;
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -323,7 +436,7 @@ const ISLAND_HEIGHT = 380;
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out";
+type IslandLoadState = "loading" | "loaded" | "floor" | "timed-out";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -506,6 +619,13 @@ export function ReviewGateCard({
     ref: view.ref,
     enabled: present,
     reloadToken,
+    // A REVIEW GATE IS SETTLED BY WHOEVER REACHES IT FIRST (cinatra#3051), and
+    // that is routinely not the reader of this column: the same gate is drawn in
+    // the run page, in the chat thread and in every third-party page the widget
+    // is open on. Mount and focus are both events about THIS reader, so a column
+    // nobody touches was never told, and held a live decision bar on a gate the
+    // store had already closed. This is the opt-in that makes it look.
+    keepLookingWhileOpen: true,
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   // §IV's target header(s), composed for this reader by the resolve answer
@@ -543,10 +663,38 @@ export function ReviewGateCard({
     scheme: LifecycleColorScheme | null;
     islandSrc: string | null;
     askedFor: LifecycleColorScheme | null | undefined;
-  }>({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+    /** The `reloadToken` the held address was adopted under — see below. */
+    token: number;
+  }>({
+    scheme: cardColorScheme,
+    islandSrc: liveIslandSrc,
+    askedFor: undefined,
+    token: reloadToken,
+  });
   const heldCredential = islandCredentialFrom(islandAddress.islandSrc, view.ref);
-  if (liveCredential !== null && liveCredential !== heldCredential) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+  // A FRESH GRANT IS ADOPTED ONLY WHEN THIS CARD ASKED FOR ONE (cinatra#3051).
+  //
+  // Every resolve mints a new island credential, so "the answer carried a
+  // credential I am not already holding" is true of EVERY answer — it was a
+  // usable signal only while the card resolved on mount and focus alone. Now
+  // that a pending card keeps looking on its own cadence (see
+  // `keepLookingWhileOpen` above), adopting on that signal would rewrite `src`
+  // every few seconds, and `ReviewTargetIsland` keys the iframe on `src`: the
+  // frame would remount before it could ever finish painting, which is exactly
+  // the blank island this file's own note warns about one screen up.
+  //
+  // The card asked when it bumped `reloadToken` — the retry and the palette
+  // repaint both go through `refresh()` — or when it is holding no address at
+  // all. A background look changes the STATE the card draws and never the
+  // address it draws it at.
+  const askedForThisAddress = heldCredential === null || islandAddress.token !== reloadToken;
+  if (liveCredential !== null && liveCredential !== heldCredential && askedForThisAddress) {
+    setIslandAddress({
+      scheme: cardColorScheme,
+      islandSrc: liveIslandSrc,
+      askedFor: undefined,
+      token: reloadToken,
+    });
   } else if (islandAddress.scheme === cardColorScheme) {
     // Nothing is outstanding — the frame is already in the host's palette. Drop
     // any standing request, so a reader who returns to a palette whose ask went
@@ -555,7 +703,12 @@ export function ReviewGateCard({
       setIslandAddress({ ...islandAddress, askedFor: undefined });
     }
   } else if (heldCredential === null && liveCredential === null) {
-    setIslandAddress({ scheme: cardColorScheme, islandSrc: liveIslandSrc, askedFor: undefined });
+    setIslandAddress({
+      scheme: cardColorScheme,
+      islandSrc: liveIslandSrc,
+      askedFor: undefined,
+      token: reloadToken,
+    });
   } else if (islandAddress.askedFor !== cardColorScheme) {
     setIslandAddress({ ...islandAddress, askedFor: cardColorScheme });
     refresh();
@@ -862,6 +1015,16 @@ function renderState(args: {
     focusBinding,
   } = args;
 
+  // §III's target reading — ONE element, used by both arms that draw a target,
+  // so the pending and the decided readings cannot drift apart.
+  const targetReading: ReactElement = (
+    <ReviewTargetIsland
+      src={islandSrc}
+      credentialed={islandCredentialed}
+      onRetryResolve={onRefresh}
+    />
+  );
+
   switch (state.state) {
     case "loading":
       return (
@@ -925,11 +1088,7 @@ function renderState(args: {
               reading drew them: one island, every pinned target, the renderer
               resolved from the artifact's own type. The island carries no
               decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            onRetryResolve={onRefresh}
-          />
+          {targetReading}
           {/* §VIII — the RECORDED partition, in the place it annotated: between
               the target it is about and the decision it rode on. */}
           {state.suggestions && state.suggestions.length > 0 ? (
@@ -974,11 +1133,7 @@ function renderState(args: {
           {/* §III — the target(s). ONE island renders every pinned target as
               sibling panels, exactly as the page stacks them, because the
               decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            onRetryResolve={onRefresh}
-          />
+          {targetReading}
           {/* §VIII — the per-item chips, between the target they annotate and
               the floor that decides them. Marks are LIVE only for a reader who
               may take the terminal decision they would ride on: a reader with
@@ -1536,23 +1691,79 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  //
+  // `attempt` REMOUNTS the frame; `wait` only restarts the bound. They are two
+  // fields because a CREDENTIALED address must not be remounted (cinatra#3051):
+  // its grant is worth one paint and is already spent, so re-presenting it is a
+  // guaranteed empty island. See the retry below.
+  const [load, setLoad] = useState<{
+    src: string;
+    attempt: number;
+    wait: number;
+    loaded: boolean;
+    timedOut: boolean;
+    empty: boolean;
+    floorReason: ReviewPreviewFloorReason | null;
+  }>({
+    src,
+    attempt: 0,
+    wait: 0,
+    loaded: false,
+    timedOut: false,
+    empty: false,
+    floorReason: null,
+  });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({
+      src,
+      attempt: 0,
+      wait: 0,
+      loaded: false,
+      timedOut: false,
+      empty: false,
+      floorReason: null,
+    });
   }
 
   useEffect(() => {
-    if (load.loaded) return;
+    // A FRAME SHOWING A FLOOR HAS ARRIVED. Its bound is spent for the same
+    // reason a painted one's is: the round trip finished, and telling the reader
+    // minutes later that the preview did not load would be false.
+    if (load.loaded || load.empty || load.floorReason !== null) return;
     const timer = setTimeout(() => {
       setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
     }, ISLAND_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.loaded]);
+  }, [load.src, load.attempt, load.wait, load.loaded, load.empty, load.floorReason]);
 
-  const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = ISLAND_HEIGHT;
+  // A FRAME THAT LOADED IS NOT NECESSARILY A FRAME THAT PAINTED (cinatra#3051).
+  // An island that refused — a spent or expired address, a reader who may not
+  // read the run, a gate that moved — answers 200 with the EMPTY document, and
+  // an empty document fires `load` exactly like a full one. Treating that as
+  // "loaded" is what put the reader back in front of a blank box with nothing
+  // to press, which is the defect this slice is closing.
+  const state: IslandLoadState = load.loaded
+    ? "loaded"
+    : load.floorReason !== null
+      ? "floor"
+      : load.timedOut || load.empty
+        ? "timed-out"
+        : "loading";
+  // §V's line is owed on every reading that is not the work on screen. The frame
+  // itself stays visible under it wherever it arrived — "its diagnostic sits
+  // above the generic read-only structured-data view of that representation".
+  const arrived = state === "loaded" || state === "floor";
+  const height = ISLAND_HEIGHT_CLAMPED;
 
   return (
+    <>
+      {/* §V — "its diagnostic sits ABOVE the generic read-only structured-data
+          view of that representation". A frame that arrived and is showing a
+          floor rather than the work keeps that view on screen underneath; the
+          one line goes over it, outside the clamped box so it never covers the
+          reading it is about. The loading and did-not-arrive readings draw the
+          same line inside their own overlays, where the box has nothing in it. */}
+      {load.floorReason !== null ? <ReviewTargetFloorLine reason={load.floorReason} /> : null}
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
@@ -1578,19 +1789,34 @@ function ReviewTargetIsland({
         // several of these off screen without fetching them all.
         loading={credentialed ? "eager" : "lazy"}
         className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-          load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+          arrived ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
-        }
+        onLoad={(event) => {
+          const reading = islandReading(event.currentTarget);
+          setLoad((current) =>
+            current.src === src
+              ? {
+                  ...current,
+                  loaded: reading === "representation",
+                  empty: reading === "unpainted",
+                  floorReason:
+                    reading === "host-floor"
+                      ? "renderer-unresolved"
+                      : reading === "display-floor"
+                        ? "representation-unavailable"
+                        : null,
+                }
+              : current,
+          );
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The
           iframe stays mounted underneath while timed out: a late `onLoad`
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
-      {state !== "loaded" ? (
+      {!arrived ? (
         <div className="absolute inset-x-0 top-0" style={{ height }}>
           {state === "loading" ? (
             <IslandLoadingSkeleton />
@@ -1601,21 +1827,37 @@ function ReviewTargetIsland({
                 // that failed has very likely expired, and remounting the frame
                 // on the same URL would present the same dead credential; the
                 // re-resolve mints a fresh one and the new `src` remounts the
-                // frame by itself. The attempt bump stays for the cookie arm,
-                // where the URL does not change and the remount is the retry.
+                // frame by itself.
+                //
+                // AND ON THAT ARM IT DOES NOTHING ELSE (cinatra#3051). The
+                // attempt bump used to run here too, which remounted the frame
+                // on the address that had just been spent — the second
+                // presentation of a single-use grant, which the serving path
+                // refuses, so the retry's own first act was to guarantee an
+                // empty island. The bump stays for the COOKIE arm, where the
+                // URL does not change and the remount IS the retry; the
+                // credentialed arm only restarts the bound and waits for the
+                // fresh address, which remounts by itself.
                 onRetryResolve();
-                setLoad((current) => ({
-                  ...current,
-                  attempt: current.attempt + 1,
-                  loaded: false,
-                  timedOut: false,
-                }));
+                setLoad((current) =>
+                  credentialed
+                    ? { ...current, wait: current.wait + 1, timedOut: false, empty: false }
+                    : {
+                        ...current,
+                        attempt: current.attempt + 1,
+                        wait: current.wait + 1,
+                        loaded: false,
+                        timedOut: false,
+                        empty: false,
+                      },
+                );
               }}
             />
           )}
         </div>
       ) : null}
     </div>
+    </>
   );
 }
 
@@ -1632,15 +1874,19 @@ function ReviewTargetIsland({
 function IslandLoadingSkeleton(): ReactElement {
   return (
     <div
-      aria-busy="true"
       data-conformance-id="review-target-island-skeleton"
-      className="h-full animate-pulse space-y-4 p-4"
+      className="h-full space-y-3 overflow-y-auto bg-surface-strong p-4"
     >
-      <div className="space-y-1.5 border-b border-line pb-3">
-        <div className="h-2.5 w-1/3 rounded bg-surface-muted" />
-        <div className="h-1.5 w-1/4 rounded bg-surface-muted" />
-      </div>
-      <div className="space-y-2">
+      {/* §V — "The floor is never a blank … a sanitized, telemetry-safe one-line
+          diagnostic (package · slot · reason, never a raw error or manifest
+          value) — so the surface never shows an empty panel where a target
+          should be." The representation is not on screen yet, so the line says
+          so, in the drawing's own three parts. */}
+      <ReviewTargetFloorLine reason="preview-loading" />
+      {/* §IV's header, REAL and from the gate's own rows — the bars that used to
+          stand in for it named nothing, which is the whole defect (cinatra#3051). */}
+      {/* Only the REPRESENTATION is still unknown, so only it is a skeleton. */}
+      <div aria-busy="true" className="animate-pulse space-y-2">
         <div className="h-1.5 w-11/12 rounded bg-surface-muted" />
         <div className="h-1.5 w-4/5 rounded bg-surface-muted" />
         <div className="h-1.5 w-full rounded bg-surface-muted" />
@@ -1651,6 +1897,59 @@ function IslandLoadingSkeleton(): ReactElement {
   );
 }
 
+
+/**
+ * §V's floor — ONE sanitized, telemetry-safe `package · slot · reason` line.
+ * Never a raw error, never a value, and never absent while the representation
+ * is not on screen.
+ *
+ * AND IT NAMES NO PACKAGE (cinatra#3058, fix leg 8; the convergence round on
+ * the reconciled merge). §V's line names the package whose renderer did not
+ * resolve, and §V fixes where that name may come from: "The resolution is
+ * host-derived, never a claim the client or the model can forge." This overlay
+ * is the CARD's, drawn on the client, for a frame that has not painted — no
+ * renderer was reached, so no resolution exists to report, and nothing on the
+ * header wire carries one. Reading the artifact TYPE's own defining package off
+ * the type id instead would put a package on a failure that package had no part
+ * in: the reader would be told `@cinatra-ai/blog-post-artifact` failed when the
+ * host may have resolved `@vendor/reviewer` for it, or when the frame is simply
+ * still loading. That is the invented value §V's "never a raw error or manifest
+ * value" keeps off this line.
+ *
+ * So the line drops its `package` half and keeps the two parts that ARE true of
+ * this reading — the slot and the reason — which is what the surface model's own
+ * `null` package means: "drops the `package` half of the line rather than
+ * inventing one". The floor is still never a blank. The package-named floor is
+ * the ISLAND's, where the host resolved a renderer and can say so.
+ */
+function ReviewTargetFloorLine({
+  reason,
+}: {
+  reason: ReviewPreviewFloorReason;
+}): ReactElement {
+  return (
+    <p
+      role="status"
+      data-review-target-floor={reason}
+      // Kept, and kept EMPTY: the conformance handle that proves the half is
+      // dropped rather than quietly filled in.
+      data-review-floor-package=""
+      data-review-floor-slot={REVIEW_TARGET_SLOT}
+      className="mt-1 font-mono text-badge-2xs tracking-tight text-muted-foreground"
+    >
+      {reviewPreviewFloorDiagnostic(null, REVIEW_TARGET_SLOT, reason)}
+    </p>
+  );
+}
+
+/** The one slot a review target is ever mounted in this release (§III). */
+const REVIEW_TARGET_SLOT = "detail";
+
+/** What the header says while the answer has not yet named the target. It names
+ *  the READING — never a guess at the artifact — so the panel is identified
+ *  without a fact being invented for it. */
+const REVIEW_TARGET_UNNAMED_TITLE = "Review target";
+
 /**
  * The island's past-the-bound presentation (cinatra#2713) — reuses
  * `ReviewGateBlocked`'s exact visual shape (icon circle, title/body, `link`
@@ -1659,13 +1958,24 @@ function IslandLoadingSkeleton(): ReactElement {
  * floor below is untouched and still live — a preview that did not load is
  * never drawn as a reason the reviewer cannot decide.
  */
-function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement {
+function IslandLoadTimedOut({
+  onRetry,
+}: {
+  onRetry: () => void;
+}): ReactElement {
   return (
     <div
       data-conformance-id="review-target-island-timeout"
-      className="grid h-full place-items-center px-4 text-center"
+      className="h-full space-y-3 overflow-y-auto bg-surface-strong p-4"
     >
-      <div>
+      {/* THE HEADER AND THE FLOOR STAY (cinatra#3051). A preview that did not
+          arrive removes the preview, not the target: the reader still has to be
+          told what they are deciding about, and §V's floor is what makes this a
+          named panel rather than an empty one. The header is the CARD's, above
+          this overlay; the floor is the same one line the loading reading drew,
+          with the reason it now has. */}
+      <ReviewTargetFloorLine reason="preview-unavailable" />
+      <div className="text-center">
         <div className="mx-auto mb-2.5 grid size-9 place-items-center rounded-lg bg-destructive/10 text-destructive">
           <CircleX aria-hidden="true" className="size-[18px]" />
         </div>
@@ -1721,22 +2031,17 @@ function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement 
 // composed for this reader and words none of them itself.
 // ---------------------------------------------------------------------------
 
-/** The mono revision id, truncated for display, with the exact id preserved. */
-function revisionMarker(revisionId: string): { short: string; full: string } {
-  return {
-    full: revisionId,
-    short: revisionId.length > 14 ? `${revisionId.slice(0, 12)}…` : revisionId,
-  };
-}
-
 /**
  * The header for ONE target. Drawn above the island, inside the gate's frame.
  */
 export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }): ReactElement {
-  const revision = revisionMarker(header.revisionId);
+  const revision = reviewRevisionMarker(header.revisionId);
   return (
     <div
       data-conformance-id="review-target-header"
+      // The same header, under the attribute the widget and run-panel suites
+      // already select it by, so one drawn header answers both readings.
+      data-review-target-header=""
       className="rounded-control border border-line bg-surface-strong px-4 py-3"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -1762,24 +2067,74 @@ export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }
 }
 
 /**
+ * THE HEADER WITH NO FACTS TO PUT IN IT (cinatra#3051).
+ *
+ * §IV opens with "Every target opens with a header that names what is under
+ * review and fixes it in place" — EVERY target, including the one whose facts
+ * this answer could not compose. The facts are the ones "the host authorized",
+ * and where it authorized none there are none to draw; what is left is the
+ * header's own form, naming the READING rather than guessing at the artifact.
+ *
+ * It therefore carries no title it was not given, no type, no revision, no
+ * pinned marker and no fact. Measured on the real surface, the alternative was
+ * a reader offered Approve and Reject for twenty seconds over a panel that
+ * named nothing at all — and a header composed out of ids would have been the
+ * invented one the composer refuses to send.
+ */
+function ReviewTargetPendingHeader(): ReactElement {
+  return (
+    <div
+      // NO CONFORMANCE ANCHOR OF ITS OWN. The drawing's closed anchor set names
+      // the target's header, not a second reading of it, and the review
+      // surface's render→spec guard is what keeps that set closed: this is §IV's
+      // header with no facts in it, not a new affordance. It is read by the two
+      // attributes below.
+      //
+      // The first is the same attribute the composed header carries, so ONE
+      // selector reads "this panel is named" on either reading …
+      data-review-target-header=""
+      // … and this one says openly which reading it is: the facts have not
+      // arrived, and nothing was made up in their place.
+      data-review-target-header-pending=""
+      className="rounded-control border border-line bg-surface-strong px-4 py-3"
+    >
+      <span className="font-sans text-sm font-bold text-foreground">
+        {REVIEW_TARGET_UNNAMED_TITLE}
+      </span>
+    </div>
+  );
+}
+
+/**
  * Every pinned target's header, in gate order — the reading the card draws
- * above the one island that renders all of them. An answer that carried no
- * headers draws NOTHING: a header the card cannot source is a header it would
- * have to invent, and naming the wrong artifact over a review is worse than
- * naming none.
+ * above the one island that renders all of them, on every host that draws the
+ * card (lifecycle-cards §IX: "it is the SAME card wherever it appears: the same
+ * regions, the same states, the same data on screen").
+ *
+ * An answer that carried no headers draws the FACTLESS one above rather than a
+ * composed one: a header the card cannot source is a header it would have to
+ * invent, and naming the wrong artifact over a review is worse than naming
+ * none — but naming nothing at all is worse than either, which is what §IV's
+ * "every target opens with a header" settles.
  */
 export function ReviewTargetHeaders({
   headers,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
-}): ReactElement | null {
-  if (!headers || headers.length === 0) return null;
+}): ReactElement {
   return (
-    <>
-      {headers.map((header) => (
-        <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
-      ))}
-    </>
+    // A marker, not a box: `contents` keeps the headers exactly where they were
+    // in the card's own stack, so the reading can be read as one thing without
+    // moving anything on screen.
+    <div data-review-target-reading="" className="contents">
+      {!headers || headers.length === 0 ? (
+        <ReviewTargetPendingHeader />
+      ) : (
+        headers.map((header) => (
+          <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
+        ))
+      )}
+    </div>
   );
 }
 

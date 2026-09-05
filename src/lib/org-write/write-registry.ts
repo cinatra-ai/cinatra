@@ -1139,6 +1139,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   },
   {
     module: "src/lib/widget-user-auth.ts",
+    exportName: "renewUserWidgetToken",
+    capability: "org.settings",
+    orgIdExtractor: "presented token row's org (copied verbatim onto the successor)",
+    storageReferences: ["widget_user_tokens"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: re-issues the browser-held bearer from the stored row it replaces, no app session — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
+    module: "src/lib/widget-user-auth.ts",
     exportName: "consumeUserWidgetToken",
     capability: "org.settings",
     orgIdExtractor: "stored token row's org (validation consume + expiry sweep)",
