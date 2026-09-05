@@ -2104,10 +2104,22 @@ export function AgenticRunPanel({
           // the ground a reader actually sees. Only the WORKING reading is
           // redrawn here: the review reading is the graded cell it already was
           // and keeps the class string it was measured on.
+          //
+          // AND THE FRAME'S OWNER OWNS THIS BOX'S CHROME TOO (fix leg 14).
+          // Section I of the review drawing rules the run detail as a whole:
+          // "two cards are never stacked in one detail". This box is drawn in
+          // that same detail, so when the rail already draws the frame beside
+          // it the box gives up its card chrome for exactly the reason the
+          // progress plate below does — the chrome belongs to whoever draws the
+          // frame, and a card of our own around the gate's card is the second
+          // card section I forbids. Off the frame BOTH readings keep the class
+          // string each was measured on, untouched.
           className={
-            reviewScreenNode !== null
-              ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
-              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+            railDrawsTheFrame
+              ? "flex flex-col gap-4"
+              : reviewScreenNode !== null
+                ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+                : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
