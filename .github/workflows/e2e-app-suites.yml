@@ -202,8 +202,9 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
         # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
         # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
@@ -222,7 +223,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
@@ -430,7 +431,9 @@ jobs:
 
       - name: Add CI build swap (default-runner only)
         # Same 12G step + rationale as the render-smoke job above (entry-66).
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
+        # and cleanup, and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the

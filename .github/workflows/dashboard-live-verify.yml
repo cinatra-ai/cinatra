@@ -295,13 +295,14 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). A 4G swapfile absorbs `pnpm build` page-data
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). A 4G swapfile absorbs `pnpm build` page-data
         # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
         # unresponsiveness ("runner received a shutdown signal" mid page-data
         # collection). Subshell-guarded so a swap-setup failure NEVER fails the job.
         # Mirrors the build-image build/e2e jobs.
-        if: ${{ needs.detect.outputs.run_real == 'true' && vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ needs.detect.outputs.run_real == 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build
@@ -309,7 +310,7 @@ jobs:
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show || true; free -h || true
           else
             echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
           fi

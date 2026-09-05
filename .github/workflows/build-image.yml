@@ -2914,8 +2914,9 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
         # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
         # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
@@ -2934,7 +2935,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3670,7 +3671,9 @@ jobs:
         # DROP the swapfile and instead reclaim the ~25-30G of preinstalled
         # toolchains this job never uses (plus the preloaded docker images)
         # BEFORE the build. Best-effort -- a prune hiccup never fails the job.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY: it deletes shared toolchains and prunes all
+        # docker state, which must never run on a self-hosted runner.
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           set +e
@@ -3701,9 +3704,10 @@ jobs:
         # ENOSPC structurally cannot recur — while 15.8G RAM + 20G swap (~35.8G)
         # clears the ~33G cold peak. Byte-identical best-effort/fail-open script
         # to the four memory-bound jobs' swap step (subshell-guarded, partial-
-        # file cleanup on failure, swapon --show/df -h diagnostics); skipped when
-        # CI_BUILD_RUNNER moves this job to a larger runner.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # file cleanup on failure, swapon --show/df -h diagnostics); GitHub-hosted
+        # runners ONLY (a self-hosted runner brings its own memory and cleanup,
+        # and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -4330,7 +4334,9 @@ jobs:
         # (entry-66 CI-memory investigation, 2026-07-17): this job runs the same
         # memory-heavy `pnpm build` directly on the runner and was reclaimed
         # mid-build on the held PRs with no swap at all.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
+        # and cleanup, and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
