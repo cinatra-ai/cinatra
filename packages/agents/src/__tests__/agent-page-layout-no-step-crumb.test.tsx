@@ -153,6 +153,61 @@ describe("the trail is byte-identical across the run's step readings (item 2)", 
   });
 });
 
+describe("the scheduling route composes the same trail as every other reading (item 2)", () => {
+  // THE READING THE FIRST PROOF ROUND FAILED (cinatra#3223, fix leg 2). The
+  // block above proves the trail on the run's OWN path, where the layout had
+  // already stopped publishing a step contribution. The scheduling step of the
+  // same run answers at a sub-route of that path, and the trail's own producer
+  // named that segment "Schedule" — so the graded reading of one run read two
+  // crumbs on its gate reading and three on its scheduling reading.
+  //
+  // The ratified drawing: "A breadcrumb always reflects the navigation
+  // hierarchy — the route the page sits on, not the thing the page happens to
+  // be about", and "'Agents > Agent run > Review' is not a possible breadcrumb
+  // — the review is read on its run's own route, under that run's trail." A
+  // step is a reading inside the run, so the trail is the same trail whichever
+  // step is open, whatever path that step happens to answer at.
+  const SCHEDULE_ROUTE = `${RUN_PATH}/trigger`;
+
+  it("reads two crumbs on the scheduling route, byte-identical to the gate reading", () => {
+    nav.pathname = RUN_PATH;
+    renderReading(READINGS[2]!);
+    const gateTrail = JSON.stringify(trailOn(RUN_PATH));
+
+    cleanup();
+    clearCrumbContributions();
+    nav.pathname = SCHEDULE_ROUTE;
+    renderReading(READINGS[0]!);
+    const scheduleTrail = JSON.stringify(trailOn(SCHEDULE_ROUTE));
+
+    expect(JSON.parse(scheduleTrail)).toEqual([
+      { label: "Agents", href: "/agents" },
+      { label: RUN_NAME, href: RUN_PATH },
+    ]);
+    expect(scheduleTrail).toBe(gateTrail);
+  });
+
+  it("names no step at the sub-route position, with or without a contribution", () => {
+    expect(
+      buildBreadcrumbTrail(SCHEDULE_ROUTE, {
+        contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+      }).map((c) => c.label),
+    ).toEqual(["Agents", RUN_NAME]);
+    expect(buildBreadcrumbTrail(SCHEDULE_ROUTE).length).toBe(2);
+  });
+
+  it("leaves every OTHER sub-route under an instance named as it was", () => {
+    // Only the run's STEP sub-routes are elided. A genuine page of its own
+    // under the instance keeps its crumb, so this change removes one departure
+    // rather than the sub-route level itself.
+    expect(
+      buildBreadcrumbTrail(`${RUN_PATH}/permissions`, {
+        contributions: [{ prefix: RUN_PATH, label: RUN_NAME }],
+      }).map((c) => c.label),
+    ).toEqual(["Agents", RUN_NAME, "Permissions"]);
+  });
+});
+
 describe("the run-starting page keeps the trail the drawing gives it (item 3)", () => {
   it("reads 'Agents' then the run-starting page's own name, and nothing after it", () => {
     // The page that starts a run answers under the instance branch with the
