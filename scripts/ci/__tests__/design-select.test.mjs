@@ -34,6 +34,7 @@ import { REPO_ROOT } from "../design-select.mjs";
 const TSCONFIG_PATH = join(REPO_ROOT, "tsconfig.json");
 
 import {
+  WIDENING_RULES,
   aliasesFor,
   buildFamilies,
   discoverSpecFiles,
@@ -42,6 +43,7 @@ import {
   routeFiles,
   stripJsonc,
   selectFamilies,
+  wideningRuleFor,
 } from "../design-select.mjs";
 
 // Every virtual repo carries a tsconfig, because the selector READS its aliases
@@ -590,5 +592,35 @@ describe("7. THE SECOND CONVERGENCE ROUND (false negatives)", () => {
     expect(aliases.exact.size).toBeGreaterThan(50);
     const { unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
     expect(unresolved).toEqual([]);
+  });
+});
+
+describe("8. THE RULE TABLE'S SHAPE", () => {
+  it("names every rule's predicate `applies`, never `match`", () => {
+    expect(WIDENING_RULES.length).toBeGreaterThan(0);
+    for (const rule of WIDENING_RULES) {
+      expect(typeof rule.id).toBe("string");
+      expect(typeof rule.why).toBe("string");
+      expect(typeof rule.applies).toBe("function");
+      // `match` is a string method: a rule object must not shadow that name,
+      // because a reader (and a static analyser) then reads the call site as a
+      // regular-expression build rather than a predicate test.
+      expect(Object.prototype.hasOwnProperty.call(rule, "match")).toBe(false);
+    }
+  });
+
+  it("decides through `applies`, so wideningRuleFor reads the same property", () => {
+    const selector = WIDENING_RULES.find((rule) => rule.id === "selector");
+    expect(selector.applies("scripts/ci/design-select.mjs")).toBe(true);
+    expect(selector.applies("README.md")).toBe(false);
+    expect(wideningRuleFor("src/components/button.tsx")?.id).toBe("shared-primitive");
+    expect(wideningRuleFor("scripts/ci/design-select.mjs")?.id).toBe("selector");
+    expect(wideningRuleFor("README.md")).toBe(null);
+  });
+
+  it("keeps the source free of the old property name", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts/ci/design-select.mjs"), "utf8");
+    expect(source).not.toMatch(/^\s*match:/m);
+    expect(source).not.toContain("rule.match(");
   });
 });

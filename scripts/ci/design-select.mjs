@@ -155,41 +155,50 @@ const RESOLVE_EXTENSIONS = [
 ];
 
 /**
+ * One widening rule: an id, the sentence the selector prints, and the predicate
+ * that decides whether the rule applies to a changed path.
+ *
+ * @typedef {{id: string, why: string, applies: (path: string) => boolean}} WideningRule
+ */
+
+/**
  * A changed file in any of these classes cannot be attributed to a subset of
  * families, so it runs the whole suite. Each rule carries the sentence the
  * selector prints, because a widening decision the reader cannot check is a
  * decision the reader cannot trust.
+ *
+ * @type {WideningRule[]}
  */
 export const WIDENING_RULES = [
   {
     id: "shared-primitive",
     why: "a shared primitive under src/components/ can render on any surface",
-    match: (p) => p.startsWith("src/components/"),
+    applies: (p) => p.startsWith("src/components/"),
   },
   {
     id: "workspace-package",
     why: "a workspace package under packages/*/src/ can render on any surface",
-    match: (p) => /^packages\/[^/]+\/src\//.test(p),
+    applies: (p) => /^packages\/[^/]+\/src\//.test(p),
   },
   {
     id: "global-style",
     why: "a stylesheet can restyle any surface",
-    match: (p) => p.endsWith(".css"),
+    applies: (p) => p.endsWith(".css"),
   },
   {
     id: "app-layout",
     why: "an app layout wraps every route it encloses",
-    match: (p) => /^src\/app\/(?:.*\/)?layout\.tsx$/.test(p),
+    applies: (p) => /^src\/app\/(?:.*\/)?layout\.tsx$/.test(p),
   },
   {
     id: "dependency",
     why: "a dependency change can change how anything renders",
-    match: (p) => p === "package.json" || p === "pnpm-lock.yaml" || p === "pnpm-workspace.yaml",
+    applies: (p) => p === "package.json" || p === "pnpm-lock.yaml" || p === "pnpm-workspace.yaml",
   },
   {
     id: "generated-extension-manifest",
     why: "the generated extension manifest changes what the app mounts",
-    match: (p) =>
+    applies: (p) =>
       p.startsWith("src/lib/generated/") ||
       p === "cinatra-dev-extensions.lock.json" ||
       p === "cinatra-required-extensions.lock.json",
@@ -197,7 +206,7 @@ export const WIDENING_RULES = [
   {
     id: "design-pin",
     why: "a pinned conformance manifest, allowlist or contract governs every surface",
-    match: (p) =>
+    applies: (p) =>
       p.startsWith(`${DESIGN_SUITE_DIR}/conformance/manifests/`) ||
       p === `${DESIGN_SUITE_DIR}/conformance/allowlist.json` ||
       p === `${DESIGN_SUITE_DIR}/conformance/testid-contract.json` ||
@@ -207,7 +216,7 @@ export const WIDENING_RULES = [
   {
     id: "suite-config",
     why: "the suite or build configuration changes how every family runs",
-    match: (p) =>
+    applies: (p) =>
       p.startsWith("tests/e2e/config/") ||
       p === "tsconfig.json" ||
       p === "components.json" ||
@@ -216,13 +225,18 @@ export const WIDENING_RULES = [
   {
     id: "selector",
     why: "the selection logic itself changed, so it must not narrow its own proof",
-    match: (p) => p === "scripts/ci/design-select.mjs",
+    applies: (p) => p === "scripts/ci/design-select.mjs",
   },
 ];
 
-/** Widening reason for a changed path, or null. */
+/**
+ * Widening reason for a changed path, or null.
+ *
+ * @param {string} path
+ * @returns {WideningRule | null}
+ */
 export function wideningRuleFor(path) {
-  return WIDENING_RULES.find((rule) => rule.match(path)) ?? null;
+  return WIDENING_RULES.find((rule) => rule.applies(path)) ?? null;
 }
 
 /**
