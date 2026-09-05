@@ -44,7 +44,10 @@ describe("detail page: no legacy permissions tablist, no Permissions tab (#1733)
   });
 
   it("renders the dashboards surface directly and reaches settings from the tablist", () => {
-    expect(DETAIL_SOURCE).toContain("<ProjectDashboardsTab");
+    // RE-POINTED by cinatra#2807 fix leg 3: the dashboards surface rendered
+    // directly on the landing is now the drawn Dashboards tab body.
+    expect(DETAIL_SOURCE).toContain("<ScopeDashboardsSection");
+    expect(DETAIL_SOURCE).not.toContain("<ProjectDashboardsTab");
     // cinatra#2474 PR1 — the reach-settings affordance moved from a top-right
     // header button to the entity-page tablist's Settings entry. The #1733
     // invariant it carries is unchanged: settings stays reachable from the

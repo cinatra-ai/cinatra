@@ -23,7 +23,7 @@ import {
   type PrepareReviewPorts,
   type ResolvedRendererMount,
 } from "../artifact-review-preparation";
-import type { ArtifactRendererProps } from "../artifact-renderer-props";
+import { readOnlyArtifactEdit, type ArtifactRendererProps } from "../artifact-renderer-props";
 import type { ArtifactSummary } from "../artifact-service";
 import type { ArtifactReviewTarget } from "../artifact-review-target";
 import { buildArtifactContentProjection } from "../artifact-content-channel";
@@ -51,6 +51,9 @@ function fakeArtifact(id: string): ArtifactSummary {
 function propsWith(content: ArtifactRendererProps["content"]): ArtifactRendererProps {
   return {
     propsApiVersion: 1,
+    // The review card is a READ-ONLY surface (enabler 0.20): every surface names
+    // its edit answer, and this one refuses by construction.
+    edit: readOnlyArtifactEdit("read-only-surface"),
     artifact: {
       id: "art",
       title: "The draft",
