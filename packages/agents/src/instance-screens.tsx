@@ -37,6 +37,10 @@ import {
 } from "./run-recommendation-core";
 import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
+// WHICH MOMENT IS THE RUN STANDING AT (cinatra#3221, fix leg 3)? Asked of the
+// ONE classifier, which is the only module that reads how a moment is spelled
+// -- PLAN (B) section 6: "no screen re-derives a moment".
+import { runStandsAtMidRunScreenMoment } from "./run-surface-status";
 // The step from the run's review slot to what the review step draws
 // (cinatra#2970). A leaf, so this server component can call it.
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
@@ -796,8 +800,12 @@ export function runDetailInitialStep(params: {
  * THE DISCRIMINATOR IS THE RECORDED MOMENT, NEVER THE STATUS -- a setup pause, a
  * review gate and a mid-run screen are all `pending_approval`, so the status
  * alone would put this entry under a reviewer's decision and draw a second row
- * for a gate the spine already carries. `"hitl"` is the moment the run records
- * for the screen this entry is for, and it is the only one this reads.
+ * for a gate the spine already carries. The moment itself is READ BY THE ONE
+ * CLASSIFIER and only asked here (`runStandsAtMidRunScreenMoment`, fix leg 3):
+ * this rule composes the rail's own facts -- the status, a usable gate context,
+ * and the two entries that outrank it -- with the classifier's answer, and it
+ * never learns how a moment is spelled. PLAN (B) section 6: "no screen
+ * re-derives a moment."
  *
  * AND ONLY WHERE NO ENTRY ABOVE IS ALREADY THAT GATE: a held skills question
  * and an open input form each have their own row, and a second row for the same
@@ -827,7 +835,7 @@ export function runParkedAtTrailingGate(params: {
 }): boolean {
   if (params.runStatus !== "pending_approval") return false;
   if (!params.gateContextUsable) return false;
-  if (params.lifecycleMoment !== "hitl") return false;
+  if (!runStandsAtMidRunScreenMoment(params.lifecycleMoment)) return false;
   if (params.recommendationHeld) return false;
   if (params.openInputStepKey) return false;
   return true;
