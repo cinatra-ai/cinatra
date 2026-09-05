@@ -191,6 +191,35 @@ export const MARKETPLACE_STATIC_ROUTES = new Set([
   "vendor-applications",
 ]);
 
+// THE SCOPE BASE (cinatra#2809, per-scope surfaces S3).
+//
+// Every surface now answers under a vantage as well as at the root: the
+// workspace, a person's own scope, an organization, a team, a project. The
+// trail has to know where the scope ends and the surface begins, because the
+// two collapse branches below are written against the SURFACE ("Agents >
+// <instance>") and a scoped path carries the vantage in front of it.
+//
+// Spelled here as a recognizer over the path rather than imported from
+// `scopeSurfaceBase`: this module is a pure leaf the shell renders through, and
+// the agreement with that function is pinned by a unit test.
+const SCOPE_BASE_CONTAINERS = new Set(["organizations", "teams", "projects"]);
+const SCOPE_BASE_SINGLETONS = new Set(["workspace", "personal"]);
+
+/** The scope base a path is under, or `null` for a root-level path. */
+export function scopeBaseFromSegments(segments: string[]): string | null {
+  if (segments.length === 0) return null;
+  if (SCOPE_BASE_SINGLETONS.has(segments[0])) return `/${segments[0]}`;
+  if (SCOPE_BASE_CONTAINERS.has(segments[0]) && segments.length >= 2 && segments[1]) {
+    return `/${segments[0]}/${segments[1]}`;
+  }
+  return null;
+}
+
+/** How many segments the scope base occupies. */
+function scopeBaseDepth(scopeBase: string | null): number {
+  return scopeBase ? scopeBase.split("/").filter(Boolean).length : 0;
+}
+
 export function isPagelessContainerCrumb(segments: string[], i: number): boolean {
   const depth = i + 1; // number of path segments up to and including this crumb
   // /analytics has no page.tsx and no redirect — the section root is a pure
@@ -224,6 +253,18 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
     (segments[0] === "organizations" || segments[0] === "teams") &&
     depth === 3 &&
     segments[2] === "dashboards"
+  ) {
+    return true;
+  }
+  // The agent VENDOR level (cinatra#2809). `…/agents/<vendor>` is a routing
+  // container: the route resolves at `…/agents/<vendor>/<package>` and below,
+  // so a link at the vendor level 404s. True at the root and under every scope
+  // base, because the same route tree is mounted at both.
+  const agentsAt = scopeBaseDepth(scopeBaseFromSegments(segments));
+  if (
+    segments[agentsAt] === "agents" &&
+    i === agentsAt + 1 &&
+    segments.length >= agentsAt + 3
   ) {
     return true;
   }
@@ -312,9 +353,22 @@ export function buildBreadcrumbTrail(
     pageTitle?: { title: string; pathname: string } | null;
     chatThreadTitle?: string | null;
     contributions?: readonly CrumbContribution[];
+    /**
+     * A PERSISTED instance's home scope (cinatra#2809): the vantage its launch
+     * was anchored to, supplied by the page's server render. The scope crumb
+     * names THIS, never the path the reader wandered in through — an instance
+     * belongs where it was launched, and a trail that named the visited path
+     * would offer a way back to a scope the instance is not in.
+     */
+    homeScopeBase?: string | null;
   } = {},
 ): BreadcrumbCrumb[] {
-  const { pageTitle = null, chatThreadTitle = null, contributions = [] } = opts;
+  const {
+    pageTitle = null,
+    chatThreadTitle = null,
+    contributions = [],
+    homeScopeBase = null,
+  } = opts;
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return [{ label: "Personal", href: "/personal" }];
 
@@ -340,8 +394,52 @@ export function buildBreadcrumbTrail(
   // a thread is signalled by the PERSISTED title arriving over the chat bus
   // (present only while a thread is active — never for a new/empty chat), never
   // re-derived from the path.
-  if (segments[0] === "chat") {
-    const crumbs: BreadcrumbCrumb[] = [{ label: "Chat", href: "/chat" }];
+  const pathScopeBase = scopeBaseFromSegments(segments);
+  const baseDepth = scopeBaseDepth(pathScopeBase);
+  const surface = segments.slice(baseDepth);
+
+  /**
+   * The scope's own crumb: its resolved NAME, linking to the scope landing.
+   * The name arrives through the ONE contribution channel (the owning page's
+   * server render, after its access checks); with none published it falls back
+   * to the id's first eight characters plus an ellipsis, never a title-cased
+   * raw id.
+   */
+  const scopeCrumb = (base: string): BreadcrumbCrumb => {
+    const contributed = replacementFor(base);
+    const last = base.split("/").filter(Boolean).at(-1) ?? "";
+    return {
+      label:
+        contributed?.label ??
+        (isIdLikeSegment(last) ? idSegmentPlaceholder(last) : humanizePathSegment(last)),
+      href: contributed?.href ?? base,
+    };
+  };
+
+  /** The head of a collapsed scoped trail: the instance's HOME scope where the
+   *  page named one, otherwise the scope the path is under. */
+  const collapsedHead = (): BreadcrumbCrumb[] => {
+    const base = homeScopeBase ?? pathScopeBase;
+    return base ? [scopeCrumb(base)] : [];
+  };
+
+  // Chat: collapses to "Chat" / "Chat > <thread title>" at the root, and to
+  // "<scope> > Assistants [> <thread title>]" under a scope base, where the
+  // same renderer answers at `<base>/assistants/<vendor>/<slug>…`. The scope's
+  // own Assistants TAB (`<base>/assistants`, no vendor/slug below it) is a
+  // listing page, not a conversation, and stays on the ordinary trail.
+  const isScopedChat = pathScopeBase !== null && surface[0] === "assistants" && surface.length >= 3;
+  if (segments[0] === "chat" || isScopedChat) {
+    // THE HOME SCOPE WINS OVER THE PATH HERE TOO (convergence finding on this
+    // lane). The agent-instance branch already preferred it; the chat branch
+    // did not, so a persisted thread read at the BARE /chat address — the
+    // address a reader arrives at before the canonical-home redirect, and the
+    // one a stale bookmark holds -- collapsed to a scopeless Chat head and
+    // offered no way back to the scope the conversation actually belongs to.
+    const chatBase = isScopedChat ? (homeScopeBase ?? pathScopeBase) : homeScopeBase;
+    const crumbs: BreadcrumbCrumb[] = chatBase
+      ? [...collapsedHead(), { label: "Assistants", href: `${chatBase}/assistants` }]
+      : [{ label: "Chat", href: "/chat" }];
     if (chatThreadTitle) {
       crumbs.push({ label: chatThreadTitle, href: pathname });
     }
@@ -353,27 +451,32 @@ export function buildBreadcrumbTrail(
   // (ratified): the name is the page header's identity (run title →
   // "<template name> (N) — <startedAt>" → placeholder), supplied via the ONE
   // contribution channel by the gated instance page / rename flow.
-  if (segments[0] === "agents" && segments.length >= 4) {
-    const instancePath = "/" + segments.slice(0, 4).join("/");
+  if (surface[0] === "agents" && surface.length >= 4) {
+    const agentsRoot = `${pathScopeBase ?? ""}/agents`;
+    const instancePath = "/" + segments.slice(0, baseDepth + 4).join("/");
     const contributed = replacementFor(instancePath);
+    const instanceSegment = segments[baseDepth + 3];
     const crumbs: BreadcrumbCrumb[] = [
-      { label: "Agents", href: "/agents" },
+      ...collapsedHead(),
+      { label: "Agents", href: agentsRoot },
       {
         label:
           contributed?.label ??
-          (isIdLikeSegment(segments[3])
-            ? idSegmentPlaceholder(segments[3])
-            : humanizePathSegment(segments[3])),
+          (isIdLikeSegment(instanceSegment)
+            ? idSegmentPlaceholder(instanceSegment)
+            : humanizePathSegment(instanceSegment)),
         href: instancePath,
       },
     ];
-    const agentCrumbPaths = ["/agents", instancePath];
-    if (segments.length >= 5) {
-      const subRoute = safelyDecodePathSegment(segments[4]);
+    const agentCrumbPaths = crumbs.map((_c, i) =>
+      i === crumbs.length - 1 ? instancePath : i === crumbs.length - 2 ? agentsRoot : (homeScopeBase ?? pathScopeBase ?? ""),
+    );
+    if (surface.length >= 5) {
+      const subRoute = safelyDecodePathSegment(segments[baseDepth + 4]);
       crumbs.push({
         label:
           AGENT_INSTANCE_SUBROUTE_LABELS[subRoute] ??
-          humanizePathSegment(segments[4]),
+          humanizePathSegment(segments[baseDepth + 4]),
         href: pathname,
       });
       agentCrumbPaths.push(pathname);
@@ -457,10 +560,20 @@ export function buildBreadcrumbTrail(
   }
 
   // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
+  //
+  // THE SCOPE CRUMB SURVIVES (cinatra#2809). The head used to be crumb 0, which
+  // on a scoped route is the CONTAINER listing ("Organizations") — so a deep
+  // scoped path was truncated down to a trail that never named the scope the
+  // reader was in. The head is the scope's own crumb where the path has one,
+  // and crumb 0 everywhere else.
   if (crumbs.length <= 4) return crumbs;
+  const truncationScopeBase = scopeBaseFromSegments(segments);
+  const scopeAt = truncationScopeBase ? crumbPaths.indexOf(truncationScopeBase) : -1;
+  const headAt = scopeAt > 0 ? scopeAt : 0;
+  const cutAt = Math.min(headAt + 1, crumbs.length - 3);
   return [
-    crumbs[0],
-    { label: "…", href: crumbs[1].href, ellipsis: true },
+    crumbs[headAt],
+    { label: "…", href: crumbs[cutAt].href, ellipsis: true },
     crumbs[crumbs.length - 2],
     crumbs[crumbs.length - 1],
   ];

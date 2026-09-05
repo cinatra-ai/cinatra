@@ -343,6 +343,7 @@ export type AgentRunRecord = {
   // this column (stale-worker refusal). NULL pre-dispatch.
   executionAttemptId: string | null;
   humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
+  launchScopeAnchor?: unknown; // cinatra#2809 — the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one.
   // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a). Which moment
   // this run is at, which card that moment mounts, and the card's
   // server-checked reference. All three are NULL together for a run at no
@@ -452,7 +453,7 @@ export type CreateAgentRunInput = {
   // JSON-serializable identity captured at instantiate. The run-worker
   // replays it at re-authz time. Optional — legacy callers (test fixtures,
   // schema-only paths) omit; new MCP handlers populate it from the actor.
-  delegatedActorSnapshot?: string | null;
+  delegatedActorSnapshot?: string | null; launchScopeAnchor?: unknown; // cinatra#2809 — the IMMUTABLE vantage this run is LAUNCHED from, MINTED by the launching route through buildLaunchScopeAnchor and persisted verbatim; omitted by every headless / A2A / global writer, which persists none. Never inferred here from orgId/projectId/runBy: those move, and an address derived from a moving column moves with it.
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
   humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
   // cinatra#2485 C — the REQUESTING actor for the install-scope run gate.
@@ -1735,7 +1736,7 @@ export async function createAgentRun(
     // Derived by the snapshot module's own run-creation seam — see it for
     // why the scopes are decided HERE, at the primitive, and not at each
     // producer, and for why only an explicit human contributes a personal tier.
-    assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input),
+    assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input), launchScopeAnchor: input.launchScopeAnchor ?? null, // cinatra#2809 — the IMMUTABLE vantage this run was LAUNCHED from, stamped from the launch route, minted by the launching route and stamped here once, never updated afterwards. Rides this line for the same reason the type fields above do: this module is at its file-size ceiling.
     // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
@@ -3361,7 +3362,7 @@ export async function createAgentRunPendingInput(
     projectId?: string | null;
     humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
     // cinatra#2485 C — see CreateAgentRunInput.scopeActor. Same contract.
-    scopeActor?: ActorContext | null;
+    scopeActor?: ActorContext | null; launchScopeAnchor?: unknown; // cinatra#2809 — see CreateAgentRunInput.launchScopeAnchor. Same contract: a pending-input run is a run, and it must reach dispatch already knowing where it lives.
     /** Companion writes committed ATOMICALLY WITH THE RUN ROW (cinatra#2569) —
      *  contract + rationale on `GuardedRunCompanionWrite`. */
     withinCreateTx?: GuardedRunCompanionWrite;
@@ -3416,7 +3417,7 @@ export async function createAgentRunPendingInput(
         oboCeiling: oboCeilingJson,
         // Same derivation as createAgentRun — a pending-input run is a run,
         // and it must not reach dispatch with an undecided scope.
-        assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input),
+        assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input), launchScopeAnchor: input.launchScopeAnchor ?? null, // cinatra#2809 — the same stamp as createAgentRun: a pending-input run is a run, and it must reach dispatch already knowing where it lives.
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
       // LAST in the guarded transaction: the row exists for it to reference, and

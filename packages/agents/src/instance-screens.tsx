@@ -1,4 +1,12 @@
 import { notFound, redirect } from "next/navigation";
+import { buildAgentInstancePath } from "@/lib/agent-url";
+import {
+  canonicalRunPath,
+  homeRedirectFor,
+  launchScopeAnchorForScope,
+  parseLaunchScopeAnchor,
+} from "@/lib/launch-scope-anchor";
+import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
@@ -762,6 +770,24 @@ type ScreenProps = {
   agentId: string;          // template slug from URL
   instanceId: string;       // runId or "new"
   searchParams?: Record<string, string | string[] | undefined>;
+  /**
+   * The scope base this screen is mounted under (cinatra#2809, epic #2806) —
+   * `/teams/<id>`, `/organizations/<id>`, `/projects/<id>`, `/workspace`,
+   * `/personal`, or absent on the bare global route.
+   *
+   * The screens need it for exactly two things, and for nothing else: to send a
+   * freshly created run to its own scope's address, and to decide — AFTER the
+   * access door below has cleared — whether the reader is looking at the
+   * instance's canonical home or at another address for it.
+   */
+  scopeBase?: string | null;
+  /**
+   * The scope this screen is mounted under, as the vantage itself rather than
+   * as its route (cinatra#2809). The launcher mints the run's launch anchor
+   * from it — the ONE caller that knows which vantage the person was standing
+   * on when they pressed Run.
+   */
+  launchScope?: ScopeSurfaceRef | null;
 };
 
 /**
@@ -824,7 +850,12 @@ function serializeRunMessages(
   }));
 }
 
-export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
+export async function SetupScreen({
+  agentId,
+  instanceId,
+  scopeBase,
+  launchScope,
+}: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
 
@@ -843,9 +874,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       includeNonPublished: true,
     });
     if (!template) notFound();
-    const result = await createAndTriggerRunWithContext(actorUserId, actorOrgId, template);
+    // STAMPED FROM THE EXACT LAUNCH ROUTE (cinatra#2809): the vantage this
+    // launcher is mounted under, minted through the one function that
+    // validates the union. A launcher on the bare global route mints nothing,
+    // and its run is unanchored — the honest record of a launch made from no
+    // vantage.
+    const result = await createAndTriggerRunWithContext(
+      actorUserId,
+      actorOrgId,
+      template,
+      launchScopeAnchorForScope(launchScope ?? null, actorUserId),
+    );
     if (result.ok) {
-      redirect(`/agents/${agentId}/${encodeURIComponent(result.runId)}`);
+      // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
+      // launched from a vantage belongs to it, so the fresh run's address is
+      // this launcher's own scope base plus the one agent-path grammar.
+      redirect(
+        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
+          scopeBase: scopeBase ?? null,
+        }),
+      );
     }
     notFound();
   }
@@ -883,6 +931,29 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       if (err instanceof AuthzError) notFound();
       throw err;
     }
+    // ONE CANONICAL HOME (cinatra#2809, epic #2806). A run launched from a
+    // vantage lives at that vantage's address, and every other address for it —
+    // the bare global route, another scope's route — sends the reader there.
+    //
+    // AFTER THE ACCESS DOOR ABOVE, and before ANY instance content is rendered:
+    // redirecting first would tell an unauthorized reader that the run exists
+    // and where it lives, and rendering first would draw the instance twice.
+    // An unanchored, legacy, A2A or PERSONAL-anchored run answers null here and
+    // stays exactly where it is — `/personal` is actor-relative, and a run can
+    // have other authorized viewers.
+    const home = homeRedirectFor(
+      buildAgentInstancePath(agentId, instanceId, { scopeBase: scopeBase ?? null }),
+      canonicalRunPath({
+        agentPackageName: agentId,
+        instanceId,
+        // Decoded HERE, at the surface that addresses the instance: the
+        // column is surfaced as stored, and anything this build cannot vouch
+        // for — an unknown version, an unknown kind, a missing id, a workspace
+        // arm carrying one — reads UNANCHORED and stays on the bare route.
+        anchor: parseLaunchScopeAnchor(run.launchScopeAnchor),
+      }),
+    );
+    if (home) redirect(home);
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -2241,11 +2312,18 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   );
 }
 
-export async function DataScreen({ agentId, instanceId }: ScreenProps) {
+export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps) {
   const agentPath = agentId.includes("/")
     ? agentId.split("/").map(encodeURIComponent).join("/")
     : encodeURIComponent(agentId);
-  redirect(`/agents/${agentPath}/${encodeURIComponent(instanceId)}`);
+  // Stays INSIDE the scope it was reached from (cinatra#2809): a retired
+  // sub-route that walked the reader out to the global route would be a
+  // silent scope change dressed up as a redirect.
+  redirect(
+    buildAgentInstancePath(agentPath, encodeURIComponent(instanceId), {
+      scopeBase: scopeBase ?? null,
+    }),
+  );
 }
 
 export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {

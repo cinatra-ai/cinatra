@@ -133,6 +133,13 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     lifecycleMoment: row.lifecycleMoment ?? null,
     lifecycleCardKind: row.lifecycleCardKind ?? null,
     lifecycleCardRef: row.lifecycleCardRef ?? null,
+    // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
+    // src/lib/launch-scope-anchor.ts at the surface that addresses the
+    // instance, where a malformed or unknown payload reads UNANCHORED — the row
+    // stays on the flat bare route rather than being repaired from a column
+    // that never meant this. Decoding here instead would put the decoder in
+    // four locked route graphs whose module counts may only ever shrink.
+    launchScopeAnchor: row.launchScopeAnchor ?? null,
   };
 }
 
