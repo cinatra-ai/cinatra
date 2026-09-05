@@ -25,6 +25,14 @@ import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixt
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import { LifecycleSuggestionChipFixtures } from "./lifecycle-card-fixtures";
 import { LifecycleReviewTargetHeaderFixtures } from "./lifecycle-review-target-header-fixtures";
+import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
+import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
+import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
+import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
+import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
+import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
+import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
+import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -246,6 +254,132 @@ export default function ConformanceHarnessPage() {
                 mount per artifact kind. The harness seeds the answer's own
                 values and words none of them. */}
             <LifecycleReviewTargetHeaderFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation review composer row (mounts: composer-row-bound,
+              composer-row-acting, composer-rows-unbound, chat-composer-primary-field)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3159, epic #3155 W3: the REAL ComposerFocusRow, fed by the
+                REAL binding hook inside the REAL focus store, plus the REAL
+                primary chat box. The harness holds only which open review the
+                reader chose; the shipped resolver decides every reading. */}
+            <LifecycleComposerFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation recommendation card (mounts: recommendation-paused,
+              recommendation-empty, recommendation-readings)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3160, epic #3155 W4: the REAL RecommendationHoldCard — the
+                ONE composer of the shipped row — under the REAL chat-thread host
+                declaration, one mount per run. The card resolves the run's
+                authoritative hold state itself, so this route hands it a run and
+                nothing else; on this sessionless dev-only route that resolve
+                answers "no row for this reader" and the card draws nothing, which
+                is its own fail-closed reading. See the module header. */}
+            <LifecycleRecommendationFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation schedule card (nine surfaces, five readings)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3161, epic #3155: the REAL drawn schedule card under the
+                REAL chat-thread host declaration, one mount per manifest
+                surface. The harness supplies only what a server would have said
+                — the resolved state and body, and the one answer the decision
+                endpoint gives — and computes no presentation from it. */}
+            <LifecycleScheduleCardFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Run step rail (surface: run-step-rail)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3162, epic #3155 W6: the REAL RunStepRailPanel on a run
+                that carries every rail entry kind — a work step, the gate
+                already answered and kept as history, the gate the run is paused
+                on, and a step still ahead. The harness supplies the entries; the
+                shipped component draws every row. */}
+            <RunStepRailConformanceFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Review gate states (surfaces: review-gate-loading, review-gate-blocked)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3163, epic #3155: the REAL ReviewGateLoading and
+                ReviewGateBlocked. Both are props-only, so nothing is intercepted;
+                the blocked reason comes from the closed set the surface model
+                owns and the panel writes its own words from it. */}
+            <ReviewGateStateConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Lifecycle cards on the resolve seam (surfaces: verification-*, state-*,
+              suggestion-floor)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3164, epic #3155 W8: the REAL verification card and the
+                REAL review card, under REAL host declarations. These cards draw
+                nothing before an authorized resolve, so the suite's driver
+                answers their own resolve request with a protocol-typed envelope
+                and everything drawn from it is the shipped component's. */}
+            <LifecycleResolveFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Review target — the metadata floor (surface: tier-metadata-floor)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3164: the shipped review-target bridge's floor arm — the
+                sanitized one-line diagnostic above the host's generic read-only
+                view, which is why a floored target is never blank. */}
+            <LifecycleTierFloorFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              In-conversation lifecycle drawing — one-off surfaces (surfaces:
+              review-target-in-thread, run-progress-placeholder-in-thread,
+              review-states-outside-chat, presence-matrix, reader-state-matrix)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3165, epic #3155 W9: the REAL review-target header, the
+                REAL gate loading and "no longer open" readings, the REAL run
+                progress placeholder, and the two §IX matrices drawn by handing
+                the shipped chip row the four host declarations and the three
+                reader readings. No transport substitution anywhere. */}
+            <LifecycleOneOffFixtures />
           </CardContent>
         </Card>
       </PageContent>
