@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
   collectArtifactBindingsFromOasDocument,
+  parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
   type CollectedArtifactBinding,
+  type PersistedArtifactBindingDeclaration,
   type SemanticArtifactProducesRef,
 } from "@cinatra-ai/agents/artifact-binding";
 import {
@@ -77,6 +79,23 @@ import {
 // external-A2A run whose pinned template provably owes nothing now completes
 // cleanly during an outage instead of failing on `unavailable`, and every path
 // the flag cannot prove keeps #2497's classification untouched.
+//
+// Executed-declaration authority (cinatra#3208): the two paragraphs above
+// describe a module that re-derived a run's bindings by re-reading the PACKAGE
+// REGISTRY for the run's (packageName, packageVersion) pair — while execution
+// itself was bound to the immutable template-version snapshot on
+// `agent_templates`. Two authorities, nothing binding them together: a registry
+// copy that had drifted from the copy the template was compiled from failed the
+// run on a binding it never declared, after all of the model work was done (the
+// measured symptom named a RETIRED scalar `titleFrom` output on a run whose
+// executed declaration is the fan-out one). The compile that produces a template
+// version now PERSISTS the declaration it found, in `agent_templates
+// .artifact_bindings`, and this module reads that instead — under the same
+// version-pin guard `has_artifact_bindings` already uses. When it resolves, the
+// registry is not called at all. The registry read survives ONLY as the fallback
+// for a row whose declaration reads as unknown (compiled before the column, or
+// by a compile with no readable sibling manifest), where everything the two
+// paragraphs above describe still applies unchanged.
 //
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
@@ -399,11 +418,12 @@ async function resolveTemplatePackageAndBindingsFlag(
 ): Promise<{
   packageName: string | null;
   hasArtifactBindings: boolean | null;
+  executedDeclaration: PersistedArtifactBindingDeclaration | null;
 }> {
   ensurePostgresSchema();
   const s = postgresSchema.replaceAll('"', '""');
   const res = await pool().query(
-    `SELECT package_name, package_version, has_artifact_bindings FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
+    `SELECT package_name, package_version, has_artifact_bindings, artifact_bindings FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
     [templateId],
   );
   const row = res.rows[0] as
@@ -411,6 +431,7 @@ async function resolveTemplatePackageAndBindingsFlag(
         package_name?: string | null;
         package_version?: string | null;
         has_artifact_bindings?: boolean | null;
+        artifact_bindings?: string | null;
       }
     | undefined;
   const versionPinMatches =
@@ -426,6 +447,18 @@ async function resolveTemplatePackageAndBindingsFlag(
       versionPinMatches && typeof row?.has_artifact_bindings === "boolean"
         ? row.has_artifact_bindings
         : null,
+    // cinatra#3208 — the declaration the run ACTUALLY executed, read back from
+    // the immutable template-version snapshot it is bound to. Guarded by the
+    // SAME version pin as the presence flag and for the same reason: a template
+    // row is mutable and a concurrent reinstall can move it to another version
+    // while this run is still in flight, so a declaration that no longer
+    // describes this run's pin is treated as unknown (null), never as the
+    // executed one. `parseArtifactBindingDeclaration` is fail-closed: anything
+    // that is not a well-formed declaration of the current grammar also reads
+    // as unknown, and the caller keeps the pre-#3208 registry read.
+    executedDeclaration: versionPinMatches
+      ? parseArtifactBindingDeclaration(row?.artifact_bindings ?? null)
+      : null,
   };
 }
 
@@ -687,6 +720,11 @@ export async function writeClaimedArtifact(input: {
  * failed outcome per binding-collection error). Empty array when the run's
  * package declares no bindings.
  *
+ * cinatra#3208 — FIRST this function reads the executed declaration persisted
+ * on the run's pinned template version and, when it resolves, materializes
+ * against THAT and never touches the registry. Everything below describes the
+ * fallback the unknown case still takes.
+ *
  * cinatra#2498 — the registry read below (`loadRunPackageBindings`) is the
  * ONLY way a registry outage can reach this function; its wholesale-failure
  * catch turns that outage into a synthetic `(binding-resolution)` failure
@@ -729,37 +767,72 @@ export async function materializeRunArtifacts(input: {
   // itself failed) — evidence-free by construction.
   let resolvedPackageName: string | null = null;
   try {
-    const { packageName, hasArtifactBindings } = await resolveTemplatePackageAndBindingsFlag(
-      input.templateId,
-      input.packageVersion,
-    );
+    const { packageName, hasArtifactBindings, executedDeclaration } =
+      await resolveTemplatePackageAndBindingsFlag(input.templateId, input.packageVersion);
     if (packageName === null) return [];
-    // Locally-provable "no bindings" — skip the registry entirely. This is
-    // the ONLY branch that short-circuits; `true` and `null` both still need
-    // the registry (to resolve the actual binding grammar, or because we
-    // cannot prove the run owes nothing) and keep the existing posture below.
-    // Deliberately BEFORE the `resolvedPackageName` hoist: this branch can
-    // never reach the catch's classifier (cinatra#2497), because it never
-    // performs a read that can fail. Ordering it first is the whole point of
-    // cinatra#2498 — a template provably owing no binding at THIS run's pin
-    // must not touch the registry at all, so no outage, 404 or probe can even
-    // be observed for it. Every other path keeps #2497's classification.
-    if (hasArtifactBindings === false) return [];
-    resolvedPackageName = packageName;
-    const loaded = await loadRunPackageBindings({
-      packageName,
-      packageVersion: input.packageVersion,
-    });
-    bindings = loaded.bindings;
-    producesRefs = loaded.producesRefs;
-    for (const error of loaded.errors) {
-      outcomes.push({
-        ok: false,
-        outputId: "(binding-validation)",
-        nodeId: null,
-        extension: null,
-        error,
+    // cinatra#3208 — THE AUTHORITY. When the template version this run is
+    // pinned to persisted the declaration its own compile found, that IS the
+    // declaration the run executed, and materialization resolves against it
+    // without touching the package registry at all. Before #3208 this function
+    // re-derived the bindings by re-reading the registry for the same
+    // (packageName, packageVersion) pair; execution and materialization
+    // therefore answered to two different authorities, and a registry copy that
+    // had drifted from the copy the template was compiled from failed the run
+    // on a binding it never declared, after all the model work was done.
+    //
+    // Chosen enforcement rule (issue acceptance item 4, first branch): the
+    // registry read is REMOVED from every run that carries a persisted
+    // declaration — no digest comparison is built, because with one authority
+    // there is nothing left to compare. The registry read survives ONLY as the
+    // fallback below for a row that predates the column, or whose compile could
+    // not see its sibling manifest, where the declaration reads as unknown.
+    //
+    // The fail-closed posture is untouched: these bindings run through the SAME
+    // loop, and a run that owed an artifact and produced none still returns an
+    // `ok:false` outcome and still lands `failed` with the same sentence. Only
+    // WHICH declaration is resolved changes.
+    if (executedDeclaration !== null) {
+      bindings = executedDeclaration.bindings;
+      producesRefs = executedDeclaration.producesRefs;
+      if (bindings.length === 0) return [];
+      // Binding <-> `produces` parity was enforced at compile time against this
+      // same manifest (the compile refuses to persist a declaration otherwise),
+      // so it is not re-derived here — the persisted pair is parity-checked by
+      // construction, which is precisely what the registry re-read could not
+      // promise.
+    } else if (hasArtifactBindings === false) {
+      // Locally-provable "no bindings" (cinatra#2498) — skip the registry
+      // entirely. Kept below the persisted declaration because a declaration
+      // that resolved is strictly more specific than its presence flag.
+      return [];
+    } else {
+      // The pre-#3208 fallback, byte for byte: a template row with no
+      // persisted declaration (compiled before the column existed, or by a
+      // compile without a readable sibling manifest) still re-derives its
+      // bindings from the registry, and `hasArtifactBindings === null` still
+      // cannot be locally proven safe, so #2497's wholesale classification and
+      // #2486's fail-closed posture below are preserved exactly.
+      //
+      // The `resolvedPackageName` hoist is deliberately INSIDE this branch: the
+      // two short-circuits above can never reach the catch's classifier because
+      // neither performs a read that can fail, so no outage, 404 or probe is
+      // even observable for them.
+      resolvedPackageName = packageName;
+      const loaded = await loadRunPackageBindings({
+        packageName,
+        packageVersion: input.packageVersion,
       });
+      bindings = loaded.bindings;
+      producesRefs = loaded.producesRefs;
+      for (const error of loaded.errors) {
+        outcomes.push({
+          ok: false,
+          outputId: "(binding-validation)",
+          nodeId: null,
+          extension: null,
+          error,
+        });
+      }
     }
   } catch (err) {
     // Package/binding resolution failed wholesale (registry unreachable,
