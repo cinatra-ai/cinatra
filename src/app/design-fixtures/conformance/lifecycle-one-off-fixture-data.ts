@@ -30,7 +30,7 @@ import type {
  * to `type.displayName` — the TYPE's short display label, not the artifact's
  * own title — so the two must share no token: a driver that read the title and
  * reported the type binding would otherwise pass. "Quarterly outreach draft"
- * and the label the product derives from `@cinatra-ai/email:draft` have no word
+ * and the label the product derives from `@acme/email:draft` have no word
  * in common.
  *
  * The label itself is NOT written here: the mount derives it with the shipped
@@ -40,7 +40,7 @@ import type {
  */
 export const LIFECYCLE_REVIEW_TARGET_FIXTURE = {
   title: "Quarterly outreach draft",
-  objectType: "@cinatra-ai/email:draft",
+  objectType: "@acme/email:draft",
   revisionId: "rev_8f3a4c21b7d0",
   facts: ["Team", "Private", "text/html", "updated 8 min ago"],
 } as const;
