@@ -116,6 +116,27 @@ const SETTLED: HoldState = {
   ],
 };
 
+/** The LIVE reading a conversation shows while the hold is open: the offer as
+ *  the scorer ranked it, and a Continue beneath it. */
+const HELD: HoldState = {
+  state: "held",
+  agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
+  promptText: "Draft the Q3 post.",
+  holdRef: "hold-ref-1",
+  canDecide: true,
+  recommendations: [
+    {
+      skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+      skillRevisionId: "rev-1",
+      name: "Blog Writing Skill",
+      vendorName: "Cinatra",
+      score: 0.9,
+      rank: 1,
+      recommended: true,
+    },
+  ],
+};
+
 /**
  * THE WIDGET'S OWN TRANSPORT, answered as the shipped route answers it.
  *
@@ -493,5 +514,59 @@ describe("a remembered reading keeps the row, never the editable window", () => 
       expect(rowOf(second)!.getAttribute("data-skills-step-editable")).toBe("true"),
     );
     expect(continueOf(second)).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE OPEN QUESTION IS NOT A REMEMBERED ONE EITHER (cinatra#3062, fix leg 4
+// convergence round). The arms above close the SETTLED replay; the register
+// remembers the HELD reading too, and it is the same fact being replayed.
+// ---------------------------------------------------------------------------
+// A remembered held reading says "this hold is open" as it stood when the row
+// was drawn. The run can have started since -- released by this reader's own
+// Continue in another turn, or decided by someone else -- and section V leaves
+// nothing to press on a started run. So the replay keeps the row and its pills
+// and withholds the ANSWERING: boxes read-only, no Continue, until the resolver
+// says the question is still open. Same rule as the settled arm, same authority.
+describe("a remembered OPEN question keeps the row, never the answering", () => {
+  it("redraws the held row READ-ONLY while the authority is silent", async () => {
+    authority.answer = HELD;
+    const first = mount();
+    await waitFor(() => expect(rowOf(first)).not.toBeNull());
+    await waitFor(() => expect(continueOf(first)).not.toBeNull());
+    expect(pillsOf(first)).toHaveLength(1);
+    first.unmount();
+
+    // The turn is re-created and this mount's own read has not landed.
+    authority.pending = new Promise<HoldState | null>(() => {});
+    const second = mount();
+    await waitFor(() => expect(rowOf(second)).not.toBeNull());
+    expect(
+      pillsOf(second),
+      "the row keeps its place, one pill per offered skill",
+    ).toHaveLength(1);
+    expect(
+      continueOf(second),
+      "and it does not invite an answer the authority has not authorized",
+    ).toBeNull();
+    for (const pill of pillsOf(second)) {
+      const box = pill.querySelector<HTMLElement>('[role="checkbox"]')!;
+      expect(box.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("and the AUTHORITY hands the question back, one read later", async () => {
+    authority.answer = HELD;
+    const first = mount();
+    await waitFor(() => expect(continueOf(first)).not.toBeNull());
+    first.unmount();
+
+    const second = mount();
+    await waitFor(() => expect(rowOf(second)).not.toBeNull());
+    await waitFor(() => expect(continueOf(second)).not.toBeNull());
+    for (const pill of pillsOf(second)) {
+      const box = pill.querySelector<HTMLElement>('[role="checkbox"]')!;
+      expect(box.hasAttribute("disabled")).toBe(false);
+    }
   });
 });

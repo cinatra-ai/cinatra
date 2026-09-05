@@ -228,7 +228,22 @@ export function cardKeepsItsPlaceInTheTurn(host: string | null): boolean {
 export type RunRecommendationChipMark = "confirmed" | "adjusted" | "skipped";
 
 export type RunRecommendationDecision =
-  | { kind: "pending" }
+  | {
+      kind: "pending";
+      /**
+       * IS THIS OPEN QUESTION A REMEMBERED ONE? (cinatra#3062, fix leg 4.)
+       *
+       * A conversation redraws the row it already showed this reader the moment
+       * the turn remounts, before any read lands -- and a remembered held
+       * reading says "this hold is open" as it stood when the row was DRAWN. The
+       * run can have started since, and section V leaves nothing to press on a
+       * started run. So a replayed open question keeps the row and its pills and
+       * withholds the ANSWERING until the resolver says the question is still
+       * open. Absent is the live reading, as everywhere else on this card: only
+       * an explicit replay closes the floor, never silence.
+       */
+      replayed?: boolean;
+    }
   | {
       kind: "confirmed";
       skillNames: string[];
@@ -1267,6 +1282,9 @@ export function RunRecommendationChipRow({
    */
   const stepCandidates: SkillsStepCandidate[] =
     decision.kind === "pending" ? recs : (decision.candidates ?? []);
+  /** A held reading redrawn from the memory, with no authoritative read behind
+   *  it yet — see `RunRecommendationDecision`'s own field docs. */
+  const replayedQuestion = decision.kind === "pending" && decision.replayed === true;
 
   /**
    * Is this skill checked?
@@ -1682,11 +1700,17 @@ export function RunRecommendationChipRow({
       // be an affordance that moves and decides nothing — the same reading the
       // per-chip row refused them by disabling every chip control, and the same
       // test the SETTLED editable reading already applies below.
-      editable: canDecide && !submitted && !startedHere,
+      // AND NOT A REPLAYED ONE (cinatra#3062, fix leg 4 convergence round). The
+      // memory can only reach this branch through a conversation host, which is
+      // the only host that remembers; the reading it replays is the question as
+      // it stood, so the answering waits for the resolver.
+      editable: canDecide && !submitted && !startedHere && !replayedQuestion,
       ready: loaded,
       // NOTHING TO PRESS ONCE THE RUN HAS STARTED (cinatra#3062, convergence
-      // round) — §V's started reading keeps the pills and drops the floor.
-      control: loaded && !startedHere,
+      // round) — §V's started reading keeps the pills and drops the floor. And
+      // nothing to press on a REPLAYED question either, for the reason the
+      // `editable` line above gives.
+      control: loaded && !startedHere && !replayedQuestion,
     });
   }
 
@@ -2598,7 +2622,7 @@ export function RecommendationHoldCard({
       canDecide={state.canDecide !== false}
       decision={
         state.state === "held"
-          ? { kind: "pending" }
+          ? { kind: "pending", ...(replayed ? { replayed: true } : {}) }
           : state.state === "confirmed"
             ? {
                 kind: "confirmed",
