@@ -1,0 +1,128 @@
+# design-baselines-refresh — dispatch-only. Re-draws the two /design-fixtures pixel
+# baselines on the runner class that runs the design job (the end-to-end runner),
+# so the committed goldens match the machine that compares them. The same setup
+# as design-visual-verify's job (services, env, install, build, server), minus the
+# contract/ratchet checks; the last step runs the pixel project with
+# --update-snapshots and uploads tests/e2e/design/__screenshots__/ as an artifact
+# named design-baselines. Land the PNGs in a pull request afterwards.
+
+name: design-baselines-refresh
+'on':
+  workflow_dispatch: 
+concurrency:
+  group: design-baselines-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    name: design baselines refresh (end-to-end runner)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    timeout-minutes: 70
+    services:
+      redis:
+        image: redis:8
+        ports:
+        - 127.0.0.1:6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout
+          5s --health-retries 10
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+        - 127.0.0.1:5434:5432
+        options: "--health-cmd pg_isready --health-interval 5s --health-timeout 5s
+          --health-retries 10"
+    env:
+      E2E_DESIGN_PORT: '3101'
+      CINATRA_E2E_SETUP_BYPASS: 'true'
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      SUPABASE_SCHEMA: cinatra_e2e_design
+      CINATRA_CONFORMANCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt
+        }}
+      BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
+      CINATRA_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_APP_URL: http://localhost:3101
+      NEXT_PUBLIC_SITE_URL: http://localhost:3101
+      OPENAI_API_KEY: design-visual-verify-placeholder-not-used-by-static-route
+      REDIS_URL: redis://127.0.0.1:6379
+      CINATRA_RUNTIME_MODE: production
+      CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: 'true'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: '24'
+        cache: pnpm
+    - name: Clone companion extension repos
+      uses: "./.github/actions/clone-extensions"
+    - name: install deps
+      run: pnpm install --frozen-lockfile
+    - name: derive playwright version
+      id: playwright-version
+      run: |
+        v=$(pnpm list @playwright/test --json --depth=0 | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const e=Array.isArray(d)?d[0]:d; const ver=(e.devDependencies?.["@playwright/test"]?.version)||(e.dependencies?.["@playwright/test"]?.version); console.log(ver);')
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+    - name: cache playwright browsers
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: "~/.cache/ms-playwright"
+        key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version
+          }}
+    - name: install playwright chromium
+      run: pnpm exec playwright install --with-deps chromium
+    - name: Provision Better Auth tables (public schema)
+      run: node scripts/apply-public-schema.mjs
+    - name: Build (standalone production server)
+      run: pnpm build
+    - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
+      run: |
+        set -euo pipefail
+        minted="$(openssl rand -hex 32)"
+        echo "::add-mask::$minted"
+        printf 'CINATRA_CONFORMANCE_SEED_TOKEN=%s\n' "$minted" >> "$GITHUB_ENV"
+        echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
+    - name: Start standalone server
+      run: |
+        cp -r .next/static .next/standalone/.next/static
+        [ -d public ] && cp -r public .next/standalone/public || true
+        [ -d migrations ] && cp -r migrations .next/standalone/migrations || true
+        (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=127.0.0.1 node server.js > /tmp/design-server.log 2>&1) &
+        echo "standalone server launched as PID $!"
+    - name: Wait for /design-fixtures readiness
+      run: |
+        # Boot-time extension-lifecycle sweeps (static-bundle anchors, store
+        # rematerialize, closure gate) each fail fast against the placeholder
+        # DB but there are dozens of them; first serve can exceed the old
+        # 2-minute window. 8 minutes covers the observed fail-open boot.
+        for i in $(seq 1 240); do
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures/conformance" --max-time 5 2>/dev/null || echo 000)
+          if [ "$code" = "200" ]; then echo "ready after ${i} polls"; exit 0; fi
+          sleep 2
+        done
+        echo "::error::standalone server did not serve /design-fixtures in time"; tail -80 /tmp/design-server.log; exit 1
+    - name: refresh the pixel baselines on this runner
+      env:
+        E2E_REUSE_SERVER: '1'
+      run: |
+        timeout --kill-after=60 1800 pnpm exec playwright test -c tests/e2e/config/design.config.ts --project design-fixtures-chromium --update-snapshots
+        git status --short tests/e2e/design/__screenshots__
+    - name: the refresh must have rewritten exactly the two baselines (fail closed)
+      run: |
+        set -euo pipefail
+        changed="$(git diff --name-only -- tests/e2e/design/__screenshots__ | sort)"
+        expected="$(printf '%s\n' tests/e2e/design/__screenshots__/design-fixtures-dark.png tests/e2e/design/__screenshots__/design-fixtures-light.png | sort)"
+        echo "changed:"; printf '%s\n' "$changed"
+        if [ "$changed" != "$expected" ]; then echo "::error::the refresh did not rewrite exactly the two expected baselines"; exit 1; fi
+        if [ -n "$(git status --porcelain --untracked-files=all -- tests/e2e/design/__screenshots__ | grep '^??' || true)" ]; then echo "::error::the refresh created baseline files that are not in the repository"; exit 1; fi
+    - name: upload the refreshed baselines
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: design-baselines
+        path: tests/e2e/design/__screenshots__/
+        retention-days: 14
+        if-no-files-found: error
