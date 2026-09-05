@@ -98,6 +98,7 @@ export const LIFECYCLE_RECOMMENDATION_CANDIDATES: readonly LifecycleRecommendati
     skillId: LIFECYCLE_RECOMMENDATION_SKILL_ID[kind],
     skillRevisionId: `rev-${kind}`,
     name: LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind],
+    vendorName: null,
     score: 0.9 - index * 0.1,
     rank: index + 1,
     recommended: true,
@@ -180,7 +181,13 @@ export const LIFECYCLE_RECOMMENDATION_HOLD_STATE: Readonly<
     candidates: LIFECYCLE_RECOMMENDATION_CANDIDATES.map((candidate) => ({
       skillId: candidate.skillId,
       name: candidate.name,
+      vendorName: candidate.vendorName,
+      skillRevisionId: candidate.skillRevisionId,
+      recommended: candidate.recommended,
     })),
+    holdRef: "",
+    runStarted: true,
+    canDecide: false,
   },
   [LIFECYCLE_RECOMMENDATION_RUN.restricted]: {
     state: "held",

@@ -2239,18 +2239,6 @@ const AWAITING_MOUNT_SETTLE_MS = 5_000;
 function awaitingMount(
   surfaceId: string,
   driver: SurfaceDriver,
-  reason: string = AWAITING_PER_SCOPE_SURFACES,
-): SurfaceDriver {
-function awaitingMount(
-  surfaceId: string,
-  driver: SurfaceDriver,
-  /** Why this surface is not mounted yet. Defaults to the per-scope surfaces
-   *  wait above; another wave naming its own reason passes it here. */
-  reason: string = AWAITING_PER_SCOPE_SURFACES,
-): SurfaceDriver {
-function awaitingMount(
-  surfaceId: string,
-  driver: SurfaceDriver,
   /**
    * Why this surface is not on the harness yet. Defaults to the per-scope
    * reason this helper was introduced for; a later wave whose surfaces await a
@@ -2263,7 +2251,6 @@ function awaitingMount(
     await expect(
       page.locator(`[data-surface-id="${HARNESS_ANCHOR_SURFACE_ID}"]`).first(),
       `the conformance harness itself did not render — this is a real failure, never a surface whose mount has not landed yet`,
-      `the conformance harness itself did not render — this is a real failure, never a surface awaiting its own landing`,
     ).toBeAttached({ timeout: AWAITING_MOUNT_SETTLE_MS });
 
     let mounted = true;

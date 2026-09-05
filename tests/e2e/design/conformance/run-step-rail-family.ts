@@ -193,7 +193,7 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       absentAnchors: [],
       absentActions: [],
       shippedFiles: ["packages/agents/src/run-surface-rail.tsx", "packages/agents/src/instance-screens.tsx"],
-      unexportedModules: ["packages/agents/src/run-surface-rail.tsx"],
+      unexportedModules: ["packages/agents/src/instance-screens.tsx"],
     },
     readiness:
       "the two-column frame is shipped (packages/agents/src/run-surface-rail.tsx, mounted under the run-surface anchor by packages/agents/src/instance-screens.tsx) but the three readings the drawing declares on it are the SCREEN's, not the frame's: the run surface is a server component that resolves a run, the agent kind it is a run of, and its failure, from the database behind a session, and the conformance harness boots a standalone server with neither. A wrapper mounted here would carry the anchor and none of the three readings",
@@ -212,10 +212,10 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       absentAnchors: [],
       absentActions: [],
       shippedFiles: ["packages/agents/src/run-step-rail-panel.tsx"],
-      unexportedModules: ["packages/agents/src/run-surface-rail.tsx"],
+      unexportedModules: [],
     },
     readiness:
-      "the rail itself IS mounted and every drawn claim section I makes about it is asserted for real; what the branch does not offer is the PRESS. The rail root declares open-run-step to step-detail (packages/agents/src/run-step-rail-panel.tsx) but does not act on it: its rows are inert triggers, and the component that turns a row press into an open step in the right column is the two-column frame RunSurfaceRail, which the agents package exposes on no subpath a core route may import. So the action is named here rather than driven by pressing a row that does nothing",
+      "the rail itself IS mounted and every drawn claim section I makes about it is asserted for real; what the branch does not offer is the PRESS. The rail root declares open-run-step to step-detail (packages/agents/src/run-step-rail-panel.tsx) but does not act on it: its rows are inert triggers, and the component that turns a row press into an open step in the right column is the two-column frame RunSurfaceRail, which this harness does not mount: the fixture mounts the rail panel alone, so a press has no step-detail column to open. So the action is named here rather than driven by pressing a row that does nothing",
   },
   "run-gate-notification": {
     surface: "run-gate-notification",
