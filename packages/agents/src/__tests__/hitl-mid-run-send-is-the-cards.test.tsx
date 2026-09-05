@@ -46,7 +46,17 @@ vi.mock("../agent-hitl-screen-actions", () => ({
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: async () => ({ connectedApps: [] }),
 }));
-const approveMock = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+// THE MOCK HONOURS THE SHIPPED CONTRACT. `approveReviewTask` returns a typed
+// `GateSubmitOutcome` (cinatra#3219) — `{ ok: true }` on a landing — and the card
+// reads `outcome.ok` to decide whether the answer LANDED. A mock resolving to
+// `undefined` makes that read throw, the card correctly classifies the throw as
+// a refusal, and a refusal is exactly the case where what the reader typed is
+// kept in hand. So a void mock cannot express a landing at all, and the
+// clear-on-landing this file exists to prove is never reached. It resolves to
+// the shipped shape instead.
+const approveMock = vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; error?: string }>>(
+  async () => ({ ok: true }),
+);
 vi.mock("../hitl-actions", () => ({
   approveReviewTask: (...a: unknown[]) => approveMock(...a),
   rejectReviewTask: vi.fn(async () => undefined),
@@ -236,13 +246,13 @@ describe("§I — the answer the card sent is not sent twice", () => {
       priority: 95,
       condition: (_f, _s, ctx) => ctx.xRenderer === MID_RUN.gate.xRenderer,
       renderer: (props: { onChange?: (next: unknown) => void | Promise<void> }) => (
-        <button
+        <Button
           type="button"
           data-testid="renderer-types"
           onClick={() => void props.onChange?.({ choice: "the first answer" })}
         >
           type
-        </button>
+        </Button>
       ),
       credentialSafe: true,
     });
@@ -277,5 +287,63 @@ describe("§I — the answer the card sent is not sent twice", () => {
       (approveMock.mock.calls[1]![1] as Record<string, unknown>).choice,
       "the answer that already landed is not re-sent",
     ).toBeUndefined();
+  });
+
+  // AND THE MIRROR IS CLEARED ONLY BY A LANDING. A refusal is the case where the
+  // answer must stay in hand: the gate did not take it, so the next press has to
+  // carry the same answer again without the reader typing it a second time.
+  it("chat_thread: a REFUSED press keeps the answer, and the next press re-sends it", async () => {
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id: "@cinatra-ai/test:mid-run-buffers-on-change",
+      priority: 95,
+      condition: (_f, _s, ctx) => ctx.xRenderer === MID_RUN.gate.xRenderer,
+      renderer: (props: { onChange?: (next: unknown) => void | Promise<void> }) => (
+        <Button
+          type="button"
+          data-testid="renderer-types"
+          onClick={() => void props.onChange?.({ choice: "the first answer" })}
+        >
+          type
+        </Button>
+      ),
+      credentialSafe: true,
+    });
+
+    const mounted = mountOn("chat_thread");
+    await settle();
+    const typed = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>('[data-testid="renderer-types"]');
+      if (!found) throw new Error("no renderer");
+      return found;
+    });
+    await act(async () => {
+      typed.click();
+    });
+    const press = async () => {
+      const button = mounted.container.querySelector<HTMLElement>(CONTINUE)!;
+      await act(async () => {
+        button.click();
+      });
+      await settle();
+    };
+
+    approveMock.mockResolvedValueOnce({
+      ok: false,
+      error: "This question could not be answered from here.",
+    });
+
+    await press();
+    expect(approveMock, "the refused press was made").toHaveBeenCalledTimes(1);
+    expect(
+      (approveMock.mock.calls[0]![1] as Record<string, unknown>).choice,
+    ).toBe("the first answer");
+
+    await press();
+    expect(approveMock, "the reader could press again").toHaveBeenCalledTimes(2);
+    expect(
+      (approveMock.mock.calls[1]![1] as Record<string, unknown>).choice,
+      "a refusal keeps the answer in hand, so the retry carries it again",
+    ).toBe("the first answer");
   });
 });
