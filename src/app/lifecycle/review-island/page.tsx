@@ -113,6 +113,13 @@ import {
   type IslandColorScheme,
 } from "./island-color-scheme";
 import { resolveIslandCredentialReader } from "@/lib/lifecycle/review-island-serving";
+// WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091) — the byte
+// road. The island is the ONE surface whose reader holds no cookie, so it is
+// the one surface that has to name a road at all.
+import {
+  islandReviewSurfaceRoads,
+  type ReviewSurfaceRoads,
+} from "@/app/artifacts/[id]/review-surface-roads";
 import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
@@ -185,6 +192,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   let actorCtx: Awaited<ReturnType<typeof resolveReviewActorContext>> = null;
   let runId: string;
   let reviewTaskId: string;
+  // THE ROAD THIS PAINT IS ON (wave 3). Set only on the credential branch,
+  // because only that branch has a principal to seal capabilities to: a
+  // same-site first-party frame reaching the cookie branch below keeps the
+  // session addresses, which work there and are the narrower grant.
+  let roads: ReviewSurfaceRoads | null = null;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
     if (!reader) return empty;
@@ -194,6 +206,35 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     // would be a place for them to stop being equal.
     runId = reader.runId;
     reviewTaskId = reader.reviewTaskId;
+    // The reader this resolver just proved, carried into the road. Every
+    // address the surface below hands out is sealed to exactly these bindings
+    // and to this gate, and the serving path re-proves every one of them
+    // before a byte is read — so naming the road here grants nothing that the
+    // credential did not already carry.
+    const built = reader.principal
+      ? islandReviewSurfaceRoads({
+          principal: reader.principal,
+          runId: reader.runId,
+          reviewTaskId: reader.reviewTaskId,
+        })
+      : null;
+    // A ROAD THAT CANNOT MINT IS NOT A ROAD. The byte minter is exercised once
+    // here, with the same closure every panel will use, so an unsealable
+    // principal falls back to the session addresses — the narrower grant — at
+    // the top of the page, rather than reaching the reader as a blank plate
+    // inside somebody else's website.
+    // The probe names a form ON the road, because the minter now refuses a form
+    // off it: probing with a form it would decline for its own good reason
+    // would read as an unsealable principal and drop the whole surface to the
+    // session addresses.
+    roads =
+      built?.byteMinter?.({
+        artifactId: "unmintable-probe",
+        representationRevisionId: "unmintable-probe",
+        mime: "image/png",
+      })?.preview
+        ? built
+        : null;
   } else {
     // THE FIRST-PARTY COOKIE PATH. A session is required, and first-party that
     // is the ONE branch that is not an empty island: an unauthenticated frame
@@ -235,6 +276,10 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     runId,
     reviewTaskId,
     actorCtx,
+    // OMITTED, not passed as null, on every path that named no road: the call
+    // into this loader is then byte-identical to what it always was, so nothing
+    // about those surfaces can have changed by this wave.
+    ...(roads ? { roads } : {}),
   });
   // `not-authorized` and `blocked` draw nothing here — see the header. It is one
   // empty document either way, so a reader still cannot tell WHY it is empty.

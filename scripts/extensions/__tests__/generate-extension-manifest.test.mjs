@@ -1452,11 +1452,15 @@ describe("the generated display map imports through package exports, never a hos
   });
 
   it("the alias-backed remainder is EXACTLY the guarded-optional display, named and bounded", () => {
-    // The two aliases this change does not delete, pinned by name so a
+    // The aliases this change does not delete, pinned by name so a
     // re-introduced one for any other package fails here. A guardedOptional
     // package is outside `cinatra.extensions`, so it cannot take the workspace
     // dependency edge a bare specifier needs; its alias goes when it joins the
-    // required set (or the guarded road gets its own resolution).
+    // required set (or the guarded road gets its own resolution). The list
+    // grows only when a pinned guarded-optional pack starts declaring its own
+    // display: this wave advances exactly the screenshot and slide-deck display
+    // packs plus cms-snapshot, so the remainder is the two pre-existing guarded
+    // packs plus those three, and nothing else.
     const buildConfig = buildConfigAliases();
     const aliased = emittedRendererSpecifiers().filter(
       (s) => tsconfigResolves(s) || buildConfig.has(s),
@@ -1466,6 +1470,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
+      "@cinatra-ai/screenshot-artifact/src/renderers/detail",
+      "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
     ]);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
   });

@@ -1154,6 +1154,67 @@ async function resolveDeclaredSkillEdge(
   role: string | null,
   onScanFailure: "null" | "throw",
 ): Promise<DeclaredSkillEdgeResolution | null> {
+  return (await resolveDeclaredSkillEdgeWithReason(matchConsumer, role, onScanFailure)).resolution;
+}
+
+/**
+ * WHY an empty declared-edge resolution is empty (cinatra#3091, wave 3 of
+ * #3087).
+ *
+ * A `null` from the resolver is a fact about the DECLARATION, and the callers
+ * whose policy is fail-closed act on it — the artifact matcher falls back to
+ * its package-owned anchor and, when that anchor does not hold either, refuses
+ * the skill. A proof leg then read that refusal on a booted instance and could
+ * not tell which of the six distinct non-declarations produced it, because the
+ * resolver collapses all of them into the same `null`. That is the whole gap
+ * this token closes: it names the step that returned nothing, so the refusal a
+ * running instance prints can be read back to a cause instead of guessed at.
+ *
+ * The tokens are CLOSED and are read by branching, never by matching a
+ * sentence. `extension-scan-failed` is never produced on the `"throw"` policy
+ * (there a scan failure that ESCAPES the scanner is rethrown, by design, so an
+ * fs blip can never look like a deliberate non-declaration).
+ *
+ * THE RESIDUAL, NAMED RATHER THAN PAPERED OVER: `scanSkillExtensions()` is
+ * called below in its FAIL-SOFT mode, which swallows a per-root or per-package
+ * read error instead of throwing. A partially-failed scan therefore does not
+ * reach the rethrow at all - it reaches the walk with the consumer or the
+ * provider simply missing, and the token reads
+ * `consumer-not-found-or-ambiguous` or `provider-not-found-or-ambiguous`. Those
+ * two tokens must be read as "absent OR unreadable", never as "provably not
+ * declared"; they are still a far narrower answer than the bare `null` they
+ * replace. Closing that last gap means passing
+ * `{ strict: onScanFailure === "throw" }` to the scan, which would make ONE
+ * unreadable extension directory throw for EVERY consumer on the surface - a
+ * live-availability change to two production callers, and not a change this
+ * leg is scoped to make.
+ */
+export type DeclaredSkillEdgeEmptyReason =
+  | "consumer-name-missing"
+  | "consumer-not-found-or-ambiguous"
+  | "consumer-kind-is-not-an-edge-consumer"
+  | "no-single-declared-edge-for-role"
+  | "provider-not-found-or-ambiguous"
+  | "provider-is-not-a-one-bundle-skill-package"
+  | "provider-reserved-namespace"
+  | "extension-scan-failed";
+
+/** A resolution, or an emptiness with its named cause — never both, never
+ *  neither. */
+export type DeclaredSkillEdgeOutcome =
+  | { resolution: DeclaredSkillEdgeResolution; reason: null }
+  | { resolution: null; reason: DeclaredSkillEdgeEmptyReason };
+
+const edgeEmpty = (reason: DeclaredSkillEdgeEmptyReason): DeclaredSkillEdgeOutcome => ({
+  resolution: null,
+  reason,
+});
+
+async function resolveDeclaredSkillEdgeWithReason(
+  matchConsumer: (ext: SkillExtensionDescriptor) => boolean,
+  role: string | null,
+  onScanFailure: "null" | "throw",
+): Promise<DeclaredSkillEdgeOutcome> {
   let exts: SkillExtensionDescriptor[];
   try {
     exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
@@ -1166,37 +1227,43 @@ async function resolveDeclaredSkillEdge(
     // it asks for `"null"`; the surfaces whose fail-closed policy would be
     // user-visible ask for `"throw"` and fall back on it.
     if (onScanFailure === "throw") throw err;
-    return null;
+    return edgeEmpty("extension-scan-failed");
   }
 
   const consumers = exts.filter(matchConsumer);
   // A bare dir slug cannot disambiguate two vendors shipping the same slug —
   // the same fail-closed rule the bridge's own mount probe applies.
-  if (consumers.length !== 1) return null;
-  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
+  if (consumers.length !== 1) return edgeEmpty("consumer-not-found-or-ambiguous");
+  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) {
+    return edgeEmpty("consumer-kind-is-not-an-edge-consumer");
+  }
 
   const edges = consumers[0]!.dependencies
     .filter(isRuntimeSkillEdge)
     .filter((dep) => edgeMatchesRole(dep, role));
-  if (edges.length !== 1) return null;
+  if (edges.length !== 1) return edgeEmpty("no-single-declared-edge-for-role");
   const providerName = edges[0]!.packageName;
 
   const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
-  if (providers.length !== 1) return null;
+  if (providers.length !== 1) return edgeEmpty("provider-not-found-or-ambiguous");
   const provider = providers[0]!;
   // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
   // bundle. Anything else is not a package this projection can mount from.
-  if (provider.slugs.length !== 1) return null;
+  if (provider.slugs.length !== 1) return edgeEmpty("provider-is-not-a-one-bundle-skill-package");
   const slug = provider.slugs[0]!;
 
   const reg = safeDeriveSkillRegistration(provider.pkgName, provider.pkgDirName, slug);
-  if (!reg) return null; // reserved-namespace impostor: never mount from it
+  // reserved-namespace impostor: never mount from it
+  if (!reg) return edgeEmpty("provider-reserved-namespace");
   const { packageName, skillId } = reg;
   return {
-    packageName,
-    slug,
-    skillId,
-    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+    resolution: {
+      packageName,
+      slug,
+      skillId,
+      sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+    },
+    reason: null,
   };
 }
 
@@ -1257,8 +1324,28 @@ export async function resolveDeclaredSkillEdgeForPackage(
   consumerPackageName: string,
   role: "matcher" | "authoring",
 ): Promise<DeclaredSkillEdgeResolution | null> {
-  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) return null;
-  return resolveDeclaredSkillEdge((e) => e.pkgName === consumerPackageName, role, "throw");
+  return (await resolveDeclaredSkillEdgeForPackageWithReason(consumerPackageName, role)).resolution;
+}
+
+/**
+ * {@link resolveDeclaredSkillEdgeForPackage} with the emptiness NAMED
+ * (cinatra#3091).
+ *
+ * Identical resolution, identical fail-closed policy, identical throw on a
+ * filesystem-scan failure — the only difference is that an empty answer says
+ * which step produced it. A caller that must LOG why it fell back to its other
+ * trust anchor calls this one and prints the token; a caller that only needs
+ * the resolution keeps calling the function above, whose behaviour is
+ * byte-for-byte what it was.
+ */
+export async function resolveDeclaredSkillEdgeForPackageWithReason(
+  consumerPackageName: string,
+  role: "matcher" | "authoring",
+): Promise<DeclaredSkillEdgeOutcome> {
+  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) {
+    return edgeEmpty("consumer-name-missing");
+  }
+  return resolveDeclaredSkillEdgeWithReason((e) => e.pkgName === consumerPackageName, role, "throw");
 }
 
 // ---------------------------------------------------------------------------

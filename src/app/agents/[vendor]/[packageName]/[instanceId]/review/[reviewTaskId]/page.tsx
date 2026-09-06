@@ -48,6 +48,7 @@ import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
+import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
 import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
@@ -194,7 +195,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     );
   }
 
-  const surface = await loadReviewGateSurface({ runId, reviewTaskId, actorCtx });
+  const surface = await loadReviewGateSurface({
+    runId,
+    reviewTaskId,
+    actorCtx,
+    // WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091): the
+    // content channel, so "the json, cms-snapshot and text displays draw
+    // through the content channel on EVERY host" — this one included. The byte
+    // road stays the session routes here: they work under a cookie and they are
+    // the narrower grant.
+    roads: firstPartyReviewSurfaceRoads(),
+  });
 
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;

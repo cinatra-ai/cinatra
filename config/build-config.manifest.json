@@ -503,6 +503,8 @@
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/test-delivery-input", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/test-delivery-input.tsx" },
     { "alias": "@cinatra-ai/podcast-artifacts/src/renderers/detail", "target": "./extensions/cinatra-ai/podcast-artifacts/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/podcast-artifacts/src/renderers/preview", "target": "./extensions/cinatra-ai/podcast-artifacts/src/renderers/preview.tsx" },
+    { "alias": "@cinatra-ai/screenshot-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/screenshot-artifact/src/renderers/detail.tsx" },
+    { "alias": "@cinatra-ai/slide-deck-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/slide-deck-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx" },
     { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx" },
     { "alias": "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review", "target": "./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx" },

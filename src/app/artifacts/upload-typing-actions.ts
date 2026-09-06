@@ -39,6 +39,7 @@ import {
 } from "@/lib/artifacts/installed-type-picker";
 import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
+import { planPromotionEntry } from "@/lib/artifacts/typed-promotion";
 import {
   readArtifactForDetail,
   readArtifactForMeaningWrite,
@@ -359,26 +360,55 @@ async function promoteOnConfirmedMeaning(input: {
     const { matcherManifestRegistry, objectTypeRegistry } = await import(
       "@cinatra-ai/objects/registry"
     );
-    // THE EXTENSION'S OWN TYPE: the one artifact type its package defines. A
-    // package that defines none is a pure matcher pack — the road does not
-    // apply. A package that defines SEVERAL cannot be resolved from a
-    // package-keyed confirmation, so it is left alone rather than guessed at.
+    const { semanticRendererRegistry } = await import(
+      "@cinatra-ai/objects/artifact-renderer-registry"
+    );
+    // THE EXTENSION'S OWN TYPE: the one artifact type its package REGISTERED.
+    // The count is not always one, and `planPromotionEntry` names every outcome
+    // rather than folding them into one silence — because two very different
+    // worlds both register zero types:
+    //
+    //   a PURE MATCHER PACK declares none, so the road does not apply; and
+    //   a PACK CARRYING AN UNREACHABLE DISPLAY — it registered a display whose
+    //   target object type no installed package registers — is a broken
+    //   installation whose display can never be reached at all.
+    //
+    // The second condition is read from the registries alone, so it names the
+    // BREAKAGE and not its cause: a refused self-claim (the deck pack's own
+    // shape, its declared id sitting outside its namespace) and an absent
+    // owning package both present this way, and both are owed the same answer.
+    //
+    // The second is what the wave-3 proof leg measured (cinatra#3091): a deck
+    // confirmation that retyped nothing and reported nothing. It is separated
+    // from the first by the pack's OWN registration state — a semantic display
+    // registered for an object type no package registers.
     const owned = objectTypeRegistry
       .getTypesForPackage(input.extension)
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
-    if (owned.length !== 1) return null;
-    const ownType = owned[0]!;
+    const entryPlan = planPromotionEntry({
+      ownedRegisteredTypes: owned.map((t) => t.typeId),
+      shipsDisplayForUnregisteredType: semanticRendererRegistry
+        .listByPackage(input.extension)
+        .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null),
+    });
+    if (entryPlan.kind === "not-applicable") return null;
+    if (entryPlan.kind === "refuse") return { promoted: false, reason: entryPlan.reason };
+    const ownType = owned.find((t) => t.typeId === entryPlan.typeId)!;
     const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
     // the matcher itself resolved it from — never a default invented here. A
-    // package with no matcher declaration never matched this row, so the road
-    // refuses on the missing assertion rather than on a fabricated threshold.
+    // package with no matcher declaration has no matcher road at all, and says
+    // so with a null threshold rather than a fabricated one; the drawing's
+    // second road — the person's own assertion (§XI.10) — is still open to it,
+    // which is why a missing declaration no longer ends the call. Returning
+    // early here is what made a person's assertion on a matcher-less pack a
+    // silent no-op.
     const entry = matcherManifestRegistry
       .list()
       .find((e) => e.packageName === input.extension);
-    if (!entry) return null;
+    const threshold = entry ? entry.matcherConfidenceThreshold : null;
 
     // The org-write kernel authority the canonical objects writer requires,
     // minted HERE from the acting session — the store leaf never mints one.
@@ -392,9 +422,13 @@ async function promoteOnConfirmedMeaning(input: {
       artifactId: input.artifactId,
       extension: input.extension,
       ownType: { typeId: ownType.typeId, acceptsMimes },
-      threshold: entry.matcherConfidenceThreshold,
+      threshold,
       confirmed: true,
       createdBy: input.principalId,
+      // THE ACTING PRINCIPAL, named for the person's own road: the converging
+      // branch runs beside the per-actor extension-access gate, so the road must
+      // read THIS person's assertion and never another's.
+      principal: input.principalId,
       actor: { userId: input.userId, orgId: input.orgId },
       authority,
     });

@@ -57,6 +57,7 @@ import {
   LibraryUploadDropZone,
   LibraryUploadProvider,
 } from "./library-upload";
+import { extensionDisplayName } from "@/lib/artifacts/extension-display-name";
 
 // ---------------------------------------------------------------------------
 // Presentation helpers (pure)
@@ -65,18 +66,12 @@ import {
 const DEFAULT_ARTIFACT_FACET = "__default__";
 
 /** Prettify an extension package id into a display name:
- * `@cinatra-ai/prospect-lists:list` → "Prospect Lists". */
-export function extensionDisplayName(extension: string): string {
-  const afterScope = extension.includes("/")
-    ? extension.slice(extension.indexOf("/") + 1)
-    : extension;
-  const base = afterScope.split(":")[0] ?? afterScope;
-  return base
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
+ * `@cinatra-ai/prospect-lists:list` → "Prospect Lists". THE LEAF MOVED
+ * (wave 3 fix leg): the artifact page draws the same label beside its title,
+ * and the two have to be one function rather than two that agree today. The
+ * call site here is unchanged, and the name is re-exported so nothing that
+ * needs the string has to import this server-only surface module. */
+export { extensionDisplayName } from "@/lib/artifacts/extension-display-name";
 
 // The renderer glyph (§III) is resolved by `LibraryRowGlyph` through the
 // artifact-UI dispatch spine: a claimed row resolves its winner's registered

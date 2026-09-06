@@ -33,8 +33,14 @@ import type { ArtifactEditCapability } from "./artifact-edit-channel";
  * host refuses to mount a renderer whose expected version the supplied snapshot
  * does not satisfy. This is a SEPARATE version axis from `SDK_EXTENSIONS_ABI_VERSION`
  * (the host-port ABI) — the props snapshot has its own contract version.
+ *
+ * IT IS 2 SINCE WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091):
+ * the snapshot gained the island-scoped byte reference below, which is what lets
+ * a media display paint inside a third-party application at all. A display still
+ * declaring 1 is admitted at 1 and handed a v1 snapshot — the host's version
+ * window, not a flag day — it simply is not handed the island road.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 1;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 2;
 
 /**
  * The versioned, normalized, SERIALIZABLE props snapshot an extension-shipped
@@ -106,6 +112,28 @@ export interface ArtifactRendererProps {
    * host, which asserts the cap before this snapshot crosses to a renderer.
    */
   content: ArtifactContentProjection;
+  /**
+   * THE ISLAND-SCOPED BYTE REFERENCE (props v2, wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`).
+   *
+   * `urls` above are the host's SESSION byte routes, and a subresource load
+   * from inside a third-party application carries no cookie — which is why a
+   * media display painting from them draws a blank plate there. This is the
+   * address the reader may actually fetch on the surface they are on: on the
+   * island it is a sealed, short-lived capability bound to exactly this
+   * artifact and this revision, and on a first-party surface it is the session
+   * route named as such.
+   *
+   * A DISPLAY PAINTS FROM `bytes` WHERE IT IS PRESENT and falls back to `urls`
+   * where it is not, and it never fetches a host route on its own.
+   *
+   * ABSENT AT v1: a display that declared v1 agreed to a snapshot without it.
+   */
+  bytes?: {
+    road: "session" | "island";
+    preview: string | null;
+    download: string | null;
+  };
   /**
    * THE EDIT CAPABILITY (enabler 0.20 of `PLAN: Agents Lifecycle (C)`).
    *

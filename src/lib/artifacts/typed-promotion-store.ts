@@ -11,8 +11,10 @@ import "server-only";
 // nothing else.
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { listActiveAssertions, type AssertionRecord } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { buildArtifactWriterWitnessOpIfAbsent } from "./artifact-writer-witness";
 
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
@@ -133,6 +135,57 @@ ORDER BY asserted_at DESC LIMIT 1`,
   };
 }
 
+/**
+ * THE PERSON'S OWN ASSERTION for one (row, extension), as the assertion store
+ * recorded it — the second road §XI.10 gives onto the promotion.
+ *
+ * IT ASKS THE ASSERTION STORE RATHER THAN THE DATABASE. The store already reads
+ * a row's active assertions for the assertion primitive; a second statement of
+ * its own here would be a second reading of the same table that can drift from
+ * the first, and this module's whole shape is that the parts touching a database
+ * are few and named.
+ *
+ * ONLY a `user` assertion counts. An agent's and an authoring skill's are classic
+ * assertions too, but the drawing's sentence is about the PERSON: "or on the
+ * person's own assertion, which outranks the matcher". A `binding` row is what
+ * every upload already carries for its base, so counting one here would promote
+ * every row the moment anybody confirmed anything.
+ *
+ * AND IT IS THE ACTING PERSON'S OWN. The drawing's word is "own", and the road
+ * reaches the promotion through a branch that runs BESIDE the per-actor
+ * extension-access gate rather than behind it: a reading that accepted any
+ * person's assertion would let a second person, who cannot address that
+ * extension at all, spend somebody else's assertion as their authority. The
+ * assertion store records who asserted, so the comparison is available and the
+ * road takes it.
+ */
+export function isPersonsOwnAssertion(
+  assertion: Pick<
+    AssertionRecord,
+    "extension" | "assertedBy" | "assertionBasis" | "assertedByPrincipal"
+  >,
+  who: { extension: string; principal: string | null },
+): boolean {
+  return (
+    assertion.extension === who.extension &&
+    assertion.assertedBy === "user" &&
+    assertion.assertionBasis === "classic" &&
+    assertion.assertedByPrincipal === who.principal
+  );
+}
+
+export function readPersonAssertion(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  /** The acting principal, as the surface derived it. */
+  principal: string | null;
+}): boolean {
+  return listActiveAssertions(input.orgId, input.artifactId).some((a) =>
+    isPersonsOwnAssertion(a, { extension: input.extension, principal: input.principal }),
+  );
+}
+
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -167,9 +220,17 @@ export async function promoteMatchedArtifactType(input: {
   artifactId: string;
   extension: string;
   ownType: ExtensionOwnType | null;
-  threshold: number;
+  /** The extension's own declared matcher threshold, or NULL where the pack
+   *  declares no matcher machinery at all — in which case the matcher road does
+   *  not exist for it and only the person's own assertion can promote. */
+  threshold: number | null;
   confirmed: boolean;
   createdBy?: string | null;
+  /** WHO IS ACTING. The person's own road (§XI.10) is the ACTING person's own,
+   *  so the road needs the acting principal and not merely the row's author.
+   *  Defaults to `createdBy`, which every production surface passes the same
+   *  principal into. */
+  principal?: string | null;
   /** The acting principal, for the history event the retype records. */
   actor: { userId: string; orgId: string };
   /** The org-write kernel authority, minted host-side by the calling surface —
@@ -187,38 +248,54 @@ export async function promoteMatchedArtifactType(input: {
   retype?: TypedPromotionRetype;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
-  const matcher = readMatcherAssociation({
+  const matcher =
+    input.threshold === null
+      ? null
+      : readMatcherAssociation({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          threshold: input.threshold,
+        });
+  const personAsserted = readPersonAssertion({
     orgId: input.orgId,
     artifactId: input.artifactId,
     extension: input.extension,
-    threshold: input.threshold,
+    principal: input.principal !== undefined ? input.principal : (input.createdBy ?? null),
   });
   const plan = planTypedPromotion({
     row,
     ownType: input.ownType,
     matcher,
     confirmed: input.confirmed,
+    personAsserted,
   });
 
   if (!plan.ok) {
     // THE CONVERGING BRANCH. An `already-promoted` row may be one an earlier
     // call retyped and never got to append for. Everything else is a refusal.
     //
-    // IT CARRIES THE SAME TWO AUTHORITIES AS THE PROMOTION ITSELF, and the same
-    // form re-validation. A row that simply CARRIES the target type — written
-    // that way from the start, or promoted under some other road — was never
-    // this promotion, and appending a revision to it on a bare confirmation
-    // would be a write no matcher ever asserted for: the completion of an
-    // interrupted promotion is only a completion when the promotion's own
-    // conditions still hold.
+    // IT CARRIES THE SAME AUTHORITIES AS THE PROMOTION ITSELF, and the same form
+    // re-validation. A row that simply CARRIES the target type — written that way
+    // from the start, or promoted under some other road — was never this
+    // promotion, and appending a revision to it on a bare confirmation would be a
+    // write nobody asserted for: the completion of an interrupted promotion is
+    // only a completion when the promotion's own conditions still hold. Both
+    // roads count here for the same reason they count above — a promotion the
+    // person's own assertion authorized is exactly as interruptible as one the
+    // matcher's did.
     if (
       plan.reason === "already-promoted" &&
       row?.latestRevision &&
       input.ownType &&
       row.objectType === input.ownType.typeId &&
+      // BOTH ROADS ANSWER TO THE CONFIRMATION. The plan refuses an unconfirmed
+      // caller on either road, and the completion of an interrupted promotion
+      // can be no cheaper than the promotion it completes; the person's road
+      // read as if it stood on its own here, which is an asymmetry and not a
+      // second rule.
       input.confirmed &&
-      matcher !== null &&
-      matcher.confidence >= matcher.threshold &&
+      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
       mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
       const landed = appendPromotionRevision({
@@ -228,6 +305,7 @@ export async function promoteMatchedArtifactType(input: {
         toType: input.ownType.typeId,
         form: row.latestRevision.form,
         createdBy: input.createdBy ?? null,
+        mime: row.latestRevision.mime,
       });
       if (landed.revision !== null) {
         return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
@@ -260,6 +338,7 @@ export async function promoteMatchedArtifactType(input: {
     toType: plan.toType,
     form: plan.form,
     createdBy: input.createdBy ?? null,
+    mime: row?.latestRevision?.mime ?? null,
   });
   return {
     ok: true,
@@ -322,6 +401,65 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
 
 /** Append the promotion's revision, idempotently, under the per-artifact lock
  *  the append-only representation store takes for the same reason. */
+/**
+ * THE APPEND'S WHOLE TRANSACTION, as a pure list — the row lock, the shared-
+ * content representation, and the ARTIFACT-WRITER PROVENANCE WITNESS for it.
+ *
+ * THE WITNESS IS NOT OPTIONAL HERE, and `artifact-writer-witness.ts` says why in
+ * its own words: "every host writer that mints a blob-backed representation
+ * emits the witness, and every claimed-row read path (serve, context candidacy,
+ * selection finalization) tests for it". This road IS such a writer — its append
+ * mints a blob-backed representation on a PACK-TYPED row, and the serve arm
+ * admits a pack-typed row's direct representation only when the witness attests
+ * it. Without it the promotion committed bytes that every read path refused: the
+ * promoted revision answered 404 on `/preview` and on `/content` while the base
+ * revision it shares its resource with answered 200, so the artifact page drew
+ * its header over an empty plate.
+ *
+ * The witness is the CONVERGING form because the representation INSERT is: both
+ * halves of a re-run promotion must be able to land exactly once, and a
+ * revision an earlier promotion appended without a witness is repaired by the
+ * same re-run.
+ *
+ * Pure so the one-transaction composition is fixture-provable, the same shape
+ * the other host writers' witness proofs take.
+ */
+export function buildPromotionAppendQueries(
+  schema: string,
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    sharedResourceId: string;
+    form: "file" | "connectorRef" | "dashboard";
+    createdBy: string | null;
+    toType: string;
+    mime?: string | null;
+  },
+): Array<{ text: string; values: unknown[] }> {
+  const s = schema.replaceAll('"', '""');
+  return [
+    { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+    buildPromotionRepresentationAppend(schema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+    }),
+    buildArtifactWriterWitnessOpIfAbsent(s, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      actor: input.createdBy,
+      // Provenance detail only — the witness is the EXISTENCE of the row, never
+      // its payload.
+      detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
+    }),
+  ];
+}
+
 function appendPromotionRevision(input: {
   orgId: string;
   artifactId: string;
@@ -329,6 +467,8 @@ function appendPromotionRevision(input: {
   toType: string;
   form: "file" | "connectorRef" | "dashboard";
   createdBy: string | null;
+  /** The shared content's MIME, for the witness's provenance detail. */
+  mime?: string | null;
 }): { representationRevisionId: string; revision: number | null } {
   ensurePostgresSchema();
   const representationRevisionId = promotionRevisionId({
@@ -339,17 +479,16 @@ function appendPromotionRevision(input: {
   const results = runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
-    queries: [
-      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-      buildPromotionRepresentationAppend(postgresSchema, {
-        orgId: input.orgId,
-        artifactId: input.artifactId,
-        representationRevisionId,
-        sharedResourceId: input.sharedResourceId,
-        form: input.form,
-        createdBy: input.createdBy,
-      }),
-    ],
+    queries: buildPromotionAppendQueries(postgresSchema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+      toType: input.toType,
+      mime: input.mime ?? null,
+    }),
   });
   const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
   return {

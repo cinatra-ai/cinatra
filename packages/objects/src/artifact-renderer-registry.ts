@@ -170,6 +170,29 @@ class SemanticRendererRegistryImpl {
     );
   }
 
+  /**
+   * Every semantic renderer THIS package registered, across all slots.
+   *
+   * The read that makes an UNREACHABLE display nameable. A display is reachable
+   * only through an object type some package registers; a pack whose declared
+   * type-id sits in a namespace no installed package owns registers no type at
+   * all, yet its renderer registration still lands here keyed by that orphaned
+   * id (the cross-namespace claim road). Pairing this list with the object-type
+   * registry reading of who registers that id is what lets a caller tell a pure
+   * matcher pack — nothing declared, nothing to report — apart from a pack whose
+   * display can never be reached, instead of treating both as silence.
+   *
+   * Ordered by registration; the descriptors are copies, so a caller cannot
+   * mutate the registry through them.
+   */
+  listByPackage(packageName: string): SemanticRendererDescriptor[] {
+    const out: SemanticRendererDescriptor[] = [];
+    for (const desc of this.byTypeAndPackage.values()) {
+      if (desc.packageName === packageName) out.push({ ...desc });
+    }
+    return out;
+  }
+
   /** @internal test-only reset. */
   _clearForTests(): void {
     this.byTypeAndPackage.clear();
