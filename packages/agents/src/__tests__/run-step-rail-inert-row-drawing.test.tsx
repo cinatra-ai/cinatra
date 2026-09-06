@@ -30,6 +30,14 @@
  * marks between the rows) is untouched, and the only thing that changes is the
  * affordance — which is exactly the difference the row was lying about.
  *
+ * WHICH STEP-RESULT ROW IS EVEN DRAWN (cinatra#3226, merged in on the leg-8
+ * forward). The rail names every entry by the work it did and draws no entry at
+ * all for a record that names nothing — so the row this file is about is the
+ * row a NAMED step result leaves. The nameless record's road (no row at all) is
+ * pinned by `run-step-rail-step-result-entry.test.tsx`; between the two, every
+ * step result the runtime can leave takes one of acceptance 3's two permitted
+ * roads.
+ *
  * WHAT THIS TEST PINS, IN BOTH PALETTES. The two rows are DIFFERENT on the
  * attributes a reader sees: the row that opens is a control at full ink with a
  * pointer cursor; the row that opens nothing is not a control, sits at the
@@ -76,12 +84,23 @@ function tokens(className: string | null | undefined): string[] {
   return (className ?? "").split(/\s+/).filter(Boolean);
 }
 
+/** The name the runtime's own record gives the work that surplus step did. */
+const STEP_RESULT_WORK_NAME = "Reviewed the flow";
+
 /** The rail a run on the agent runtime actually leaves: one template step that
- *  opens, and one surplus step-result row past it that opens nothing. */
+ *  opens, and one surplus step-result row past it that opens nothing. The
+ *  surplus record names its work, which is what earns it a row at all. */
 function railWithBothRows() {
   return buildRunStepRail({
     templateSteps: [{ index: 1, stepNumber: 10, label: "Draft" }],
-    stepResults: [{ ok: true }, { kind: "wayflow_response", output: "four findings" }],
+    stepResults: [
+      { ok: true },
+      {
+        kind: "wayflow_response",
+        output: "four findings",
+        output_data: { title: STEP_RESULT_WORK_NAME },
+      },
+    ],
   });
 }
 
@@ -90,7 +109,7 @@ function stepResultEntry(): RunStepRailEntry {
     key: "step:stepResult:2",
     ordinal: 2,
     kind: "step",
-    label: "Step 2",
+    label: STEP_RESULT_WORK_NAME,
     status: "completed",
     sources: ["stepResult"],
     openable: false,
@@ -146,7 +165,7 @@ for (const palette of ["light", "dark"] as const) {
       expect(inertWrapper).not.toBeNull();
       const inertRow = inertWrapper!.firstElementChild as HTMLElement;
       expect(inertRow).not.toBeNull();
-      expect(inertRow.textContent).toContain("Step 2");
+      expect(inertRow.textContent).toContain(STEP_RESULT_WORK_NAME);
 
       const openableRow = container.querySelector<HTMLElement>(
         '[data-slot="stepper-trigger"]',

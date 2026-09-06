@@ -18,6 +18,16 @@
  *   3. the panel draws the marked row with no trigger at all, and says so in
  *      the DOM, while the rows that do open keep theirs.
  *
+ * AND THE OTHER PERMITTED BRANCH OF THE SAME ACCEPTANCE (cinatra#3226, merged
+ * in on the leg-8 forward). The rail now names every entry by the work it did
+ * and draws NO entry for a record that names nothing at all. So a step result
+ * reaches the reader on exactly one of two roads, and this file pins both:
+ * a record that names its work draws a row, and that row is not openable; a
+ * record that names nothing draws no row — it is not a step someone can expect
+ * to open because it is not a step anyone is shown. Acceptance criterion 3 of
+ * cinatra#3002 asks for one of those two, and the two rules together give one
+ * of them for every step result the runtime can leave.
+ *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
  *     src/__tests__/run-step-rail-step-result-entry.test.tsx
@@ -62,8 +72,15 @@ describe("the step-result rail row (cinatra#3002)", () => {
   it("marks a step-result-derived row as not openable", async () => {
     const { buildRunStepRail } = await import("../run-step-rail");
     const rail = buildRunStepRail({
-      // exactly what a run on the agent runtime leaves behind.
-      stepResults: [{ kind: "wayflow_response", output: "four findings" }],
+      // what a run on the agent runtime leaves behind when the runtime named
+      // the work it did — the record the rail is allowed to draw a row for.
+      stepResults: [
+        {
+          kind: "wayflow_response",
+          output: "four findings",
+          output_data: { title: "Reviewed the flow" },
+        },
+      ],
     });
 
     expect(rail.entries.length).toBe(1);
@@ -71,6 +88,20 @@ describe("the step-result rail row (cinatra#3002)", () => {
     expect(entry.kind).toBe("step");
     expect(entry.sources).toEqual(["stepResult"]);
     expect(entry.openable).toBe(false);
+    // Named by its work, never by its position.
+    expect(entry.label).toBe("Reviewed the flow");
+  });
+
+  it("draws no row at all for a step result that names nothing", async () => {
+    const { buildRunStepRail } = await import("../run-step-rail");
+    const rail = buildRunStepRail({
+      // the shape #3002 was found on: the runtime's response and nothing that
+      // names the work. The rail used to draw this as a ticked "Step 1" that
+      // opened nothing; it now draws no row for it at all.
+      stepResults: [{ kind: "wayflow_response", output: "four findings" }],
+    });
+
+    expect(rail.entries.length).toBe(0);
   });
 
   it("leaves a template-derived step row openable as before", async () => {
@@ -89,7 +120,14 @@ describe("the step-result rail row (cinatra#3002)", () => {
     const { buildRunStepRail } = await import("../run-step-rail");
     const rail = buildRunStepRail({
       templateSteps: [{ index: 1, stepNumber: 10, label: "Draft" }],
-      stepResults: [{ ok: true }, { kind: "wayflow_response", output: "four findings" }],
+      stepResults: [
+        { ok: true },
+        {
+          kind: "wayflow_response",
+          output: "four findings",
+          output_data: { title: "Reviewed the flow" },
+        },
+      ],
     });
 
     render(
@@ -105,7 +143,7 @@ describe("the step-result rail row (cinatra#3002)", () => {
     const inert = document.querySelector('[data-rail-openable="false"]');
     expect(inert).not.toBeNull();
     // The step-result row is the inert one, and it is not a control.
-    expect(inert!.textContent).toContain("Step 2");
+    expect(inert!.textContent).toContain("Reviewed the flow");
     expect(inert!.querySelector("button")).toBeNull();
     // The template step still draws its trigger.
     const openable = Array.from(rows).find((r) => r !== inert)!;
