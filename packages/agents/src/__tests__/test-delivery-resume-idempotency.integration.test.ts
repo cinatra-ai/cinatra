@@ -41,12 +41,13 @@ import {
   type TestDeliverySendPort,
 } from "../test-delivery-send-port";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 // The ORM (packages/agents/src/schema.ts) qualifies every table under the schema
 // named by SUPABASE_SCHEMA (default "cinatra"). Provision that exact schema.

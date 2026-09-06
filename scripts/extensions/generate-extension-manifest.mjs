@@ -1194,7 +1194,7 @@ export const SCHEMA_CONFIG_FIELD_KEYS = {
   "named-action": new Set(["kind", "label", "actionId", "confirm", "role", "description"]),
   select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
   "record-list": new Set([
-    "kind", "label", "listActionId", "deleteActionId", "emptyState",
+    "kind", "label", "listActionId", "deleteActionId", "emptyState", "emptyStateDetail",
     "itemTitleKey", "itemSubtitleKey", "itemBadges", "description",
   ]),
   banner: new Set(["kind", "label", "variants"]),
@@ -1323,6 +1323,20 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
       errors.push(`${at}: record-list "deleteActionId" must be a valid action id`);
     }
     if (!nonEmptyStr(raw.emptyState)) errors.push(`${at}: record-list requires "emptyState"`);
+    // cinatra#3231 — the optional Empty-state detail (helper + action label).
+    // Mirrors the TS parser: object, allowlisted keys, non-empty strings, and
+    // at least one of the two.
+    if (raw.emptyStateDetail !== undefined) {
+      const dAt = `${at}.emptyStateDetail`;
+      const d = raw.emptyStateDetail;
+      if (!isObj(d)) {
+        errors.push(`${dAt}: must be an object`);
+      } else if (rejectUnknownConfigKeys(d, new Set(["helper", "actionLabel"]), dAt, errors)) {
+        if (d.helper !== undefined && !nonEmptyStr(d.helper)) errors.push(`${dAt}: "helper" must be a non-empty string`);
+        if (d.actionLabel !== undefined && !nonEmptyStr(d.actionLabel)) errors.push(`${dAt}: "actionLabel" must be a non-empty string`);
+        if (d.helper === undefined && d.actionLabel === undefined) errors.push(`${dAt}: requires "helper" and/or "actionLabel"`);
+      }
+    }
     if (!nonEmptyStr(raw.itemTitleKey)) errors.push(`${at}: record-list requires "itemTitleKey"`);
     const badges = raw.itemBadges;
     if (!Array.isArray(badges)) {

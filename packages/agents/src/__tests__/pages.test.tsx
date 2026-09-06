@@ -151,10 +151,10 @@ describe("NewAgentPage merged discovery table", () => {
   // + Active/Archived indicator (cinatra#1007): reuse <InstalledExtensionCard>
   // without those two props, description clamped to 2 lines (since cinatra#1005
   // the default is also 2, so the explicit prop is belt-and-braces).
-  it("renders cards via InstalledExtensionCard without version/status, 2-line description clamp", () => {
+  it("renders cards via InstalledExtensionCard without version/status, 3-line description clamp (cinatra#3227)", () => {
     const card = readAgentCardSource();
     expect(card).toMatch(/<InstalledExtensionCard/);
-    expect(card).toMatch(/descriptionLineClamp=\{2\}/);
+    expect(card).toMatch(/descriptionLineClamp=\{3\}/);
     expect(card).not.toMatch(/\bversion=\{/);
     expect(card).not.toMatch(/\bstatus=\{/);
   });
