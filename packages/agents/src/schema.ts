@@ -383,7 +383,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // every headless / A2A / global writer, which resolves to unanchored and
   // stays on the flat bare route. Deliberately NOT the same thing as
   // assignmentScopeSnapshot above (which scopes assignments, not addresses).
-  // Migration: src/lib/drizzle-store.ts entry + core__0101.
+  // Migration: src/lib/drizzle-store.ts entry + core__0102.
   launchScopeAnchor: jsonb("launch_scope_anchor"),
   // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
   // creation from the LOCKED template owner anchor + org + project launch, and

@@ -348,8 +348,7 @@ export type AgentRunRecord = {
   // the org-write run mint refuses a claimed attempt that no longer matches
   // this column (stale-worker refusal). NULL pre-dispatch.
   executionAttemptId: string | null;
-  humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
-  launchScopeAnchor?: unknown; // cinatra#2809 — the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one.
+  humanPresent: boolean | null; launchScopeAnchor?: unknown; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless. cinatra#2809 — launchScopeAnchor is the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one. It rides this line for the same reason the fields below do: the module is at its line-count ceiling.
   // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a). Which moment
   // this run is at, which card that moment mounts, and the card's
   // server-checked reference. All three are NULL together for a run at no

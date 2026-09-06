@@ -15,16 +15,17 @@
 // (every route reaches the store's DDL owner) whose module counts may only ever
 // shrink; the suite carries the guarantee the builder would have.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const ROOT = process.cwd();
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 
-const MIGRATION = "migrations/core/core__0101_launch-scope-anchor.mjs";
-const FRAGMENT = "migrations/manifest.d/core__0101_launch-scope-anchor.json";
+const MANIFEST_DIR = "migrations/manifest.d";
+const MIGRATION = "migrations/core/core__0102_launch-scope-anchor.mjs";
+const FRAGMENT = "migrations/manifest.d/core__0102_launch-scope-anchor.json";
 
 describe("the two bootstrap halves", () => {
   it("adds the column to agent_runs, additively and idempotently", () => {
@@ -72,17 +73,32 @@ describe("the operator-upgrade half", () => {
     expect(sql).toContain("DROP COLUMN IF EXISTS launch_scope_anchor");
   });
 
-  it("is declared in the manifest at seq 0101, over the two tables it touches", () => {
+  it("is declared in the manifest over the two tables it touches", () => {
     const fragment = JSON.parse(read(FRAGMENT)) as {
       seq: string;
       file: string;
       destructive: boolean;
       tables: string[];
     };
-    expect(fragment.seq).toBe("0101");
-    expect(fragment.file).toBe("core/core__0101_launch-scope-anchor.mjs");
+    expect(fragment.file).toBe(`core/${basename(MIGRATION)}`);
+    expect(basename(MIGRATION)).toContain(`core__${fragment.seq}_`);
     expect(fragment.destructive).toBe(false);
     expect([...fragment.tables].sort()).toEqual(["agent_runs", "assistant_threads"]);
+  });
+
+  it("claims a sequence number NO shipped migration already holds", () => {
+    // A sequence number is claimed at MERGE, not at authoring: a migration that
+    // reaches the default branch first takes the number, and a second module
+    // re-using it fails the runner's duplicate-seq preflight at boot — the
+    // ledger never dedupes. The number is therefore read against the WHOLE
+    // ledger here, so a collision shows in this suite and not only in the gate,
+    // and a forward onto a branch that shipped one meanwhile renumbers.
+    const fragment = JSON.parse(read(FRAGMENT)) as { seq: string };
+    const others = readdirSync(join(ROOT, MANIFEST_DIR))
+      .filter((name) => name.endsWith(".json") && name !== basename(FRAGMENT))
+      .map((name) => (JSON.parse(read(join(MANIFEST_DIR, name))) as { seq: string }).seq);
+    expect(others).not.toContain(fragment.seq);
+    expect(Math.max(...others.map(Number))).toBeLessThan(Number(fragment.seq));
   });
 });
 

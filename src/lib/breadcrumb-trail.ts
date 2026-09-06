@@ -614,3 +614,42 @@ export function buildBreadcrumbTrail(
 export function breadcrumbCrumbKey(crumb: BreadcrumbCrumb, i: number): string {
   return crumb.ellipsis ? `ellipsis-${i}` : `${i}-${crumb.href}`;
 }
+
+// THE TAB TITLE MIRRORS THE RESOLVED TRAIL (cinatra#2809, per-scope surfaces
+// S3). The ratified drawing, Components/Breadcrumb: "The browser-tab title
+// mirrors the resolved trail under the same rules: an id-bearing route never
+// shows a raw id in the tab."
+//
+// The rule is the TRAIL's rule, so it reads the trail itself and lives beside
+// it. Two things were wrong before:
+//
+//   * the shell recognised an agent instance by `segments[0] === "agents"`,
+//     which is the BARE tree alone. S3 mounts the same surface under five scope
+//     bases, and on those addresses the recogniser missed — the route fell
+//     through to the id-bearing branch, where the shell deliberately writes
+//     nothing and the route's own metadata stayed in the tab while the trail
+//     beside it read the resolved names.
+//   * it read ONE crumb contribution rather than the trail, so the tab
+//     disagreed with the trail in exactly the windows where the trail resolves
+//     its leaf some other way — the broadcast page title, or the id
+//     abbreviation. The launch redirect is one of those windows.
+//
+// Returns the trail's LEAF label on an agent-instance address under any base,
+// or `null` where the address is not one. Null is not a fallback to a humanized
+// path segment: a caller that gets null leaves the tab title alone, so an
+// id-bearing route can never show a raw id in the tab. The trail's own leaf
+// rules do the rest — an unresolvable name is the id's first eight characters
+// and an ellipsis there, and therefore in the tab too.
+export function agentInstanceTabLabel(
+  pathname: string,
+  crumbs: readonly BreadcrumbCrumb[],
+): string | null {
+  const segments = pathname.split("/").filter(Boolean);
+  const at = scopeBaseDepth(scopeBaseFromSegments(segments));
+  // `<scope-base>/agents/<vendor>/<package>/<instance>` — the instance level,
+  // and any step sub-route below it, which the trail collapses to this crumb.
+  if (segments[at] !== "agents" || segments.length < at + 4) return null;
+  const leaf = crumbs[crumbs.length - 1];
+  if (!leaf || leaf.ellipsis) return null;
+  return leaf.label || null;
+}

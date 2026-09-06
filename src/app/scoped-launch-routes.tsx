@@ -21,6 +21,7 @@
 // ---------------------------------------------------------------------------
 
 import type React from "react";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import {
@@ -31,6 +32,7 @@ import { AGENT_LAUNCH_SEGMENT } from "@/lib/agent-url";
 import { ScopeSurfaceSettingsShell } from "@/components/scope-surface-settings-shell";
 import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import { scopeSurfaceBase } from "@/lib/scope-surfaces";
+import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -39,6 +41,7 @@ type AgentInstanceScreen = (props: {
   instanceId: string;
   scopeBase?: string | null;
   launchScope?: ScopeSurfaceRef | null;
+  scopeTitle?: string | null;
   searchParams?: Promise<SearchParams> | undefined;
 }) => Promise<React.ReactNode>;
 
@@ -55,6 +58,12 @@ export async function ScopedAgentsRoute({
   const route = resolveScopedAgentRoute(segments);
   if (route.kind === "not-found") notFound();
   const scopeBase = scopeSurfaceBase(scope);
+  // THE SCOPE'S NAME, READ ONCE, HERE (cinatra#2809 fix leg 2). This is the one
+  // place that knows the scope before any surface below it draws, and the read
+  // repeats that scope's own gate — so every page under this base publishes the
+  // SAME name the scope's landing publishes, and a reader who may not be told
+  // it gets the id abbreviation on all of them alike.
+  const scopeTitle = await readScopeSurfaceEntityName(scope);
 
   if (route.kind === "settings") {
     // The SHELL only. This epic pins the settings HREF and proves it resolves;
@@ -63,6 +72,7 @@ export async function ScopedAgentsRoute({
     return (
       <ScopeSurfaceSettingsShell
         scope={scope}
+        scopeTitle={scopeTitle}
         subject={{ kind: "agent", packageName: `@${route.vendor}/${route.packageName}` }}
       />
     );
@@ -86,6 +96,10 @@ export async function ScopedAgentsRoute({
     // The vantage itself, not just its route: the launcher stamps the run with
     // it, and the personal scope resolves to the originating human there.
     launchScope: scope,
+    // The resolved name travels WITH the vantage: the run page owns the one
+    // crumb publish on its route, so it publishes the scope's crumb itself
+    // rather than a second island racing it.
+    scopeTitle,
     searchParams,
   });
 }
@@ -108,6 +122,7 @@ export async function ScopedAssistantsRoute({
     return (
       <ScopeSurfaceSettingsShell
         scope={scope}
+        scopeTitle={await readScopeSurfaceEntityName(scope)}
         subject={{ kind: "assistant", packageName: route.assistantPackageName }}
       />
     );
@@ -122,4 +137,29 @@ export async function ScopedAssistantsRoute({
     params: Promise.resolve({ slug: route.slug }),
     searchParams,
   });
+}
+
+
+// THE TAB TITLE OF A SCOPED SURFACE (cinatra#2809 fix leg 2). The ratified
+// drawing, Components/Breadcrumb: "The browser-tab title mirrors the resolved
+// trail under the same rules: an id-bearing route never shows a raw id in the
+// tab." Every scoped launch route is id-bearing, and on an id-bearing route
+// the shell writes no title of its own until the trail resolves — so this is
+// what the tab reads meanwhile, and a static noun would mirror nothing.
+//
+// The read is THE gated one every other scoped surface uses, so this title can
+// never disclose a name the page beneath it may not disclose; a withheld or
+// genuinely unavailable name falls back to the surface's own noun, never to
+// the id in any form.
+export async function scopedSurfaceMetadata(
+  scope: ScopeSurfaceRef,
+  surface: "Agents" | "Assistants",
+): Promise<Metadata> {
+  try {
+    const name = await readScopeSurfaceEntityName(scope);
+    return { title: name ? surface + " — " + name : surface };
+  } catch {
+    // A name is a convenience on this surface, never its subject.
+    return { title: surface };
+  }
 }

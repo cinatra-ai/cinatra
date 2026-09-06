@@ -31,6 +31,7 @@ import {
   SCOPE_SURFACE_KIND_LABEL,
   SCOPE_SURFACE_TAB_LABEL,
   scopeSurfaceBase,
+  scopeSurfaceCrumbEntries,
   type ScopeSurfaceRef,
 } from "@/lib/scope-surfaces";
 
@@ -43,9 +44,18 @@ export type ScopeSurfaceSettingsSubject = {
 
 export function ScopeSurfaceSettingsShell({
   scope,
+  scopeTitle,
   subject,
 }: {
   scope: ScopeSurfaceRef;
+  /**
+   * The scope's own name, resolved by the route behind that scope's read gate
+   * (cinatra#2809 fix leg 2). `null` where the reader may not be told it, and
+   * the crumb then falls back to the id's first eight characters plus an
+   * ellipsis — the drawing's genuinely-unavailable arm, which is NOT what this
+   * page used to show while the name was sitting resolved one level up.
+   */
+  scopeTitle?: string | null;
   subject: ScopeSurfaceSettingsSubject;
 }) {
   const base = scopeSurfaceBase(scope);
@@ -54,15 +64,13 @@ export function ScopeSurfaceSettingsShell({
   const tabLabel = SCOPE_SURFACE_TAB_LABEL[tab];
   return (
     <Main className="min-h-screen">
-      {/* The trail above this page is the scope and its tab — published from
+      {/* The trail above this page is the SCOPE and its tab — published from
           here, after the route's own gate, exactly as every scope surface
-          publishes what it resolved. */}
-      <CrumbContributions
-        entries={[
-          { prefix: tabHref, label: tabLabel },
-          { prefix: `${tabHref}/settings`, label: "Settings" },
-        ]}
-      />
+          publishes what it resolved, and through the same road they all use.
+          The leaf ("Settings") is named by the route's own last segment; the
+          entry this shell used to publish for it targeted `<base>/<tab>/
+          settings`, a path no route answers on, so it named nothing. */}
+      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, scopeTitle ?? undefined)} />
       <PageHeader
         label={SCOPE_SURFACE_KIND_LABEL[scope.kind]}
         title="Settings"

@@ -90,7 +90,7 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     // silently re-address every bookmark to the conversation. Written once from
     // the launch route, never updated, never inferred, never backfilled — an
     // absent value means the thread stays on the flat `/chat` route.
-    // Operator-upgrade twin = migrations/core/core__0101.
+    // Operator-upgrade twin = migrations/core/core__0102.
     { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS launch_scope_anchor jsonb` },
     // `team_id` (cinatra#1037 P5.6 drop-history PR2 CUTOVER, coordinator-authorized
     // Fork-B extension): the team the thread is owned by — the structured twin of

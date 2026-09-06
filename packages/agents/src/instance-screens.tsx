@@ -6,7 +6,7 @@ import {
   launchScopeAnchorForScope,
   parseLaunchScopeAnchor,
 } from "@/lib/launch-scope-anchor";
-import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
@@ -1051,7 +1051,7 @@ function contextSlotIdInGateValues(
   return null;
 }
 
-type ScreenProps = {
+export type ScreenProps = {
   agentId: string;          // template slug from URL
   instanceId: string;       // runId or "new"
   searchParams?: Record<string, string | string[] | undefined>;
@@ -1073,6 +1073,13 @@ type ScreenProps = {
    * on when they pressed Run.
    */
   launchScope?: ScopeSurfaceRef | null;
+  /**
+   * The scope's own resolved name, read by the scoped route behind that scope's
+   * read gate (cinatra#2809 fix leg 2). `null` or absent where the reader may
+   * not be told it; the crumb then falls back to the id's first eight
+   * characters plus an ellipsis, never a title-cased raw id.
+   */
+  scopeTitle?: string | null;
 };
 
 /**
@@ -1140,6 +1147,7 @@ export async function SetupScreen({
   instanceId,
   scopeBase,
   launchScope,
+  scopeTitle,
 }: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -1857,6 +1865,16 @@ export async function SetupScreen({
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
+        // THE SCOPE THIS PAGE IS READ UNDER (cinatra#2809). The layout owns the
+        // page's one crumb publish, so the scope base and the scope's own
+        // crumbs are handed to it rather than published beside it: the bus
+        // keeps ONE route-scoped snapshot and every publish replaces it whole.
+        scopeBase={scopeBase ?? null}
+        scopeCrumbEntries={
+          launchScope
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            : undefined
+        }
         activeTab={runPageActiveTab({
           inputStepIsOpen,
           inputStepsInRail,

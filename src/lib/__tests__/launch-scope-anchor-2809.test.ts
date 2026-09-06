@@ -184,6 +184,28 @@ describe("the home redirect", () => {
   it("ignores a trailing slash rather than looping on it", () => {
     expect(homeRedirectFor("/teams/t1/agents/acme/writer/run_1/", "/teams/t1/agents/acme/writer/run_1")).toBeNull();
   });
+  it("trims the same way on the degenerate paths the trim used to answer for", () => {
+    // The root path is left alone; a path that is NOTHING but separators trims
+    // to the empty string and is therefore not the canonical home. Pinned so a
+    // rewrite of the trim cannot quietly re-answer either one.
+    expect(homeRedirectFor("/", "/teams/t1/agents/acme/writer/run_1")).toBe(
+      "/teams/t1/agents/acme/writer/run_1",
+    );
+    expect(homeRedirectFor("//", "")).toBeNull();
+    expect(homeRedirectFor("/teams/t1/agents/acme/writer/run_1///", "/teams/t1/agents/acme/writer/run_1")).toBeNull();
+  });
+  it("answers in bounded time on a path that is a long run of separators (cinatra#2809, no backtracking trim)", () => {
+    // The path reaches this function from the ROUTE — library input. A trailing
+    // trim written as an unbounded repetition over a single character class
+    // re-scans the run from every start position, so a path made of many
+    // separators costs time quadratic in its length (js/polynomial-redos). The
+    // trim walks the string ONCE instead, so this reading is flat.
+    const canonical = "/teams/t1/agents/acme/writer/run_1";
+    const hostile = `${canonical}${"/".repeat(120_000)}x`;
+    const started = performance.now();
+    expect(homeRedirectFor(hostile, canonical)).toBe(canonical);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });
 
 describe("the flat instance label", () => {

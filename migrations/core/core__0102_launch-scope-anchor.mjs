@@ -1,4 +1,4 @@
-// core__0101 — the LAUNCH ANCHOR (cinatra#2809, per-scope surfaces S3, epic #2806).
+// core__0102 — the LAUNCH ANCHOR (cinatra#2809, per-scope surfaces S3, epic #2806).
 //
 // The operator-upgrade twin of the two fresh-install bootstrap halves widened
 // in the SAME PR:
@@ -36,9 +36,11 @@
 // NOT DESTRUCTIVE by the convention's classifier: it adds two nullable columns,
 // changes no key, replaces no index, and deletes nothing.
 //
-// SEQ 0101 — strictly greater than the max shipped seq on the default branch
-// (core__0100). A concurrent lane may land the next seq first, in which case a
-// rename-only renumber is normal. migrations/** is HIGH-RISK: maintainer
+// SEQ 0102 — strictly greater than the max shipped seq on the default branch
+// (core__0101, the agent-template artifact bindings, which landed while this
+// branch was open and took the 0101 this module was authored at; the renumber
+// onto the next free number is exactly the rename the convention expects).
+// A later lane may land 0102 first, in which case the same rename repeats. migrations/** is HIGH-RISK: maintainer
 // approval required; the lane never merges.
 //
 // DOWN. Drops both columns. The honest cost is stated rather than hidden: the

@@ -275,8 +275,32 @@ export function homeRedirectFor(
   currentPath: string,
   canonicalPath: string,
 ): string | null {
-  const here = currentPath.length > 1 ? currentPath.replace(/\/+$/, "") : currentPath;
-  return here === canonicalPath ? null : canonicalPath;
+  return trimTrailingSeparators(currentPath) === canonicalPath ? null : canonicalPath;
+}
+
+/** "/" — the one character the trailing trim below walks off the end. */
+const SEPARATOR_CHAR_CODE = 47;
+
+/**
+ * The trailing "/" walked off a path, in ONE pass from the end.
+ *
+ * Deliberately not a pattern. The path arrives from the ROUTE — library input —
+ * and a trailing trim expressed as an unbounded repetition over a single
+ * character class ("one or more separators, then the end") re-scans the run
+ * from every start position when the end does not follow it, so a path made of
+ * many separators costs time QUADRATIC in its length. That is a denial of
+ * service on a function every instance page calls before it renders anything.
+ * A backwards walk answers the same string in a single linear pass.
+ *
+ * The root path is returned untouched, and a path that is nothing but
+ * separators trims to the empty string — exactly what the pattern answered, so
+ * no redirect decision moves with this change.
+ */
+function trimTrailingSeparators(path: string): string {
+  if (path.length <= 1) return path;
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === SEPARATOR_CHAR_CODE) end -= 1;
+  return end === path.length ? path : path.slice(0, end);
 }
 
 /**
