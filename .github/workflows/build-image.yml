@@ -3263,7 +3263,7 @@ jobs:
       # Headroom is what this job can give, so it gives it — the wp-drupal-uat
       # recipe, unchanged in intent. Nothing here touches what the flow asserts.
       - name: Reclaim runner disk (so the swapfile below has room)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Same reclaim the UAT gate does before enlarging swap. Disk was never
         # this job's constraint; this exists only so the 16G file below fits with
         # room to spare.
@@ -3272,7 +3272,7 @@ jobs:
           df -h /
 
       - name: Enlarge swap + record the memory baseline
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Turns the cliff into a slowdown the suite can still finish and REPORT
         # THROUGH, which is the part that matters for a required gate: a slow red
         # names a failing test, a reclaimed runner names nothing. The baseline is
