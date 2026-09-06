@@ -44,7 +44,7 @@ describe("ScopeDashboardsSection — failure containment (§IX/§X error frame)"
       // ANY(array) binding.
       new Error("DrizzleQueryError: malformed array literal"),
     );
-    const el = (await ScopeDashboardsSection({ actor, scope })) as {
+    const el = (await ScopeDashboardsSection({ actor, scope, entityLabel: "Team: Growth" })) as {
       type: unknown;
     };
     expect(el.type).toBe(ScopeDashboardsTabError);
@@ -56,7 +56,7 @@ describe("ScopeDashboardsSection — failure containment (§IX/§X error frame)"
       rows: [],
       canManage: true,
     });
-    const el = (await ScopeDashboardsSection({ actor, scope })) as {
+    const el = (await ScopeDashboardsSection({ actor, scope, entityLabel: "Team: Growth" })) as {
       type: unknown;
     };
     expect(el.type).toBe(ScopeDashboardsTab);

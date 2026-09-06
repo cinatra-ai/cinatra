@@ -38,12 +38,13 @@ import { Client } from "pg";
 import type { Actor } from "@cinatra-ai/extension-types";
 import type { InstallBatchSagaDeps } from "@/lib/extension-install-batch";
 import type { DependencyInstallPlan, PlannedMember } from "@/lib/extension-dependency-plan";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL;
 const HAS_DB =
   typeof DB_URL === "string" &&
   DB_URL.length > 0 &&
-  !DB_URL.includes("unused:unused@localhost:5432/unused") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   !DB_URL.includes("build:build@127.0.0.1:5432/build");
 
 const TEST_SCHEMA = `cinatra_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;

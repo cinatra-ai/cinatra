@@ -20,7 +20,7 @@
 //   test.env.SUPABASE_DB_URL = process.env.SUPABASE_DB_URL ?? "<unused placeholder>"
 // and ESM HOISTS the `import baseConfig` statement below this comment, so that
 // module is fully evaluated BEFORE the `process.env.SUPABASE_DB_URL = …` line
-// further down ever runs. So the base config captured the "unused:unused@localhost:5432"
+// further down ever runs. So the base config captured the "unused:unused"
 // placeholder, vitest then injected THAT placeholder into every test worker's
 // env, and the assignment below was overwritten in the workers it was meant to
 // serve. Effect: `pnpm test:integration` with only CINATRA_TEST_DB_URL set ran

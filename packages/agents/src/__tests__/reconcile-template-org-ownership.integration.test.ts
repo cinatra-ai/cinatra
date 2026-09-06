@@ -28,12 +28,13 @@ import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const ORG = `org_${randomUUID().slice(0, 8)}`;
 const OTHER_ORG = `org_${randomUUID().slice(0, 8)}`;

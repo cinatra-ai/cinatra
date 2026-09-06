@@ -31,12 +31,13 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string"
   && dbUrl.length > 0
-  && !dbUrl.includes("unused:unused@localhost:5432/unused");
+  && !isPlaceholderDbUrl(dbUrl);
 
 // The instance's operator-vendor segment for this proof. The author proposes
 // under `@uat2597`, which deliberately does NOT match it — the default case.
