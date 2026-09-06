@@ -87,7 +87,7 @@ vi.mock("../artifact-review-gate-store", async (importOriginal) => {
 
 const TEST_SCHEMA = "cinatra_test_gate_notify_2833";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2833-gate-notify";
 

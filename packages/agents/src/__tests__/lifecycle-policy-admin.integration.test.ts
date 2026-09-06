@@ -23,7 +23,7 @@ import { Client } from "pg";
 
 const TEST_SCHEMA = "cinatra_test_policy_2047";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2047-admin";
 const OTHER_ORG = "org-2047-other";

@@ -23,7 +23,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string"
   && dbUrl.length > 0
-  && !dbUrl.includes("unused:unused@localhost:5432/unused"); // align with parent-run-id.test.ts:21 and AGENTS.md
+  && !dbUrl.includes("unused:unused@"); // align with parent-run-id.test.ts:21 and AGENTS.md
 
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
 // and REQUIRES a host-minted authority; the guard also reads the org's

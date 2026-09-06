@@ -20,12 +20,13 @@ import { Client } from "pg";
 import { assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { assistantRegistrySchemaQueries } from "@/lib/assistant-registry-schema";
 import { buildUpSql } from "../../../../migrations/core/core__0065_assistant-registry-foundation.mjs";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused") &&
+  !isPlaceholderDbUrl(dbUrl) &&
   !dbUrl.includes("build:build@127.0.0.1:5432/build");
 
 const maybe = hasDb ? describe : describe.skip;

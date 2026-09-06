@@ -61,7 +61,7 @@ import { payloadAssertsApproval } from "@/lib/artifacts/artifact-review-rejectio
 const TEST_SCHEMA = "cinatra_test_review_gate_1796";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+  DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-1796-review-gate";
 // cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against

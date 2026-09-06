@@ -60,7 +60,7 @@ import { publishCmsRepairedCapturePort } from "../cms-repaired-capture-port";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2286_s10_pr4";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2286-s10-pr4";
 const MEMBER_USER = "user-2286-s10-pr4-member";

@@ -18,7 +18,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !dbUrl.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation

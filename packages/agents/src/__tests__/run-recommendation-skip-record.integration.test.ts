@@ -33,7 +33,7 @@ import { Client } from "pg";
 
 const TEST_SCHEMA = "cinatra_test_skip_2794";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 
 /** The id the retired sentinel reserved. A REAL skill may carry it — skill ids

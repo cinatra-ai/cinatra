@@ -7,7 +7,7 @@
 //
 // Skipped when no real Postgres is available (e.g. CI without a DB). The
 // package vitest.config injects a non-connecting sentinel
-// (postgres://unused:unused@localhost:5432/unused) so env-shape checks pass;
+// (see vitest.placeholder-db-url.ts) so env-shape checks pass;
 // that sentinel is NOT a live DB, so it counts as "no DB" here — otherwise the
 // beforeAll pool.connect() would fire ECONNREFUSED and fail the whole file
 // instead of skipping cleanly.

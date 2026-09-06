@@ -43,7 +43,7 @@ import type { SuggestionProjector } from "../lifecycle-suggestion-producer-lane"
 
 const TEST_SCHEMA = "cinatra_test_suggestion_2570";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2570";
 

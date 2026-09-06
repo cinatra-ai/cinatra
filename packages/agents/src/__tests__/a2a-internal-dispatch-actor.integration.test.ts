@@ -27,7 +27,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !dbUrl.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 
 // Ids unique to THIS file (never shared with a sibling integration suite).

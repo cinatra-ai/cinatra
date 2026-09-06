@@ -59,7 +59,7 @@ import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-ac
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2047_obs2";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2047-obs2";
 /** cinatra#2286 S10 PR2 — the principal fix: a dispatched repair now requires

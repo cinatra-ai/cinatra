@@ -584,7 +584,8 @@ export default defineConfig({
       "src/__tests__/mcp-server-tool-count.test.ts",
     ],
     env: {
-      // The placeholder is unroutable by construction (see the module's comment).
+      // The placeholder sits off the PostgreSQL default port and nothing in
+      // the test environment answers it (see the module's comment).
       SUPABASE_DB_URL:
         process.env.SUPABASE_DB_URL ?? ROOT_SUITE_PLACEHOLDER_DB_URL,
       // rename-vendor-action.test.ts uses the real instance-secrets module

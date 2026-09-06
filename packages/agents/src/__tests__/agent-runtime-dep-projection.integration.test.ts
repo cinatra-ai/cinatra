@@ -22,7 +22,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !dbUrl.includes("unused:unused@");
 
 // A required + an optional connector edge, object-valued (the cinatra#1056
 // widening). The `requirement` is the field a plain-string legacy column could

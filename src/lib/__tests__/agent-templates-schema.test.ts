@@ -13,16 +13,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_agent_templates_schema";
 let pool: Pool;
 
-// vitest.config.ts always sets SUPABASE_DB_URL — to the placeholder
-// `postgres://unused:unused@localhost:5432/unused` when the host shell did NOT
-// export a real value. Skip when we see that placeholder so CI without a live
-// Postgres emits zero noise.
+// vitest.config.ts always sets SUPABASE_DB_URL — to the shared placeholder
+// (see vitest.placeholder-db-url.ts) when the host shell did NOT export a real
+// value. Skip when we see that placeholder so CI without a live Postgres emits
+// zero noise.
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 describe.skipIf(!HAS_REAL_DB)("agent_templates ownership schema", () => {
   beforeAll(async () => {

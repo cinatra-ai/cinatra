@@ -32,7 +32,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !dbUrl.includes("unused:unused@");
 
 const ORG_A = `org_a_${randomUUID().slice(0, 8)}`;
 const ORG_B = `org_b_${randomUUID().slice(0, 8)}`;

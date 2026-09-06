@@ -46,7 +46,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !dbUrl.includes("unused:unused@");
 
 // The ORM (packages/agents/src/schema.ts) qualifies every table under the schema
 // named by SUPABASE_SCHEMA (default "cinatra"). Provision that exact schema.

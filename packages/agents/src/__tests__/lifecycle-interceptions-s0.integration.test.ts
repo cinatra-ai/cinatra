@@ -34,7 +34,7 @@ import { producedEventId, type ArtifactProducedEvent } from "@/lib/lifecycle/lif
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2038";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2038-lifecycle";
 
