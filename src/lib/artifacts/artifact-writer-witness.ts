@@ -87,6 +87,50 @@ VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, '${ARTIFACT_WRITE
 }
 
 /**
+ * The witness INSERT, CONVERGING — the same row this module already defines,
+ * written only when it is not there yet.
+ *
+ * WHY A SECOND SPELLING IS NOT WHAT THIS IS. The row, its columns and its
+ * `action` are the ones above; the only difference is the guard. A writer whose
+ * representation INSERT is itself idempotent (`ON CONFLICT DO NOTHING`, so that
+ * an interrupted write can be re-run and repaired) re-enters its own
+ * transaction against a representation that is already there. Its witness has to
+ * behave the same way, or the repair stacks duplicate `create` rows on one
+ * revision — and the audit table is append-only, so nothing can take them back.
+ *
+ * The guard is also the REPAIR: a representation minted before its writer
+ * emitted a witness gets one on the re-run, which is what makes bytes that no
+ * read path would admit servable again without touching the append-only history.
+ *
+ * MUST ride the same transaction as the `representation` INSERT it describes,
+ * exactly as the unguarded form must.
+ */
+export function buildArtifactWriterWitnessOpIfAbsent(
+  schema: string,
+  f: ArtifactWriterWitnessFacts,
+): ArtifactWriterWitnessOp {
+  return {
+    text: `INSERT INTO "${schema}"."artifact_audit"
+  (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
+SELECT gen_random_uuid()::text, $1::text, $2::text, $3::text, '${ARTIFACT_WRITER_WITNESS_ACTION}', $4::text, $5::jsonb
+WHERE NOT EXISTS (
+  SELECT 1 FROM "${schema}"."artifact_audit"
+  WHERE org_id = $1::text
+    AND artifact_id = $2::text
+    AND representation_revision_id = $3::text
+    AND action = '${ARTIFACT_WRITER_WITNESS_ACTION}'
+)`,
+    values: [
+      f.orgId,
+      f.artifactId,
+      f.representationRevisionId,
+      f.actor ?? null,
+      JSON.stringify(f.detail ?? {}),
+    ],
+  };
+}
+
+/**
  * The witness PREDICATE, as a SQL `EXISTS (…)` fragment for a read path's WHERE
  * clause. `schema` is the already-escaped schema identifier; the three column
  * arguments are SQL expressions (usually qualified column references) for the

@@ -168,6 +168,22 @@ describe("the label beside the title is the kind name the drawing draws", () => 
 describe("the page draws the header the drawing closes", () => {
   const PAGE = path.join(__dirname, "..", "page.tsx");
   const source = readFileSync(PAGE, "utf8");
+  // The model's CODE, with its prose stripped: the docblock says the word
+  // "size" precisely to record that the line carries none, so reading the
+  // comments would fail the rule they state.
+  const MODEL = readFileSync(path.join(__dirname, "..", "artifact-detail-header.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  // The header is built in ONE place on this page, by the pure model above, and
+  // the page decides nothing about it. So the header's own construction is what
+  // the "no size" rule is about, and it is what these assertions read — not the
+  // whole page file. Scoping matters now that a size is drawn ELSEWHERE on the
+  // same page and is supposed to be: the ratified drawing gives the download
+  // card a size (V.2) while closing this line without one, so a file-wide ban
+  // on the token would forbid the drawing's own reading and would have to be
+  // deleted the moment that card was wired. It is narrowed to the header
+  // instead, which is what it always claimed to say.
+  const headerCall = source.match(/const header = buildArtifactDetailHeader\(\{[\s\S]*?\}\);/);
 
   it("puts no download control inside the header", () => {
     expect(source).not.toMatch(/<Download\b/);
@@ -179,6 +195,13 @@ describe("the page draws the header the drawing closes", () => {
   });
 
   it("hands the header no size to draw", () => {
-    expect(source).not.toContain("sizeBytes");
+    expect(headerCall).not.toBeNull();
+    expect(headerCall?.[0]).not.toMatch(/size/i);
+  });
+
+  it("the header model has no size cell to be handed one", () => {
+    // The other side of the same rule: even a caller that wanted to pass a size
+    // has nowhere to put it, so the closed line cannot be re-opened by a page.
+    expect(MODEL).not.toMatch(/size/i);
   });
 });

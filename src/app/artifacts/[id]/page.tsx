@@ -308,8 +308,22 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.
+  // ITS SIZE IS THE RESOLVED REVISION'S (cinatra#3091, wave 3). This card is the
+  // ratified drawing's V.2 — name, form, size, download — and the size has to
+  // describe the bytes `downloadHref` above hands over, which is the pinned
+  // representation this page already resolved. `artifact.size` is the object
+  // row's creation-time cache that the append-only save road never rewrites; it
+  // is the same split reading cinatra#3026 took out of the header, and it
+  // travels with the size to whichever surface still draws one. NULL where no
+  // representation resolved — the card then draws no download either, so its
+  // last-resort cached reading disagrees with nothing.
   const genericFloor = (
-    <FallbackHandler artifact={artifact} mime={mime} downloadHref={downloadHref} />
+    <FallbackHandler
+      artifact={artifact}
+      mime={mime}
+      sizeBytes={resolved?.sizeBytes ?? null}
+      downloadHref={downloadHref}
+    />
   );
 
   return (

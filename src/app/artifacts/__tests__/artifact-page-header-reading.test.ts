@@ -32,13 +32,17 @@
  * read from the revision that form came from, never from the row's cached
  * value.
  *
- * OPEN, AND DELIBERATELY NOT CLOSED IN THIS LEG: the host's own generic floor,
- * `handlers/fallback-handler.tsx`, is §V.2's card for a file nothing of ours can
- * read, and it still draws its Size row from `artifact.size` — the row's cached
- * value, the same stale reading #3026 removed from the header. Retargeting that
- * card at the resolved revision changes a drawn reading, so it is left to the
- * leg that proves this surface rather than taken silently here; the assertion
- * that would pin it is named in that leg, not written red in this file.
+ * NOW CLOSED, IN THE LEG THAT PROVES THIS SURFACE: the host's own generic
+ * floor, `handlers/fallback-handler.tsx`, is §V.2's card for a file nothing of
+ * ours can read, and it drew its Size row from `artifact.size` — the row's
+ * cached value, the same stale reading #3026 removed from the header. It now
+ * reads the size of the representation the page resolved, the very bytes its
+ * own download control hands over, and falls back to the cached value only for
+ * a row that resolved no representation at all (which draws no download either,
+ * so nothing can disagree with it there). The assertion this docblock said
+ * would be written in that leg is
+ * `handlers/__tests__/w3-download-card-size-is-the-resolved-revisions.test.tsx`,
+ * red on the previous head and green here.
  */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -62,7 +66,15 @@ describe("the artifact page's header describes the HEAD revision (cinatra#3026)"
     // drawing closes the meta line without a size, so the page resolves none
     // and passes none. This is the assertion that would have gone red before
     // the header was closed, when the page still computed a size for it.
-    expect(PAGE).not.toContain("sizeBytes");
+    //
+    // READ OVER THE HEADER'S OWN CONSTRUCTION, not the whole page file. The
+    // drawing that closes THIS line also draws a size on the per-kind download
+    // card (V.2), so the page legitimately resolves one for that card; a
+    // file-wide ban on the token would forbid the drawing's own reading. The
+    // rule is, and always was, about what reaches the header.
+    const headerCall = PAGE.match(/const header = buildArtifactDetailHeader\(\{[\s\S]*?\}\);/);
+    expect(headerCall).not.toBeNull();
+    expect(headerCall?.[0]).not.toMatch(/size/i);
     expect(PAGE).not.toMatch(/\$\{mime \|\| "unknown"\} · \$\{sizeBytes\} bytes/);
   });
 

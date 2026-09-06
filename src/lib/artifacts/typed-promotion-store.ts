@@ -14,6 +14,7 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { listActiveAssertions, type AssertionRecord } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { buildArtifactWriterWitnessOpIfAbsent } from "./artifact-writer-witness";
 
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
@@ -304,6 +305,7 @@ export async function promoteMatchedArtifactType(input: {
         toType: input.ownType.typeId,
         form: row.latestRevision.form,
         createdBy: input.createdBy ?? null,
+        mime: row.latestRevision.mime,
       });
       if (landed.revision !== null) {
         return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
@@ -336,6 +338,7 @@ export async function promoteMatchedArtifactType(input: {
     toType: plan.toType,
     form: plan.form,
     createdBy: input.createdBy ?? null,
+    mime: row?.latestRevision?.mime ?? null,
   });
   return {
     ok: true,
@@ -398,6 +401,65 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
 
 /** Append the promotion's revision, idempotently, under the per-artifact lock
  *  the append-only representation store takes for the same reason. */
+/**
+ * THE APPEND'S WHOLE TRANSACTION, as a pure list — the row lock, the shared-
+ * content representation, and the ARTIFACT-WRITER PROVENANCE WITNESS for it.
+ *
+ * THE WITNESS IS NOT OPTIONAL HERE, and `artifact-writer-witness.ts` says why in
+ * its own words: "every host writer that mints a blob-backed representation
+ * emits the witness, and every claimed-row read path (serve, context candidacy,
+ * selection finalization) tests for it". This road IS such a writer — its append
+ * mints a blob-backed representation on a PACK-TYPED row, and the serve arm
+ * admits a pack-typed row's direct representation only when the witness attests
+ * it. Without it the promotion committed bytes that every read path refused: the
+ * promoted revision answered 404 on `/preview` and on `/content` while the base
+ * revision it shares its resource with answered 200, so the artifact page drew
+ * its header over an empty plate.
+ *
+ * The witness is the CONVERGING form because the representation INSERT is: both
+ * halves of a re-run promotion must be able to land exactly once, and a
+ * revision an earlier promotion appended without a witness is repaired by the
+ * same re-run.
+ *
+ * Pure so the one-transaction composition is fixture-provable, the same shape
+ * the other host writers' witness proofs take.
+ */
+export function buildPromotionAppendQueries(
+  schema: string,
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    sharedResourceId: string;
+    form: "file" | "connectorRef" | "dashboard";
+    createdBy: string | null;
+    toType: string;
+    mime?: string | null;
+  },
+): Array<{ text: string; values: unknown[] }> {
+  const s = schema.replaceAll('"', '""');
+  return [
+    { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+    buildPromotionRepresentationAppend(schema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+    }),
+    buildArtifactWriterWitnessOpIfAbsent(s, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      actor: input.createdBy,
+      // Provenance detail only — the witness is the EXISTENCE of the row, never
+      // its payload.
+      detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
+    }),
+  ];
+}
+
 function appendPromotionRevision(input: {
   orgId: string;
   artifactId: string;
@@ -405,6 +467,8 @@ function appendPromotionRevision(input: {
   toType: string;
   form: "file" | "connectorRef" | "dashboard";
   createdBy: string | null;
+  /** The shared content's MIME, for the witness's provenance detail. */
+  mime?: string | null;
 }): { representationRevisionId: string; revision: number | null } {
   ensurePostgresSchema();
   const representationRevisionId = promotionRevisionId({
@@ -415,17 +479,16 @@ function appendPromotionRevision(input: {
   const results = runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
-    queries: [
-      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-      buildPromotionRepresentationAppend(postgresSchema, {
-        orgId: input.orgId,
-        artifactId: input.artifactId,
-        representationRevisionId,
-        sharedResourceId: input.sharedResourceId,
-        form: input.form,
-        createdBy: input.createdBy,
-      }),
-    ],
+    queries: buildPromotionAppendQueries(postgresSchema, {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId,
+      sharedResourceId: input.sharedResourceId,
+      form: input.form,
+      createdBy: input.createdBy,
+      toType: input.toType,
+      mime: input.mime ?? null,
+    }),
   });
   const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
   return {
