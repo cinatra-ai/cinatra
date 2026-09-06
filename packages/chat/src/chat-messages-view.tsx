@@ -20,7 +20,7 @@
 // components that emit byte-identical DOM.
 
 import { isRunStartToolName } from "./run-start-tool-names";
-import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -95,6 +95,8 @@ import {
   correctRunStartSentenceForFiredSchedule,
   correctRunStartSentenceForScheduleWait,
   runIsWaitingForItsSchedule,
+  RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
+  RUN_START_SCHEDULE_FIRED_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 import { useConversationCredential } from "./conversation-credential";
 import { runSeedRequest } from "./run-seed-request";
@@ -941,6 +943,89 @@ function carriedMomentView(view: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * THE LINE SECTION VI DRAWS OVER A SCHEDULE THAT HAS FIRED (cinatra#3174 fix
+ * leg 7, criterion 4).
+ *
+ * The section gives the two fired readings their own words and gives them
+ * DIFFERENT words — see `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` and
+ * `RUN_START_SCHEDULE_FIRED_SENTENCE` for the sentences and for why each is a
+ * standing sentence rather than a clause after a dispatch head. Every other
+ * reading draws no line of its own: a schedule that has never run says nothing
+ * extra above its rows, and a graded round measured that as correct.
+ */
+function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
+  if (reading === "fired-recurring") return RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE;
+  if (reading === "spent-one-off") return RUN_START_SCHEDULE_FIRED_SENTENCE;
+  return null;
+}
+
+/**
+ * A STEP'S OWN CONTAINER, AND THE READING ITS CARD SETTLED ON (cinatra#3174 fix
+ * leg 7, criterion 4).
+ *
+ * WHY THE CORRECTION ROAD COULD NOT REACH THIS TURN. The two fired sentences
+ * already existed and were already wired — into the correction that rewrites
+ * the PLATFORM's own start sentence for a run this turn dispatched. That road
+ * is real and is kept: a run started from the conversation carries
+ * "Dispatched `pkg` (runId: `…`, status: `…`)." into its turn, and a card that
+ * has outlived that sentence corrects it. But it is not the road the schedule
+ * card usually arrives by. The schedule proposal primitive is its own tool, not
+ * a run dispatch, so the turn it produces carries no platform sentence at all —
+ * only the model's own lead-in — and there was nothing in it for a corrector to
+ * find. A graded round measured exactly that: the fired-recurring turn and the
+ * never-fired turn read the identical line, because the only difference between
+ * them lived in a reported reading nothing drew.
+ *
+ * SO THE TURN DRAWS THE LINE, rather than rewriting one. The reading is the
+ * CARD's — the payload here is a ref and only the card's own resolve knows
+ * whether the schedule has fired — so the card reports it into this container's
+ * sink, exactly as it already reports into the run container's, and the
+ * container draws the section's sentence above the card for the readings that
+ * have one.
+ *
+ * AND IT IS NOT A SECOND AUTHOR OF THE MODEL'S PROSE. Nothing written by the
+ * model is read, matched or rewritten here: the lead-in stands as it was
+ * written and the reading's line is drawn beside it, which is the same
+ * narrowness `rewritePlatformStartSentence` keeps for the road it serves.
+ *
+ * ABOVE THE CARD, NEVER INSIDE IT. The section rules a summary node out of the
+ * card itself — "No summary box is ever drawn, no status label, and nothing
+ * stands between the reader and the form" — so the card goes on drawing the
+ * card, and this line is the turn's.
+ *
+ * THE CONTAINER IS OTHERWISE UNCHANGED: same key, same `data-transcript-slot`,
+ * same children, so a step whose views are not a schedule card draws exactly
+ * what it drew before this seam existed.
+ */
+function ProducedViewsSlot({
+  slot,
+  children,
+}: {
+  slot: number;
+  children: ReactNode;
+}): ReactElement {
+  const [reading, setReading] = useState<ScheduleCardReading>("other");
+  const line = standingScheduleLineFor(reading);
+  return (
+    <ScheduleReadingReport onReading={setReading}>
+      <div data-transcript-slot={slot}>
+        {line === null ? null : (
+          <p
+            // Passive: it names WHICH reading drew the line, for a test and for
+            // a rendered reading of the screen. The words are what is drawn.
+            data-schedule-standing-line={reading}
+            className="max-w-none text-[15px] leading-relaxed text-foreground"
+          >
+            {line}
+          </p>
+        )}
+        {children}
+      </div>
+    </ScheduleReadingReport>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Ordered parts renderer (chronologically interleaved text + tool badges)
 // ---------------------------------------------------------------------------
@@ -1172,9 +1257,9 @@ function OrderedPartsSection({
         // A step that produced a view gets its own container at its own slot.
         if (slottedViews.length > 0) {
           return (
-            <div key={`slot-${idx}`} data-transcript-slot={idx}>
+            <ProducedViewsSlot key={`slot-${idx}`} slot={idx}>
               {slottedViews}
-            </div>
+            </ProducedViewsSlot>
           );
         }
         // Other tool parts feed the single live status line below the
