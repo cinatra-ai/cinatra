@@ -95,6 +95,10 @@ vi.mock("../attachment-resolver-ports", () => ({
 }));
 vi.mock("../semantic-assertion-store", () => ({
   assertSemanticType: assertSemanticTypeMock,
+  // cinatra#3118 criterion 6 — the authoritative active-assertion read the
+  // producer fast path keys on. No producer assertion here: these packs are
+  // driven as UPLOADS, so every candidate is classified.
+  listActiveAssertions: () => [],
 }));
 vi.mock("@/lib/extensions-dev-watcher", () => ({
   registerArtifactExtensionSkillsForPackage: lazyRegisterMock,
@@ -205,29 +209,46 @@ function registerAllAsSkills() {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// cinatra#3118 — the matcher now composes ONE delimited, attributed request for
+// the whole candidate set and reads back one verdict entry per candidate
+// identity `(extension, matcherSkillId)`. These helpers answer exactly the
+// candidates the runtime asked about, read off the composed prompt's roster.
+// ---------------------------------------------------------------------------
+type RosterEntry = { extension: string; matcherSkillId: string };
+
+function rosterFromPrompt(user: string): RosterEntry[] {
+  const out: RosterEntry[] = [];
+  const re = /extension="([^"]+)" matcherSkillId="([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(user)) !== null) {
+    out.push({ extension: m[1]!, matcherSkillId: m[2]! });
+  }
+  return out;
+}
+
+function batchedLlmMock(
+  verdictFor: (c: RosterEntry) => { matches: boolean; confidence: number },
+) {
+  runLlmMock.mockImplementation(async (input: { user: string }) => ({
+    text: JSON.stringify({
+      verdicts: rosterFromPrompt(input.user).map((c) => ({
+        extension: c.extension,
+        matcherSkillId: c.matcherSkillId,
+        rationale: "r",
+        ...verdictFor(c),
+      })),
+    }),
+  }));
+}
+
 function targetAwareLlmMock(targetPkg: string) {
-  // The runtime's user prompt is:
-  //   `Classify the attached artifact. Decide whether it is a "${cand.extPackageName}" work product. ...`
-  // We match on the targetPkg substring in the user prompt to return matches:true,
-  // matches:false otherwise.
-  runLlmMock.mockImplementation(async (input: { user: string }) => {
-    if (input.user.includes(targetPkg)) {
-      return {
-        text: JSON.stringify({
-          matches: true,
-          confidence: 0.85,
-          rationale: `target ${targetPkg} matched`,
-        }),
-      };
-    }
-    return {
-      text: JSON.stringify({
-        matches: false,
-        confidence: 0.1,
-        rationale: "not target",
-      }),
-    };
-  });
+  batchedLlmMock((c) =>
+    c.extension === targetPkg
+      ? { matches: true, confidence: 0.85 }
+      : { matches: false, confidence: 0.1 },
+  );
 }
 
 describe("Content pack — target-aware matcher integration", () => {
@@ -258,8 +279,10 @@ describe("Content pack — target-aware matcher integration", () => {
     registerAllAsSkills();
     targetAwareLlmMock("@cinatra-ai/blog-post-artifact");
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // text/markdown matches blog-post + blog-idea (NOT slide-deck or screenshot).
-    expect(runLlmMock).toHaveBeenCalledTimes(2);
+    // text/markdown matches blog-post + blog-idea (NOT slide-deck or
+    // screenshot) — two candidates, ONE call (cinatra#3118).
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(rosterFromPrompt(runLlmMock.mock.calls[0][0].user as string)).toHaveLength(2);
     // Only the target asserts.
     expect(assertSemanticTypeMock).toHaveBeenCalledTimes(1);
     expect(assertSemanticTypeMock).toHaveBeenCalledWith(
@@ -323,13 +346,12 @@ describe("Content pack — target-aware matcher integration", () => {
     stageAuthoritative("text/markdown");
     registerAllAsArtifactDefs();
     registerAllAsSkills();
-    runLlmMock.mockResolvedValue({
-      text: JSON.stringify({ matches: false, confidence: 0.1 }),
-    });
+    batchedLlmMock(() => ({ matches: false, confidence: 0.1 }));
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // blog-post + blog-idea both classified (text/markdown matches both),
-    // both return no-match — no assert lands.
-    expect(runLlmMock).toHaveBeenCalledTimes(2);
+    // blog-post + blog-idea both classified (text/markdown matches both) in the
+    // ONE batched call, both return no-match — no assert lands.
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(rosterFromPrompt(runLlmMock.mock.calls[0][0].user as string)).toHaveLength(2);
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
@@ -338,9 +360,7 @@ describe("Content pack — target-aware matcher integration", () => {
     stageAuthoritative("text/markdown");
     registerAllAsArtifactDefs();
     registerAllAsSkills();
-    runLlmMock.mockResolvedValue({
-      text: JSON.stringify({ matches: true, confidence: 0.5 }),
-    });
+    batchedLlmMock(() => ({ matches: true, confidence: 0.5 }));
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });

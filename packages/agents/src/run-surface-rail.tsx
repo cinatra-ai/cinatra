@@ -51,6 +51,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { RUN_RAIL_MARK_CLASS } from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -125,16 +126,24 @@ export function useRunStepSelection() {
  * drawing's `.rail .step` carries none. THE ROW KEEPS ITS FOCUS INDICATOR --
  * the base's `focus-visible:ring-3` ring is what draws focus on this control,
  * and a 1px border that is transparent at rest never drew it.
+ *
+ * AND THE CIRCLE IS CENTRED IN THE ROW'S OWN BOX (cinatra#3225 item 3, fix leg
+ * 10), which is the drawing's own ".rail .step { align-items: center }". These
+ * rows wrap in the same 208px column as the panel rail's (cinatra#3226), so
+ * `items-start` is the same first-line reading the page's own rows carried and
+ * the sixth proof round measured 27px off the row's centre. ONE RAIL, one
+ * rule: the two row declarations state the same alignment, and the mark between
+ * them is graded against both.
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+  "h-auto items-center justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
 
 /**
  * The same row, for one that cannot be opened: neither the hover affordance nor
  * the press animation of a row that does something (cinatra#2970).
  */
 export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
+  "h-auto items-center justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
@@ -185,7 +194,16 @@ export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
 // graph of four route-budgeted routes and the route-graph ratchet refused it.
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {
-  return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
+  // THE DRAWING'S OWN LINE BOX, AND NO NUDGE (cinatra#3225 item 3, fix leg 10).
+  // ".rail .step" states "font-size: 14px; line-height: 1.15", so each line box
+  // is 16.1px here exactly as it is on the page's own rail rows -- one rail,
+  // one line box, whichever module drew the row. `mt-0.5` is GONE with leg 8's
+  // first-line reading: the row above centres the circle in its own box, and a
+  // nudge on the label only moves the box's centre away from the line it names.
+  return cn(
+    "text-sm leading-[1.15] font-medium",
+    selected ? "text-foreground" : "text-muted-foreground",
+  );
 }
 
 /**
@@ -378,7 +396,9 @@ export function RunSurfaceRailSeparator(): ReactElement {
       aria-hidden="true"
       data-run-surface-rail-separator=""
       data-conformance-id="run-step-rail-separator"
-      className="my-1 ml-[11px] h-2 w-0.5 shrink-0 rounded-[1px] bg-line"
+      // ONE definition for both rails (cinatra#3225), declared with the rest
+      // of the rail vocabulary in `run-step-rail-extra-entry`.
+      className={RUN_RAIL_MARK_CLASS}
     />
   );
 }
@@ -446,17 +466,25 @@ export function RunSurfaceRail({
         data-run-step-rail-column=""
         className="flex shrink-0 flex-col pt-1"
       >
-        {steps.map((step, index) => (
-          <Fragment key={step.key}>
-            {index > 0 ? <RunSurfaceRailSeparator /> : null}
-            {step.row}
-          </Fragment>
-        ))}
-        {/* The page's own rows are one more entry after the gate rows, so the
-            mark stands before them too. They carry their own separators
+        {/* ROW, MARK, ROW — SIBLINGS IN NORMAL FLOW (cinatra#3225 items 2 and
+            3, fix leg 10). That is how the drawing composes the rail, and the
+            mark's own "margin: 4px 0 4px 11px" is what states the gap either
+            side of it. Leg 9 wrapped each row and its mark in a pair box that
+            reserved a 16px slot instead; the drawing draws no such slot, and on
+            a row whose label wrapped the mark ended up inside the row's own box.
+            The page's own rows are one more entry after these, so the last row
+            carries a mark too whenever they follow; they carry their own marks
             inside (`RunStepRailPanel`), which is why only the join is drawn
             here. */}
-        {runSurfaceNodeExists(rail) && steps.length > 0 ? <RunSurfaceRailSeparator /> : null}
+        {steps.map((step, index) => {
+          const markBelow = index < steps.length - 1 || runSurfaceNodeExists(rail);
+          return (
+            <Fragment key={step.key}>
+              {step.row}
+              {markBelow ? <RunSurfaceRailSeparator /> : null}
+            </Fragment>
+          );
+        })}
         {rail}
       </div>
 

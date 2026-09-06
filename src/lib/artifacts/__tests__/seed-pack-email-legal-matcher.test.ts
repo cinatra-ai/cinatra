@@ -83,6 +83,10 @@ vi.mock("../attachment-resolver-ports", () => ({
 }));
 vi.mock("../semantic-assertion-store", () => ({
   assertSemanticType: assertSemanticTypeMock,
+  // cinatra#3118 criterion 6 — the authoritative active-assertion read the
+  // producer fast path keys on. No producer assertion here: these packs are
+  // driven as UPLOADS, so every candidate is classified.
+  listActiveAssertions: () => [],
 }));
 vi.mock("@/lib/extensions-dev-watcher", () => ({
   registerArtifactExtensionSkillsForPackage: lazyRegisterMock,
@@ -198,25 +202,46 @@ function registerAllAsSkills() {
     return def ? declaredMatcherEdge(def) : null;
   });
 }
+
+// ---------------------------------------------------------------------------
+// cinatra#3118 — the matcher now composes ONE delimited, attributed request for
+// the whole candidate set and reads back one verdict entry per candidate
+// identity `(extension, matcherSkillId)`. These helpers answer exactly the
+// candidates the runtime asked about, read off the composed prompt's roster.
+// ---------------------------------------------------------------------------
+type RosterEntry = { extension: string; matcherSkillId: string };
+
+function rosterFromPrompt(user: string): RosterEntry[] {
+  const out: RosterEntry[] = [];
+  const re = /extension="([^"]+)" matcherSkillId="([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(user)) !== null) {
+    out.push({ extension: m[1]!, matcherSkillId: m[2]! });
+  }
+  return out;
+}
+
+function batchedLlmMock(
+  verdictFor: (c: RosterEntry) => { matches: boolean; confidence: number },
+) {
+  runLlmMock.mockImplementation(async (input: { user: string }) => ({
+    text: JSON.stringify({
+      verdicts: rosterFromPrompt(input.user).map((c) => ({
+        extension: c.extension,
+        matcherSkillId: c.matcherSkillId,
+        rationale: "r",
+        ...verdictFor(c),
+      })),
+    }),
+  }));
+}
+
 function targetAwareLlmMock(targetPkg: string) {
-  runLlmMock.mockImplementation(async (input: { user: string }) => {
-    if (input.user.includes(targetPkg)) {
-      return {
-        text: JSON.stringify({
-          matches: true,
-          confidence: 0.85,
-          rationale: `target ${targetPkg} matched`,
-        }),
-      };
-    }
-    return {
-      text: JSON.stringify({
-        matches: false,
-        confidence: 0.1,
-        rationale: "not target",
-      }),
-    };
-  });
+  batchedLlmMock((c) =>
+    c.extension === targetPkg
+      ? { matches: true, confidence: 0.85 }
+      : { matches: false, confidence: 0.1 },
+  );
 }
 
 describe("Email+Legal pack — target-aware matcher integration", () => {
@@ -244,8 +269,10 @@ describe("Email+Legal pack — target-aware matcher integration", () => {
     registerAllAsSkills();
     targetAwareLlmMock(MARKDOWN_PLAIN_PKG);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // text/markdown matches BOTH the markdown+plain fixture + contract.
-    expect(runLlmMock).toHaveBeenCalledTimes(2);
+    // text/markdown matches BOTH the markdown+plain fixture + contract — two
+    // candidates, ONE batched call (cinatra#3118).
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(rosterFromPrompt(runLlmMock.mock.calls[0][0].user as string)).toHaveLength(2);
     expect(assertSemanticTypeMock).toHaveBeenCalledTimes(1);
     expect(assertSemanticTypeMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -284,11 +311,10 @@ describe("Email+Legal pack — target-aware matcher integration", () => {
     stageAuthoritative("text/markdown");
     registerAllAsArtifactDefs();
     registerAllAsSkills();
-    runLlmMock.mockResolvedValue({
-      text: JSON.stringify({ matches: false, confidence: 0.1 }),
-    });
+    batchedLlmMock(() => ({ matches: false, confidence: 0.1 }));
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    expect(runLlmMock).toHaveBeenCalledTimes(2);
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(rosterFromPrompt(runLlmMock.mock.calls[0][0].user as string)).toHaveLength(2);
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 

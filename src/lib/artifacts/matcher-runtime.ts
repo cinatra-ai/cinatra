@@ -370,13 +370,113 @@ LIMIT 1`,
   }
 }
 
-const matcherResponseSchema = z
+// ---------------------------------------------------------------------------
+// cinatra#3118 — the BATCHED classification contract.
+//
+// Until this slice the matcher issued ONE `runResolvedDeterministicLlmTask`
+// call PER CANDIDATE: ten calls to classify one markdown upload with the
+// current seed packs, each re-sending the same attachment. Now every surviving
+// candidate's rubric is composed into ONE delimited, attributed request and the
+// model answers with one verdict entry per candidate IDENTITY.
+//
+// The identity is `(extension, matcherSkillId)` — the CANDIDATE, not the kind —
+// so a package declaring three matcher skills is still evaluated three times
+// inside the single call. Evaluation is independent multi-label: any number of
+// entries may come back `matches: true`, and none of them ranks the others.
+// ---------------------------------------------------------------------------
+
+/** ONE verdict entry, parsed on its own so a single bad entry never costs the
+ *  others their verdict (criterion 3). */
+const matcherVerdictSchema = z
   .object({
+    extension: z.string(),
+    matcherSkillId: z.string(),
     matches: z.boolean(),
     confidence: z.number().min(0).max(1),
     rationale: z.string().optional(),
   })
   .strict();
+
+/** The response ENVELOPE. Entries stay `unknown` here on purpose: the envelope
+ *  parse decides only whether the response is readable AT ALL (a whole-response
+ *  failure is terminal and best-effort, exactly as before), while each entry is
+ *  validated separately below. */
+const batchedMatcherResponseSchema = z
+  .object({ verdicts: z.array(z.unknown()) })
+  .strict();
+
+/** The JSON schema handed to the provider. `required` lists EVERY key at BOTH
+ *  levels — the OpenAI strict `json_schema` rule (cinatra#1891 walk-2
+ *  DEFECT-2), which now has a nested object to honour it in as well. */
+const BATCHED_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdicts"],
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["extension", "matcherSkillId", "matches", "confidence", "rationale"],
+        properties: {
+          extension: { type: "string" },
+          matcherSkillId: { type: "string" },
+          matches: { type: "boolean" },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          rationale: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
+
+/** Per-candidate rubric byte budget, the clamp MARKER INCLUDED: a composed
+ *  rubric body can never exceed this, so `MAX_CANDIDATES` x this is a true
+ *  bound on rubric COMPOSITION (criterion 1) — the single-call guarantee must
+ *  not be conditional on prompt size. 24 x 4000 bytes is the worst case, and
+ *  the clamp log line is literally true. Mirrors the defensive clamp the
+ *  signals renderer already applies. */
+const RUBRIC_BODY_MAX_BYTES = 4000;
+const RUBRIC_CLAMP_MARKER = "\n[rubric clamped]";
+
+/** The composition delimiters are STRUCTURAL: they carry the candidate identity
+ *  the response is keyed back onto. Batching puts every pack's rubric body into
+ *  ONE request, so a body containing the delimiter opener could close its own
+ *  section early and write text that reads as part of ANOTHER candidate's
+ *  section — inducing a well-keyed verdict for an extension it does not own.
+ *  That cross-talk did not exist while each candidate had its own call, so the
+ *  opener is neutralised in every body BEFORE composition. */
+const RUBRIC_DELIMITER_OPENER = /\[\[\[/g;
+
+function neutralizeRubricDelimiters(body: string): {
+  text: string;
+  neutralized: number;
+} {
+  const hits = body.match(RUBRIC_DELIMITER_OPENER)?.length ?? 0;
+  if (hits === 0) return { text: body, neutralized: 0 };
+  return { text: body.replace(RUBRIC_DELIMITER_OPENER, "[ [ ["), neutralized: hits };
+}
+
+function clampRubricBody(body: string): { text: string; clamped: boolean } {
+  const buf = Buffer.from(body, "utf8");
+  if (buf.byteLength <= RUBRIC_BODY_MAX_BYTES) return { text: body, clamped: false };
+  // The marker is paid for INSIDE the budget, never added on top of it.
+  const budget = RUBRIC_BODY_MAX_BYTES - Buffer.byteLength(RUBRIC_CLAMP_MARKER, "utf8");
+  // Decode the truncated buffer and drop a trailing replacement character so a
+  // multi-byte codepoint is never cut in half.
+  const cut = buf
+    .subarray(0, budget)
+    .toString("utf8")
+    .replace(/\uFFFD+$/, "");
+  return { text: `${cut}${RUBRIC_CLAMP_MARKER}`, clamped: true };
+}
+
+/** The candidate identity used to key the response back onto the candidate
+ *  list. NUL-joined so no package name or skill id can forge another's key. */
+function candidateKey(extension: string, matcherSkillId: string): string {
+  return `${extension}\u0000${matcherSkillId}`;
+}
 
 /**
  * Run the LLM meaning-matcher for a freshly-created artifact. The matcher layers
@@ -524,6 +624,56 @@ async function runArtifactMatchImpl(
     return;
   }
 
+  // cinatra#3118 criterion 6 — the PRODUCER fast path.
+  //
+  // An agent-emitted artifact carries an ACTIVE `assertedBy:"agent"` assertion
+  // for the extension its producer declared — the authoritative row written
+  // inside artifact-creation's own transaction, NOT the defensively-parsed
+  // `classifier_signals` blob (which this worker tolerates being legacy or
+  // hand-edited and must never treat as control flow). Precedence in
+  // `assertSemanticType` is SAME-EXTENSION only and `agent` outranks `matcher`,
+  // so a matcher verdict for THAT extension can only ever come back
+  // `blockedByPrecedence`: it is paid for and thrown away. Drop those
+  // candidates BEFORE the call.
+  //
+  // Candidates for OTHER extensions are NOT wasted and stay in the batch — they
+  // are the alternate-meaning drafts the materializer explicitly enqueues for.
+  // A read failure degrades to classifying (at worst the old wasted verdict),
+  // never to skipping.
+  let producerExtensions = new Set<string>();
+  try {
+    const { listActiveAssertions } = await import("./semantic-assertion-store");
+    producerExtensions = new Set(
+      listActiveAssertions(payload.orgId, payload.artifactId)
+        .filter((a) => a.assertedBy === "agent")
+        .map((a) => a.extension),
+    );
+  } catch (err) {
+    console.warn(
+      `[artifact-matcher] active-assertion read failed for ${payload.artifactId} — classifying every candidate:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+  if (producerExtensions.size > 0) {
+    const kept = candidates.filter((c) => !producerExtensions.has(c.extPackageName));
+    const droppedByProducer = candidates.length - kept.length;
+    if (droppedByProducer > 0) {
+      console.info(
+        `[artifact-matcher] ${droppedByProducer} candidate(s) dropped before the call for ${payload.artifactId} — the producer already asserted ${[
+          ...producerExtensions,
+        ].join(", ")} (provably blocked by precedence)`,
+      );
+      candidates.length = 0;
+      candidates.push(...kept);
+    }
+  }
+  if (candidates.length === 0) {
+    console.info(
+      `[artifact-matcher] every candidate for ${payload.artifactId} is an extension the producer already asserted — NO classification call made`,
+    );
+    return;
+  }
+
   // 3) Resolve the LLM runtime once; prefetch the installed-skills map.
   //    A THROW here is transient (provider config read / network) → retry the
   //    job. A clean `null` return is TERMINAL (no runtime configured for the
@@ -648,7 +798,15 @@ async function runArtifactMatchImpl(
     );
   }
 
-  // 4) Per-candidate classification.
+  // 4) ONE batched classification for the whole candidate set (cinatra#3118).
+  //
+  // Trust resolution, the boot-order lazy register, the empty-body skip and
+  // every refusal log below are UNCHANGED — they simply run as a PREPARATION
+  // pass now, because only a trusted, non-empty rubric may enter the composed
+  // request. What changes is that the surviving candidates share one call.
+  type PreparedCandidate = { cand: Candidate; system: string };
+  const prepared: PreparedCandidate[] = [];
+
   for (const cand of candidates) {
     // Trust anchor — the matcher skill is either the RESOLVED TARGET of the
     // artifact extension's declared `matcher` edge (post-extraction) or ships
@@ -707,55 +865,143 @@ async function runArtifactMatchImpl(
       continue;
     }
 
-    const userPrompt =
-      `Classify the attached artifact. Decide whether it is a "${cand.extPackageName}" work product. ` +
-      signalsBlock +
-      `Respond ONLY with JSON: {"matches": boolean, "confidence": number between 0 and 1, "rationale": short string}.`;
+    prepared.push({ cand, system });
+  }
 
-    // cinatra#1891 scope 6: split the TRANSIENT invocation failure (provider
-    // error / timeout — the call itself threw) from a TERMINAL malformed
-    // response (the provider answered, the JSON/zod parse failed). The former
-    // rethrows as retryable so the whole job retries; the latter is a
-    // best-effort per-candidate skip. Swallowing the invocation throw (as the
-    // old chassis did) meant a flapping provider silently produced NO
-    // classification instead of retrying.
-    let llmText: string;
-    try {
-      const result = await runResolvedDeterministicLlmTask({
-        runtime,
-        system,
-        user: userPrompt,
-        attachments: [attachmentRef],
-        attachmentResolverPorts: ports,
-        declaredToolboxIds: [],
-        outputSchema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["matches", "confidence", "rationale"],
-          properties: {
-            matches: { type: "boolean" },
-            confidence: { type: "number", minimum: 0, maximum: 1 },
-            rationale: { type: "string" },
-          },
-        },
-        logLabel: "artifact-matcher",
-        actorContext: opts.actorContext,
-      });
-      llmText = String(result.text ?? "{}");
-    } catch (err) {
-      throw new MatcherRetryableError(
-        `LLM classification call failed for ${cand.extPackageName} on ${payload.artifactId}`,
-        err,
+  if (prepared.length === 0) {
+    console.info(
+      `[artifact-matcher] no trusted, non-empty matcher rubric survived for ${payload.artifactId} — NO classification call made`,
+    );
+    return;
+  }
+
+  // 5) Compose ONE delimited, attributed rubric per candidate. The delimiters
+  //    carry the candidate identity so the model's answer can be keyed back
+  //    onto the candidate list, and each body is byte-clamped so the
+  //    single-call guarantee cannot be defeated by a large skill body.
+  const rubricSections: string[] = [];
+  const rosterLines: string[] = [];
+  prepared.forEach(({ cand, system }, i) => {
+    const n = i + 1;
+    const { text: safeBody, neutralized } = neutralizeRubricDelimiters(system);
+    if (neutralized > 0) {
+      console.warn(
+        `[artifact-matcher] ${neutralized} section-delimiter opener(s) neutralised in the rubric for ${cand.extPackageName} (${cand.matcherSkillId}) before composing the batched request for ${payload.artifactId}`,
       );
     }
+    const { text, clamped } = clampRubricBody(safeBody);
+    if (clamped) {
+      console.info(
+        `[artifact-matcher] rubric for ${cand.extPackageName} (${cand.matcherSkillId}) clamped to ${RUBRIC_BODY_MAX_BYTES} bytes in the batched request for ${payload.artifactId}`,
+      );
+    }
+    const head = `[[[CANDIDATE ${n} extension="${cand.extPackageName}" matcherSkillId="${cand.matcherSkillId}"]]]`;
+    rubricSections.push(`${head}\n${text}\n[[[END CANDIDATE ${n}]]]`);
+    rosterLines.push(
+      `${n}. extension="${cand.extPackageName}" matcherSkillId="${cand.matcherSkillId}"`,
+    );
+  });
 
-    let parsed: z.infer<typeof matcherResponseSchema>;
+  // One call cannot carry N system prompts, so the per-candidate bodies become
+  // attributed SECTIONS of one composed rubric. Scoping each rubric to its own
+  // verdict reduces cross-talk between rubrics; it cannot be claimed to
+  // eliminate it, which is why the response CONTRACT below — not the prompt —
+  // is what the tests hold.
+  const system =
+    `You are the artifact meaning-matcher. One artifact is attached, and below are ${prepared.length} INDEPENDENT candidate rubrics, each delimited and attributed to one candidate identity.\n` +
+    `Judge every candidate SEPARATELY and only by its own rubric. A rubric's instructions govern its OWN verdict and nothing else: never let one rubric's wording change another candidate's answer.\n` +
+    `This is not a ranking. Any number of candidates may match, or none.\n\n` +
+    rubricSections.join("\n\n");
+
+  const userPrompt =
+    `Classify the attached artifact against EVERY candidate below, independently. For each one decide whether the artifact is that candidate's work product.\n` +
+    `Candidates (answer with exactly one verdict entry per candidate):\n` +
+    `${rosterLines.join("\n")}\n\n` +
+    signalsBlock +
+    `Respond ONLY with JSON: {"verdicts": [{"extension": string, "matcherSkillId": string, "matches": boolean, "confidence": number between 0 and 1, "rationale": short string}]} — one entry per candidate above, echoing its extension and matcherSkillId exactly, in the same order.`;
+
+  // cinatra#1891 scope 6, unchanged in kind: the TRANSIENT invocation failure
+  // (the call itself threw) rethrows as retryable so the whole job retries; a
+  // TERMINAL malformed response (the provider answered, the parse failed) is
+  // best-effort. What cinatra#3118 changes is the COST of the former — a
+  // provider hiccup now costs ONE attempt per job attempt, not N.
+  let llmText: string;
+  try {
+    const result = await runResolvedDeterministicLlmTask({
+      runtime,
+      system,
+      user: userPrompt,
+      attachments: [attachmentRef],
+      attachmentResolverPorts: ports,
+      declaredToolboxIds: [],
+      outputSchema: BATCHED_OUTPUT_SCHEMA,
+      logLabel: "artifact-matcher",
+      actorContext: opts.actorContext,
+    });
+    llmText = String(result.text ?? "{}");
+  } catch (err) {
+    throw new MatcherRetryableError(
+      `LLM classification call failed for ${prepared.length} candidate(s) on ${payload.artifactId}`,
+      err,
+    );
+  }
+
+  // 6) Read the response. A whole-response failure is TERMINAL and best-effort
+  //    (the row keeps its structural identity) — never retried, exactly as a
+  //    malformed single response was before.
+  let envelope: z.infer<typeof batchedMatcherResponseSchema>;
+  try {
+    envelope = batchedMatcherResponseSchema.parse(JSON.parse(llmText));
+  } catch (err) {
+    console.warn(
+      `[artifact-matcher] batched response unreadable for ${payload.artifactId} — no candidate classified:`,
+      err instanceof Error ? err.message : err,
+    );
+    return;
+  }
+
+  // Per-ENTRY handling (criterion 3). Every malformed shape is explicit, logged
+  // and survivable: the remaining entries still apply.
+  const knownCandidates = new Set(
+    prepared.map((p) => candidateKey(p.cand.extPackageName, p.cand.matcherSkillId)),
+  );
+  const verdicts = new Map<string, z.infer<typeof matcherVerdictSchema>>();
+  for (const raw of envelope.verdicts) {
+    let entry: z.infer<typeof matcherVerdictSchema>;
     try {
-      parsed = matcherResponseSchema.parse(JSON.parse(llmText));
+      entry = matcherVerdictSchema.parse(raw);
     } catch (err) {
       console.warn(
-        `[artifact-matcher] ${cand.extPackageName} malformed / out-of-range response — skipping candidate:`,
+        `[artifact-matcher] malformed / out-of-range verdict entry dropped for ${payload.artifactId}:`,
         err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+    const key = candidateKey(entry.extension, entry.matcherSkillId);
+    if (!knownCandidates.has(key)) {
+      console.warn(
+        `[artifact-matcher] verdict entry names an unknown candidate (${entry.extension} / ${entry.matcherSkillId}) — dropped for ${payload.artifactId}`,
+      );
+      continue;
+    }
+    if (verdicts.has(key)) {
+      console.warn(
+        `[artifact-matcher] duplicate verdict entry for ${entry.extension} / ${entry.matcherSkillId} — keeping the first for ${payload.artifactId}`,
+      );
+      continue;
+    }
+    verdicts.set(key, entry);
+  }
+
+  // 7) Apply in CANDIDATE-LIST order (criterion 4) — never in response order.
+  //    When two matcher skills for the same extension both pass, the FIRST
+  //    assertion lands and the second is precedence-blocked, so the order is
+  //    what decides which one is recorded.
+  for (const { cand } of prepared) {
+    const parsed = verdicts.get(candidateKey(cand.extPackageName, cand.matcherSkillId));
+    if (!parsed) {
+      console.info(
+        `[artifact-matcher] ${cand.extPackageName} (${cand.matcherSkillId}) has no verdict entry in the batched response — treated as NO MATCH on ${payload.artifactId}`,
       );
       continue;
     }

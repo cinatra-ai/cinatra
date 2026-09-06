@@ -1261,6 +1261,59 @@ export async function onAgentHitl(input: HitlInput): Promise<CoordinatorAnswer> 
   };
 }
 
+/**
+ * THE RUN STOPPED AT A REVIEW GATE (cinatra#3221, fix leg 7).
+ *
+ * THE SAME ENTRY SHAPE AS THE PAUSE ABOVE, AND FOR THE SAME REASON. A run
+ * parked at the work review gate leaves a row behind, and the row is what every
+ * surface reads: the rail asks which moment the run stands at before it can
+ * elect the entry the reader is standing on. That row said nothing here — the
+ * review gate's park stated no moment at all — so a run genuinely stopped in
+ * front of its review carried whatever the PREVIOUS gate had left (or nothing),
+ * and the run page elected no entry on the gate. The third proof round measured
+ * exactly that, in both palettes.
+ *
+ * WHY NOT `onArtifactProduced`. That entry answers a different question — did an
+ * artifact write open a review — and states its moment OVER NO PARK, because a
+ * write can land on a run already waiting somewhere else. This one is the park
+ * itself: the run IS stopped here, so the moment is pinned to the status the
+ * caller just won, exactly as the pause above pins its own.
+ *
+ * NO POLICY, for the same reason the pause has none: whether a review exists was
+ * decided by the review core before the gate was ever emitted. This records that
+ * the run is now standing at it.
+ */
+export type ReviewGateInput = {
+  run: Pick<AgentRunRecord, "id" | "orgId" | "status">;
+  /** The gate's server-minted card reference — `null` where none was minted. */
+  gateRef: string | null;
+  authority: OrgWriteAuthority | undefined;
+};
+
+export async function onRunStoppedAtReviewGate(
+  input: ReviewGateInput,
+): Promise<CoordinatorAnswer> {
+  // ONLY WHILE THE RUN IS STILL PARKED WHERE THE CALLER LEFT IT — the same
+  // compare-and-set the pause above states, and for the same window: a decision
+  // fast enough to land between the park and this record would otherwise put a
+  // card back on a run that is already moving again.
+  await stateMoment({
+    run: input.run,
+    moment: "review",
+    cardRef: input.gateRef,
+    authority: input.authority,
+    onlyWhileStatus: input.run.status,
+  });
+  const current = await readAgentRunById(input.run.id);
+  return {
+    carrier: current
+      ? { kind: "run", run: current }
+      : { kind: "run", run: input.run as AgentRunRecord },
+    status: current?.status ?? input.run.status,
+    moment: "review",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 4. an artifact write is recorded
 // ---------------------------------------------------------------------------
