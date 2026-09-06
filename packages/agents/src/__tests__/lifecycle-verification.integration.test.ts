@@ -26,7 +26,12 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId, isVerificationReopenTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  autoReviewTaskId,
+  isVerificationReopenTaskId,
+  legacyVerificationReopenReviewTaskId,
+  verificationReopenReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import type { VerificationFieldProjector, VerificationTargetRef } from "../lifecycle-verification-store";
@@ -275,6 +280,14 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     const row = reopen.rows[0] as { run_id: string; review_task_id: string; pinned_targets: Array<{ representationRevisionId: string }> };
     expect(row.run_id).toBe(runId);
     expect(isVerificationReopenTaskId(row.review_task_id)).toBe(true);
+    // AND IT SPELLS ITS PREFIX ONCE (cinatra#3080, the fourth reproduction of
+    // the real road). `isVerificationReopenTaskId` is a prefix test, so it said
+    // `true` about the id the running application actually minted —
+    // `lifecycle-review:verify:verify:{gateId}` — and this suite passed over the
+    // doubled word for as long as it existed. The reopen task id is the gate's,
+    // built by the one builder, and nothing else.
+    expect(row.review_task_id).toBe(verificationReopenReviewTaskId(gateId));
+    expect(row.review_task_id).not.toContain("verify:verify");
     expect(row.pinned_targets[0].representationRevisionId).toBe(repairedRev);
 
     // A re-drive is idempotent: the SAME record, the SAME one reopen gate.
@@ -376,6 +389,138 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(run2.created).toBe(false);
     expect(run2.advisoryCommentId).toBe(run1.advisoryCommentId);
     expect(await advisoryStore.listAdvisoryComments(gateId)).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // The convergence round of the fourth reproduction (cinatra#3080). Two
+  // properties of the fix itself, on the real store: that the default
+  // projector's authorized axis did not switch drift detection OFF, and that
+  // correcting a deterministic id does not open a second gate beside the rows
+  // the released build already wrote under the retired spelling.
+  // -------------------------------------------------------------------------
+
+  /** The three fields `defaultRepresentationFieldProjector` projects. */
+  function representationFields(revision: string, resource: string, form: string) {
+    return {
+      "representation.revision": revision,
+      "representation.resource": resource,
+      "representation.form": form,
+    };
+  }
+
+  it("DEFAULT SCOPE: a landed repair's own revision + content advance is NOT drift, and reopens nothing", async () => {
+    const runId = `run-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const baseRev = `rev-base-${randomUUID()}`;
+    const gateId = await seedGate(runId, artifactId, baseRev);
+    const repairedRev = `rev-rep-${randomUUID()}`;
+    const res = await verifStore.recordVerificationForExternalChange({
+      gateId,
+      orgId: ORG,
+      runId,
+      reviewedTarget: { artifactId, representationRevisionId: baseRev },
+      repairedTarget: { artifactId, representationRevisionId: repairedRev },
+      acceptedFindings: [],
+      scopeManifest: verifStore.DEFAULT_REPRESENTATION_SCOPE,
+      projectFields: projector(
+        baseRev,
+        representationFields("1", "res-a", "file"),
+        repairedRev,
+        representationFields("2", "res-b", "file"),
+      ),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.verdict.outcome).toBe("verified");
+    expect(res.reopenedGateId).toBeNull();
+    const onRun = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1`,
+      [runId],
+    );
+    expect((onRun.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("DEFAULT SCOPE: a FORM the review never asked for is still drift, and still reopens EXACTLY ONE bounded gate", async () => {
+    // The fix authorizes what landing a repair advances by construction — the
+    // revision and the content pointer — and NOTHING else. A repair that comes
+    // back in a different form returned something nobody asked for, and the
+    // bounded reopen has to still be able to fire on the automatic path.
+    const runId = `run-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const baseRev = `rev-base-${randomUUID()}`;
+    const gateId = await seedGate(runId, artifactId, baseRev);
+    const repairedRev = `rev-rep-${randomUUID()}`;
+    const res = await verifStore.recordVerificationForExternalChange({
+      gateId,
+      orgId: ORG,
+      runId,
+      reviewedTarget: { artifactId, representationRevisionId: baseRev },
+      repairedTarget: { artifactId, representationRevisionId: repairedRev },
+      acceptedFindings: [],
+      scopeManifest: verifStore.DEFAULT_REPRESENTATION_SCOPE,
+      projectFields: projector(
+        baseRev,
+        representationFields("1", "res-a", "file"),
+        repairedRev,
+        representationFields("2", "res-b", "inline"),
+      ),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.verdict.outcome).toBe("drifted");
+    expect(res.verdict.outOfScopePaths).toEqual(["representation.form"]);
+    expect(res.reopenedGateId).not.toBeNull();
+    const reopened = await pool(
+      `SELECT review_task_id, status FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND id<>$2`,
+      [runId, gateId],
+    );
+    expect(reopened.rows).toHaveLength(1);
+    expect((reopened.rows[0] as { review_task_id: string }).review_task_id).toBe(
+      verificationReopenReviewTaskId(gateId),
+    );
+  });
+
+  it("RETIRED SPELLING: a reopen gate already written under the doubled word is RE-USED, never doubled", async () => {
+    // Correcting a deterministic id is a data change as well as a code change.
+    // The released build wrote its reopen gates as
+    // `lifecycle-review:verify:verify:{gateId}`; emitting the corrected id
+    // beside such a row would leave TWO pending gates for ONE verification —
+    // this leg's own defect, arriving through the data instead of the code.
+    const runId = `run-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const baseRev = `rev-base-${randomUUID()}`;
+    const gateId = await seedGate(runId, artifactId, baseRev);
+    const repairedRev = `rev-rep-${randomUUID()}`;
+    const retiredTaskId = legacyVerificationReopenReviewTaskId(gateId);
+    const retired = await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId: retiredTaskId,
+      targets: [{ artifactId, representationRevisionId: repairedRev }],
+      expiresAt: null,
+    });
+
+    const res = await verifStore.recordVerificationForExternalChange({
+      gateId,
+      orgId: ORG,
+      runId,
+      reviewedTarget: { artifactId, representationRevisionId: baseRev },
+      repairedTarget: { artifactId, representationRevisionId: repairedRev },
+      acceptedFindings: [{ id: "f2", path: "body" }],
+      projectFields: projector(baseRev, { body: "old" }, repairedRev, { body: "old" }), // unmet
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.verdict.outcome).toBe("unmet");
+    // The reopen landed on the row that was already there.
+    expect(res.reopenedGateId).toBe(retired.gateId);
+    const rows = await pool(
+      `SELECT review_task_id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND id<>$2`,
+      [runId, gateId],
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect((rows.rows[0] as { review_task_id: string }).review_task_id).toBe(retiredTaskId);
+    expect(isVerificationReopenTaskId(retiredTaskId)).toBe(true);
   });
 
   it("BOUND: a failed verification at the cycle bound ESCALATES — records the verdict, reopens nothing", async () => {

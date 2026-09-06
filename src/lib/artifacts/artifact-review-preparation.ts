@@ -483,12 +483,11 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  // AWAITED, because the props builder READS THE PINNED REVISION (enabler 0.3:
-  // "an ASYNCHRONOUS PROPS BUILDER that reads the pinned revision on the
-  // server"). The synchronous signature this replaces is what kept every
-  // consumer of this core on the named-absent content projection, and a display
-  // handed an absent projection draws its own "nothing pinned" floor over work
-  // that is really there.
+  // AWAITED, like `resolveMount` above (cinatra#3080, fix leg 7). The content
+  // channel reads the pinned revision on the SERVER — "the text arm streams
+  // bytes off the blob store, and the plan asks for an asynchronous builder
+  // precisely so no display is ever tempted to fetch them itself" — so the props
+  // a review target is built with cannot be assembled synchronously any more.
   const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,

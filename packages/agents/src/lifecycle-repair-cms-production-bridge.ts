@@ -471,6 +471,14 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
         repairId: repair.id,
         currentBaseRevisionId,
         reauthorized: true,
+        // THIS ROAD'S SUCCESSOR IS A RE-STAGED ARTIFACT (cinatra#3080, fix leg
+        // 8). The CMS repair does not append a revision to the snapshot the
+        // reviewer saw — it applies to the remote page and captures the result
+        // as its own snapshot, so the successor is a different artifact by
+        // construction. Granted HERE, beside the response rather than inside it:
+        // this is host code at the one call site the exception is true of, and a
+        // producing run submitting a response can never grant it for itself.
+        restagedSuccessorPermitted: true,
         response: {
           gateId: repair.gateId,
           baseTarget: {

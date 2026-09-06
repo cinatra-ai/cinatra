@@ -19,8 +19,11 @@
  *             runtime+digest / floor) …
  *   RESUME    … and exactly ONE resume outbox intent (kind-discriminated;
  *   -INTENT   approve-envelope asserts approval, reject-envelope does NOT).
- *   REJECT  — records a tombstone disposition per target (applied_at NULL,
- *             never a hard delete).
+ *   RETIRED — a reject is refused by the decision core (cinatra#3080) before any
+ *             port is touched, so no effect of any kind reaches the store …
+ *   STORE     … while the store still commits a LEGACY reject plan (the rejects
+ *   (legacy)  taken before the retirement still have to drain): a tombstone
+ *             disposition per target (applied_at NULL, never a hard delete).
  *   IDEMPOTENT — a response-lost retry of the SAME decision is idempotent
  *             (no duplicate audit/outbox rows; plan null).
  *   CONFLICT  — a DIFFERENT decision on a resolved gate fails closed
@@ -49,6 +52,7 @@ import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 // module load) are dynamic-imported AFTER SUPABASE_SCHEMA is set in beforeAll.
 import {
   submitReviewDecisionCore,
+  reviewDecisionFingerprint,
   ARTIFACT_REVIEW_DECISION_API_VERSION,
   type SubmitDecisionPorts,
   type ReviewRendererProvenance,
@@ -56,7 +60,15 @@ import {
   type ReviewDisposition,
   type ReviewDecisionCommitPlan,
 } from "@/lib/artifacts/artifact-review-decision";
-import { payloadAssertsApproval } from "@/lib/artifacts/artifact-review-rejection";
+import {
+  normalizeReviewTargets,
+  reviewTargetKey,
+} from "@/lib/artifacts/artifact-review-target";
+import {
+  payloadAssertsApproval,
+  buildReviewResumeText,
+} from "@/lib/artifacts/artifact-review-rejection";
+import { REVIEW_REJECT_RETIRED_REASON } from "@/lib/artifacts/review-surface-model";
 
 const TEST_SCHEMA = "cinatra_test_review_gate_1796";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -132,6 +144,71 @@ function mkDecision(input: {
     disposition: input.disposition,
     comment: input.comment ?? null,
     reviewedTargets: input.targets,
+  };
+}
+
+/** A hand-built LEGACY reject commit plan (cinatra#3080). The decision core no
+ *  longer produces one — the word is retired there — but the STORE still has to
+ *  commit and drain the rejects taken BEFORE the retirement (their tombstone
+ *  dispositions and their reject resume envelope), so the store half of that
+ *  contract is proved by driving `commitReviewDecision` directly, the same way
+ *  the ROLLBACK and GUARD cases below drive it. */
+function legacyRejectPlan(input: {
+  runId: string;
+  reviewTaskId: string;
+  targets: Target[];
+  comment: string | null;
+  decidedBy: string | null;
+}): ReviewDecisionCommitPlan {
+  // The plan must be one the RETIRED core could actually have produced, or the
+  // store half is proved against a fiction: the targets are normalized and put
+  // in the core's canonical key order before ANY effect is derived from them,
+  // and the fingerprint is the real SHA-256 decision identity, not a literal.
+  const normalized = normalizeReviewTargets(input.targets);
+  if (!normalized.ok) throw new Error(`legacy reject fixture targets: ${normalized.error}`);
+  const targets = [...normalized.targets].sort((a, b) => {
+    const ka = reviewTargetKey(a);
+    const kb = reviewTargetKey(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  const resumeText = buildReviewResumeText({
+    disposition: "reject",
+    reviewTaskId: input.reviewTaskId,
+    comment: input.comment,
+    targets,
+  });
+  if (resumeText.kind !== "reject") throw new Error("expected a reject resume text");
+  return {
+    runId: input.runId,
+    reviewTaskId: input.reviewTaskId,
+    disposition: "reject",
+    terminal: true,
+    fingerprint: reviewDecisionFingerprint({
+      runId: input.runId,
+      reviewTaskId: input.reviewTaskId,
+      disposition: "reject",
+      comment: input.comment,
+      reviewedTargets: targets,
+    }),
+    comment: input.comment,
+    decidedBy: input.decidedBy,
+    auditRows: targets.map((t) => ({
+      artifactId: t.artifactId,
+      representationRevisionId: t.representationRevisionId,
+      disposition: "reject" as const,
+      rendererProvenance: {
+        kind: "build-map" as const,
+        packageName: "@cinatra-ai/default-artifact",
+        digest: null,
+      },
+    })),
+    dispositionOps: targets.map((t) => ({
+      artifactId: t.artifactId,
+      representationRevisionId: t.representationRevisionId,
+      kind: "tombstone" as const,
+    })),
+    resumeIntent: { kind: "reject", rejectResponse: resumeText.rejectResponse },
+    suggestionPlan: null,
   };
 }
 
@@ -333,7 +410,12 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect(await gateStore.readGateDispositions(emit.gateId)).toHaveLength(0);
   });
 
-  it("REJECT: records a tombstone disposition per target (applied_at NULL) + a reject resume intent that never reads as approval", async () => {
+  // REJECT IS RETIRED (cinatra#3080), so the one old REJECT case is now TWO:
+  // the core REFUSES the word before any port is touched, and the store keeps
+  // committing the legacy reject plans taken before the retirement. Splitting
+  // them keeps both halves proved against the real store — the refusal would
+  // otherwise silently delete the tombstone/resume-envelope coverage.
+  it("RETIRED: a reject is refused by the decision core, and NOTHING reaches the store", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const art = `art-${randomUUID()}`;
     const targets: Target[] = [{ artifactId: art, representationRevisionId: "rev-x" }];
@@ -343,7 +425,29 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       mkDecision({ runId, reviewTaskId, disposition: "reject", targets, comment: "not good" }),
       makeDecidePorts(),
     );
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.kind).toBe("invalid-decision");
+    if (res.error.kind !== "invalid-decision") return;
+    // The platform's ONE sentence, quoted from where the floor defines it.
+    expect(res.error.message).toBe(REVIEW_REJECT_RETIRED_REASON);
+
+    // Zero effect: the gate is untouched and no row of any kind was written.
+    expect((await gateStore.readReviewGate(runId, reviewTaskId))?.status).toBe("pending");
+    expect(await gateStore.readGateAuditRows(emit.gateId)).toHaveLength(0);
+    expect(await gateStore.readGateDispositions(emit.gateId)).toHaveLength(0);
+    expect(await gateStore.readResumeIntent(emit.gateId)).toBeNull();
+  });
+
+  it("STORE (legacy reject): records a tombstone disposition per target (applied_at NULL) + a reject resume intent that never reads as approval", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets: Target[] = [{ artifactId: art, representationRevisionId: "rev-x" }];
+    const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    await gateStore.commitReviewDecision(
+      legacyRejectPlan({ runId, reviewTaskId, targets, comment: "not good", decidedBy: "user-decider" }),
+    );
 
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
     expect(gate?.status).toBe("resolved");
@@ -390,15 +494,20 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
       makeDecidePorts(),
     );
+    // A DIFFERENT decision on the resolved gate. The fingerprint is what the CAS
+    // compares, and it covers the comment as well as the disposition and the
+    // targets — so with reject retired (cinatra#3080) leaving approve as the only
+    // terminal word, the difference is carried by the comment. The case under
+    // proof is unchanged: a second, NON-matching decision fails closed.
     const conflicting = await  submitReviewDecisionCore(
-      mkDecision({ runId, reviewTaskId, disposition: "reject", targets }),
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets, comment: "on reflection, no" }),
       makeDecidePorts(),
     );
     expect(conflicting.ok).toBe(false);
     if (conflicting.ok) return;
     expect(conflicting.error.kind).toBe("gate-conflict");
 
-    // Unchanged: still approve, one audit row, no reject disposition.
+    // Unchanged: still the FIRST approve, one audit row, no disposition rows.
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
     expect(gate?.disposition).toBe("approve");
     expect(await gateStore.readGateAuditRows(emit.gateId)).toHaveLength(1);
@@ -596,18 +705,20 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect(gate?.resolvedBy).toBe("user-V-reviewer");
   });
 
-  it("RECORD: a terminal REJECT stamps the deciding actor too", async () => {
+  it("RECORD: a terminal legacy REJECT stamps the deciding actor too", async () => {
+    // Driven at the store, because the core refuses the word (cinatra#3080). The
+    // recording contract is what is under proof and it is the store's: whatever
+    // terminal plan resolves a gate stamps its decider.
     const { runId, reviewTaskId } = freshGateIds();
     const art = `art-${randomUUID()}`;
-    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    const targets: Target[] = [{ artifactId: art, representationRevisionId: "rev-1" }];
     await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
 
-    const res = await submitReviewDecisionCore(
-      mkDecision({ runId, reviewTaskId, disposition: "reject", targets, comment: "not yet" }),
-      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
+    await gateStore.commitReviewDecision(
+      legacyRejectPlan({ runId, reviewTaskId, targets, comment: "not yet", decidedBy: "user-V-reviewer" }),
     );
-    expect(res.ok).toBe(true);
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("resolved");
     expect(gate?.disposition).toBe("reject");
     expect(gate?.resolvedBy).toBe("user-V-reviewer");
   });

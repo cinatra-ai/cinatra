@@ -1029,6 +1029,14 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       cmsRepairsCompleted: 0,
       cmsRepairsUnresolved: 0,
       cmsRepairsUncaptured: 0,
+      // cinatra#3080 added the GENERIC repair-COMPLETION sub-drain beside the
+      // CMS one — the half every non-CMS producer's repair had no completer
+      // for, and the reason a Regenerate settled its gate with no successor.
+      // Same fence, same short-circuit: this assertion is what proves the
+      // whole sweep still stops before it, so a new sub-drain can never open a
+      // successor on a stack that opted out.
+      producerRepairsCompleted: 0,
+      producerRepairsUnresolved: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

@@ -15,6 +15,7 @@ import {
   type RailMessage,
   type RailTemplateStep,
 } from "../run-step-rail";
+import { REVIEW_SETTLED_ACT_STORAGE } from "@/lib/artifacts/review-surface-model";
 
 const tstep = (index: number, stepNumber: number, label: string): RailTemplateStep => ({
   index,
@@ -354,5 +355,44 @@ describe("buildRunStepRail — lifecycle policy decisions (cinatra#2047 D-5)", (
     });
     expect(forward.entries.map((e) => e.key)).toEqual(["gate:t1", "lifecycle:ev-a", "lifecycle:ev-b"]);
     expect(reversed.entries.map((e) => e.key)).toEqual(forward.entries.map((e) => e.key));
+  });
+});
+
+describe("cinatra#3080 — a settled gate entry carries the ACT, not just the column", () => {
+  // THE MEASURED DISAGREEMENT. The card read "Superseded by {person}" while
+  // `artifact_review_gates.disposition` held `changes_requested` for the same
+  // act, and nothing in the product related the two: the card switched on the
+  // wire outcome, the rail switched on the raw column, each choosing a word of
+  // its own. The act is now derived HERE, once, where a store row becomes a rail
+  // entry — the surface reads the act and never the column.
+  const settled = (disposition: string): RailGate => ({
+    gateId: `g-${disposition}`,
+    reviewTaskId: `t-${disposition}`,
+    status: "resolved",
+    disposition,
+    createdAt: "2026-09-01T09:16:17Z",
+  });
+
+  it("a Regenerate's stored `changes_requested` reads as the act SUPERSEDED", () => {
+    const rail = buildRunStepRail({ gates: [settled("changes_requested")] });
+    const entry = rail.entries.find((e) => e.kind === "gate")!;
+    expect(entry.gate!.disposition).toBe("changes_requested");
+    expect(entry.gate!.settledAct).toBe("superseded");
+    // The two are related in ONE place, and that place says so.
+    expect(REVIEW_SETTLED_ACT_STORAGE.superseded).toBe("changes_requested");
+  });
+
+  it("a Continue's stored `approve` reads as the act CONTINUED", () => {
+    const rail = buildRunStepRail({ gates: [settled("approve")] });
+    expect(rail.entries.find((e) => e.kind === "gate")!.gate!.settledAct).toBe("continued");
+  });
+
+  it("a pending gate records no act, and an unknown column reads as none", () => {
+    const pending = buildRunStepRail({
+      gates: [{ ...settled("approve"), status: "pending", disposition: null }],
+    });
+    expect(pending.entries.find((e) => e.kind === "gate")!.gate!.settledAct).toBeNull();
+    const unknown = buildRunStepRail({ gates: [settled("something-this-build-cannot-read")] });
+    expect(unknown.entries.find((e) => e.kind === "gate")!.gate!.settledAct).toBeNull();
   });
 });

@@ -3489,6 +3489,21 @@ jobs:
         shell: bash
         run: pnpm test:lifecycle-c-w3
 
+      # cinatra#3080 (epic #3023). THE REVIEW FLOOR's real-store tier. Item 3 of
+      # its acceptance is four statements about what a Comment does NOT change —
+      # the gate stays pending, the run stays parked, the frozen revision is
+      # unchanged, no successor gate exists — and item 4 is what a Regenerate
+      # does: settle the earlier gate, open exactly one successor, refuse an
+      # empty note, be idempotent on a double press, and lose to whichever
+      # decision reached the gate CAS first. Every one of those is a claim about
+      # the DATABASE, so a stubbed store would agree with whatever the code said.
+      # Wired here on arrival, beside its siblings, so it cannot join the class
+      # of root tiers that run nowhere.
+      - name: The review floor — real-store tier (cinatra#3080, epic #3023)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:review-floor
+
       # cinatra#3026 (epic #3023, lifecycle-c W2). THE EDITOR'S SAVE needs a real
       # Postgres for the same reason: its whole subject is that the unique index
       # on (organisation, artifact, revision) IS the compare-and-set — a save

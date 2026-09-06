@@ -35,6 +35,7 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/age
 import {
   readReviewGate,
   enforceReviewRunAccess,
+  listReviewGatesForRun,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
 
@@ -43,15 +44,15 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 
 import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
+import { reviewSettledAct } from "@/lib/artifacts/review-surface-model";
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -101,30 +102,97 @@ type PageProps = {
  */
 async function loadRunStepsContext(
   runId: string,
-): Promise<{ steps: ReviewRunStep[]; activeStep: number; templateId: string | null }> {
+  reviewTaskId: string,
+): Promise<{
+  steps: ReviewRunStep[];
+  activeStep: number;
+  templateId: string | null;
+  /** The agent as a person names it, for the gate header's own naming line. */
+  templateName: string | null;
+}> {
   let runSteps: ReviewRunStep[] = [];
   let templateId: string | null = null;
+  let templateName: string | null = null;
   try {
     const run = await readAgentRunById(runId);
     if (run) {
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+      // THE GATE HEADER'S NAMING, ON THIS HOST TOO (cinatra#3080, fix leg 7
+      // convergence). The template this page already reads for the rail IS the
+      // agent the drawing's header names; not handing it down left the review
+      // SCREEN — the surface the drawing grades — drawing the word alone while
+      // the run card beside it drew the full line.
+      templateName = template?.name?.trim() ? template.name.trim() : null;
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
       runSteps = buildRunStepperSteps(policySteps).map((s) => ({ index: s.index, label: s.label }));
     }
   } catch {
     runSteps = [];
   }
-  const reviewIndex = runSteps.length + 1;
-  const steps: ReviewRunStep[] = [...runSteps, { index: reviewIndex, label: "Review" }];
-  return { steps, activeStep: reviewIndex, templateId };
+
+  // ONE RAIL ENTRY PER REVIEW, AND THE RAIL GROWS (cinatra#3080, the fourth
+  // reproduction of the real road). This rail used to append exactly ONE
+  // synthetic "Review" row, whatever the run held — so a Regenerate that
+  // settled its gate and minted a successor changed nothing on the left of the
+  // screen, measured on the running application and graded a defect twice. The
+  // drawing: "when a review is decided the rail keeps it as read-only history
+  // and moves to the next review beneath it"; "Regenerate settles the gate it
+  // was pressed on as superseded and mints a successor gate for that same
+  // artifact — a fresh review entry beneath the settled one"; "a new review
+  // gate entry on the rail, beneath the one just resolved".
+  //
+  // The gates are read in creation order, each settled one carrying the ACT it
+  // records (the one vocabulary, never the stored token), and the entry for the
+  // gate THIS route addresses is the active one. A plain read: this page has
+  // already cleared the review READ door for this run inside
+  // `loadReviewGateSurface`, which is the door this reader's own contract names.
+  //
+  // FAIL-SOFT, like the steps above it: a run whose gates cannot be read keeps
+  // the single synthetic Review row rather than losing the rail.
+  let gateSteps: ReviewRunStep[] = [];
+  let activeOffset = 0;
+  try {
+    const gates = await listReviewGatesForRun(runId);
+    gateSteps = gates.map((gate, i) => {
+      const act = reviewSettledAct(gate.disposition);
+      const settled = gate.status === "resolved" && act !== null;
+      return {
+        index: runSteps.length + 1 + i,
+        label: settled ? `Review · ${act}` : "Review",
+      };
+    });
+    const here = gates.findIndex((gate) => gate.reviewTaskId === reviewTaskId);
+    activeOffset = here >= 0 ? here : Math.max(gates.length - 1, 0);
+  } catch {
+    gateSteps = [];
+  }
+
+  if (gateSteps.length === 0) {
+    const reviewIndex = runSteps.length + 1;
+    return {
+      steps: [...runSteps, { index: reviewIndex, label: "Review" }],
+      activeStep: reviewIndex,
+      templateId,
+      templateName,
+    };
+  }
+  return {
+    steps: [...runSteps, ...gateSteps],
+    activeStep: runSteps.length + 1 + activeOffset,
+    templateId,
+    templateName,
+  };
 }
 
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
   const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
-  const runId = decodeURIComponent(rawInstanceId);
-  const reviewTaskId = decodeURIComponent(rawTaskId);
+  // cinatra#3080 — read back through the one reader the whole route family
+  // uses, so a malformed segment answers this page's own missing-run answer
+  // rather than raising out of the route.
+  const runId = readAgentInstanceIdFromSegment(rawInstanceId);
+  const reviewTaskId = readAgentInstanceIdFromSegment(rawTaskId);
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
 
@@ -219,15 +287,22 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
   // gate is the prompt window at the foot — see below.
 
-  const { steps, activeStep, templateId } = await loadRunStepsContext(runId);
+  const { steps, activeStep, templateId, templateName } = await loadRunStepsContext(
+    runId,
+    reviewTaskId,
+  );
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
   // window (both route through the same server helper; the prompt window is the
   // Comment path — the changes-request channel — not a fourth decision).
   async function submitAction(input: {
-    disposition: ReviewDisposition;
+    /** WHICH FLOOR ACTION (cinatra#3080) — `comment`, `regenerate` or
+     *  `continue`; the ONE entry resolves the vocabulary and refuses a reject. */
+    disposition: ReviewFloorSubmission;
     comment: string | null;
+    /** For a picture, the edited prompt — its own value, carried by Regenerate. */
+    regeneratePrompt?: string | null;
     suggestionDecisions?: SuggestionDecisionPartition | null;
   }): Promise<ReviewSubmitOutcome> {
     "use server";
@@ -248,6 +323,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
       input.comment,
       undefined,
       input.suggestionDecisions ?? null,
+      input.regeneratePrompt ?? null,
     );
   }
 
@@ -386,10 +462,23 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                     ref: gateCardRef,
                   }}
                   submitAction={submitAction}
+                  // cinatra#3080 item 5 — the review SCREEN's own field. Only
+                  // this surface resolves it (server-side, under the reader's
+                  // access) and only this surface hands it down: the prompt is
+                  // edited here, beside the picture, where Regenerate is.
+                  picturePrompt={surface.kind === "ready" ? surface.picturePrompt : null}
                   // §VI — the gate's own conversational prompt window keeps its
                   // exchange with the RUN (cinatra#3141 item 1); the card draws
                   // the window now, so the page names the run and mounts none.
                   runId={runId}
+                  // AND THE HEADER'S NAMING (fix leg 7 convergence). Every
+                  // segment is one THIS page already resolved for the rail on
+                  // its left, so the line and the rail cannot disagree: the
+                  // agent's own name, and where this gate sits in the ladder
+                  // the rail draws. A run whose template cannot be read hands
+                  // down null and the header draws the word alone.
+                  agentLabel={templateName}
+                  step={steps.length > 0 ? { index: activeStep, total: steps.length } : null}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>

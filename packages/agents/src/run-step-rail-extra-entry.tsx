@@ -6,6 +6,7 @@ import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 
 import { cn } from "@/lib/utils";
+import { REVIEW_SETTLED_ACT_TITLE } from "@/lib/artifacts/review-surface-model";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 
@@ -130,13 +131,42 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
+  const settledAct = entry.gate?.settledAct ?? null;
+  const settledWord = settledAct === null ? "Settled" : REVIEW_SETTLED_ACT_TITLE[settledAct];
 
   const titleNode = (
     <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
       {entry.label}
       {isGate && isResolved ? (
-        <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          {entry.gate?.disposition ?? "resolved"}
+        // THE SETTLED WORD, NEVER THE STORED TOKEN (cinatra#3080). This row used
+        // to print `entry.gate.disposition` straight out of the column, so a
+        // settled Review entry read APPROVE after a Continue and
+        // CHANGES_REQUESTED after a Regenerate — uppercased by the badge's own
+        // CSS, which made a machine value look like a deliberate label. The
+        // drawing's rail "records how it was settled (continued, superseded by a
+        // regeneration, changes requested)", so the word comes from the floor's
+        // one vocabulary and keeps its sentence case: a settled reading is a
+        // word a person reads, not a token they decode.
+        //
+        // IT READS THE ACT, NOT THE COLUMN (the fourth reproduction of the real
+        // road). The act is derived once where the store row becomes a rail
+        // entry (`run-step-rail.ts`); this component never sees the raw
+        // disposition, so it cannot name it a second way. An act this build
+        // cannot read says "Settled" — true, and never a raw column.
+        // ONE LABEL, MIDDOT-JOINED, AND THE WORD LOWERCASE (fix leg 7). The
+        // eighth proof round measured this row as two un-joined spans —
+        // "Review" then a title-case "Continued" — against the rail the drawing
+        // draws, whose settled rows read "Review · the post · continued" and
+        // "Review · featured image · continued": one sentence a person reads, in
+        // which the settled word is a word and not a badge. The TARGET segment
+        // between them is not drawn here: this rail entry carries no target
+        // name, and naming the wrong artifact in a run's history is worse than
+        // naming none.
+        <span
+          className="text-muted-foreground"
+          data-rail-gate-settled={settledWord}
+        >
+          {` · ${settledWord.toLowerCase()}`}
         </span>
       ) : null}
       {isVerification ? (

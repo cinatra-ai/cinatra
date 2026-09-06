@@ -129,8 +129,8 @@ describe("§IV the review states", () => {
     // §II — exactly one floor, however many targets the island draws.
     expect(container.querySelectorAll('[data-conformance-id="review-decision-bar"]')).toHaveLength(1);
     // The three affordances, live.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
-    expect(isDisabled(screen.getByRole("button", { name: /reject/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /regenerate/i }))).toBe(false);
     expect(isDisabled(screen.getByRole("button", { name: /comment/i }))).toBe(false);
   });
 
@@ -139,7 +139,7 @@ describe("§IV the review states", () => {
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Approving or rejecting needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
     });
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
@@ -148,8 +148,8 @@ describe("§IV the review states", () => {
     // §IV: a restricted card is a card. It shows the target and the disabled
     // floor — it is NEVER silently dropped (that is `absent`).
     expect(container.querySelector("iframe")).not.toBeNull();
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /reject/i }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /regenerate/i }))).toBe(true);
     // A reader who may respond keeps a live Comment.
     expect(isDisabled(screen.getByRole("button", { name: /comment/i }))).toBe(false);
     expect(
@@ -215,15 +215,34 @@ describe("the two absences are distinct", () => {
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
     renderOn("site_widget");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const widgetFloor = await screen.findByRole("button", { name: /approve/i });
+    const widgetFloor = await screen.findByRole("button", { name: /continue/i });
     expect(isDisabled(widgetFloor)).toBe(false);
     cleanup();
 
     // …and it is the SAME drawing the chat thread produces for the same state.
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     renderOn("chat_thread");
-    const chatFloor = await screen.findByRole("button", { name: /approve/i });
+    const chatFloor = await screen.findByRole("button", { name: /continue/i });
     expect(widgetFloor.textContent).toBe(chatFloor.textContent);
+  });
+
+  it("the SITE WIDGET's floor is the three, and neither retired act (cinatra#3080 item 1)", async () => {
+    // Item 1 names the review card inside a third-party application as a surface
+    // in its own right. The parity case above proves the widget draws WHAT CHAT
+    // DRAWS; this one reads the widget's own DOM and names the three labels and
+    // the two absences, so the surface has a positive proof that does not borrow
+    // another host's. (The browser-level walk of this surface needs the embed
+    // harness and is carried as a named deviation.)
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("site_widget");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    const bar = container.querySelector('[data-conformance-id="review-decision-bar"]')!;
+    const labels = [...bar.querySelectorAll("button")].map((b) => b.textContent?.trim() ?? "");
+    expect(labels).toEqual(["Comment", "Regenerate", "Continue"]);
+    expect(bar.textContent).not.toContain("Reject");
+    expect(bar.textContent).not.toContain("Approve");
   });
 
   it("neither absence is ever drawn as a DISABLED card", async () => {
@@ -358,7 +377,7 @@ describe("one renderer, four first-party hosts", () => {
 // ---------------------------------------------------------------------------
 
 describe("§III the target island", () => {
-  it("is a same-origin frame with the documented sandbox tokens, clamped, and control-free", async () => {
+  it("is a same-origin frame with the documented sandbox tokens, clamped, and it draws NO expand", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
@@ -367,13 +386,19 @@ describe("§III the target island", () => {
     // The src is a RELATIVE first-party path — the island is never fetched from
     // another origin, and the ref is the only thing in the query.
     expect(frame.getAttribute("src")?.startsWith("/")).toBe(true);
-    // ONE HEIGHT, and the frame scrolls inside it. §III of the ratified drawing:
-    // "a wide representation scrolls inside its own container rather than
-    // widening the page" — and §IV: "the review surface adds no per-type controls
-    // of its own around it", which is why the Expand toggle that used to sit
-    // under the frame is gone.
     expect(frame.style.height).toBe("380px");
-    expect(screen.queryByRole("button", { name: /expand|collapse/i })).toBeNull();
+
+    // NO EXPAND, AND NO FOOTER STRIP TO PUT ONE ON (cinatra#3080, the fourth
+    // reproduction of the real road). The word Expand appears nowhere in the
+    // ratified drawing; §III enumerates this gate's frame as "a gate header …,
+    // then the review target, then the decision bar and the conversational
+    // prompt window", and its answer to a target bigger than the box is the
+    // box's own scroll: "a wide representation scrolls inside its own container
+    // rather than widening the page". An independent grade charged the control
+    // as an unspecified element on the target strip.
+    expect(screen.queryByRole("button", { name: /expand/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
+    expect(container.querySelector('[data-action="toggle-review-target-height"]')).toBeNull();
   });
 
   it("carries NO decision chrome inside the frame — the floor is the card's", async () => {
@@ -446,7 +471,7 @@ describe("§III the target island", () => {
     ).not.toBeNull();
     // §II — a preview that failed to load is never drawn as a reason the
     // reviewer cannot decide; the floor below is untouched.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
   });
 
   it("timed-out: Try again remounts the iframe and returns to loading", async () => {
@@ -551,14 +576,14 @@ describe("the decision seam", () => {
     }) as unknown as typeof fetch;
 
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 
     await waitFor(() =>
       expect(calls.some((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)).toBe(true),
     );
     const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!;
-    expect(decide.body).toMatchObject({ ref: VIEW.ref, disposition: "approve" });
+    expect(decide.body).toMatchObject({ ref: VIEW.ref, disposition: "continue" });
     // The card names its gate ONLY with the server-minted ref — never with a run
     // id or a gate id it assembled itself.
     expect(JSON.stringify(decide.body)).not.toMatch(/runId|reviewTaskId/);
@@ -606,8 +631,8 @@ describe("the decision seam", () => {
     }) as unknown as typeof fetch;
 
     const { container } = renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
     );
@@ -635,8 +660,8 @@ describe("the decision seam", () => {
         <ReviewGateCard view={VIEW} submitAction={hostAction} />
       </LifecycleCardSurfaceProvider>,
     );
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
     );
@@ -659,8 +684,8 @@ describe("the decision seam", () => {
       );
     }) as unknown as typeof fetch;
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(document.querySelector('[data-review-outcome="error"]')).not.toBeNull(),
     );
@@ -677,8 +702,8 @@ describe("the decision seam", () => {
       );
     }) as unknown as typeof fetch;
     renderOn("chat_thread");
-    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(document.querySelector('[data-review-outcome="not-permitted"]')).not.toBeNull(),
     );
@@ -947,7 +972,7 @@ describe("§VIII the marking is a TWO-STATE toggle, accepted by default", () => 
 });
 
 describe("§VIII the marks ride the ONE decision submit", () => {
-  it("approve carries what is on screen: untouched means ACCEPTED", async () => {
+  it("Continue carries what is on screen: untouched means ACCEPTED", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -958,7 +983,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
       accepted: ["sug-1", "sug-2"],
@@ -966,7 +991,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     });
   });
 
-  it("approve carries the partition the reviewer pressed into being", async () => {
+  it("Continue carries the partition the reviewer pressed into being", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -979,19 +1004,22 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     pressChip(container, "items · 0 · bcc"); // dismissed
     await waitFor(() => expect(stateOf(container, "items · 0 · bcc")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     const body = decideBodies(fetchMock)[0];
-    expect(body.disposition).toBe("approve");
+    expect(body.disposition).toBe("continue");
     expect(body.suggestionDecisions).toEqual({ accepted: ["sug-1"], dismissed: ["sug-2"] });
   });
 
-  it("an IMMEDIATE Reject is not refused — it records every suggestion as NOT TAKEN", async () => {
-    // The reworked guard (cinatra#2852). With accepted-by-default, the shipped
-    // rule ("clear them first to reject") would refuse the very first press of
-    // Reject on a row the reviewer never touched. A reject tombstones the
-    // revisions, so nothing can be applied into them; the truthful record is a
-    // dismissal for every surfaced id.
+  // cinatra#3080 — the two REJECT/partition cases moved into one about
+  // REGENERATE. They asserted that an immediate Reject recorded every surfaced
+  // suggestion as NOT TAKEN, which was the truthful record of a decision that
+  // tombstoned the revisions the marks would have been applied into. Reject is
+  // retired, so there is nothing to build that partition for; what takes its
+  // place on the floor is Regenerate, which settles the gate as SUPERSEDED
+  // without deciding the items under it — so it carries no partition at all, and
+  // the marks are simply still there on the successor revision's review.
+  it("REGENERATE carries no partition — it decides none of the items under the gate", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -1004,34 +1032,12 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     // Nothing pressed: every suggestion is accepted on screen.
     expect(stateOf(container, "subject")).toBe("accepted");
-    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
+    fireEvent.change(screen.getByTestId("review-rationale"), { target: { value: "again please" } });
+    fireEvent.click(screen.getByRole("button", { name: /regenerate/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     const body = decideBodies(fetchMock)[0];
-    expect(body.disposition).toBe("reject");
-    expect(body.suggestionDecisions).toEqual({ accepted: [], dismissed: ["sug-1", "sug-2"] });
-    // …and the surface no longer warns about a combination that cannot happen.
-    expect(container.querySelector('[data-conformance-id="suggestion-chips-reject-note"]')).toBeNull();
-  });
-
-  it("a reject records them as not taken however the reviewer marked them", async () => {
-    const fetchMock = mockResolveAndDecide({
-      state: "pending",
-      canDecide: true,
-      canComment: true,
-      suggestions: CHIPS,
-    });
-    const { container } = renderOn("chat_thread");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
-    );
-    pressChip(container, "subject"); // dismissed
-    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
-    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
-    expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
-      accepted: [],
-      dismissed: ["sug-1", "sug-2"],
-    });
+    expect(body.disposition).toBe("regenerate");
+    expect("suggestionDecisions" in body).toBe(false);
   });
 
   it("a gate with NO suggestions posts no partition key — the pre-#2571 fingerprint", async () => {
@@ -1041,8 +1047,8 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       canComment: true,
     });
     renderOn("chat_thread");
-    await waitFor(() => expect(screen.getByRole("button", { name: /approve/i })).not.toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /continue/i })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
   });
@@ -1064,11 +1070,11 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     pressChip(container, "subject");
     await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(hostAction).toHaveBeenCalledTimes(1));
     expect(hostAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        disposition: "approve",
+        disposition: "continue",
         suggestionDecisions: { accepted: ["sug-2"], dismissed: ["sug-1"] },
       }),
     );
@@ -1142,7 +1148,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     ).not.toBeNull();
     expect(stateOf(container, "subject")).toBe("accepted");
     // …and the decision carries exactly what is now on screen.
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
       accepted: ["sug-1"],
@@ -1181,7 +1187,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
     expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(0);
     // The floor is still live — a failed decoration never costs the decision.
-    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /continue/i }))).toBe(false);
   });
 
   it("the notice SURVIVES a second surface change — a flap must not wipe the warning", async () => {
@@ -1264,7 +1270,7 @@ describe("§VIII read-only presentations", () => {
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Approving or rejecting needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
       suggestions: CHIPS,
     });
     const { container } = renderOn("chat_thread");
@@ -1687,11 +1693,17 @@ describe("a settled card that knows its outcome", () => {
     return container;
   }
 
-  it("names the outcome AND the decider", async () => {
+  it("names the outcome, and NEVER the decider (cinatra#3080, fix leg 6)", async () => {
+    // The ratified drawing names nobody in any settled marker it draws — see
+    // `reviewSettledCopy`, where its four markers are quoted. The decider is
+    // still carried on the wire for the audit trail and is not drawn here.
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Dana Okonkwo");
+    // THE DRAWN SENTENCE (fix leg 7). The marker used to say what happened to
+    // the RUN; the drawing's settled marker says what happened to the WORK.
     expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
+      "Decided on the revision above. These are the words that will be sent.",
     );
     expect(
       container
@@ -1702,13 +1714,16 @@ describe("a settled card that knows its outcome", () => {
 
   it("names each of the three recorded outcomes", async () => {
     const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Approved by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
+      ["approved", "Continued"],
+      ["rejected", "Rejected"],
+      // cinatra#3080 item 4 — the gate the change road settled reads SUPERSEDED.
+      // The stored disposition is untouched; the WORD is the drawing's.
+      ["changes_requested", "Superseded"],
     ];
     for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
+      expect(container.textContent).not.toContain("Dana Okonkwo");
       cleanup();
     }
   });
@@ -1742,8 +1757,8 @@ describe("a settled card that knows its outcome", () => {
     // for an identifier, so the card must read as a finished sentence without
     // one — never "Approved by" and a dangling nothing.
     const container = await settledWith("approved");
-    expect(container.textContent).toContain("Approved");
-    expect(container.textContent).not.toContain("Approved by");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Continued by");
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
@@ -1759,7 +1774,8 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Approved by Dana Okonkwo");
+      expect(html).toContain("Continued");
+      expect(html).not.toContain("Dana Okonkwo");
     }
   });
 
@@ -1785,7 +1801,8 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Dana Okonkwo");
   });
 });
 
@@ -1820,9 +1837,9 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
   const DISPOSITIONS = [
-    ["approved", "Approved by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ["approved", "Continued"],
+    ["rejected", "Rejected"],
+    ["changes_requested", "Superseded"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {
@@ -1847,8 +1864,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
       expect(
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
       ).toBeNull();
-      expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
-      expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /regenerate/i })).toBeNull();
       expect(screen.queryByRole("button", { name: /comment/i })).toBeNull();
       expect(container.querySelector("textarea")).toBeNull();
       expect(
@@ -1875,7 +1892,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued");
+      expect(container.textContent).not.toContain("Dana Okonkwo");
       cleanup();
     }
   });

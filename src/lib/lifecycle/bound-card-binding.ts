@@ -38,6 +38,7 @@ import "server-only";
 
 import {
   controlsLentBy,
+  typedControlFor,
   resolveBoundReference,
   type BoundReferenceResolution,
 } from "@/lib/lifecycle/bound-reference-resolver";
@@ -362,25 +363,26 @@ export type TurnBoundCard = {
 const NOT_BOUND: TurnBoundCard = { grant: null, systemContext: "" };
 
 /**
- * The primary control a binding lends for a TYPED message.
+ * The primary control a binding lends for a TYPED message, IGNORING the words.
  *
- * `controlsLentBy` says what the card offers; this says which one a sentence
- * gets. Deliberately narrow — see the note above — and pure, so the choice is
- * one readable line rather than a condition buried in a mint.
+ * SUPERSEDED FOR REVIEWS by `typedControlFor` (cinatra#3080), which reads the
+ * person's own message: an exact floor word reaches that control, "reject" is
+ * answered, and every other sentence still lands here — on Comment. This
+ * function remains the statement of the rule for the cards whose typed road has
+ * NOT been built, and it is what `typedControlFor` falls back to for them.
+ *
+ * A WAITING SCREEN MINTS NOTHING YET (convergence round 1, finding 1). The
+ * handler implements `submit` — it is the substrate the later slices build on —
+ * but a SEND does not hand it out, because pressing Continue RESUMES A RUN and
+ * the decision that a sentence asked for that is exactly what cinatra#2853's
+ * typed actions per card kind exist to make. Minting `submit` on the strength of
+ * "the model chose to call the tool" would put a run resumption behind text that
+ * can reach the model from the run's own content.
  */
 export function primaryControlFor(
   resolution: BoundReferenceResolution,
 ): LentActionControl | null {
   if (resolution.kind === "review") return "comment";
-  // A WAITING SCREEN MINTS NOTHING YET (convergence round 1, finding 1). The handler
-  // implements `submit` — it is the substrate the later slices build on — but a
-  // SEND does not hand it out, because pressing Continue RESUMES A RUN and the
-  // decision that a sentence asked for that is exactly what cinatra#2853's typed
-  // actions per card kind exist to make. Until then the only authority a message
-  // carries is the one whose effect the review page's own box already has for a
-  // typed sentence: the person's words filed as their comment. Minting `submit`
-  // on the strength of "the model chose to call the tool" would put a run
-  // resumption behind text that can reach the model from the run's own content.
   return null;
 }
 
@@ -429,8 +431,26 @@ export async function issueTurnLentActionGrant(input: {
     };
   }
 
-  const control = primaryControlFor(binding.resolution);
-  if (!control) return NOT_BOUND;
+  // WHICH CONTROL THE SENTENCE ASKS FOR (cinatra#3080 item 6). The typed road is
+  // one pure ladder in `typedControlFor`: an exact floor word reaches that
+  // control, a retired word is answered rather than silently dropped, and every
+  // other sentence is a Comment exactly as before.
+  const asked = typedControlFor(binding.resolution, input.messageText);
+  if (asked.kind === "retired") {
+    // THE PLATFORM'S OWN REFUSAL, RELAYED — the same shape an ambiguous binding
+    // gets, and for the same reason: no grant is minted, so the assistant could
+    // not act even if it tried, and it is told the words to say back rather than
+    // left to invent an answer about a control that no longer exists.
+    return {
+      grant: null,
+      systemContext:
+        "\n\nBOUND CARD — NO GRANT, AND THE PLATFORM HAS ANSWERED. " +
+        `Say this back to the person, word for word, and add nothing to it: "${asked.reason}" ` +
+        "You hold no authority to operate any card this turn; do not attempt one.",
+    };
+  }
+  if (asked.kind === "none") return NOT_BOUND;
+  const control = asked.control;
 
   // WORD FOR WORD, OR NOT AT ALL (convergence round 2). The words that land are the
   // person's, so a message the card's own decision path would REFUSE as too long

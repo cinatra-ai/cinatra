@@ -150,7 +150,15 @@ const RAIL_EXTRAS: RailEntry[] = [
     label: "Review",
     status: "resolved",
     sources: ["gate"],
-    gate: { gateId: "gate-1", reviewTaskId: "task-resolved", disposition: "approved", resolved: true },
+    gate: {
+      gateId: "gate-1",
+      reviewTaskId: "task-resolved",
+      // `approved` is not a stored disposition, so it records no act — the
+      // fixture keeps its value and states the consequence (cinatra#3080).
+      disposition: "approved",
+      settledAct: null,
+      resolved: true,
+    },
   },
   {
     key: "verification:task-resolved",
@@ -168,7 +176,13 @@ const RAIL_EXTRAS: RailEntry[] = [
     label: "Review",
     status: "pending",
     sources: ["gate"],
-    gate: { gateId: "gate-2", reviewTaskId: "task-pending", disposition: null, resolved: false },
+    gate: {
+      gateId: "gate-2",
+      reviewTaskId: "task-pending",
+      disposition: null,
+      settledAct: null,
+      resolved: false,
+    },
   },
   {
     key: "lifecycle:event-9",

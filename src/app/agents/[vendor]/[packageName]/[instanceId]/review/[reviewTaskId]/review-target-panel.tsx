@@ -87,10 +87,17 @@ export function ReviewTargetPanel({
           server: the provenance reading and the representation itself. Exactly
           one header per pinned target, and the card is the only place one can
           come from. */}
-      {/* §V — THE FLOOR'S REGION, AND NO OTHER. A target that rendered says
-          nothing about what rendered it; a target that did NOT render is the one
-          reading the drawing keeps on screen, over the generic read-only view of
-          the representation. */}
+      {/* §V — THE FLOOR'S REGION, AND NO OTHER. The model gives every rendered
+          rung a null region id, so this one null check IS the floor gate: a
+          resolved renderer draws no region here at all — the reader is deciding
+          on the work, not on what drew it. A floor keeps its mark because a
+          reader must be told a render failed, and the sanitized diagnostic
+          follows inside the slot below. A resolved renderer draws no
+          region here at all: the reader is deciding on the work, not on what
+          drew it. A floor keeps its mark because a reader must be told a render
+          failed, and the sanitized diagnostic follows inside the slot below.
+          (The host's own text rendering has no region either, and never did —
+          cinatra#2931 W4.) */}
       {provenanceConformanceId !== null && provenance !== null ? (
         <div
           data-conformance-id={provenanceConformanceId}

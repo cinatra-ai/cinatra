@@ -38,7 +38,10 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  autoReviewTaskId,
+  repairSuccessorReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2047_d1";
@@ -65,6 +68,7 @@ let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
 let crStore: typeof import("../lifecycle-review-changes-requested-store");
 let dispatchStore: typeof import("../lifecycle-repair-dispatch-store");
+let completionStore: typeof import("../lifecycle-repair-producer-completion-store");
 let verifStore: typeof import("../lifecycle-verification-store");
 let dbMod: typeof import("../db");
 /** The object type of an artifact CORE implements the repair for — derived from
@@ -135,9 +139,39 @@ async function produce(
   return ev;
 }
 
+/**
+ * Seed the artifact's own REPRESENTATION row (cinatra#3080, the fourth
+ * reproduction of the real road).
+ *
+ * `produce()` writes the produced-event outbox row and the object, and NOT a
+ * `representation` row — which is exactly why this suite could not see the
+ * doubled gate. The S4 auto-trigger projects both the reviewed and the repaired
+ * revision through `defaultRepresentationFieldProjector`, which reads that table;
+ * with no rows it projected `{}` on both sides, the diff was empty, the verdict
+ * came back `verified` and nothing was reopened. On the running application the
+ * rows are there, both sides project three fields, the revision advance reads as
+ * out-of-scope drift and a SECOND pending gate opens on every Regenerate.
+ *
+ * Seeding the row is what puts this fixture on the real road.
+ */
+async function seedRepresentation(
+  artifactId: string,
+  representationRevisionId: string,
+  revision: number,
+): Promise<void> {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."representation"
+       (id, org_id, artifact_id, resource_id, revision, form)
+     VALUES ($1, $2, $3, $4, $5, 'file')
+     ON CONFLICT (id) DO NOTHING`,
+    [representationRevisionId, ORG, artifactId, `res-${randomUUID()}`, revision],
+  );
+}
+
 async function repairRow(repairId: string) {
   const r = await pool(
-    `SELECT route, status, successor_gate_id, successor_artifact_id, change_summary
+    `SELECT route, status, successor_gate_id, successor_artifact_id,
+            successor_representation_revision_id, change_summary
      FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
     [repairId],
   );
@@ -147,6 +181,7 @@ async function repairRow(repairId: string) {
         status: string;
         successor_gate_id: string | null;
         successor_artifact_id: string | null;
+        successor_representation_revision_id: string | null;
         change_summary: string | null;
       }
     | undefined;
@@ -227,6 +262,7 @@ beforeAll(async () => {
   repairStore = await import("../lifecycle-repair-store");
   crStore = await import("../lifecycle-review-changes-requested-store");
   dispatchStore = await import("../lifecycle-repair-dispatch-store");
+  completionStore = await import("../lifecycle-repair-producer-completion-store");
   verifStore = await import("../lifecycle-verification-store");
   dbMod = await import("../db");
 
@@ -678,5 +714,575 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     expect(summary.repairsDispatched).toBe(0);
     expect(summary.repairsEscalated).toBe(0);
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3080 — REGENERATE OPENS ITS SUCCESSOR, WITH NO HUMAN STEP BETWEEN
+// ---------------------------------------------------------------------------
+//
+// THE SHAPE THE CAPTURE MEASURED. Pressing Regenerate on a real run settled the
+// gate as superseded and minted a real repair run — and then the road stopped:
+// the run PARKED at `pending_approval` on a setup screen, no revision was
+// appended, no successor gate opened, and the review target was never
+// re-pointed, while the settled panel told the reader "the review has moved on
+// from it". The park has one cause and the missing successor has another, and
+// the two cases below are those two causes, each stated as the store can see it.
+//
+// CAUSE ONE — THE REPAIR RUN WAS ASKED THE SETUP QUESTION AGAIN. The execution
+// path pauses a queued run for every REQUIRED input its template declares that
+// the run's own `input_params` does not already hold (the setup interrupt loop
+// in `execution.ts`). The delivered repair carried the typed request and NOTHING
+// ELSE, so every one of the producing template's required inputs read as
+// pending and the run stopped on a screen before it ever produced anything. The
+// drawing has no such step in it: "Regenerate runs the same producing step again
+// from the note field". So the delivery now carries the producing run's OWN
+// inputs — the same step, the same inputs — and the note rides beside them.
+//
+// CAUSE TWO — NOTHING COMPLETED THE BLOG ROAD. A dispatched repair is finished
+// by a completer that finds what the repair run produced and submits the typed
+// response, which is what pins the successor gate. One completer existed and it
+// owned CMS snapshots only; every other producer's repair sat `dispatched`
+// forever with its production unclaimed. The generic completer is that missing
+// half.
+describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and the successor gate", () => {
+  /** A template that declares one REQUIRED input, the way a real producer does. */
+  async function seedTemplateWithRequiredInput(): Promise<string> {
+    const templateId = `tmpl-${randomUUID()}`;
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
+         (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+       VALUES ($1,$2,'organization',$2,'seed','seed','[]',$3,'{}',$4,$5)`,
+      [
+        templateId,
+        ORG,
+        JSON.stringify({
+          type: "object",
+          required: ["idea"],
+          properties: { idea: { type: "object", title: "idea" } },
+        }),
+        `@cinatra-ai/regen-${randomUUID()}-agent`,
+        MANIFEST_REPAIR_CAPABLE,
+      ],
+    );
+    return templateId;
+  }
+
+  /** A producing run that already answered its setup question. */
+  async function seedAnsweredRun(templateId: string, inputParams: unknown): Promise<string> {
+    const runId = `run-${randomUUID()}`;
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, run_by, input_params, status)
+       VALUES ($1,$2,$3,$4,$5,'completed')`,
+      [runId, templateId, ORG, MEMBER_USER, JSON.stringify(inputParams)],
+    );
+    return runId;
+  }
+
+  async function runRow(runId: string) {
+    const r = await pool(
+      `SELECT input_params, status, source_type FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
+      [runId],
+    );
+    return r.rows[0] as
+      | { input_params: string | null; status: string; source_type: string | null }
+      | undefined;
+  }
+
+  async function gatesForRun(runId: string) {
+    const r = await pool(
+      `SELECT id, status, pinned_targets, review_task_id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       WHERE run_id=$1 ORDER BY created_at ASC`,
+      [runId],
+    );
+    return r.rows as Array<{
+      id: string;
+      status: string;
+      pinned_targets: unknown;
+      review_task_id: string;
+    }>;
+  }
+
+  /** The setup interrupt loop's OWN predicate, stated here so the assertion is
+   *  about the thing that actually parked the run rather than a paraphrase of
+   *  it: a required, non-hidden field the run's `input_params` does not hold. */
+  function pendingSetupFields(
+    required: string[],
+    inputParams: Record<string, unknown>,
+  ): string[] {
+    return required.filter((f) => !Object.prototype.hasOwnProperty.call(inputParams, f));
+  }
+
+  /**
+   * Hold a dispatched repair run at a chosen status, DETERMINISTICALLY.
+   *
+   * A minted repair run is picked up and driven by the runtime inside this same
+   * process, and with no real producing graph behind it that ends in `failed` a
+   * moment later — asynchronously, which makes "the run is still queued" a race
+   * rather than a fact. So the run is first allowed to REACH a terminal status
+   * (nothing touches it after that), and only then held at the status the case
+   * is about. Every reading below is taken after this returns.
+   */
+  async function holdRunAt(runId: string, status: string): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const row = await runRow(runId);
+      if (row && ["completed", "failed", "stopped"].includes(row.status)) break;
+      if (Date.now() > deadline) throw new Error(`the repair run never settled: ${runId}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status=$2 WHERE id=$1`, [
+      runId,
+      status,
+    ]);
+  }
+
+  /** Drive a run to a pending review and press Regenerate on it. */
+  async function regenerateOn(templateId: string, producerRunId: string) {
+    const ev = await produce({ producerRunId }, coreRepairableObjectType);
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: baseTaskId,
+      baseTarget: {
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "the second section needs a plainer opening sentence",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) throw new Error("the change road refused the press");
+    expect(cr.route.kind).toBe("producer_repair");
+    return { ev, repairId: cr.repairId };
+  }
+
+  it("THE PARK: the repair run carries the producing step's own inputs, so no setup screen stands between the press and the work", async () => {
+    const templateId = await seedTemplateWithRequiredInput();
+    const idea = { title: "How Teams Adopt New Connectors", summary: "a summary", outline: [] };
+    const producerRunId = await seedAnsweredRun(templateId, { idea });
+
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const repairRunId = dispatchStore.repairRunId(repairId);
+    const row = await runRow(repairRunId);
+    expect(row).toBeDefined();
+    expect(row!.source_type).toBe("lifecycle_repair");
+
+    const params = JSON.parse(row!.input_params ?? "{}") as Record<string, unknown>;
+    // The same producing step, the same inputs — the drawing's own words.
+    expect(params.idea).toEqual(idea);
+    // And the note still rides beside them: the request is the instruction.
+    expect((params.lifecycleRepairRequest as { kind?: string } | undefined)?.kind).toBe(
+      "lifecycle_repair_request",
+    );
+    expect(
+      ((params.lifecycleRepairRequest as { findings?: unknown[] }).findings ?? []).length,
+    ).toBeGreaterThan(0);
+
+    // Stated in the setup loop's OWN terms: nothing is pending, so nothing
+    // pauses the run before it produces.
+    expect(pendingSetupFields(["idea"], params)).toEqual([]);
+  });
+
+  it("THE PARK: a repair of a repair does not inherit the previous round's request", async () => {
+    // A second attempt's base is the first attempt's successor, and the
+    // producing run of a second attempt can itself be a repair run. Copying its
+    // `input_params` wholesale would carry the OLD request into the new one and
+    // the producer would answer the earlier attempt's findings. The delivery
+    // overwrites it with this attempt's.
+    const templateId = await seedTemplateWithRequiredInput();
+    const idea = { title: "Round two", summary: "s", outline: [] };
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea,
+      lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "an-older-repair" },
+    });
+
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const params = JSON.parse(
+      (await runRow(dispatchStore.repairRunId(repairId)))!.input_params ?? "{}",
+    ) as Record<string, unknown>;
+    expect(params.idea).toEqual(idea);
+    expect((params.lifecycleRepairRequest as { repairId?: string }).repairId).toBe(repairId);
+  });
+
+  it("THE SUCCESSOR: exactly ONE new gate opens on the NEW revision, beneath the settled one", async () => {
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Successor", summary: "s", outline: [] },
+    });
+    const { ev, repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const repairRunId = dispatchStore.repairRunId(repairId);
+    // The dispatched run does its producing work and finishes, exactly as any
+    // other agent run does.
+    const successorRev = `rev-regenerated-${randomUUID()}`;
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: successorRev,
+        producerRunId: repairRunId,
+      },
+      coreRepairableObjectType,
+    );
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='completed' WHERE id=$1`, [
+      repairRunId,
+    ]);
+
+    const before = await gatesForRun(producerRunId);
+    expect(before).toHaveLength(1);
+    expect(before[0]!.status).toBe("resolved");
+
+    const completion = await completionStore.completeDispatchedProducerRepairs();
+    expect(completion.completed).toBe(1);
+
+    // The repair landed, and it names the revision the repair run produced.
+    const settled = await repairRow(repairId);
+    expect(settled!.status).toBe("repaired");
+    expect(settled!.successor_gate_id).not.toBeNull();
+    expect(settled!.successor_artifact_id).toBe(ev.artifactId);
+
+    // EXACTLY ONE successor, pending, over the NEW revision — a fresh review
+    // entry beneath the settled one, which is left exactly as it was.
+    const after = await gatesForRun(producerRunId);
+    expect(after).toHaveLength(2);
+    const successor = after.find((g) => g.id === settled!.successor_gate_id)!;
+    expect(successor.status).toBe("pending");
+    expect(successor.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: successorRev },
+    ]);
+    // The superseded gate keeps the revision it froze.
+    const superseded = after.find((g) => g.id === before[0]!.id)!;
+    expect(superseded.status).toBe("resolved");
+    expect(superseded.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+    ]);
+
+    // The successor's OWN produced event does not open a second gate on top of
+    // the one the repair pinned.
+    expect((await orch.sweepReviewOrchestration({ limit: 50 })).gatesCreated).toBe(0);
+    expect(await gatesForRun(producerRunId)).toHaveLength(2);
+
+    // Idempotent: a re-drain claims nothing and mints no second successor.
+    expect((await completionStore.completeDispatchedProducerRepairs()).completed).toBe(0);
+    expect(await gatesForRun(producerRunId)).toHaveLength(2);
+  });
+
+  it("THE SUCCESSOR: a repair run still working is left alone, not finalized on nothing", async () => {
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "In flight", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const completion = await completionStore.completeDispatchedProducerRepairs();
+    // The counters are the DRAIN's, and this tier shares one schema across its
+    // cases, so earlier cases' open repairs are in the same scan. What is
+    // exactly this repair's is the row and the run's gates; of the counters,
+    // only "nothing was completed" is a statement about the whole scan that this
+    // case can make, and it is the one that matters — a repair still working
+    // must not be finalized by anybody.
+    expect(completion.completed).toBe(0);
+    expect(completion.pending).toBeGreaterThanOrEqual(1);
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
+    expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE SUCCESSOR: a repair run that has written something but is STILL RUNNING is not claimed on its first write", async () => {
+    // A producing step is allowed to write more than once — an outline before
+    // the draft, a picture beside the post. The completer claims the LATEST
+    // thing the repair run wrote, and "latest" is only an ANSWER once the run
+    // has stopped writing. Claiming mid-flight pins the first fragment into the
+    // successor gate, and the finished work that follows arrives at a repair
+    // already `repaired` and is dropped: the reviewer is then asked to decide on
+    // something the producer had already moved past, with no way back.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Still writing", summary: "s", outline: [] },
+    });
+    const { ev, repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    const runId = dispatchStore.repairRunId(repairId);
+    // The run writes an INTERMEDIATE artifact and is still going.
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: `rev-intermediate-${randomUUID()}`,
+        producerRunId: runId,
+      },
+      coreRepairableObjectType,
+    );
+    await holdRunAt(runId, "running");
+    // Named here rather than imported: the point of the case is that the run has
+    // NOT reached any of the three terminal statuses, so the three are written
+    // out where the assertion is read.
+    expect(["completed", "failed", "stopped"]).not.toContain((await runRow(runId))!.status);
+
+    const completion = await completionStore.completeDispatchedProducerRepairs();
+    expect(completion.completed).toBe(0);
+
+    // Untouched and still open: no successor was pinned on a fragment.
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
+    expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE SUCCESSOR: a repair run PARKED waiting for a person is unresolved, never reported as still working", async () => {
+    // The exact shape the first capture photographed. A run parked on a human
+    // gate does not move again by itself, so the repair behind it is WEDGED, not
+    // in flight — and counting it `pending` reports a permanent wedge as
+    // ordinary progress, pass after pass, with nothing ever saying so.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Parked", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+
+    // The counters are the whole drain's and this tier shares one schema, so the
+    // reading is a DELTA across the ONE thing that changes between two passes:
+    // this repair run's status. Everything else in the scan has already settled
+    // terminal by now and no longer moves.
+    const runId = dispatchStore.repairRunId(repairId);
+    await holdRunAt(runId, "running");
+    const working = await completionStore.completeDispatchedProducerRepairs();
+    expect(working.pending).toBeGreaterThanOrEqual(1);
+
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval' WHERE id=$1`,
+      [runId],
+    );
+    const parked = await completionStore.completeDispatchedProducerRepairs();
+
+    // The same repair, the same everything else: WORKING became WEDGED.
+    expect(parked.pending).toBe(working.pending - 1);
+    expect(parked.unresolved).toBe(working.unresolved + 1);
+    // And still open, never finalized on a run that has not produced.
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE SUCCESSOR: a finished repair run that produced nothing leaves the repair OPEN rather than finalizing wrong", async () => {
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Produced nothing", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='failed' WHERE id=$1`, [
+      dispatchStore.repairRunId(repairId),
+    ]);
+
+    const completion = await completionStore.completeDispatchedProducerRepairs();
+    // As above: the row and the gates are this case's; of the counters, only
+    // "nothing was completed" speaks for the whole scan.
+    expect(completion.completed).toBe(0);
+    expect(completion.unresolved).toBeGreaterThanOrEqual(1);
+    // Open and ops-visible, never silently repaired.
+    expect((await repairRow(repairId))!.status).toBe("dispatched");
+    expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    expect(await gatesForRun(producerRunId)).toHaveLength(1);
+  });
+
+  it("THE PAGE: a repair run is a run — the run page opens it exactly as it opens any other run, and the link to it is a URL", async () => {
+    // The last reading of the running application could not open the repair
+    // run's own page, so the person could not see where the work had stopped. Two things have to
+    // hold for "a repair run is a run": the page's OWN resolver must resolve
+    // it for the person whose repair it is, exactly as it resolves the run
+    // that produced it — no filter, no narrower policy, nothing keyed on how
+    // the run was made — and the link the product draws for it must be a
+    // valid address. The second half is what a repair run breaks and an
+    // ordinary run cannot: its id is derived from its repair rather than
+    // minted as a uuid, so it carries a character a path segment must escape.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "The page", summary: "s", outline: [] },
+    });
+    const { repairId } = await regenerateOn(templateId, producerRunId);
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+    const repairRunId = dispatchStore.repairRunId(repairId);
+
+    const store = await import("../store");
+    const actor = { actorType: "human" as const, source: "ui" as const, userId: MEMBER_USER };
+    const roles = { platformRole: "member" as const, actorOrganizationId: ORG };
+
+    // The URL the page is reached by names the agent, and the agent resolves.
+    const packageName = (
+      (
+        await pool(
+          `SELECT package_name FROM "${q(TEST_SCHEMA)}"."agent_templates" WHERE id=$1`,
+          [templateId],
+        )
+      ).rows[0] as { package_name: string }
+    ).package_name;
+    const agentId = packageName.slice(1);
+    expect(
+      await store.readAgentTemplateBySlug(agentId, {
+        actorUserId: MEMBER_USER,
+        includeNonPublished: true,
+      }),
+    ).not.toBeNull();
+
+    // The run the page opens: the producing run is the control, the repair run
+    // is the case, and the page reads them through the SAME call.
+    const producerSeen = await store.readAgentRunById(producerRunId, actor, roles);
+    expect(producerSeen?.id).toBe(producerRunId);
+    const repairSeen = await store.readAgentRunById(repairRunId, actor, roles);
+    expect(repairSeen?.id).toBe(repairRunId);
+    expect(repairSeen?.sourceType).toBe("lifecycle_repair");
+
+    // And the address of that page is a single path segment for this run and
+    // decodes back to it — the reading that was false for a repair run.
+    const { buildAgentInstancePath } = await import("@/lib/agent-url");
+    const href = buildAgentInstancePath(packageName, repairRunId);
+    const segments = href.split("/");
+    expect(segments).toHaveLength(5);
+    expect(decodeURIComponent(segments[4]!)).toBe(repairRunId);
+    expect(segments[4]).not.toContain(":");
+    // An ordinary run's link is unchanged, character for character.
+    expect(buildAgentInstancePath(packageName, producerRunId)).toBe(
+      `/agents/${agentId}/${producerRunId}`,
+    );
+  });
+
+  it("THE WHOLE ROAD: Regenerate settles its gate superseded and raises exactly ONE successor over the new revision, with nothing parked and no wedge said", async () => {
+    // The drawing, end to end: "Regenerate sends the work back to be made again
+    // from the words in the note field, settles this gate as superseded, and
+    // raises its successor over the new revision". This drives that whole road
+    // once, in the store, and reads every step of it — including the reading
+    // the last reading of the running application could not get: that the
+    // repair run never parks waiting for a person, so the completer never has
+    // a wedge to report.
+    const templateId = await seedTemplateWithRequiredInput();
+    const producerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "The whole road", summary: "s", outline: [] },
+    });
+
+    // The gate is pending, and it is the only one.
+    const ev = await produce({ producerRunId }, coreRepairableObjectType);
+    await seedRepresentation(ev.artifactId, ev.representationRevisionId, 1);
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const opened = await gatesForRun(producerRunId);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.status).toBe("pending");
+
+    // Regenerate, with the reviewer's words in the note field.
+    const note = "Open the second section with a plainer sentence and keep the harbour example.";
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: autoReviewTaskId(ev.eventId),
+      baseTarget: {
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: note,
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) throw new Error("the change road refused the press");
+    const repairId = cr.repairId;
+
+    // ONE repair, delivered on a run that carries the producing step's own
+    // inputs and the reviewer's words — nothing to ask a person.
+    expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(1);
+    const repairRunId = dispatchStore.repairRunId(repairId);
+    const delivered = JSON.parse((await runRow(repairRunId))!.input_params ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(pendingSetupFields(["idea"], delivered)).toEqual([]);
+    const request = delivered.lifecycleRepairRequest as { findings?: Array<{ message?: string }> };
+    expect((request.findings ?? []).some((f) => (f.message ?? "").includes("harbour"))).toBe(true);
+
+    // The repair run does its producing work and finishes, like any other run.
+    const successorRev = `rev-regenerated-${randomUUID()}`;
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: successorRev,
+        producerRunId: repairRunId,
+      },
+      coreRepairableObjectType,
+    );
+    await seedRepresentation(ev.artifactId, successorRev, 2);
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='completed' WHERE id=$1`, [
+      repairRunId,
+    ]);
+
+    // The completion drain, watched: the wedge line is what a parked repair run
+    // makes the completer say, and there is nothing parked on this road.
+    const said: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      said.push(args.map((a) => String(a)).join(" "));
+      realError(...(args as []));
+    };
+    let completion: Awaited<ReturnType<typeof completionStore.completeDispatchedProducerRepairs>>;
+    try {
+      completion = await completionStore.completeDispatchedProducerRepairs();
+    } finally {
+      console.error = realError;
+    }
+    expect(completion.completed).toBe(1);
+    expect(
+      said.filter((line) => line.includes(`repair ${repairId}`) && line.includes("waiting for a person")),
+    ).toEqual([]);
+
+    // The gate it was pressed on is settled, and it keeps the revision it froze.
+    const after = await gatesForRun(producerRunId);
+    expect(after).toHaveLength(2);
+    const superseded = after.find((g) => g.id === opened[0]!.id)!;
+    expect(superseded.status).toBe("resolved");
+    expect(superseded.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+    ]);
+
+    // EXACTLY ONE successor, beneath it, over the NEW revision — and the
+    // review target the repair records is that new revision, not the old one.
+    const settled = await repairRow(repairId);
+    expect(settled!.status).toBe("repaired");
+    expect(settled!.successor_artifact_id).toBe(ev.artifactId);
+    expect(settled!.successor_representation_revision_id).toBe(successorRev);
+    const successor = after.find((g) => g.id === settled!.successor_gate_id)!;
+    expect(successor).toBeDefined();
+    expect(successor.status).toBe("pending");
+    expect(successor.pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: successorRev },
+    ]);
+    expect(after.filter((g) => g.status === "pending")).toHaveLength(1);
+
+    // ONE PRESS, ONE PENDING GATE — and it is the successor, by name.
+    //
+    // The drawing: "Regenerate settles the gate it was pressed on as superseded
+    // and mints a successor gate for that same artifact — a fresh review entry
+    // beneath the settled one"; "a new review gate entry on the rail, beneath
+    // the one just resolved". One. The running application opened TWO, 0.3 s
+    // apart, on both presses: the repair successor
+    // (`lifecycle-review:repair:{repairId}:1`) and a second gate whose review
+    // task read `lifecycle-review:verify:verify:{gateId}` — the S4 auto-trigger
+    // firing on a projection whose own axis it was judging as drift, under an
+    // identifier that spelled its prefix twice.
+    const pending = after.filter((g) => g.status === "pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.review_task_id).toBe(
+      repairSuccessorReviewTaskId(repairId, 1),
+    );
+    // No gate anywhere on this run carries the doubled word.
+    expect(after.filter((g) => g.review_task_id.includes("verify:verify"))).toEqual([]);
+    // The verification RECORD still lands — the audit reading the run rail
+    // opens is not what was wrong; reopening a gate over it was.
+    const verification = await verifStore.readVerificationRecordForGate(
+      settled!.successor_gate_id!,
+    );
+    expect(verification).not.toBeNull();
+    expect(verification!.outcome).toBe("verified");
   });
 });

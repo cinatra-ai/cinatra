@@ -540,6 +540,22 @@ const suggestionsField = z
   .max(MAX_LIFECYCLE_SUGGESTIONS)
   .optional();
 
+// ---------------------------------------------------------------------------
+// NO RECORDED-NOTES REGION ON THE REVIEW CARD (cinatra#3080, fix leg 5)
+// ---------------------------------------------------------------------------
+//
+// A `notes` field once travelled on the three review-gate states and drew a
+// third region between the target and the floor. The ratified cards drawing
+// enumerates this card exhaustively — "the target panel naming what is under
+// review and pinning its exact revision, then the decision floor that governs
+// it" (§II) — and gives Advisory comments to a DIFFERENT card: the
+// verification card "closes with Advisory comments … The reading's provenance
+// is the body of a service comment there, not a line of its own" (§VII). With
+// the region drawn on the review card, the Audit lane's own service-authored
+// diagnostic rode the same seam onto it. The field is gone from the wire, so no
+// reader can put one back. The verification card's own advisory shape, and the
+// constants it uses, are unchanged and live with that card.
+
 /**
  * The readable form of an RFC 6901 JSON Pointer, for §VIII's label slot.
  *
@@ -701,6 +717,10 @@ function panelValue(raw: string | undefined): string | undefined {
  * them all answer the same way — no chips. The `loading` / `advisory` /
  * `absent` states cannot carry them at all, because a card that draws nothing
  * (or draws no floor) has nowhere to put a mark.
+ *
+ * `notes` (cinatra#3080) rides the same three states on the same rule — the
+ * words a `Comment` recorded against the review, read back to the reader on
+ * whichever surface they are standing on.
  */
 export type LifecycleCardState =
   | { state: "loading" }

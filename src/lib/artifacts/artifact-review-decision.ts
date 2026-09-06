@@ -73,6 +73,13 @@ import {
 } from "./artifact-review-target";
 import type { RevisionMemberOutcome, RunAccessOutcome, ReviewTargetMount } from "./artifact-review-preparation";
 import { buildReviewResumeText } from "./artifact-review-rejection";
+// THE FLOOR'S OWN SENTENCE (cinatra#3080). The refusal this core answers a
+// retired `reject` with is the same string the typed road and every surface say,
+// so it is quoted from the ONE module that owns the floor's vocabulary rather
+// than re-spelled here. The surface model is pure and client-safe and type-only
+// in the other direction, so this edge adds no cycle and no new module to any
+// route's graph.
+import { REVIEW_REJECT_RETIRED_REASON } from "./review-surface-model";
 
 // ---------------------------------------------------------------------------
 // The SUGGESTION PARTITION (cinatra#2571, epic #2564 S6b) — the reviewer's
@@ -547,11 +554,21 @@ export type SubmitDecisionResult =
 // The pure core.
 // ---------------------------------------------------------------------------
 
-const VALID_DISPOSITIONS: ReadonlySet<ReviewDisposition> = new Set([
-  "approve",
-  "reject",
-  "comment",
-]);
+/**
+ * The dispositions a NEW decision may carry (cinatra#3080).
+ *
+ * `reject` IS NOT HERE, and its absence is the whole point: the floor now offers
+ * Comment, Regenerate and Continue, and a person who wants neither outcome
+ * leaves the run as it is. Retiring the affordance without retiring the
+ * OPERATION would leave the capability reachable by anything that can post a
+ * decision, so the refusal lives at the core — checked first, below, with the
+ * platform's one stated reason rather than the generic "unknown disposition".
+ *
+ * LEGACY ROWS ARE UNAFFECTED. `ReviewDisposition` still admits `reject` as a
+ * TYPE because rows decided before this retirement still read back, and their
+ * resume intents still drain; what changed is only what may be newly produced.
+ */
+const VALID_DISPOSITIONS: ReadonlySet<ReviewDisposition> = new Set(["approve", "comment"]);
 
 export async function submitReviewDecisionCore(
   decision: ArtifactReviewDecision,
@@ -560,6 +577,14 @@ export async function submitReviewDecisionCore(
   // 1. Validate the decision shape + normalize targets.
   if (!SUPPORTED_DECISION_API_VERSIONS.has(decision.decisionApiVersion)) {
     return invalid(`Unsupported decisionApiVersion ${decision.decisionApiVersion}.`);
+  }
+  // REJECT IS RETIRED (cinatra#3080), and it is refused HERE — before the run
+  // access check, before the gate read, before any port is touched — so no
+  // reject reaches any effect and the refusal costs nothing to observe. The
+  // reason is the platform's one sentence, the same one the typed road and the
+  // surfaces say, so a person hears the same answer wherever they ask.
+  if (decision.disposition === "reject") {
+    return invalid(REVIEW_REJECT_RETIRED_REASON);
   }
   if (!VALID_DISPOSITIONS.has(decision.disposition)) {
     return invalid(`Unknown disposition "${decision.disposition}".`);
@@ -595,13 +620,10 @@ export async function submitReviewDecisionCore(
     // gate that never resolves.
     return invalid("Suggestion decisions require a terminal disposition (approve or reject).");
   }
-  if (partition && decision.disposition === "reject" && partition.accepted.length > 0) {
-    // A reject TOMBSTONES every reviewed revision. Applying a patch to a revision
-    // the same decision is tombstoning is incoherent, and the intent drain would
-    // be writing into rejected work. Dismissals on a reject are fine — they
-    // record what the reviewer looked at and declined.
-    return invalid("A reject decision cannot accept suggestions.");
-  }
+  // (cinatra#3080) The reject/partition rule that stood here — a reject may not
+  // ACCEPT suggestions, because applying a patch to a revision the same decision
+  // tombstones is incoherent — is now subsumed: `reject` is refused outright at
+  // the top of this function, so no partition can ride one.
   const fingerprint = reviewDecisionFingerprint({
     runId: decision.runId,
     reviewTaskId: decision.reviewTaskId,
@@ -705,17 +727,15 @@ export async function submitReviewDecisionCore(
     return { ok: false, error: { kind: "revision-not-member", targets: notMember } };
   }
 
-  // 6. Build the atomic commit plan. A reject records a TOMBSTONE per reviewed
-  // artifact (never a hard delete — the op union admits none). The terminal
-  // resume intent is part of the plan so the commit persists it transactionally.
-  const dispositionOps: ReviewDispositionOp[] =
-    decision.disposition === "reject"
-      ? reviewedTargets.map((t) => ({
-          artifactId: t.artifactId,
-          representationRevisionId: t.representationRevisionId,
-          kind: "tombstone" as const,
-        }))
-      : [];
+  // 6. Build the atomic commit plan. The terminal resume intent is part of the
+  // plan so the commit persists it transactionally.
+  //
+  // NO DISPOSITION OPS ARE PRODUCED ANY MORE (cinatra#3080). The only decision
+  // that ever emitted one was a reject, which recorded a TOMBSTONE per reviewed
+  // artifact; with reject retired, every new plan carries an empty list. The
+  // field and the `ReviewDispositionOp` union stay because the commit path still
+  // has to apply the ops of decisions taken before the retirement.
+  const dispositionOps: ReviewDispositionOp[] = [];
   const resumeIntent = terminal ? buildResumeIntent(decision, reviewedTargets) : null;
   const plan: ReviewDecisionCommitPlan = {
     runId: decision.runId,

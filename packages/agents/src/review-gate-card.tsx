@@ -140,7 +140,6 @@ import {
   ArrowRight,
   Check,
   CircleX,
-  ClipboardCheck,
   MessageSquare,
   RotateCcw,
 } from "lucide-react";
@@ -153,10 +152,8 @@ import {
   type LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorAction, ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
@@ -304,12 +301,39 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** The island's ONE height. §III of the ratified artifact-review drawing gives
- * the target no height control: "a wide representation scrolls inside its own
- * container rather than widening the page". The frame is that container, and it
- * scrolls; the Expand / Collapse toggle that used to sit under it was a control
- * the surface added of its own, which §IV forbids. */
-const ISLAND_HEIGHT = 380;
+/** The island's height CEILING. A representation taller than this scrolls
+ *  inside it — the drawing's own answer to a target that outgrows its box, and
+ *  it draws no expand. */
+const ISLAND_HEIGHT_CLAMPED = 380;
+
+/** The floor under a measured height, so a document that reports nothing (or
+ *  reports before its own layout settles) cannot collapse the frame to a
+ *  hairline: the skeleton and the never-blank floor both need room to read. */
+const ISLAND_HEIGHT_MIN = 120;
+
+/**
+ * THE HEIGHT THE ISLAND FRAME IS GIVEN (cinatra#3080, fix leg 6).
+ *
+ * The box used to be `ISLAND_HEIGHT_CLAMPED` tall whatever was inside it, so a
+ * target shorter than the ceiling sat above a bordered emptiness that no drawing
+ * sentence puts there — 261 to 272 css px of it on every frame of the sixth
+ * reading, on the run page, the review page and in a conversation alike. The
+ * drawing draws the pane and then what comes after it: "the gate opens with a
+ * gate header …, then the review target, then the decision bar and the
+ * conversational prompt window", and its own frames show the pane ending where
+ * its content ends. The one size sentence the drawing does give is for a target
+ * that is TOO BIG — "a wide representation scrolls inside its own container
+ * rather than widening the page" — which is what the ceiling keeps.
+ *
+ * `null` — nothing measured yet, or a document this frame may not read — keeps
+ * the ceiling, which is exactly what shipped before.
+ */
+export function reviewIslandFrameHeight(measured: number | null): number {
+  if (measured === null || !Number.isFinite(measured) || measured <= 0) {
+    return ISLAND_HEIGHT_CLAMPED;
+  }
+  return Math.min(ISLAND_HEIGHT_CLAMPED, Math.max(ISLAND_HEIGHT_MIN, Math.ceil(measured)));
+}
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -452,9 +476,23 @@ function composerCommentResult(outcome: ReviewSubmitOutcome): ComposerCommentRes
 export function ReviewGateCard({
   view,
   submitAction,
+  picturePrompt,
   runId,
+  agentLabel,
+  step,
 }: {
   view: ReviewGateCardView;
+  /**
+   * WHAT THE HEADER NAMES (cinatra#3080, fix leg 7). The drawing's header strip
+   * carries a mono line beside the word — "Outreach agent · run rn_8f31… · step
+   * 4 of 6" — and every fact in it is one the HOST already holds at render time:
+   * the run surface that mounts this gate drew the agent's name and the step
+   * ladder before the card ever resolved. Both are optional and both degrade:
+   * the line prints the segments it was given and nothing else.
+   */
+  agentLabel?: string | null;
+  /** Where the gated step sits in the run, when the host knows the ladder. */
+  step?: { index: number; total: number } | null;
   /**
    * The RUN this gate belongs to (cinatra#3141 item 1). The gate's conversational
    * prompt window — the drawing's one channel for requesting changes — keeps its
@@ -470,6 +508,18 @@ export function ReviewGateCard({
    * to the gate-scoped, ref-bound endpoint — the same core either way.
    */
   submitAction?: SubmitReviewDecisionAction;
+  /**
+   * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080
+   * item 5), for the floor's own pre-filled field.
+   *
+   * SUPPLIED BY THE REVIEW SCREEN, and by it alone. It is the surface that
+   * resolves it — server-side, under the reader's own access, off the artifact
+   * projection the target was already prepared from — and hands it down; the
+   * card's own resolve carries no such field, so a card in a transcript draws
+   * the note alone. That asymmetry is the drawing's: the prompt is edited on the
+   * review SCREEN, where the person is looking at the picture full size.
+   */
+  picturePrompt?: string | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   // The host's embedding context, when it has one (cinatra#2577). Only an
@@ -565,8 +615,9 @@ export function ReviewGateCard({
   // identity is stable across re-resolves.
   const refBoundSubmit = useMemo<SubmitReviewDecisionAction>(() => {
     return async (input: {
-      disposition: ReviewDisposition;
+      disposition: ReviewFloorSubmission;
       comment: string | null;
+      regeneratePrompt?: string | null;
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
@@ -581,6 +632,10 @@ export function ReviewGateCard({
             ref: view.ref,
             disposition: input.disposition,
             comment: input.comment,
+            // The picture prompt, when Regenerate carried one (cinatra#3080
+            // item 5). Omitted entirely otherwise, so every other press posts
+            // the body it posted before the field existed.
+            ...(input.regeneratePrompt ? { regeneratePrompt: input.regeneratePrompt } : {}),
             // Omitted entirely when there is no partition, so a gate with no
             // chips posts the body it posted before this slice — and lands the
             // identity-version-1 fingerprint S6b pinned.
@@ -737,12 +792,12 @@ export function ReviewGateCard({
     setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
   // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
-  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
-    disposition === "reject"
-      ? rejectPartition(surfaced)
-      : disposition === "approve"
-        ? buildPartition(surfaced, dismissed)
-        : null;
+  // §VIII, cinatra#3080: the marks ride the ONE decision that still decides the
+  // items under the gate — Continue. Regenerate settles the gate as superseded
+  // and Comment settles nothing, so neither carries them; the retired reject's
+  // "record every surfaced suggestion as not taken" partition went with it.
+  const suggestionDecisionsFor = (action: ReviewFloorAction) =>
+    action === "continue" ? buildPartition(surfaced, dismissed) : null;
 
   const frame = HOST_FRAME[host];
   // The server-minted island URL, when this answer carried one (cinatra#2754).
@@ -769,6 +824,11 @@ export function ReviewGateCard({
   const body = renderState({
     state,
     targetHeaders,
+    naming: {
+      agentLabel: agentLabel ?? null,
+      runId: runId ?? null,
+      step: step ?? null,
+    },
     promptWindow:
       runId != null && runId !== ""
         ? (canComment: boolean) => (
@@ -806,6 +866,7 @@ export function ReviewGateCard({
       }),
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt: picturePrompt ?? null,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
@@ -830,6 +891,8 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  /** What the header strip's mono line names — the host's own facts. */
+  naming: ReviewGateNaming;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
@@ -844,11 +907,13 @@ function renderState(args: {
   dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (action: ReviewFloorAction) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
+  picturePrompt: string | null;
 }): ReactElement | null {
   const {
     state,
+    naming,
     targetHeaders,
     promptWindow,
     islandSrc,
@@ -860,13 +925,14 @@ function renderState(args: {
     onToggleMark,
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt,
   } = args;
 
   switch (state.state) {
     case "loading":
       return (
         <>
-          <ReviewGateHeader pending />
+          <ReviewGateHeader pending naming={naming} />
           <ReviewGateLoading />
         </>
       );
@@ -916,7 +982,7 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} />
+          <ReviewGateHeader pending={false} naming={naming} />
           {/* §IV — the header the decision was taken on, kept over the reviewed
               work: a settled gate names what was reviewed whether or not its
               read-only preview has painted. */}
@@ -936,10 +1002,7 @@ function renderState(args: {
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
           {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          <ReviewGateSettled outcome={state.outcome} />
         </>
       ) : (
         <>
@@ -963,7 +1026,7 @@ function renderState(args: {
       const suggestions = state.suggestions ?? [];
       return (
         <>
-          <ReviewGateHeader pending />
+          <ReviewGateHeader pending naming={naming} />
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
@@ -999,6 +1062,7 @@ function renderState(args: {
           <ReviewDecisionBar
             permissions={permissions}
             submitAction={submit}
+            picturePrompt={picturePrompt}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1193,29 +1257,12 @@ function buildPartition(
   return { accepted, dismissed: notTaken };
 }
 
-/**
- * The partition a REJECT carries: every surfaced suggestion recorded as NOT
- * TAKEN (§VIII, cinatra#2852).
- *
- * The shipped guard refused an immediate Reject while anything was accepted, and
- * with the old unmarked default that was survivable — nothing was accepted until
- * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
- * first press of Reject, on a row the reviewer never touched, which is a control
- * that fails on press.
- *
- * So the rework is here, at the surface that knows what a reject MEANS for these
- * items: a reject tombstones every reviewed revision, so nothing can be applied
- * into them, and the truthful record of that is a dismissal for each surfaced
- * id — the reviewer looked at them and took none. The decision core's rule ("a
- * reject decision cannot accept suggestions") is untouched and still enforced
- * server-side; this simply never asks it for the impossible.
- */
-function rejectPartition(
-  surfaced: ReadonlyArray<LifecycleSuggestion>,
-): SuggestionDecisionPartition | null {
-  if (surfaced.length === 0) return null;
-  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
-}
+// THE REJECT PARTITION IS GONE (cinatra#3080). It recorded every surfaced
+// suggestion as NOT TAKEN, which was the truthful reading of a decision that
+// tombstoned the revisions the marks would have been applied into. With Reject
+// retired there is no such decision to build one for: Continue carries the marks
+// as they stand, Regenerate settles the gate as superseded without deciding the
+// items under it, and Comment decides nothing at all.
 
 /**
  * §VIII's TWO drawn readings, plus the one HISTORY reading a settled gate can
@@ -1467,8 +1514,8 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
-              : "Deciding these needs approve access on this run."}
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you decide below."
+              : "Deciding these needs decision access on this run."}
         </p>
       ) : null}
     </div>
@@ -1479,14 +1526,91 @@ export function SuggestionChips({
  * §I/§II — the gate header the review page has always drawn ("Review requested"
  * + the awaiting-your-decision pill), now owned by the card so all three hosts
  * show the same thing. Markup and tokens are the page's, unchanged.
+ *
+ * A SETTLED GATE KEEPS A HEADER, AND IT IS NOT A REQUEST (cinatra#3080, fix leg
+ * 6). Fix leg 5 headed a settled gate with NOTHING, reading "the same pane, the
+ * marker below the whole card, no floor" as taking the whole strip away. The
+ * drawing does not: §XIII.1 draws the settled reading outside a conversation
+ * with the SAME header strip its pending frame carries — the sans heading
+ * "Review" over the gate, byte for byte in both frames — and the annotation
+ * above it takes away only the floor: "Settled, outside the conversation — the
+ * same display, no floor, and the marker below the whole gate". What is untrue
+ * once a gate is decided is the REQUEST and the ASK: the request wording, and
+ * the awaiting-your-decision pill. Those go; the heading stays and says what the
+ * region is. (§XIII was written after this branch's pin was taken, which is why
+ * fix leg 5 could not read it.)
+ *
+ * THE STRIP, AS DRAWN (fix leg 7). The eighth proof round charged three
+ * things against it. NO GLYPH: the drawing's header strip is the word and
+ * the naming line and nothing else, and the clipboard tile drawn before the
+ * word appears in no frame of it. A BOTTOM RULE: the strip carries
+ * `border-bottom:1px solid var(--line)`, which is what separates the header
+ * from the body beneath it. AND THE TARGET-NAMING LINE: beside the word, on
+ * the same baseline, a mono ten-pixel muted line naming what is under
+ * review — "Outreach agent \u00b7 run rn_8f31\u2026 \u00b7 step 4 of 6".
+ *
+ * The naming is the HOST's to supply, not the wire's: the run surface that
+ * draws this gate already knows the agent, the run and the step, and a field
+ * added to the resolve answer would be a second, later-arriving source for
+ * facts the host holds at render time. A host that holds none passes none,
+ * and the line is not drawn at all.
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
+export type ReviewGateNaming = {
+  /** The agent whose run raised the gate, as a person would name it. */
+  agentLabel: string | null;
+  /** The run the gate is a step of. */
+  runId: string | null;
+  /** Where in the run the gated step sits. */
+  step: { index: number; total: number } | null;
+};
+
+/** The run id, truncated to the length the drawing prints it at ("rn_8f31…"). */
+function shortRunId(runId: string): string {
+  return runId.length > 8 ? `${runId.slice(0, 7)}…` : runId;
+}
+
+/**
+ * The mono line the drawing draws BESIDE the word — "Outreach agent · run
+ * rn_8f31… · step 4 of 6". It says only what the host could source: a segment
+ * the card cannot name truthfully is left out rather than invented, because a
+ * gate that names the wrong run is worse than a gate that names none.
+ */
+export function reviewGateNamingLine(naming: ReviewGateNaming | null): string | null {
+  if (!naming) return null;
+  const segments: string[] = [];
+  if (naming.agentLabel) segments.push(naming.agentLabel);
+  if (naming.runId) segments.push(`run ${shortRunId(naming.runId)}`);
+  if (naming.step) segments.push(`step ${naming.step.index} of ${naming.step.total}`);
+  return segments.length > 0 ? segments.join(" · ") : null;
+}
+
+export function ReviewGateHeader({
+  pending,
+  naming,
+}: {
+  pending: boolean;
+  naming: ReviewGateNaming | null;
+}): ReactElement {
+  const namingLine = reviewGateNamingLine(naming);
   return (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
-        <ClipboardCheck aria-hidden="true" className="size-4" />
+    <div className="flex flex-wrap items-baseline gap-2 border-b border-line pb-2.5">
+      <span className="font-sans text-sm font-bold text-foreground">
+        {pending ? "Review requested" : "Review"}
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      {namingLine ? (
+        <span
+          data-review-gate-naming=""
+          // The SAME mono treatment the target header's identity line already
+          // carries a few lines below — `font-mono text-badge-2xs tracking-tight
+          // text-muted-foreground`. The drawing letter-spaces both at 0.04em; the
+          // shipped tracking scale has no token at that value and arbitrary
+          // tracking is refused (cinatra#886), so the two mono lines stay
+          // identical to each other rather than one of them drifting.
+          className="font-mono text-badge-2xs tracking-tight text-muted-foreground"
+        >
+          {namingLine}
+        </span>
+      ) : null}
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-brand-mustard" aria-hidden="true" />
@@ -1544,10 +1668,51 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  const [load, setLoad] = useState<{
+    src: string;
+    attempt: number;
+    loaded: boolean;
+    timedOut: boolean;
+    /** What the island's own document reports, once it can be read. */
+    measured: number | null;
+  }>({ src, attempt: 0, loaded: false, timedOut: false, measured: null });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ src, attempt: 0, loaded: false, timedOut: false, measured: null });
   }
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  // THE ISLAND IS SAME-ORIGIN, so its own document is measurable directly and
+  // nothing has to be sent from inside it — no message channel, and no addition
+  // to the display-only posture. A read that is refused, or a document that is
+  // not there yet, answers null and the frame keeps its ceiling.
+  const measure = useCallback(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let reported: number | null = null;
+    try {
+      const doc = frame.contentDocument;
+      // THE BODY IS THE MEASURE, NOT THE ROOT (the convergence round on fix
+      // leg 6). `documentElement` is this document's scrolling element, and a
+      // scrolling element's `scrollHeight` is never smaller than the viewport
+      // it scrolls in — which here IS the frame. Reading it inside a box that
+      // starts at the ceiling answers the ceiling for a 184-tall document, so
+      // the frame could never shrink and the empty region this leg exists to
+      // remove would have survived in a browser (jsdom does not model the
+      // floor, which is why a stub could hide it). The body's own scroll height
+      // is content-driven, so it is what is read; the root is kept only as the
+      // fallback for a document that has no body yet.
+      const measuredBody = doc?.body?.scrollHeight ?? 0;
+      const height = measuredBody > 0 ? measuredBody : (doc?.documentElement?.scrollHeight ?? 0);
+      reported = height > 0 ? height : null;
+    } catch {
+      reported = null;
+    }
+    setLoad((current) =>
+      current.src !== src || current.measured === reported
+        ? current
+        : { ...current, measured: reported },
+    );
+  }, [src]);
 
   useEffect(() => {
     if (load.loaded) return;
@@ -1557,8 +1722,50 @@ function ReviewTargetIsland({
     return () => clearTimeout(timer);
   }, [load.src, load.attempt, load.loaded]);
 
+  // A DOCUMENT THAT GROWS AFTER ITS LOAD EVENT IS STILL MEASURED. A picture
+  // decodes, a font swaps, a renderer paints a second pass — all of them settle
+  // AFTER `load`, and a height taken once would clip exactly the targets that
+  // take the longest to arrive. The observer is optional everywhere it is not
+  // implemented, and it is torn down with the frame it watches.
+  useEffect(() => {
+    if (!load.loaded) return;
+    measure();
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === "undefined") return;
+    let observer: ResizeObserver | null = null;
+    try {
+      const doc = frame.contentDocument;
+      // AND THE BODY IS WHAT IS WATCHED, for the same reason it is what is
+      // read: a document stretched to its frame has a root box that never
+      // changes, so an observer on the root alone can sleep through exactly the
+      // late arrival this exists for — a picture decoding, a font swapping, a
+      // renderer's second pass. The root is observed as well, for a document
+      // whose body is not there yet.
+      const targets = [doc?.body, doc?.documentElement].filter(
+        (node): node is HTMLElement => !!node,
+      );
+      if (targets.length === 0) return;
+      observer = new ResizeObserver(() => measure());
+      for (const target of targets) observer.observe(target);
+    } catch {
+      observer?.disconnect();
+      observer = null;
+    }
+    return () => observer?.disconnect();
+  }, [load.loaded, load.src, load.attempt, measure]);
+
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = ISLAND_HEIGHT;
+  // ONE BOX, AND IT SCROLLS INSIDE ITSELF WHEN IT HAS TO (cinatra#3080, the
+  // fourth reproduction of the real road, and fix leg 6). The drawing's answer
+  // to a representation taller or wider than the box is the box's own scroll —
+  // §III, "a wide representation scrolls inside its own container rather than
+  // widening the page" — not a control. It enumerates this gate's frame as "a
+  // gate header …, then the review target, then the decision bar and the
+  // conversational prompt window", and the word Expand does not appear anywhere
+  // in it. The toggle and the footer strip it sat on are gone. What the box is
+  // NOT is a fixed pane with emptiness under a short target: see
+  // `reviewIslandFrameHeight`.
+  const height = reviewIslandFrameHeight(load.measured);
 
   return (
     <div
@@ -1571,6 +1778,7 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.src}:${load.attempt}`}
+        ref={frameRef}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -1589,9 +1797,10 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
-        }
+        onLoad={() => {
+          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current));
+          measure();
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The
@@ -1929,15 +2138,30 @@ export function ReviewGatePromptWindow({
   };
 
   return (
-    // The conversational prompt window (cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    // The conversational prompt window (cinatra#2063). The anchor marks this
+    // mount for the run-embedded conformance closed set.
+    //
+    // WHAT IS TYPED HERE IS A NOTE, AND ONLY A NOTE (cinatra#3080). Until this
+    // branch a non-empty sentence on a single-target lifecycle gate resolved as
+    // `changes_requested` — the gate closed and a repair opened, from a window
+    // whose whole promise is that it decides nothing. Asking for another go is
+    // REGENERATE's, on the floor above, where it carries the right a terminal
+    // decision needs. So `handleSubmit` files what is typed through the Comment
+    // path and the gate stays pending: the outcome the card reads back is
+    // `annotated`, and its own message is "Comment added to the review. It is
+    // still open." The marker below says which road this is; it moved with the
+    // window when the card took the mount over from the review route, and it
+    // travelled as the older wording by accident.
+    //
+    // AND IT IS NOT A `data-action` (fix leg 7). The window is the
+    // CONVERSATIONAL reading of Comment, not a fourth decision affordance, and
+    // the card composes the floor rather than drawing one: not a single
+    // review-action anchor may be emitted by this file, which is what makes "one
+    // renderer, every host" true rather than asserted. The road is named on a
+    // marker of the window's own.
     <div
       data-conformance-id="review-prompt-window"
-      data-action="request-changes -> changes-requested"
+      data-review-prompt-road="comment-review -> annotated"
       ref={setPortalTarget}
     >
       <HitlConversationPanel

@@ -329,6 +329,8 @@
     "test:extension-tables": "vitest run --config vitest/integration/3031.config.ts --no-coverage",
     "test:widget-schedule-grant": "vitest run --config vitest/integration/3052.config.ts --no-coverage",
     "test:agent-ui-durable-resume": "vitest run --config vitest/integration/3067.config.ts --no-coverage",
+    "test:review-floor": "vitest run --config vitest/integration/3080.config.ts --no-coverage",
+    "test:e2e:review-floor": "playwright test -c tests/e2e/config/review-floor.config.ts",
     "test:dev-instance-provisioning": "vitest run --config vitest/integration/3135.config.ts --no-coverage",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",

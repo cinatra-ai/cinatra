@@ -66,6 +66,14 @@ import {
  * are exactly what the card's own buttons offer". A control that no card draws
  * is not in this union, so a grant cannot name one.
  *
+ * `approve` and `reject` ARE GONE (cinatra#3080), because the buttons are. The
+ * review floor is Comment · Regenerate · Continue, so those are the three a
+ * review lends. The words themselves are not lost: a person who types "approve"
+ * is asking for Continue and the mint resolves it there, and a person who types
+ * "reject" is told there is no reject — both in `typedControlFor`, which is the
+ * one place a WORD becomes a control. Keeping the retired words in this union
+ * would let a grant name an authority no card can honour.
+ *
  * `fill` is deliberately ABSENT. Filling a form without submitting it is the
  * plan's own separate road ("it needs a mechanism of its own, because the
  * fields live in the page in front of you while the assistant works on the
@@ -74,8 +82,8 @@ import {
  */
 export const LENT_ACTION_CONTROLS = [
   "comment",
-  "approve",
-  "reject",
+  "regenerate",
+  "continue",
   "submit",
 ] as const;
 

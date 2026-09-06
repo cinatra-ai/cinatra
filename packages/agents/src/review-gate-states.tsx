@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
+import { CircleX } from "lucide-react";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
@@ -65,10 +65,15 @@ export function ReviewGateBlocked({
 
 /**
  * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Changes requested by …", over the shipped sentence for
- * that outcome, and with the recorded suggestion chips still drawn above it by
- * the caller.
+ * §4.2). The card that knows what happened says so — "Continued", "Rejected",
+ * "Superseded" — over the shipped sentence for that outcome, and with the
+ * recorded suggestion chips still drawn above it by the caller.
+ *
+ * AND IT NAMES NO PERSON (cinatra#3080, fix leg 6). This block read
+ * "Superseded by {name}" on the sixth reading; the ratified drawing names nobody
+ * in any settled marker it draws — see `reviewSettledCopy`, where the four
+ * drawn markers are quoted. The decider is still carried on the wire for the
+ * audit trail and is simply not drawn here.
  *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
@@ -79,39 +84,44 @@ export function ReviewGateBlocked({
  * A gate this build cannot read an outcome for never reaches this component:
  * the caller draws `ReviewGateBlocked` for it, unchanged, Refresh and all.
  *
+ * ONE BORDERED INLINE ROW, NOT A CENTRED STACK (cinatra#3080, fix leg 7). The
+ * eighth proof round measured a 144-css-px centred block here — a tinted icon
+ * disc over a heading over a centred sentence — against the drawing, which draws
+ * the settled marker as a single bordered row below the whole gate: `display:
+ * flex; align-items:center; gap:8px; border:1px solid var(--line);
+ * border-radius:8px; padding:9px 12px; margin-top:10px`, holding the approved
+ * pill with its dot beside a muted twelve-pixel sentence. The icon disc appears
+ * in no settled marker the drawing draws.
+ *
  * Conformance anchor: `review-gate-settled`.
  */
-export function ReviewGateSettled({
-  outcome,
-  decidedByName,
-}: {
-  outcome: ReviewSettledOutcome;
-  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
-   *  cannot name safely, and the copy then states the outcome alone. */
-  decidedByName?: string;
-}) {
-  const copy = reviewSettledCopy(outcome, decidedByName);
-  const Icon =
-    outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
-  // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
-  // in the tint-over-token shape the shipped status chips already use.
+export function ReviewGateSettled({ outcome }: { outcome: ReviewSettledOutcome }) {
+  const copy = reviewSettledCopy(outcome);
+  // The status palette's own tokens, in the dot-and-pill shape the drawing draws
+  // and the shipped status chips already use.
   const tone =
     outcome === "approved"
-      ? "bg-success/10 text-success"
+      ? { pill: "border-success/40 bg-success/15 text-success", dot: "bg-success" }
       : outcome === "rejected"
-        ? "bg-destructive/10 text-destructive"
-        : "bg-warning/10 text-warning";
+        ? { pill: "border-destructive/40 bg-destructive/15 text-destructive", dot: "bg-destructive" }
+        : { pill: "border-warning/40 bg-warning/15 text-warning", dot: "bg-warning" };
   return (
     <div
       data-conformance-id="review-gate-settled"
       data-review-outcome={outcome}
-      className="rounded-control border border-line bg-surface-strong px-4 py-5 text-center"
+      className="mt-2.5 flex flex-wrap items-center gap-2 rounded-control border border-line bg-surface px-3 py-2.5"
     >
-      <div className={`mx-auto mb-2.5 grid size-9 place-items-center rounded-lg ${tone}`}>
-        <Icon aria-hidden="true" className="size-[18px]" />
-      </div>
-      <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${tone.pill}`}
+      >
+        <span
+          data-review-settled-dot=""
+          aria-hidden="true"
+          className={`size-[7px] rounded-full ${tone.dot}`}
+        />
+        {copy.title}
+      </span>
+      <span className="text-xs text-muted-foreground">{copy.body}</span>
     </div>
   );
 }

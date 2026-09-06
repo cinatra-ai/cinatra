@@ -64,6 +64,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
+import { gateNamingStep } from "./orchestrator-gate-predicate";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
@@ -399,12 +400,21 @@ function ReviewGateStepCard({
   cardRef,
   reviewSurfaceUrl,
   runId,
+  agentLabel,
+  step,
 }: {
   cardRef: string | null;
   reviewSurfaceUrl: string | null;
   /** The run this step belongs to — the gate's prompt window keeps its exchange
    * with it (cinatra#3141 item 1). */
   runId: string | null;
+  /** WHAT THE GATE HEADER NAMES (cinatra#3080, fix leg 7). The drawing's header
+   * strip carries "Outreach agent · run rn_8f31… · step 4 of 6" beside the word,
+   * and this panel is the surface that already knows all three: it drew the
+   * agent's name in the run title and the step ladder in the rail before the
+   * card resolved anything. */
+  agentLabel: string | null;
+  step: { index: number; total: number } | null;
 }) {
   if (cardRef) {
     return (
@@ -416,6 +426,8 @@ function ReviewGateStepCard({
             ref: cardRef,
           }}
           runId={runId}
+          agentLabel={agentLabel}
+          step={step}
         />
       </LifecycleCardSurfaceProvider>
     );
@@ -1881,6 +1893,12 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const toDisplayIndex = (policyStepNum: number): number =>
     stepperSteps.find((s) => s.stepNumber === policyStepNum)?.index ?? policyStepNum;
 
+  // THE GATE HEADER'S OWN NAMING (cinatra#3080, fix leg 7) — the agent as this
+  // panel already names it, and the step ladder the rail already draws. Both are
+  // null-safe: a panel with no template name and no ladder hands the card
+  // nothing, and the header draws the word alone rather than an invented line.
+  const gateAgentLabel = templateName.trim().length > 0 ? templateName.trim() : null;
+
   const activeStep = (() => {
     if (status === "pending_input" || status === "queued") return 1;
     if (status === "pending_approval" && currentStepNumber !== null) {
@@ -1899,6 +1917,18 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     }
     return 1;
   })();
+
+  // AND WHERE THE GATED STEP SITS (fix leg 7, corrected at convergence). This
+  // read the LIVE interrupt alone, and a completed run has none — the resume
+  // clears it — so the review card a finished run draws lost its step segment
+  // exactly on the reading a reviewer arrives at most often. The ladder is
+  // still there to be read, so the step falls back to the one the rail is
+  // showing, bounded by the ladder's own length. No ladder, no segment.
+  const gateStep = gateNamingStep({
+    ladderLength: stepperSteps.length,
+    currentDisplayIndex: currentStepNumber !== null ? toDisplayIndex(currentStepNumber) : null,
+    activeStep,
+  });
 
   // ---------------------------------------------------------------------------
   // Spinner label — always shows the step the user is currently waiting for.
@@ -2102,7 +2132,13 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         ? reviewValues.reviewSurfaceUrl
         : null;
     stageCard = (
-      <ReviewGateStepCard cardRef={cardRef} reviewSurfaceUrl={reviewSurfaceUrl} runId={runId} />
+      <ReviewGateStepCard
+        cardRef={cardRef}
+        reviewSurfaceUrl={reviewSurfaceUrl}
+        runId={runId}
+        agentLabel={gateAgentLabel}
+        step={gateStep}
+      />
     );
   } else if (status === "pending_approval" && effectiveInterruptContext !== null && !awaitingNextStep) {
     // Go directly to approval card — no SkillsPreviewCard interstitial (req 4).
@@ -2188,7 +2224,13 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard =
       status === "completed" ? (
         reviewSlot.ref ? (
-          <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
+          <ReviewGateStepCard
+            cardRef={reviewSlot.ref}
+            reviewSurfaceUrl={null}
+            runId={runId}
+            agentLabel={gateAgentLabel}
+            step={gateStep}
+          />
         ) : reviewMayStillOpen ? (
           <Card data-run-review-slot="working">
             <CardContent className="p-6">

@@ -361,6 +361,42 @@ export function RunSurfaceRailRow({
 }
 
 /**
+ * THE RAIL COLUMN'S OWN CLASSES, in one place because two mounts draw this
+ * column — the frame below, and the screen's own rail-only branch — and a column
+ * that reads differently on one of them is two columns.
+ *
+ * IT STAYS IN VIEW (cinatra#3080, fix leg 6). The column scrolled away with the
+ * run detail beside it, so on a run whose detail is longer than the window the
+ * rail's rows sat measurably ABOVE the viewport while the gate under them filled
+ * the screen — the sixth reading photographed the run page at the settled
+ * instant with every rail row off screen and the column free of ink, though the
+ * rows were in the DOM the whole time. The ratified run-and-review drawing puts
+ * the rail beside the detail and keeps it there: "The run's step rail stays on
+ * the left with the gated step highlighted and resolved gates above it as
+ * history (§I); the gate itself … fills the run detail on the right", and "The
+ * reviewer decides in the run, with the steps in view." Sticky is what makes
+ * that sentence true at every scroll position.
+ *
+ * THE OFFSET IS THE SHELL'S OWN, READ FROM THE SHELL (the convergence round on
+ * fix leg 6). The shell's sticky header is `h-16`, but it does not start at the
+ * viewport's top: it takes its own `top` from `--banner-height`, which the
+ * impersonation banner sets while it is up. A fixed `top-20` therefore parks the
+ * rail's first rows UNDER that header exactly when someone is reading the run as
+ * somebody else. The column reads the same variable the header does, so the two
+ * cannot drift apart, and the same variable comes out of the height a rail
+ * longer than the window may take before it scrolls inside itself.
+ *
+ * IT CARRIES NO GAP OF ITS OWN (cinatra#3188 item 2). The ratified drawing puts
+ * the whole gap between two entries INSIDE the mark that stands between them —
+ * 4px above it and 4px below — so a column gap on top of that would space the
+ * rail at three times the drawing rhythm. Staying in view and reading at the
+ * drawn rhythm are one class, not two: the sticky column is the same column the
+ * marks space.
+ */
+export const RUN_SURFACE_RAIL_COLUMN_CLASS =
+  "sticky top-[calc(var(--banner-height,0px)+5rem)] flex max-h-[calc(100vh-var(--banner-height,0px)-6rem)] shrink-0 flex-col self-start overflow-y-auto pt-1";
+
+/**
  * THE MARK BETWEEN TWO ENTRIES (cinatra#3188 item 2).
  *
  * The ratified drawing's rail draws one of these between every pair of adjacent
@@ -444,7 +480,7 @@ export function RunSurfaceRail({
       <div
         data-conformance-id="run-step-rail-column"
         data-run-step-rail-column=""
-        className="flex shrink-0 flex-col pt-1"
+        className={RUN_SURFACE_RAIL_COLUMN_CLASS}
       >
         {steps.map((step, index) => (
           <Fragment key={step.key}>

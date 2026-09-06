@@ -29,6 +29,7 @@ import type {
 } from "@/lib/artifacts/artifact-review-preparation";
 import type {
   ReviewDisposition,
+  ReviewRunAccessOp,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
@@ -104,30 +105,155 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
-export function reviewSettledCopy(
-  outcome: ReviewSettledOutcome,
-  decidedByName?: string,
-): { title: string; body: string } {
-  const by = decidedByName ? ` by ${decidedByName}` : "";
+/**
+ * THE SETTLED ACT — what a settled gate RECORDS, as one closed axis
+ * (cinatra#3080, the fourth reproduction of the real road).
+ *
+ * The surface used to name a settled gate in two independent switch statements —
+ * one over the wire outcome for the card, one over the stored column for the
+ * rail — each choosing a display string of its own. That is how the running
+ * application could read "Superseded by {person}" on the card while the store
+ * held `changes_requested` for the same act, with nothing in the product saying
+ * the two were the same thing. The act is now modelled once, the storage
+ * encoding is named as data, and every reading is derived from it, so the two
+ * cannot say different things about one decision.
+ *
+ * THE SCHEMA GAP, STATED PLAINLY, because it is the reason the words differ at
+ * all. `artifact_review_gates.disposition` is CHECK-constrained to
+ * `('approve','reject','changes_requested')` and the audit table to those plus
+ * `'comment'` (`artifact-review-gate-schema.ts`). There is NO `superseded` value
+ * to write, so a Regenerate stores `changes_requested` and the act it performed
+ * is SUPERSEDED. Closing the gap needs a migration widening both constraints and
+ * every reader of the terminal disposition with it; until that lands
+ * `REVIEW_SETTLED_ACT_STORAGE` below IS the relation between the two, in one
+ * place, readable by a person and pinned by a test — not a display string
+ * chosen twice.
+ */
+export type ReviewSettledAct = "continued" | "superseded" | "rejected";
+
+/**
+ * The stored `disposition` each act is written as. The ONE place the schema gap
+ * is crossed; a reader that wants to know what a stored row means asks here.
+ */
+export const REVIEW_SETTLED_ACT_STORAGE: Readonly<Record<ReviewSettledAct, string>> = {
+  continued: "approve",
+  superseded: "changes_requested",
+  rejected: "reject",
+};
+
+/** The word each act reads as. One table, so the card and the rail cannot drift. */
+export const REVIEW_SETTLED_ACT_TITLE: Readonly<Record<ReviewSettledAct, string>> = {
+  continued: "Continued",
+  superseded: "Superseded",
+  rejected: "Rejected",
+};
+
+/**
+ * The act a STORED disposition records, or null where this build cannot say.
+ * The inverse of `REVIEW_SETTLED_ACT_STORAGE`, derived from it rather than
+ * written out a second time.
+ */
+export function reviewSettledAct(disposition: string | null | undefined): ReviewSettledAct | null {
+  if (disposition == null || disposition === "") return null;
+  for (const act of Object.keys(REVIEW_SETTLED_ACT_STORAGE) as ReviewSettledAct[]) {
+    if (REVIEW_SETTLED_ACT_STORAGE[act] === disposition) return act;
+  }
+  return null;
+}
+
+/** The act a WIRE outcome records. The card reads the outcome off the wire; the
+ *  rail reads the stored column — both arrive at the same act. */
+export function reviewSettledActForOutcome(outcome: ReviewSettledOutcome): ReviewSettledAct {
   switch (outcome) {
     case "approved":
+      return "continued";
+    case "rejected":
+      return "rejected";
+    case "changes_requested":
+      return "superseded";
+  }
+}
+
+/**
+ * The user-facing copy for a settled gate whose outcome is recorded. Title +
+ * one line; NO refresh (the component draws none) — the reading is final.
+ *
+ * THE MARKER NAMES THE ACT, NEVER A PERSON (cinatra#3080, fix leg 6). It used to
+ * read `${title} by ${name}`, and the ratified drawings name nobody in any
+ * settled marker they draw. The cards drawing draws the settled reading twice in
+ * §XIII.1 — "Settled — the same pane, the marker below the whole card, no floor"
+ * and "Settled, outside the conversation — the same display, no floor, and the
+ * marker below the whole gate" — and the marker in both frames reads "Continued
+ * · Decided on the revision above. These are the words that will be sent." §II's
+ * own two settled cards read "Continued · Decided on the revision above. The post
+ * keeps the revision it was continued at, and this review does not re-open." and
+ * "Superseded · The review of the earlier picture — kept, and no longer open. Its
+ * successor is below." Not one of the four carries a name. The decider still
+ * travels on the wire for the audit trail; this surface stopped drawing one.
+ */
+export function reviewSettledCopy(outcome: ReviewSettledOutcome): {
+  title: string;
+  body: string;
+} {
+  switch (outcome) {
+    case "approved":
+      // CONTINUED (cinatra#3080). The STORED disposition is still `approve` —
+      // Continue performs the former approve transition and keeps writing the
+      // same value, with no migration — so this is a relabel of the READING and
+      // nothing else: a gate decided before the floor was redrawn and one
+      // decided after it are the same row and read the same way.
       return {
-        title: `Approved${by}`,
-        body: "The gate is resolved and the run has been released to continue.",
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
+        // THE DRAWN SENTENCE, VERBATIM (fix leg 7). The eighth proof round
+        // measured this line as "The gate is resolved and the run has been
+        // released to continue." — a sentence about the RUN. The drawing's
+        // settled marker outside a conversation reads about the WORK:
+        // "Decided on the revision above. These are the words that will be
+        // sent." The comment above this function already quoted it; the copy
+        // had not caught up.
+        body: "Decided on the revision above. These are the words that will be sent.",
       };
     case "rejected":
+      // LEGACY ONLY (cinatra#3080). No new decision can produce a reject — the
+      // decision operation refuses one — but rows decided before the retirement
+      // must still read as what they were, so the copy stays.
       return {
-        title: `Rejected${by}`,
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
+      // SUPERSEDED (cinatra#3080 acceptance item 4). The STORED disposition is
+      // unchanged — Regenerate settles the gate "in the change road's existing
+      // representation", with no migration — so this is a relabel of the READING
+      // and nothing else. It reads as SUPERSEDED because on this floor the
+      // canonical change operation has exactly ONE caller, Regenerate, and the
+      // drawing's word for the gate a regeneration settles is `superseded`: the
+      // reviewed revision is kept and displayed, and its successor opens beneath
+      // it on the next revision. Nothing was turned back and nothing was lost.
       return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
+        title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
+        body: "The gate is settled as superseded. The reviewed revision is kept as it was, and the review has moved on from it.",
       };
   }
+}
+
+/**
+ * THE SETTLED WORD FOR A STORED DISPOSITION (cinatra#3080).
+ *
+ * The card reads its outcome off the wire's closed set; the RAIL reads the gate
+ * row's own column, and used to print it — so a settled Review entry read
+ * APPROVE after a Continue and CHANGES_REQUESTED after a Regenerate, the
+ * machine's vocabulary on a person's surface. The drawing's rail "records how it
+ * was settled (continued, superseded by a regeneration, changes requested)", so
+ * every place a disposition is DISPLAYED comes here for the word.
+ *
+ * Titles only, and they agree with `reviewSettledCopy` by test, so the rail row
+ * and the card above it cannot drift into two names for one decision. A value
+ * this build does not know reads "Settled" — true, and never a raw column.
+ */
+export function reviewSettledWord(disposition: string | null | undefined): string {
+  const act = reviewSettledAct(disposition);
+  return act === null ? "Settled" : REVIEW_SETTLED_ACT_TITLE[act];
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +332,20 @@ export function reviewTypeLabel(objectType: string): string {
     ? objectType.slice(objectType.indexOf("/") + 1)
     : objectType;
   const base = (afterScope.split(":")[0] ?? afterScope).trim();
-  const pretty = base
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  const words = base.split("-").filter(Boolean);
+  // THE PILL READS THE KIND ALONE (cinatra#3080, fix leg 7). Two things made it
+  // read the type id back instead. The packaging noun — a type packaged as
+  // `blog-post-artifact` is still a blog post, and the drawing's pills say so:
+  // `@cinatra-ai/screenshot-artifact` draws "Screenshot",
+  // `@cinatra-ai/slide-deck-artifact` draws "Slide deck",
+  // `@cinatra-ai/brand-voice-artifact` draws "Brand voice". And the CASE: every
+  // pill the drawing draws is SENTENCE case — "Blog post", "Blog image", "Email
+  // body", "Slide deck" — never the Title Case the eighth proof round measured
+  // ("Blog Post Artifact").
+  const kind = words.filter((w) => w !== "artifact" && w !== "artifacts");
+  const spoken = kind.length > 0 ? kind : words;
+  const pretty = spoken
+    .map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(" ");
   return pretty || objectType;
 }
@@ -242,8 +378,8 @@ export function reviewTargetRowFacts(
   now: Date = new Date(),
 ): string[] {
   return [
-    artifact.ownerLevel,
-    artifact.visibility,
+    spokenFact(artifact.ownerLevel),
+    spokenFact(artifact.visibility),
     artifact.mime,
     `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
   ];
@@ -271,7 +407,20 @@ export function reviewTargetRowFacts(
 function relativeUpdatedTime(updatedAt: string, now: Date): string {
   const at = new Date(updatedAt);
   if (Number.isNaN(at.getTime())) return updatedAt;
-  return formatDistance(at, now, { addSuffix: true });
+  // THE DRAWN ABBREVIATION (cinatra#3080, fix leg 7). §IV of the ratified review
+  // drawing prints the identity line's last segment as "updated 8 min ago", not
+  // "8 minutes ago": the line is mono, ten pixels and already carrying five
+  // segments, and the drawing spends its width on the facts rather than on the
+  // unit. Only the unit is abbreviated; every other magnitude keeps the shared
+  // formatter's own words.
+  return formatDistance(at, now, { addSuffix: true }).replace(/\bminutes?\b/, "min");
+}
+
+/** A row fact as the drawing prints it: the substrate's own word, capitalized
+ *  for a reading ("Team", "Private"), never a labelled prefix and never a raw
+ *  lower-case column value dropped onto a person's line. */
+function spokenFact(value: string): string {
+  return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
@@ -292,7 +441,8 @@ export function reviewRevisionMarker(representationRevisionId: string): {
 // ---------------------------------------------------------------------------
 
 export interface ReviewDecisionPermissions {
-  /** Terminal Approve / Reject — requires approve access on the run. */
+  /** The terminal floor actions, Continue and Regenerate — both require the
+   *  run's decision (approve) access; only the WORDS retired, not the right. */
   canDecide: boolean;
   /** Comment — requires respond access on the run. */
   canComment: boolean;
@@ -306,9 +456,9 @@ export function reviewDecideDisabledReason(
 ): string | null {
   if (perms.canDecide) return null;
   if (perms.canComment) {
-    return "A terminal Approve / Reject needs approve access on the run — you can Comment, but not decide.";
+    return "Continue and Regenerate need decision access on the run — you can Comment, but not decide.";
   }
-  return "You do not have approve access on the run, so a terminal decision is disabled.";
+  return "You do not have decision access on the run, so Continue and Regenerate are disabled.";
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +535,17 @@ export type ReviewSurfaceModel =
        * pictures are additive context.
        */
       pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+      /**
+       * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080
+       * item 5) — the review SCREEN's own pre-filled field, beside the note.
+       *
+       * On the surface model rather than on a target's `props`, and that is the
+       * point: `props` is what the DISPLAY is handed, and the display shows the
+       * work, never the instructions the work was made from. Null when the gate
+       * pins no single target that records one, and the screen then draws the
+       * note alone exactly as it did before this field existed.
+       */
+      picturePrompt: string | null;
       permissions: ReviewDecisionPermissions;
     };
 
@@ -422,13 +583,16 @@ export type ReviewSubmitOutcome =
   /** A transient failure — the decision did not commit; safe to retry. */
   | { kind: "error"; message: string };
 
-/** The disposition set the decision bar offers (§IV) — exactly three, no
- * separate "request changes". */
-export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = [
-  "approve",
-  "reject",
-  "comment",
-];
+/**
+ * The set a NEW decision may carry (§IV, redrawn by cinatra#3080).
+ *
+ * NOT the floor: the floor is Comment · Regenerate · Continue, and it lives in
+ * `@/lib/artifacts/review-surface-model`. This is what reaches the #1807 decision core
+ * once the floor's vocabulary has been resolved — Continue's stored `approve`
+ * and Comment's `comment`. Regenerate is absent because it takes the change
+ * road, and `reject` is absent because it is retired.
+ */
+export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = ["approve", "comment"];
 
 /**
  * Map the #1807 decision core's typed `SubmitDecisionResult` to the surface's
@@ -455,7 +619,7 @@ export function mapSubmitResultToOutcome(
       return {
         kind: "not-permitted",
         message:
-          "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+          "You do not have the run access this decision needs — Continue and Regenerate require decision access, a comment requires respond access.",
       };
     // FAIL-CLOSED: a conflicting/settled gate is a block, never a silent success.
     case "gate-conflict":
@@ -511,9 +675,263 @@ export function mapChangesRequestedToOutcome(
       return { kind: "blocked", reason: "revision-not-live" };
     case "targets-mismatch":
       return { kind: "blocked", reason: "targets-mismatch" };
+    case "regenerate-unavailable":
+      // NOT a block: the operation refused BEFORE it settled anything, so the
+      // gate is still pending and the floor is still live. The reason the store
+      // stated is the reason the person reads — carried through verbatim rather
+      // than replaced by a generic line, because "it could not be recorded" and
+      // "there is nothing here that can make this again" are different answers.
+      return { kind: "error", message: result.error };
     default:
       // invalid-request / idempotency-key-reuse / empty-feedback / a transient
       // failure — the decision did not commit; safe to retry.
       return { kind: "error", message: "The change request could not be recorded." };
   }
+}
+
+// ===========================================================================
+// THE REVIEW FLOOR (cinatra#3080, part of epic #3023 — `PLAN: Agents Lifecycle
+// (C)` §6 step 4). The one place the three review actions, their labels, their
+// required access and the words a person may type for them are written down.
+//
+// "On every review the floor offers three things and no more — Comment, the note
+// that decides nothing; Regenerate, which sends the person's words to the
+// producing step for the next revision; Continue, which goes on with the frozen
+// revision — a person who wants neither leaves the run as it is, so there is no
+// Reject; and Regenerate lives only on the review screen, never in an artifact's
+// renderer."
+//
+// THREE THINGS THIS SECTION IS, AND ONE IT IS NOT.
+//
+//   · It is the FLOOR's vocabulary — what is drawn, in what order, under what
+//     access. Every surface (the card in the chat, the review page, the run
+//     page's review step, the card inside a third-party application) reads its
+//     labels from here, so "the same three and no more" is true by construction
+//     rather than by four independent button lists agreeing.
+//   · It is the TYPED ROAD — which floor action a typed word asks for. One pure
+//     function, so "continue" and the compatibility alias "approve" cannot drift
+//     apart, and "reject" has exactly one answer in exactly one place.
+//   · It is the RETIREMENT of Reject, whose one refusal sentence lives below.
+//
+// It is NOT a second decision path. A floor action resolves to the disposition
+// the #1807 decision core already takes (`continue` → the stored `approve`,
+// unchanged and unmigrated) or, for Regenerate, to NO disposition at all —
+// Regenerate rides the change road's canonical `changes_requested` operation,
+// and `floorActionDisposition` deliberately answers null for it rather than
+// inventing a fourth stored value.
+//
+// PERSISTENCE IS UNTOUCHED. Continue keeps storing `approve` in
+// `artifact_review_gates.disposition`; a legacy `approve` row reads as Continued
+// and a legacy `reject` row stays readable. There is no migration here, and none
+// is needed: the change is what the floor OFFERS, not what the store HOLDS.
+//
+// IT LIVES IN THIS MODULE, not in one of its own, and that is a deliberate
+// choice rather than a convenience: this file is already THE pure, client-safe
+// surface model every review host imports, and the route-graph ratchet is a
+// no-new-rot budget — a new leaf on four locked routes' first-party graphs would
+// have to be paid for with a ceiling raise. The vocabulary belongs to the
+// surface model; putting it here costs those graphs nothing.
+// ===========================================================================
+
+/** The three review actions a pending review offers, and no fourth. */
+export type ReviewFloorAction = "comment" | "regenerate" | "continue";
+
+/**
+ * The floor, IN DRAWN ORDER: the note that decides nothing, then the two acts
+ * that settle the gate. The order is part of the drawing, so it is pinned here
+ * and asserted rather than left to each surface's JSX.
+ */
+export const REVIEW_FLOOR_ACTIONS: readonly ReviewFloorAction[] = [
+  "comment",
+  "regenerate",
+  "continue",
+] as const;
+
+/** The words on the buttons. The ONE source every surface renders from. */
+export const REVIEW_FLOOR_LABELS: Record<ReviewFloorAction, string> = {
+  comment: "Comment",
+  regenerate: "Regenerate",
+  continue: "Continue",
+};
+
+/**
+ * THE ANSWER TO A REJECT, wherever it is asked — the button that no longer
+ * exists, the typed word, the API. ONE sentence, defined here with the rest of
+ * the floor's vocabulary and quoted verbatim by the decision operation that
+ * refuses the word, so a person hears the same answer wherever they ask.
+ */
+export const REVIEW_REJECT_RETIRED_REASON =
+  "There is no Reject on a review. Ask for another go with Regenerate, or leave the run as it is.";
+
+/** Regenerate carries the person's words to the producing step, so it cannot be
+ *  pressed with nothing to carry. Refused with the reason, never silently. */
+export const REGENERATE_NEEDS_A_NOTE =
+  "Regenerate needs a note saying what to change — the note is what goes back to the step that made this.";
+
+/**
+ * A gate that still pins MORE THAN ONE target (a legacy row from before
+ * one-review-per-artifact) cannot say which piece of work to remake, so
+ * Regenerate is refused on it WITH THE REASON — and Comment and Continue still
+ * work. No new multi-target gate is minted, so this is a reading of history, not
+ * a state the product can reach again.
+ */
+export const REGENERATE_MULTI_TARGET_REASON =
+  "This review covers more than one piece of work, so Regenerate cannot say which one to make again. Comment or Continue instead.";
+
+/** A review with no producing step behind it (a batch gate, or a review the
+ *  lifecycle road never opened) has nowhere to send the words back to. */
+/**
+ * The ledger-row property a producing step records the prompt it worked from on.
+ * ONE name, read by the surface and never guessed: a row that carries it was
+ * made from a prompt, and that is the whole of what the floor asks.
+ */
+export const RECORDED_PROMPT_PROPERTY = "imagePrompt";
+
+export const REGENERATE_NOT_ON_THIS_REVIEW =
+  "This review has no producing step to send the words back to, so Regenerate is not available on it. Comment or Continue instead.";
+
+/**
+ * THE ANSWER WHEN NOTHING CAN MAKE THE WORK AGAIN (cinatra#3080 item 4).
+ *
+ * The review IS on the lifecycle road — it has a producing step on paper — but
+ * that step declares no repair capability and no other route can remake this
+ * artifact, so a Regenerate would settle the gate and never bring a successor
+ * back. Refused with this reason and the gate left PENDING: a review closed for
+ * a revision that is not coming is worse than a refusal, because the run is
+ * released from a decision nobody made.
+ */
+export const REGENERATE_HAS_NO_PRODUCING_STEP =
+  "Nothing can make this piece of work again, so Regenerate would close the review with no new revision to come. Comment or Continue instead.";
+
+/** The same refusal, for a lineage that has already been remade as many times as
+ *  a review allows. The bound exists so a regeneration loop cannot run forever;
+ *  reaching it leaves the gate pending rather than settling it into nothing. */
+export const REGENERATE_BOUND_REACHED =
+  "This work has already been sent back to be made again as many times as a review allows. Comment or Continue instead.";
+
+/**
+ * What a CALLER may submit. The three floor actions, plus the two retired words
+ * every already-shipped client and every stored row still speaks: `approve`
+ * (a compatibility alias of Continue, decided in the issue so the existing typed
+ * decision tests MOVE rather than break) and `reject` (refused, with the reason).
+ */
+export type ReviewFloorSubmission = ReviewFloorAction | "approve" | "reject";
+
+export type ResolvedFloorSubmission =
+  | { kind: "action"; action: ReviewFloorAction; alias: boolean }
+  | { kind: "retired"; reason: string };
+
+const FLOOR_ACTION_SET: ReadonlySet<string> = new Set(REVIEW_FLOOR_ACTIONS);
+
+/**
+ * Resolve a submitted word to the floor action it asks for.
+ *
+ * `approve` resolves to Continue and says so (`alias: true`), because a caller
+ * that still speaks the old word gets the new behaviour and the surfaces can
+ * still tell the two apart when they report what happened. `reject` resolves to
+ * nothing at all — it is the ONE word with no action behind it.
+ */
+export function resolveReviewFloorSubmission(
+  submission: ReviewFloorSubmission | string,
+): ResolvedFloorSubmission {
+  if (submission === "reject") {
+    return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
+  }
+  if (submission === "approve") {
+    return { kind: "action", action: "continue", alias: true };
+  }
+  if (FLOOR_ACTION_SET.has(submission)) {
+    return { kind: "action", action: submission as ReviewFloorAction, alias: false };
+  }
+  return { kind: "retired", reason: `Unknown review action "${submission}".` };
+}
+
+/**
+ * The gate disposition a floor action STORES.
+ *
+ * Continue keeps storing `approve` — the same value, the same fingerprint
+ * identity, no migration. Comment stores `comment`. Regenerate stores NOTHING
+ * through this road: it settles the gate as superseded through the change road's
+ * own canonical operation, which records `changes_requested` itself, so a null
+ * here is the honest answer and the action that reads it must take the other
+ * road rather than fall back to a disposition.
+ */
+export function floorActionDisposition(action: ReviewFloorAction): ReviewDisposition | null {
+  switch (action) {
+    case "continue":
+      return "approve";
+    case "comment":
+      return "comment";
+    case "regenerate":
+      return null;
+  }
+}
+
+/**
+ * The run access a floor action needs.
+ *
+ * Regenerate SETTLES THE GATE (as superseded), so it needs exactly what a
+ * terminal decision needs — not the reader's respond access. Comment keeps the
+ * respond access it has always had.
+ */
+export function floorActionRunAccessOp(action: ReviewFloorAction): ReviewRunAccessOp {
+  return action === "comment" ? "respondToHitl" : "approveHitl";
+}
+
+/** The typed road's answer for a word that asks for nothing on the floor. */
+export type TypedReviewWord = ResolvedFloorSubmission | { kind: "unknown" };
+
+/**
+ * THE TYPED ROAD (acceptance item 6). Which floor action a person's typed word
+ * asks for, deterministically and in one place.
+ *
+ * A word that is not a floor word is `unknown` — ordinary chat, never a
+ * decision. `reject` is NOT unknown: it is a word the platform recognises and
+ * refuses with the reason, because "we did not understand you" and "there is no
+ * such thing here" are different answers and the person is owed the second one.
+ */
+export function resolveTypedReviewWord(message: string): TypedReviewWord {
+  const word = message.trim().replace(/[.!]+$/, "").toLowerCase();
+  if (word === "reject" || word === "rejected") {
+    return { kind: "retired", reason: REVIEW_REJECT_RETIRED_REASON };
+  }
+  if (word === "approve" || word === "approved") {
+    return { kind: "action", action: "continue", alias: true };
+  }
+  if (word === "continue" || word === "continued") {
+    return { kind: "action", action: "continue", alias: false };
+  }
+  if (word === "regenerate") return { kind: "action", action: "regenerate", alias: false };
+  if (word === "comment") return { kind: "action", action: "comment", alias: false };
+  return { kind: "unknown" };
+}
+
+/**
+ * THE PICTURE'S PROMPT (acceptance item 5), read off the reviewed revision's
+ * ledger row.
+ *
+ * TYPE-AGNOSTIC, and deliberately so. It does NOT ask "is this a picture" — the
+ * review surface is G1-clean and may not key on an artifact type, a mime family
+ * or a renderer identity, and a core that sniffed `image/` would be exactly the
+ * identity keying the artifact-UI boundary forbids. What it asks instead is the
+ * only question the floor actually needs answered: DOES THE REVIEWED REVISION'S
+ * LEDGER ROW RECORD THE PROMPT IT WAS MADE FROM? A row that records one has a
+ * prompt to show and re-send; a row that does not shows the note alone.
+ *
+ * That reads the same way for the picture the drawing is about and for anything
+ * else a producing step later records a prompt on, which is the correct
+ * behaviour rather than a lucky one: the field belongs to "made from a prompt",
+ * not to "is an image".
+ *
+ * THE DISPLAY IS NOT GIVEN THIS. The prompt is the review SCREEN's field, beside
+ * the note; the renderer props contract carries no prompt at all, so there is
+ * nothing for a display to show even if one wanted to.
+ */
+export function reviewPicturePrompt(input: {
+  properties: Record<string, unknown> | null | undefined;
+}): string | null {
+  const raw = input.properties?.[RECORDED_PROMPT_PROPERTY];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
