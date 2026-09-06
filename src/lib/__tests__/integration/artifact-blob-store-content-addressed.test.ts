@@ -30,6 +30,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub that lacks the
 // named exports the artifact-creation graph imports. Mock EXACTLY the
@@ -49,7 +50,7 @@ const FIXTURE_OBJECT_TYPE = "@cinatra-ai/test-fixture-artifact:doc";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 // vitest.config.ts sets the placeholder `unused:unused@` URL when the host
 // shell did not export a real value — skip on it (zero CI noise).
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const ORG = "org-int-926";
 

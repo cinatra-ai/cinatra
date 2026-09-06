@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "../../vitest.placeholder-db-url";
 
 const root = path.resolve(__dirname, "../..");
 
@@ -390,7 +391,7 @@ export default defineConfig({
     env: {
       SUPABASE_DB_URL:
         process.env.SUPABASE_DB_URL ??
-        "postgres://unused:unused@localhost:5432/unused",
+        ROOT_SUITE_PLACEHOLDER_DB_URL,
     },
   },
 });
