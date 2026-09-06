@@ -24,6 +24,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, createHmac } from "node:crypto";
 
+import {
+  CREDENTIAL_FINGERPRINT_VERSION_PREFIX,
+  deriveKeyedCredentialFingerprint,
+} from "@/lib/llm-credential-fingerprint";
+
+/** 64 hex chars = 32 bytes: a valid host secret for the keyed derivation. */
+const HOST_SECRET =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 /** The live connector surface. `null` = connector not installed/active. */
 let surface: { getConfiguredAPIKey?: () => Promise<string | null> } | null = null;
 /** The LEGACY connector-config row. `null` = purged, the real post-save state. */
@@ -129,6 +138,7 @@ beforeEach(() => {
   syncRows.clear();
   syncMapStatePort = null;
   delete process.env.BETTER_AUTH_SECRET;
+  process.env.CINATRA_ENCRYPTION_KEY = HOST_SECRET;
   process.env.SUPABASE_DB_URL = "postgresql://u@127.0.0.1:5432/cinatra_3202";
   process.env.SUPABASE_SCHEMA = "cinatra";
   // The registration flag is a per-PROCESS fact anchored on globalThis; clear it
@@ -140,11 +150,18 @@ describe("cinatra#3202 — a service-held key with the legacy row purged", () =>
   it("SEAM 1: the namespace fingerprint resolves the real key (it used to be null)", async () => {
     const fp = await deriveApiKeyFingerprint();
 
-    expect(fp).toBe(createHash("sha256").update(SERVICE_HELD_KEY).digest("hex"));
-    // Still non-reversible, still keyed when the host secret is present.
+    // It resolves the REAL service-held key (leg 1), and it does so on the ONE
+    // host-owned KEYED road for a credential (leg 2) — never a second, plain
+    // digest of the same key.
+    expect(fp).toBe(
+      deriveKeyedCredentialFingerprint("anthropic", SERVICE_HELD_KEY, HOST_SECRET),
+    );
+    expect(fp!.startsWith(CREDENTIAL_FINGERPRINT_VERSION_PREFIX)).toBe(true);
     expect(fp).not.toContain(SERVICE_HELD_KEY);
+    expect(fp).not.toBe(createHash("sha256").update(SERVICE_HELD_KEY).digest("hex"));
     process.env.BETTER_AUTH_SECRET = "app-secret";
-    expect(await deriveApiKeyFingerprint()).toBe(
+    expect(await deriveApiKeyFingerprint()).toBe(fp);
+    expect(await deriveApiKeyFingerprint()).not.toBe(
       createHmac("sha256", "app-secret").update(SERVICE_HELD_KEY).digest("hex"),
     );
   });

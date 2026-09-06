@@ -12,6 +12,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, createHmac } from "node:crypto";
 
+// cinatra#3202 fix leg 2: the credential fingerprint takes the host-owned KEYED
+// road, so the expectation is the credential-fingerprint module's OWN value —
+// never a second, locally recomputed digest of the key.
+import {
+  CREDENTIAL_FINGERPRINT_VERSION_PREFIX,
+  deriveKeyedCredentialFingerprint,
+} from "@/lib/llm-credential-fingerprint";
+
+/** 64 hex chars = 32 bytes: a valid host secret for the keyed derivation. */
+const HOST_SECRET =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 const readAnthropicConnection = vi.fn<(...a: never[]) => unknown>();
 
 // A3 (cinatra#1363): the lifecycle-gate reader buildSyncCandidates now calls.
@@ -164,6 +176,7 @@ const ORIG_ENV = { ...process.env };
 
 beforeEach(() => {
   readAnthropicConnection.mockReset();
+  process.env.CINATRA_ENCRYPTION_KEY = HOST_SECRET;
 });
 
 afterEach(() => {
@@ -181,26 +194,52 @@ describe("deriveApiKeyFingerprint", () => {
   it("is non-reversible (no substring of the raw key) and stable", async () => {
     const apiKey = "sk-ant-SUPER-SECRET-12345";
     readAnthropicConnection.mockReturnValue({ apiKey });
-    delete process.env.BETTER_AUTH_SECRET;
     const fp1 = (await deriveApiKeyFingerprint())!;
     const fp2 = (await deriveApiKeyFingerprint())!;
     expect(fp1).toBe(fp2); // stable
     expect(fp1).not.toContain("SECRET");
     expect(fp1).not.toContain(apiKey);
-    expect(fp1).toBe(createHash("sha256").update(apiKey).digest("hex"));
   });
 
-  it("uses HMAC keyed by BETTER_AUTH_SECRET when present", async () => {
+  // cinatra#3202 fix leg 2 — ONE fingerprint road for the credential.
+  it("is the credential-fingerprint module's OWN keyed value for the same key", async () => {
+    const apiKey = "sk-ant-SUPER-SECRET-12345";
+    readAnthropicConnection.mockReturnValue({ apiKey });
+
+    expect(await deriveApiKeyFingerprint()).toBe(
+      deriveKeyedCredentialFingerprint("anthropic", apiKey, HOST_SECRET),
+    );
+    expect((await deriveApiKeyFingerprint())!.startsWith(
+      CREDENTIAL_FINGERPRINT_VERSION_PREFIX,
+    )).toBe(true);
+  });
+
+  it("is NEVER a bare sha256 of the key, and never keyed by BETTER_AUTH_SECRET", async () => {
     const apiKey = "sk-ant-abc";
     readAnthropicConnection.mockReturnValue({ apiKey });
+
+    delete process.env.BETTER_AUTH_SECRET;
+    const withoutAppSecret = await deriveApiKeyFingerprint();
+    expect(withoutAppSecret).not.toBe(createHash("sha256").update(apiKey).digest("hex"));
+
+    // The app secret is no longer an input at all: the host secret alone keys
+    // the digest, so setting it changes nothing.
     process.env.BETTER_AUTH_SECRET = "app-secret";
-    expect(await deriveApiKeyFingerprint()).toBe(
+    const withAppSecret = await deriveApiKeyFingerprint();
+    expect(withAppSecret).toBe(withoutAppSecret);
+    expect(withAppSecret).not.toBe(
       createHmac("sha256", "app-secret").update(apiKey).digest("hex"),
     );
   });
 
+  // Fail closed: no host secret ⇒ no fingerprint (never a weaker digest).
+  it("returns null when the host secret is unavailable", async () => {
+    readAnthropicConnection.mockReturnValue({ apiKey: "sk-ant-abc" });
+    delete process.env.CINATRA_ENCRYPTION_KEY;
+    expect(await deriveApiKeyFingerprint()).toBeNull();
+  });
+
   it("different keys ⇒ different fingerprints (no collision)", async () => {
-    delete process.env.BETTER_AUTH_SECRET;
     readAnthropicConnection.mockReturnValue({ apiKey: "key-A" });
     const a = await deriveApiKeyFingerprint();
     readAnthropicConnection.mockReturnValue({ apiKey: "key-B" });

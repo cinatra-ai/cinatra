@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 
 import {
@@ -42,6 +42,7 @@ import {
 } from "@/lib/anthropic-skill-sync-dao";
 import { acquireSkillLease } from "@/lib/anthropic-skill-lease-dao";
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+import { deriveHostKeyedCredentialFingerprint } from "@/lib/llm-credential-fingerprint";
 
 /**
  * In-flight reference lease TTL. Longer than a creation run so a version a run
@@ -119,22 +120,31 @@ export async function resolveConfiguredAnthropicApiKey(): Promise<string | null>
   return apiKey.length > 0 ? apiKey : null;
 }
 
+/** The provider id this namespace's credential is bound to. */
+const ANTHROPIC_CREDENTIAL_PROVIDER = "anthropic";
+
 /**
- * Non-reversible digest of a raw key. HMAC-SHA256 keyed by BETTER_AUTH_SECRET
- * when available (defence-in-depth), else plain SHA-256. Pure: it neither reads
- * nor logs anything, and the raw key never leaves the caller.
+ * Non-reversible digest of a raw key — ONE road for the credential: the
+ * host-owned, versioned, HOST-SECRET-KEYED derivation in
+ * `@/lib/llm-credential-fingerprint`, never a second digest of the same
+ * credential here. An unkeyed digest of an API key is an offline-crackable
+ * oracle, and this value is persisted verbatim as a public identifier
+ * (`anthropic_skill_sync.api_key_fingerprint`), so it must not be one.
+ *
+ * `null` when the host secret is unavailable — fail closed, exactly like an
+ * absent key: the namespace is undeterminable, and a weaker digest is never a
+ * substitute. Pure: it neither reads the database nor logs anything, and the
+ * raw key never leaves the caller.
  */
-function fingerprintApiKey(apiKey: string): string {
-  const secret = process.env.BETTER_AUTH_SECRET?.trim();
-  return secret
-    ? createHmac("sha256", secret).update(apiKey).digest("hex")
-    : createHash("sha256").update(apiKey).digest("hex");
+function fingerprintApiKey(apiKey: string): string | null {
+  return deriveHostKeyedCredentialFingerprint(ANTHROPIC_CREDENTIAL_PROVIDER, apiKey);
 }
 
 /**
  * Non-reversible fingerprint of the configured Anthropic API key. NEVER the raw
- * key; never logged. Returns null if no key is configured. The key is resolved
- * through {@link resolveConfiguredAnthropicApiKey}, so this is async.
+ * key; never logged. Returns null if no key is configured, or if the host
+ * secret that keys the derivation is unavailable. The key is resolved through
+ * {@link resolveConfiguredAnthropicApiKey}, so this is async.
  */
 export async function deriveApiKeyFingerprint(): Promise<string | null> {
   const apiKey = await resolveConfiguredAnthropicApiKey();
@@ -580,6 +590,18 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
     return { ok: true, outcomes: [] }; // no Anthropic key configured ⇒ nothing to mirror
   }
   const fp = fingerprintApiKey(apiKey);
+  if (!fp) {
+    // The host secret that keys the credential fingerprint is unavailable, so
+    // the namespace cannot be identified. Fail closed on the SAME channel an
+    // undeterminable environment uses — never sync under a guessed namespace.
+    return {
+      ok: false,
+      outcomes: [],
+      namespaceError:
+        "[anthropic-skill-sync] cannot derive the API-key namespace: the host " +
+        "encryption key is unset or too short — refusing to sync.",
+    };
+  }
   let env: string;
   try {
     env = deriveEnvironmentNamespace();
