@@ -1,22 +1,44 @@
 /**
- * THE ARTIFACT PAGE'S HEADER READS THE HEAD REVISION, NOT THE FIRST ONE.
+ * THE ARTIFACT PAGE'S HEADER READS ONE REVISION — AND NO LONGER READS A SIZE.
  *
- * cinatra#3026 (epic #3023, lifecycle-c W2). The page's header describes the
- * document under it — "text/markdown · N bytes". The form was already read from
- * the resolved head revision; the SIZE was read from `artifact.size`, the value
- * cached on the object row when the artifact was created.
+ * cinatra#3026 (epic #3023, lifecycle-c W2) fixed a split reading. The header
+ * described the document under it as "text/markdown · N bytes"; the form was
+ * read from the resolved head revision, but the SIZE was read from
+ * `artifact.size`, the value cached on the object row when the artifact was
+ * created.
  *
  * The save road behind the editor APPENDS a new revision with an expected base
  * and never touches that row, by design: a revision is immutable and the row's
  * cached size belongs to the revision that created it. So the reading stayed at
  * the first revision's size through every later save — measured on a real
  * surface as "6712 bytes" still on screen after five saved change sets, over a
- * document the store had grown.
+ * document the store had grown. #3026 fixed it by reading both halves of the
+ * sentence from the SAME resolved revision.
  *
- * Both readings are already in hand at that point in the page: `resolved` is the
- * head revision the editor was opened on, and it carries its own `sizeBytes`
- * beside the `mime` the header already reads from it. This suite pins that the
- * header reads the same revision for both halves of its sentence.
+ * WHAT CHANGED, AND WHY THIS SUITE CHANGED WITH IT (cinatra#3091, lifecycle-d
+ * W3). The sentence #3026 repaired no longer exists. The ratified drawing
+ * (artifact-review §IV read with §XI) closes this header at a mono meta line of
+ * SIX facts — type, pinned revision, owner level, visibility, MIME, updated
+ * time — and names no seventh. A size is not one of them, so the page hands the
+ * header none at all; `w3-artifact-page-header-closed` pins the closed line and
+ * the six cells from the other side.
+ *
+ * So #3026's invariant is not repealed here, it is narrowed to what the header
+ * still reads. The header's remaining revision-derived fact is the FORM, and it
+ * must still resolve head-first from the same one resolution the editor opens
+ * on. The half of #3026 that guarded the size travels with the size: a drawn
+ * size now belongs to the per-kind download card (§V.2), not to this header,
+ * and the rule it must keep is the same rule — a size drawn beside a form is
+ * read from the revision that form came from, never from the row's cached
+ * value.
+ *
+ * OPEN, AND DELIBERATELY NOT CLOSED IN THIS LEG: the host's own generic floor,
+ * `handlers/fallback-handler.tsx`, is §V.2's card for a file nothing of ours can
+ * read, and it still draws its Size row from `artifact.size` — the row's cached
+ * value, the same stale reading #3026 removed from the header. Retargeting that
+ * card at the resolved revision changes a drawn reading, so it is left to the
+ * leg that proves this surface rather than taken silently here; the assertion
+ * that would pin it is named in that leg, not written red in this file.
  */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -35,20 +57,26 @@ describe("the artifact page's header describes the HEAD revision (cinatra#3026)"
     expect(existsSync(path.join(ROOT, PAGE_PATH))).toBe(true);
   });
 
-  it("the header's byte count comes from the resolved head revision", () => {
-    expect(PAGE).toMatch(/const sizeBytes = resolved\?\.sizeBytes \?\? artifact\.size;/);
-    expect(PAGE).toMatch(/description=\{`\$\{mime \|\| "unknown"\} · \$\{sizeBytes\} bytes`\}/);
+  it("the header is handed no byte count at all — the drawn line carries none", () => {
+    // The reading #3026 repaired was removed rather than re-pointed: the
+    // drawing closes the meta line without a size, so the page resolves none
+    // and passes none. This is the assertion that would have gone red before
+    // the header was closed, when the page still computed a size for it.
+    expect(PAGE).not.toContain("sizeBytes");
+    expect(PAGE).not.toMatch(/\$\{mime \|\| "unknown"\} · \$\{sizeBytes\} bytes/);
   });
 
   it("the header no longer reads the size cached on the object row at creation", () => {
+    // Unchanged from #3026 and still the point: whatever this page draws, it
+    // never draws the row's creation-time size as a count of bytes.
     expect(PAGE).not.toMatch(/\$\{artifact\.size\} bytes/);
   });
 
-  it("the form and the size are read from ONE revision — the same one", () => {
-    // `mime` already resolves head-first with the row as its floor; the size
-    // must fall back the same way rather than by a different rule.
+  it("the fact the header DOES take from a revision is read head-first", () => {
+    // `mime` is the surviving revision-derived cell of the six. It resolves
+    // head-first with the row as its floor — the rule #3026 established, kept
+    // for the reading that outlived the sentence.
     expect(PAGE).toMatch(/const mime = resolved\?\.mime \?\? artifact\.mime/);
-    expect(PAGE).toMatch(/resolved\?\.sizeBytes \?\? artifact\.size/);
   });
 
   it("the resolution the header reads is the EDITOR's revision, not a fresh latest", () => {

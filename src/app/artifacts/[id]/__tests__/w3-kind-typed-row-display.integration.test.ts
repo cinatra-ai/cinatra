@@ -37,6 +37,7 @@ import { resolveEffectiveIdentity } from "@cinatra-ai/objects/effective-identity
 import { parseFrontmatter } from "../../../../../packages/skills/src/agent-skill-paths";
 
 import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 import { resolveArtifactDispatchInputs, _resetFirstPartySeedForTests } from "../renderer-resolution";
 import { pickArtifactRenderer } from "../renderer-dispatch";
@@ -64,7 +65,12 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "..");
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+// "Is a real database there?" is asked through the ONE shared predicate, never
+// inline. An inline substring test is wrong in both directions: it stops
+// recognising the placeholder the moment its endpoint moves, and it reads a
+// REAL database that happens to carry the reserved credential pair as the
+// placeholder — skipping this tier while still reporting green.
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_w3_kind_typed_row";
 const ORG = "org-3091-kind-typed";
 

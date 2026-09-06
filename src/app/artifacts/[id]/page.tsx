@@ -173,8 +173,9 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // header's old `mime - bytes` description line; the ratified drawing closes
   // this header at the mono meta line and gives no size at all, and
   // `w3-artifact-page-header-closed` pins that the page hands the header none.
-  // The size the drawing DOES draw is a meta cell of the header model, which
-  // reads it from the row itself.
+  // The header model carries no size cell either — the drawing draws a size on
+  // the per-kind download card (the drawing's V.2), not on this line, so the
+  // page resolves none for the header and passes none to it.
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
