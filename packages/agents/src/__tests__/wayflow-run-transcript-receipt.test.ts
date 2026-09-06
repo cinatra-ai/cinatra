@@ -1,0 +1,563 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// cinatra#3002 — a run executed on the agent runtime must leave its produced
+// text where the run page reads it.
+//
+// The runtime completion path recorded the response in TWO places a reader
+// cannot see: ephemeral AG-UI `TEXT_MESSAGE_*` frames (gone once the stream
+// ends) and one `wayflow_response` entry in `agent_runs.step_results` (no
+// screen renders that kind). The run's TRANSCRIPT — `agent_run_messages`, the
+// rows the run page renders — was never written on this path, while the
+// completion card told the reader the output was "in the run transcript
+// below". This suite pins the missing writer:
+//
+//   1. terminal success persists the runtime's final response as the run's own
+//      `final` transcript message;
+//   2. it is written BEFORE the terminal transition, so the instant a reader
+//      can see `completed` the text that card names already exists;
+//   3. a run that returned no text writes no receipt (there is nothing to
+//      show, and an empty row would be a false claim of output);
+//   4. a re-entered terminal handling writes no second copy of the answer;
+//   5. a run that lands `failed` on the materialization gate gets no receipt
+//      at all — a success-shaped transcript row on a failed run is the same
+//      lie this issue closes, pointed the other way.
+//
+// Fix leg 1 (the first proof round's finding 2) adds the two that decide WHICH
+// text the receipt is written from:
+//
+//   6. a run whose LAST agent message carries only data — the shape a real
+//      artifact-producing run completed in, its declared outputs travelling as
+//      DataParts — still leaves its answer as the run's transcript row;
+//   7. a run with no text anywhere in its history still writes nothing.
+//
+// Fix leg 2 (the SECOND proof round's finding 2) adds the ones that decide what
+// happens when the answer never travelled as a message part at all:
+//
+//   8. a run whose answer is its EndNode's SOLE DECLARED OUTPUT - the shape
+//      the graded `Agent Code Reviewer` run completed in, and the shape that
+//      still left zero transcript rows at the previous head - leaves that
+//      declared output as the run's transcript row;
+//   9. an AMBIGUOUS declaration writes nothing: several declared outputs
+//      carrying values (the media `{ transcript, kind }` shape, the research
+//      agent's rows-beside-notes shape) means the run did not produce one body
+//      of prose, and a lone non-string output is data rather than words;
+//  10. the declaration beats the backward scan, and the run's own last word
+//      beats the declaration.
+//
+// Harness mirrors wayflow-materialization-outcome-honesty.test.ts.
+//
+// Run:
+//   cd packages/agents && pnpm exec vitest run \
+//     src/__tests__/wayflow-run-transcript-receipt.test.ts
+
+const { publishAgUiEventSpy, materializeRunArtifactsSpy, recordRunFinalResponseMessageSpy } =
+  vi.hoisted(() => ({
+    publishAgUiEventSpy: vi.fn(async () => undefined),
+    materializeRunArtifactsSpy: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    recordRunFinalResponseMessageSpy: vi.fn(async () => null),
+  }));
+
+vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    publishAgUiEvent: publishAgUiEventSpy,
+    enrichSchemaWithResolvedData: vi.fn(async (schema: unknown) => ({ ...(schema as object) })),
+    DualAdapterDispatch: class MockDualAdapterDispatch {
+      onInterrupt = vi.fn();
+      onText = vi.fn();
+      onTextChunk = vi.fn();
+      onToolCall = vi.fn();
+      onState = vi.fn();
+      onError = vi.fn();
+      onFinish = vi.fn();
+      onResume = vi.fn();
+    },
+  };
+});
+
+vi.mock("@/lib/artifacts/run-artifact-materializer", () => ({
+  materializeRunArtifacts: materializeRunArtifactsSpy,
+}));
+
+vi.mock("../run-final-response-receipt", () => ({
+  recordRunFinalResponseMessage: recordRunFinalResponseMessageSpy,
+}));
+
+const storeMock = vi.hoisted(() => ({
+  readAgentRunById: vi.fn(),
+  readAgentTemplateById: vi.fn(async () => null),
+  readAgentTemplates: vi.fn(async () => []),
+  readAgentTemplateVersionBySemver: vi.fn(async () => null),
+  readAgentTemplateVersionById: vi.fn(async () => null),
+  transitionRunStatus: vi.fn(async () => undefined),
+  RunTransitionError: class RunTransitionError extends Error {
+    code: string;
+    constructor(args: { code: string }) {
+      super(args.code);
+      this.code = args.code;
+    }
+  },
+  findSavedConnectionForAgentUrl: vi.fn(async () => null),
+  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2AContextId: vi.fn(async () => undefined),
+}));
+vi.mock("../store", () => storeMock);
+vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
+vi.mock("../skill-autosave", () => ({
+  runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
+}));
+vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
+  resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
+  AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
+}));
+vi.mock("@cinatra-ai/a2a", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    rememberLatestWayflowGateTask: vi.fn(async () => undefined),
+    rememberWayflowGateTask: vi.fn(async () => undefined),
+    getOrAddWayflowRendererGateIndex: vi.fn(async () => 0),
+  };
+});
+const enqueueBackgroundJobSpy = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@/lib/background-jobs", () => ({ enqueueBackgroundJob: enqueueBackgroundJobSpy }));
+
+import { handleWayflowTaskState } from "../execution";
+import type { AgentRunRecord } from "../store";
+
+const TEST_AUTHORITY = { orgId: "org-3002", can: () => true };
+
+/** The four named findings a real runtime run returned in the issue's own proof. */
+const RUNTIME_ANSWER =
+  "Four findings about the flow you handed me: the trigger never fires twice, " +
+  "the retry budget is unbounded, the end node drops its structured outputs, " +
+  "and the schedule is read in the wrong time zone.";
+
+function makeRun(): AgentRunRecord {
+  return {
+    id: "run-3002",
+    templateId: "tmpl-3002",
+    versionId: null,
+    runBy: "user-a",
+    status: "running",
+    inputParams: {},
+    stepResults: null,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+    title: null,
+    createdAt: new Date("2026-01-01"),
+    sourceType: "agent_builder",
+    sourceId: null,
+    packageVersion: "1.0.0",
+    a2aTaskId: "task-3002",
+    a2aContextId: "ctx-3002",
+    parentRunId: null,
+    agUiEnabled: null,
+    lgThreadId: null,
+    traceId: null,
+    timeoutSeconds: null,
+    streamedText: null,
+    authPolicy: null,
+    orgId: "org-3002",
+    projectId: null,
+    idempotencyKey: null,
+    oboCeiling: null,
+    dependentInstallId: null,
+  } as unknown as AgentRunRecord;
+}
+
+function completedTask(parts: Array<Record<string, unknown>>) {
+  return {
+    id: "task-3002",
+    contextId: "ctx-3002",
+    status: { state: "completed", message: { parts: [] } },
+    metadata: {},
+    history: [{ role: "agent", parts }],
+  };
+}
+
+/** The same terminal task, with the WHOLE history spelled out. */
+function completedTaskWithHistory(
+  history: Array<{ role: string; parts: Array<Record<string, unknown>> }>,
+) {
+  return {
+    id: "task-3002",
+    contextId: "ctx-3002",
+    status: { state: "completed", message: { parts: [] } },
+    metadata: {},
+    history,
+  };
+}
+
+describe("cinatra#3002 — the runtime run's transcript receipt", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+  });
+
+  it("persists the runtime's final response as the run's own transcript message", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask([{ kind: "text", text: RUNTIME_ANSWER }]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("writes the receipt BEFORE the terminal transition, never after it", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask([{ kind: "text", text: RUNTIME_ANSWER }]),
+    });
+
+    const receiptOrder =
+      recordRunFinalResponseMessageSpy.mock.invocationCallOrder[0];
+    const transitionOrder =
+      storeMock.transitionRunStatus.mock.invocationCallOrder[0];
+    expect(receiptOrder).toBeDefined();
+    expect(transitionOrder).toBeDefined();
+    expect(receiptOrder).toBeLessThan(transitionOrder);
+    // …and after the materialization gate that can still route this handling
+    // to `failed`, so no receipt is written for a run that does not complete.
+    const materializeOrder = materializeRunArtifactsSpy.mock.invocationCallOrder[0];
+    expect(materializeOrder).toBeDefined();
+    expect(materializeOrder).toBeLessThan(receiptOrder);
+    // and the transition that followed is the terminal-success one.
+    const [, , to] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [
+      string,
+      string,
+      string,
+    ];
+    expect(to).toBe("completed");
+  });
+
+  it("writes no receipt when the run returned no text", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask([{ kind: "data", data: { note: "no text part" } }]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes NO receipt when the run lands failed on the materialization gate", async () => {
+    // cinatra#2486 routes this same handling to `failed` when a declared
+    // artifact was not delivered. A receipt written before that gate would
+    // leave a success-shaped transcript row on a failed run — the same class of
+    // lie this issue closes, pointed the other way.
+    materializeRunArtifactsSpy.mockResolvedValue([
+      { ok: false, outputId: "draft", nodeId: null, extension: null, error: "no binding" },
+    ]);
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTask([{ kind: "text", text: RUNTIME_ANSWER }]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+    const [, , to] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [
+      string,
+      string,
+      string,
+    ];
+    expect(to).toBe("failed");
+  });
+
+  it("persists the answer of a run whose LAST agent message carries only data (fix leg 1)", async () => {
+    // THE SHAPE THE FIRST PROOF ROUND MEASURED on a real completed run. An
+    // artifact-producing run's declared outputs travel as DataParts, so the run
+    // ends on an agent message with no text and its answer sits one message
+    // earlier. The receipt read the LAST message only, so that run — a run that
+    // executed on the agent runtime, completed, and wrote four artifacts —
+    // finished with ZERO transcript rows: the blank page under a completion
+    // card, alive on the path the graded run took.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        {
+          role: "agent",
+          parts: [{ kind: "data", data: { ideas: ["one", "two", "three", "four"] } }],
+        },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("still writes NO receipt for a run that produced no text anywhere in its history", async () => {
+    // The other half of the same rule: a run whose evidence is the artifacts it
+    // wrote has no transcript to point at, and a row invented for it would be
+    // the same false claim of output, pointed the other way.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["two"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT write a mid-run question as the run's answer (the scan stops at the last turn)", async () => {
+    // The convergence round's finding. A run that asked the user something and
+    // then finished on a data-only message must not have the QUESTION written as
+    // its answer — and this is also the shape that would defeat the guard above:
+    // an artifact-only LAST TURN whose earlier turn carried text.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Which audience is this for?" }] },
+        { role: "user", parts: [{ kind: "text", text: "Founders." }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one", "two"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("takes the LAST text-carrying message of the run's final turn, not an earlier one", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Working on it." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("survives a malformed earlier message rather than failing the run's terminal handling", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Draft the ideas." }] },
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+        // Malformed, and NOT last: only the backward scan reaches it.
+        { role: "agent", parts: {} as unknown as Array<Record<string, unknown>> },
+        { role: "agent", parts: [{ kind: "data", data: { ideas: ["one"] } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  // ── fix leg 2: the answer that never travelled as a message part ────────
+
+  /** The `Agent Code Reviewer` flow declares exactly one output, `findings`. */
+  const REVIEW_FINDINGS =
+    "Three findings: the package slug does not match packageName, the component " +
+    "ids are not stable kebab-case, and the version was not bumped on republish.";
+
+  /** The synthetic DataPart WayFlow appends when a flow reaches FinishedStatus,
+   *  carrying the EndNode's declared output values. Stripped from the persisted
+   *  history before any text extraction reads it — which is exactly why nothing
+   *  on this path could see the run's answer before this leg. */
+  function endNodeOutputsMessage(outputs: Record<string, unknown>) {
+    return {
+      role: "agent",
+      parts: [{ kind: "data", data: { __cinatra_endnode_outputs__: outputs } }],
+    };
+  }
+
+  it("persists a run's DECLARED output as its transcript row when the answer never travelled as text (fix leg 2)", async () => {
+    // THE SHAPE THE SECOND PROOF ROUND MEASURED. A gate-free, text-answering run
+    // executed on the agent runtime, completed — and `agent_run_messages` held
+    // zero rows for it, lane-wide. Its answer is the flow's declared EndNode
+    // output, so `finalText` is empty and the bounded backward scan finds no
+    // text-carrying message either: both of fix leg 1's sources are blind here.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledTimes(1);
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: REVIEW_FINDINGS,
+    });
+  });
+
+  it("writes NO receipt when a declared text output stands beside other produced values", async () => {
+    // THE CONVERGENCE FINDING. A flow that declares several things it produced
+    // has not produced one body of prose. `@cinatra-ai/media-transcript-agent`
+    // ends with `{ transcript, kind }` — `kind` is a label, not the run's
+    // words — and picking one string out of that set would name the wrong thing
+    // as the run's answer, then let the card say "its output is in the run
+    // transcript below" over it. An ambiguous declaration keeps the honest
+    // step-results reading.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Transcribe this." }] },
+        endNodeOutputsMessage({ transcript: "[Speaker 1]: Hello world.", kind: "audio" }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes NO receipt when a diagnostic note stands beside the run's structured work", async () => {
+    // `@cinatra-ai/web-research-agent`'s real EndNode: `enrichedRows` (array),
+    // `extractionNotes` (string), `failures` (array), `webChecks` (array). The
+    // rows are the run's work and the notes are an aside; receipting the aside
+    // would put the aside in the transcript under a card claiming it is the
+    // run's output — a new false claim of the very class #3002 removes.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Research these." }] },
+        endNodeOutputsMessage({
+          enrichedRows: [{ company: "Acme", site: "acme.test" }],
+          extractionNotes: "One row could not be enriched.",
+          failures: [],
+          webChecks: [],
+        }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reads the lone text output when its declared siblings came back empty", async () => {
+    // Outputs the run left empty carry nothing, so they make no ambiguity: the
+    // one output that carries anything IS the whole of what this run produced.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS, failures: [], notes: "" }),
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: REVIEW_FINDINGS,
+    });
+  });
+
+  it("prefers the run's DECLARATION over the backward scan's best guess", async () => {
+    // "Working on it." is a real text-carrying agent message in the run's final
+    // turn, so the leg-1 scan would write it as the run's answer. The flow's own
+    // declared output says what the run produced; a declaration beats a
+    // heuristic.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        { role: "agent", parts: [{ kind: "text", text: "Working on it." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+        { role: "agent", parts: [{ kind: "data", data: { done: true } }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: REVIEW_FINDINGS,
+    });
+  });
+
+  it("still lets the run's own LAST WORD win over its declaration", async () => {
+    // A run that ends by speaking has said its answer, and every other consumer
+    // on this path already means that by the run's output.
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: makeRun(),
+      fromStatus: "running",
+      task: completedTaskWithHistory([
+        { role: "user", parts: [{ kind: "text", text: "Review this agent." }] },
+        endNodeOutputsMessage({ findings: REVIEW_FINDINGS }),
+        { role: "agent", parts: [{ kind: "text", text: RUNTIME_ANSWER }] },
+      ]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).toHaveBeenCalledWith({
+      runId: "run-3002",
+      text: RUNTIME_ANSWER,
+    });
+  });
+
+  it("writes no second receipt when the terminal handling is re-entered", async () => {
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: "run-3002",
+      run: { ...makeRun(), status: "completed" } as AgentRunRecord,
+      fromStatus: "completed",
+      task: completedTask([{ kind: "text", text: RUNTIME_ANSWER }]),
+    });
+
+    expect(recordRunFinalResponseMessageSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+});

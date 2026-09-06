@@ -332,6 +332,28 @@ export type RunProducedOutput = {
  * captured at SSR — a run that completes while the user watches would otherwise
  * be judged on a snapshot taken while it was still `queued`.
  */
+/**
+ * DOES THIS RUN HAVE A TRANSCRIPT? (cinatra#3002)
+ *
+ * The one rule, in one place. A run page shows a transcript when the run
+ * accumulated streamed text (the external-peer proxy path writes
+ * `agent_runs.streamed_text`) or when `agent_run_messages` holds rows for it
+ * (every other path, including the receipt a completed runtime-executed run
+ * writes). `readRunOutputEvidence` reads the two facts from the database and
+ * asks this; `deriveRunOutcome` below turns the answer into the reading the
+ * completion card draws.
+ *
+ * It lives here, in the pure domain, because a test that proves the joined
+ * path — a completed run writes its row, the card then names a transcript —
+ * must apply the PRODUCT's rule rather than restate it (convergence finding).
+ */
+export function hasTranscriptEvidence(input: {
+  streamedText: string | null | undefined;
+  messageCount: number;
+}): boolean {
+  return (input.streamedText ?? "") !== "" || input.messageCount > 0;
+}
+
 export type RunOutputEvidence = {
   /** Provenance-linked output objects, newest first. */
   outputs: readonly RunProducedOutput[];
@@ -376,6 +398,25 @@ export type RunTerminalOutcome =
        */
       outputRenderedBelow: boolean;
       /**
+       * WHICH evidence the outcome rests on (cinatra#3002).
+       *
+       * `hasTranscript` and `hasStepResults` are two independent facts, and this
+       * resolver used to fold them into one boolean — so a run whose only record
+       * of output was a step result was reported exactly like a run with a
+       * transcript, and the card told the reader to look at a transcript that
+       * was never written. The two hosts render DIFFERENT things (one draws the
+       * message thread, the other keeps output behind the step rail), so the
+       * caller has to know which fact it is holding before it names a place.
+       *
+       *   `outputs`      provenance-linked output objects (the card links them)
+       *   `transcript`   message rows / accumulated streamed text exist
+       *   `step-results` `agent_runs.step_results` only — recorded, but not the
+       *                  transcript, and not every host can point at it
+       *   `none`         nothing established (the read is in flight, failed, or
+       *                  returned only unlinkable rows)
+       */
+      outputEvidence: "outputs" | "transcript" | "step-results" | "none";
+      /**
        * True when we could NOT establish what the run left behind: the read is
        * still in flight, it failed, or it returned only rows we cannot link.
        *
@@ -387,6 +428,25 @@ export type RunTerminalOutcome =
        * space (confirmation-round finding).
        */
       evidenceIndeterminate: boolean;
+      /**
+       * True when the read that would settle the question is STILL RUNNING
+       * (cinatra#3002, fix leg 5).
+       *
+       * A strict subset of {@link evidenceIndeterminate}, and the distinction is
+       * the whole point. The indeterminate flag alone covered two states that
+       * owe the reader different sentences: a read that CAME BACK and could not
+       * establish anything, and a read that has not come back yet. The fifth
+       * proof round read a conversation at the live completion instant and saw
+       * the first state's sentence — "its output could not be loaded" — over a
+       * run whose transcript row had been written seconds earlier and which
+       * drew that row seconds later with no reload. Nothing had failed; the
+       * card had simply asked, and not yet been answered.
+       *
+       * A caller holding this flag must stay as conservative as it is for any
+       * indeterminate outcome — name no place, claim no emptiness — but must
+       * NOT assert a failure that has not happened.
+       */
+      evidencePending: boolean;
     }
   | { kind: "completed-no-output" };
 
@@ -407,6 +467,16 @@ export const COMPLETED_STATUS = "completed";
 export function resolveRunTerminalOutcome(input: {
   status: string;
   evidence: RunOutputEvidence | null;
+  /**
+   * Whether the caller's evidence read has come back (cinatra#3002, fix leg 5).
+   *
+   * Only consulted when `evidence` is null, where it is the difference between
+   * "still asking" and "asked, and could not be told". Omitted means `pending`:
+   * a caller that does not track its read has, by construction, one outstanding
+   * — and the conservative reading of an untracked null is the one that asserts
+   * no failure.
+   */
+  evidenceRead?: "pending" | "settled";
 }): RunTerminalOutcome {
   if (input.status !== COMPLETED_STATUS) return { kind: "not-terminal" };
   const evidence = input.evidence;
@@ -418,7 +488,10 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
+      // …and, unless the caller says its read has landed, it is still running.
+      evidencePending: input.evidenceRead !== "settled",
     };
   }
   if (evidence.outputs.length > 0) {
@@ -426,18 +499,39 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: evidence.outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     };
   }
   // Ordered BEFORE the indeterminate branches on purpose: transcript/step
   // evidence is positively known, so "its output is below" is a TRUE statement
   // even if the object read separately came back unusable.
-  if (evidence.hasTranscript || evidence.hasStepResults) {
+  //
+  // The two are reported SEPARATELY (cinatra#3002). A transcript is the thing
+  // the transcript host renders; a step result is not, and a run executed on the
+  // agent runtime leaves exactly one. Folding them into `outputRenderedBelow`
+  // alone let the card name the transcript for a run that never wrote one.
+  // Transcript first: it is the stronger claim, and a run holding both is a run
+  // whose text IS below.
+  if (evidence.hasTranscript) {
     return {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
+    };
+  }
+  if (evidence.hasStepResults) {
+    return {
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      outputEvidence: "step-results",
+      evidenceIndeterminate: false,
+      evidencePending: false,
     };
   }
   // Either the produced-output read failed, or it succeeded but every row it
@@ -450,7 +544,11 @@ export function resolveRunTerminalOutcome(input: {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read is BACK — it just could not settle the question. This is the
+      // state the load-failure sentence belongs to, and the only one.
+      evidencePending: false,
     };
   }
   return { kind: "completed-no-output" };

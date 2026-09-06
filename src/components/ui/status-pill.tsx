@@ -10,7 +10,20 @@ import { cn } from "@/lib/utils";
  * run-detail headers, and inline within prose.
  *
  * Spec rules enforced here:
- *   - Icon (play, check, pause, etc.) on the left — never a bare dot
+ *   - Icon (play, check, pause, etc.) on the left BY DEFAULT — the design
+ *     system's own rule for the pill family is "Use icon-led pills; never just
+ *     dots" (specs/app-components.html, the note under the pill gallery), and
+ *     every caller that does not ask otherwise gets that form.
+ *   - `glyph="dot"` is the ONE opt-in exception, and it exists because the
+ *     ratified drawing draws it: the run detail's own header pill is
+ *     `<span class="pill approved"><span class="dot"></span>completed</span>`
+ *     (specs/app-artifact-review.html, example `run-schedule-step-fired`), and
+ *     the "What this run made" header of the run's last step draws the same
+ *     dot form. The dot is 7px and takes the pill's own status colour —
+ *     `.pill .dot { width: 7px; height: 7px; border-radius: 50% }` with
+ *     `.pill.approved .dot { background: var(--green) }`, the same green as
+ *     `.pill.approved`'s own text. Reach for it ONLY where the drawing draws
+ *     a dot; everywhere else the icon-led form is the rule.
  *   - Tinted background + same-colour text + matching border (status colour)
  *   - "running" is indigo; "failed" / destructive is red. Red never means run.
  *   - "needs-review" reads as the brand mustard so it picks up the same
@@ -48,6 +61,12 @@ export type StatusPillProps = {
   status: StatusPillStatus;
   className?: string;
   children?: React.ReactNode;
+  /**
+   * Which leading mark the pill carries. `"icon"` (the default) is the design
+   * system's rule. `"dot"` is the run-detail reading the ratified drawing
+   * draws — see the note at the top of this file. There is no third form.
+   */
+  glyph?: "icon" | "dot";
 } & Omit<React.ComponentProps<"span">, "children" | "className">;
 
 // Icon glyphs — Lucide-style stroke icons sized to fit the pill height.
@@ -149,16 +168,29 @@ export function StatusPill({
   status,
   className,
   children,
+  glyph = "icon",
   ...props
 }: StatusPillProps & VariantProps<typeof pillVariants>) {
   return (
     <span
       data-slot="status-pill"
       data-status={status}
+      data-glyph={glyph}
       className={cn(pillVariants({ status }), className)}
       {...props}
     >
-      <StatusIcon status={status} />
+      {glyph === "dot" ? (
+        // 7px, round, in the pill's own status colour. `bg-current` IS the
+        // drawing's rule: the dot carries the same colour as the label beside
+        // it, so one variant string keeps both halves in one family.
+        <span
+          data-slot="status-pill-dot"
+          aria-hidden="true"
+          className="h-[7px] w-[7px] shrink-0 rounded-full bg-current"
+        />
+      ) : (
+        <StatusIcon status={status} />
+      )}
       {children ?? DEFAULT_LABEL[status]}
     </span>
   );
