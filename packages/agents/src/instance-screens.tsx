@@ -467,11 +467,14 @@ export function screenDrawsPageRail(params: {
     stepperStepCount: params.stepperStepCount,
   });
 }
-/** The statuses that ARE an execution: the run fired and is in it, or died in it. */
+/**
+ * The statuses that ARE an execution: the run fired and is in it, or died in it.
+ *
+ * `pending_approval` IS NOT ONE OF THEM -- see the note in the function below.
+ */
 const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
   "queued",
   "running",
-  "pending_approval",
   "waiting_trigger",
 ]);
 
@@ -485,6 +488,22 @@ const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
  * execution) and `stopped` is what a CANCELLED schedule leaves behind, so for
  * the terminal statuses the RECORD is the answer — persisted step results, run
  * messages, or streamed text. For the live statuses the status is the record.
+ *
+ * AND `pending_approval` IS NOT EVIDENCE OF A RECORD (cinatra#3184 fix leg 3).
+ * It sat in the live set above, read as "in an execution, with or without output
+ * yet". A run reaches it BEFORE it has produced anything: answering the run's
+ * skills question releases the run, and the gate it parks at next writes
+ * `pending_approval` behind it. The two runs the second graded reading of this
+ * branch was shot on carry exactly that -- the status, and no step result, no
+ * run message and no streamed text -- so the one fact the rail's still-to-come
+ * rows and the frame's tab answer both ride on flipped the moment Continue was
+ * pressed: `railDrawsUpcomingRunSteps` dropped every row below the settled
+ * Skills entry and `runGateStepInFrame` handed the strip Setup again, over the
+ * very step standing in the frame. The RECORD answers for this status, exactly
+ * as it does for the terminal ones -- a mid-run approval has its own history
+ * behind it and still reads true, and a run parked at a gate before it has
+ * produced anything reads false. `queued`, `running` and `waiting_trigger` are
+ * unchanged: each is reached only by dispatching the run.
  *
  * Exported so the regression test can pin the whole table without a DB, a
  * session or a Next.js render.
