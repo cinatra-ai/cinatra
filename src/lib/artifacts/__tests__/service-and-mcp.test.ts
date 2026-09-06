@@ -96,6 +96,20 @@ vi.mock("@/lib/objects/effective-identity", () => ({
     eligibleExtensions: [],
   }),
 }));
+// Presentation identity is a SECOND identity pass, and the live one opens a
+// Postgres session: it calls `ensurePostgresSchema()` before its batched read.
+// This is a unit suite — it must never reach a database — so the resolver is
+// mocked beside the effective-identity mock above. The empty map and the base
+// identity are what a row with no active assertion resolves to on the live
+// path, which is what every row in this suite is (cinatra#3254).
+vi.mock("@/lib/objects/presentation-identity", () => ({
+  resolveArtifactPresentationIdentities: vi.fn().mockReturnValue(new Map()),
+  resolveArtifactPresentationIdentity: vi.fn().mockReturnValue({
+    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    tier: "claim-backed",
+    suggestions: [],
+  }),
+}));
 // The assertion store still backs the extension filter + the MCP semantic
 // primitives; stubbed (registered tools are not invoked here).
 vi.mock("../semantic-assertion-store", () => ({
