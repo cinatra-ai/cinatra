@@ -18,7 +18,7 @@
 // and /skills (and any future surface) can drop it in unchanged.
 // ---------------------------------------------------------------------------
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AccessCombobox,
@@ -48,6 +48,13 @@ type ScopeFilterComboboxProps = {
    * offers a filter that can only ever return an empty list (cinatra#2688).
    */
   showPersonal?: boolean;
+  /**
+   * Override the closed trigger's reading (cinatra#3229), in URL tokens. The
+   * artifacts library elects "Scope: Workspace" / "Scope: {label}" /
+   * "Scope: {n} selected" per its drawing; every other mount keeps the shared
+   * helper's own composition. Rows and selection semantics never change.
+   */
+  summarizeSelection?: (selection: readonly ScopeToken[], scopes: AvailableScopes) => string;
 };
 
 export function ScopeFilterCombobox({
@@ -57,6 +64,7 @@ export function ScopeFilterCombobox({
   id,
   showAdmin = true,
   showPersonal = true,
+  summarizeSelection,
 }: ScopeFilterComboboxProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -75,6 +83,14 @@ export function ScopeFilterCombobox({
     setSyncedKey(serverKey);
     setSelection(value);
   }
+
+  // The combobox speaks values ("owner"); the elected reading speaks URL tokens
+  // ("personal") — adapt at this seam so the caller writes tokens only.
+  const summarizeValues = useCallback(
+    (values: readonly string[], s: AvailableScopes) =>
+      summarizeSelection!(values.map(comboboxValueToScopeToken), s),
+    [summarizeSelection],
+  );
 
   function handleChange(nextComboboxSelection: string[]) {
     const tokens = nextComboboxSelection.map(comboboxValueToScopeToken);
@@ -101,6 +117,7 @@ export function ScopeFilterCombobox({
       scopes={scopes}
       showAdmin={showAdmin}
       showPersonal={showPersonal}
+      summarizeSelection={summarizeSelection ? summarizeValues : undefined}
     />
   );
 }

@@ -24,10 +24,11 @@
 // The graph walk is exercised over a VIRTUAL file map (no temp dirs, no git):
 // the selector takes its IO injected for exactly this reason.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { REPO_ROOT } from "../design-select.mjs";
 
@@ -38,6 +39,8 @@ import {
   aliasesFor,
   buildFamilies,
   discoverSpecFiles,
+  main,
+  parsePlan,
   playwrightArgs,
   resolveChangedFiles,
   routeFiles,
@@ -239,6 +242,8 @@ describe("3. WIDEN — a global change still runs the whole suite", () => {
     ["an app layout", "src/app/layout.tsx"],
     ["the generated extension manifest", "src/lib/generated/extensions.server.ts"],
     ["the selector itself", "scripts/ci/design-select.mjs"],
+    ["the selector's own unit suite", "scripts/ci/__tests__/design-select.test.mjs"],
+    ["the workflow that runs the suite", ".github/workflows/design-visual-verify.yml"],
   ];
 
   for (const [label, file] of widening) {
@@ -405,14 +410,45 @@ describe("5. THE INVOCATION and THIS repo", () => {
     expect(result.specs).toEqual(["tests/e2e/design/agents-card-accent.spec.ts"]);
   });
 
-  it("skips THIS repo's suite for a workflow-only change", () => {
+  // The workflow file IS the gate: it decides whether the suite runs at all,
+  // which families it runs, and on what boot. A change to it must therefore be
+  // proved by the WHOLE suite — a narrowed (or skipped) run would let the file
+  // that governs the selection certify its own selection.
+  it("runs THIS repo's WHOLE suite for a workflow-only change", () => {
     const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
     const result = selectFamilies({
       changedFiles: [".github/workflows/design-visual-verify.yml", "README.md"],
       families,
       unresolved,
     });
+    expect(result.mode).toBe("all");
+    expect(result.summary).toContain(".github/workflows/design-visual-verify.yml");
+  });
+
+  it("runs THIS repo's WHOLE suite for a change to the selector's own unit suite", () => {
+    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const result = selectFamilies({
+      changedFiles: ["scripts/ci/__tests__/design-select.test.mjs"],
+      families,
+      unresolved,
+    });
+    expect(result.mode).toBe("all");
+    expect(result.summary).toContain("scripts/ci/__tests__/design-select.test.mjs");
+  });
+
+  // The intentional no-impact diff, judged against THIS repo's REAL graph
+  // rather than the virtual one: a docs-only change reaches no family and
+  // starts no Playwright, so the install/build/boot is never paid.
+  it("skips THIS repo's suite entirely for an intentional no-impact diff", () => {
+    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const result = selectFamilies({
+      changedFiles: ["README.md", "docs/internals/contracts/design-conformance-pin-drift.md"],
+      families,
+      unresolved,
+    });
     expect(result.mode).toBe("none");
+    expect(result.specs).toEqual([]);
+    expect(result.summary).toContain("no UI change");
   });
 });
 
@@ -622,5 +658,127 @@ describe("8. THE RULE TABLE'S SHAPE", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts/ci/design-select.mjs"), "utf8");
     expect(source).not.toMatch(/^\s*match:/m);
     expect(source).not.toContain("rule.match(");
+  });
+
+  it("carries a rule for the workflow and for the selector's own tests", () => {
+    const ids = WIDENING_RULES.map((rule) => rule.id);
+    expect(ids).toContain("suite-workflow");
+    expect(ids).toContain("selector-test");
+    expect(wideningRuleFor(".github/workflows/design-visual-verify.yml")?.id).toBe("suite-workflow");
+    expect(wideningRuleFor("scripts/ci/__tests__/design-select.test.mjs")?.id).toBe("selector-test");
+    expect(
+      wideningRuleFor("scripts/ci/__tests__/design-select-workflow.test.mjs")?.id,
+    ).toBe("selector-test");
+    // Precise, not "every workflow": an unrelated workflow does not run the
+    // design suite, and a neighbouring CI test is not this selector's proof.
+    expect(wideningRuleFor(".github/workflows/gates.yml")).toBe(null);
+    expect(wideningRuleFor("scripts/ci/__tests__/product-tree-hygiene.test.mjs")).toBe(null);
+  });
+});
+
+// The workflow boundary (cinatra#3268 item 2): the cheap `select` job PUBLISHES
+// its plan and the expensive job CONSUMES it, so both halves of the run are
+// bound to one selection taken against the event's frozen base commit. A plan
+// the expensive job cannot trust is a hard failure — never a silent "none",
+// which would skip the suite while reporting success.
+describe("9. THE PUBLISHED PLAN — the expensive job consumes what the cheap job decided", () => {
+  const KNOWN = ["tests/e2e/design/alpha.spec.ts", "tests/e2e/design/beta.spec.ts"];
+  const planText = (plan) => JSON.stringify(plan);
+
+  it("reads a subset plan and hands its families to Playwright", () => {
+    const { plan, error } = parsePlan(
+      planText({ mode: "subset", specs: KNOWN, reasons: [], summary: "2 of 3 selected" }),
+      { knownSpecs: KNOWN },
+    );
+    expect(error).toBe(undefined);
+    expect(plan.mode).toBe("subset");
+    expect(playwrightArgs(plan)).toEqual([
+      "test",
+      "-c",
+      "tests/e2e/config/design.config.ts",
+      ...KNOWN,
+    ]);
+  });
+
+  it("reads an all plan and hands Playwright no filter", () => {
+    const { plan } = parsePlan(planText({ mode: "all", specs: KNOWN, summary: "all" }), {
+      knownSpecs: KNOWN,
+    });
+    expect(playwrightArgs(plan)).toEqual(["test", "-c", "tests/e2e/config/design.config.ts"]);
+  });
+
+  it("refuses a plan that is not JSON at all", () => {
+    const { plan, error } = parsePlan("not json {", { knownSpecs: KNOWN });
+    expect(plan).toBe(undefined);
+    expect(error).toMatch(/not JSON/);
+  });
+
+  it("refuses an empty plan file", () => {
+    expect(parsePlan("").error).toMatch(/empty/);
+    expect(parsePlan("   \n").error).toMatch(/empty/);
+  });
+
+  it("refuses a plan carrying an unknown mode", () => {
+    expect(parsePlan(planText({ mode: "maybe", specs: [] })).error).toMatch(/mode/);
+    expect(parsePlan(planText({ specs: [] })).error).toMatch(/mode/);
+  });
+
+  it("refuses a plan whose spec list is not a list of paths", () => {
+    expect(parsePlan(planText({ mode: "subset", specs: "a.spec.ts" })).error).toMatch(/spec list/);
+    expect(parsePlan(planText({ mode: "subset", specs: [1] })).error).toMatch(/spec list/);
+  });
+
+  it("refuses a subset that selects nothing, and a skip that names families", () => {
+    expect(parsePlan(planText({ mode: "subset", specs: [] })).error).toMatch(/no families/);
+    expect(parsePlan(planText({ mode: "none", specs: KNOWN })).error).toMatch(/names families/);
+  });
+
+  it("refuses a plan naming a spec this suite does not have", () => {
+    const { error } = parsePlan(planText({ mode: "subset", specs: ["tests/e2e/design/ghost.spec.ts"] }), {
+      knownSpecs: KNOWN,
+    });
+    expect(error).toMatch(/ghost\.spec\.ts/);
+  });
+
+  it("fails the run on a malformed plan file instead of skipping the suite", () => {
+    const file = join(tmpdir(), `design-select-plan-${process.pid}-malformed.json`);
+    writeFileSync(file, "{ mode: none }");
+    try {
+      expect(main(["--run", "--plan", file])).toBe(1);
+    } finally {
+      rmSync(file, { force: true });
+    }
+  });
+
+  it("refuses --plan with no path instead of quietly selecting again", () => {
+    // `--run --plan` with the path lost. Branching on the VALUE let this fall
+    // through to an ordinary diff selection, which on a diff with no UI answers
+    // "none" and returns 0 — a green expensive job that ran no test at all.
+    const err = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => err.push(String(m)));
+    try {
+      expect(main(["--run", "--plan"])).toBe(1);
+      expect(main(["--run", "--plan", ""])).toBe(1);
+      expect(main(["--plan", "--run"])).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err.join("\n")).toMatch(/--plan needs the path/);
+  });
+
+  it("fails the run when the published plan file is absent", () => {
+    const file = join(tmpdir(), `design-select-plan-${process.pid}-absent.json`);
+    rmSync(file, { force: true });
+    expect(main(["--run", "--plan", file])).toBe(1);
+  });
+
+  it("starts no Playwright for a published plan that skips the suite", () => {
+    const file = join(tmpdir(), `design-select-plan-${process.pid}-none.json`);
+    writeFileSync(file, `${JSON.stringify({ mode: "none", specs: [], summary: "skipped" })}\n`);
+    try {
+      expect(main(["--run", "--plan", file])).toBe(0);
+    } finally {
+      rmSync(file, { force: true });
+    }
   });
 });

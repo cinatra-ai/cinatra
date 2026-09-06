@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { DECLARED_ORG_FK_CASCADES } from "@/lib/org-write/write-registry";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 /** The live pg_constraint sweep for FKs referencing public.organization from a
  *  non-public schema (the reconciliation source of truth). */
@@ -36,7 +37,7 @@ const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   dbUrl !== "" &&
-  !dbUrl.includes("unused:unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 describe.skipIf(!enabled)("org FK catalog reconciliation (#1938, live)", () => {
   it("every FK referencing public.organization is declared, and vice versa", async () => {
