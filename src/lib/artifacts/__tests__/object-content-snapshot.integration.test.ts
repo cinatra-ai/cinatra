@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub that lacks the named
 // exports the artifact graph imports. Provide the metadata surface the
@@ -52,7 +53,7 @@ vi.mock("@/lib/database", async () => {
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_object_snapshot_1430";
 const ORG = "org-snap-1430";
 const EXT_A = "@cinatra-ai/campaigns-artifact";
