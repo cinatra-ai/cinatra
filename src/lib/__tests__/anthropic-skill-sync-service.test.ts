@@ -26,6 +26,15 @@ let syncLifecycleReader: (ids: string[]) => SyncLifecycleResult = () => ({
   states: new Map(),
 });
 
+// cinatra#3202: the key now resolves through the connector's registered
+// surface. `null` here = connector not installed/active, so every case below
+// exercises the DEGRADED legacy-row fallback these tests were written against —
+// the service-held-key path has its own suite
+// (anthropic-key-through-connector-surface.test.ts).
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: () => null,
+}));
+
 vi.mock("@/lib/database", () => ({
   readAnthropicConnectionFromDatabase: () => readAnthropicConnection(),
   readAnthropicSkillSyncEnabledFromDatabase: () => false,
@@ -162,40 +171,40 @@ afterEach(() => {
 });
 
 describe("deriveApiKeyFingerprint", () => {
-  it("returns null when no Anthropic key configured", () => {
+  it("returns null when no Anthropic key configured", async () => {
     readAnthropicConnection.mockReturnValue(null);
-    expect(deriveApiKeyFingerprint()).toBeNull();
+    expect(await deriveApiKeyFingerprint()).toBeNull();
     readAnthropicConnection.mockReturnValue({ apiKey: "   " });
-    expect(deriveApiKeyFingerprint()).toBeNull();
+    expect(await deriveApiKeyFingerprint()).toBeNull();
   });
 
-  it("is non-reversible (no substring of the raw key) and stable", () => {
+  it("is non-reversible (no substring of the raw key) and stable", async () => {
     const apiKey = "sk-ant-SUPER-SECRET-12345";
     readAnthropicConnection.mockReturnValue({ apiKey });
     delete process.env.BETTER_AUTH_SECRET;
-    const fp1 = deriveApiKeyFingerprint()!;
-    const fp2 = deriveApiKeyFingerprint()!;
+    const fp1 = (await deriveApiKeyFingerprint())!;
+    const fp2 = (await deriveApiKeyFingerprint())!;
     expect(fp1).toBe(fp2); // stable
     expect(fp1).not.toContain("SECRET");
     expect(fp1).not.toContain(apiKey);
     expect(fp1).toBe(createHash("sha256").update(apiKey).digest("hex"));
   });
 
-  it("uses HMAC keyed by BETTER_AUTH_SECRET when present", () => {
+  it("uses HMAC keyed by BETTER_AUTH_SECRET when present", async () => {
     const apiKey = "sk-ant-abc";
     readAnthropicConnection.mockReturnValue({ apiKey });
     process.env.BETTER_AUTH_SECRET = "app-secret";
-    expect(deriveApiKeyFingerprint()).toBe(
+    expect(await deriveApiKeyFingerprint()).toBe(
       createHmac("sha256", "app-secret").update(apiKey).digest("hex"),
     );
   });
 
-  it("different keys ⇒ different fingerprints (no collision)", () => {
+  it("different keys ⇒ different fingerprints (no collision)", async () => {
     delete process.env.BETTER_AUTH_SECRET;
     readAnthropicConnection.mockReturnValue({ apiKey: "key-A" });
-    const a = deriveApiKeyFingerprint();
+    const a = await deriveApiKeyFingerprint();
     readAnthropicConnection.mockReturnValue({ apiKey: "key-B" });
-    const b = deriveApiKeyFingerprint();
+    const b = await deriveApiKeyFingerprint();
     expect(a).not.toBe(b);
   });
 });

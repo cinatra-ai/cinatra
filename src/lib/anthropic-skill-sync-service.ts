@@ -41,6 +41,7 @@ import {
   withNamespaceSyncLock,
 } from "@/lib/anthropic-skill-sync-dao";
 import { acquireSkillLease } from "@/lib/anthropic-skill-lease-dao";
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 
 /**
  * In-flight reference lease TTL. Longer than a creation run so a version a run
@@ -74,19 +75,71 @@ export const ANTHROPIC_SKILL_LEASE_TTL_MS = 10 * 60 * 1000;
 // ---------------------------------------------------------------------------
 
 /**
- * Non-reversible fingerprint of the configured Anthropic API key. HMAC-SHA256
- * keyed by BETTER_AUTH_SECRET when available (defence-in-depth), else plain
- * SHA-256. NEVER the raw key; never logged. Returns null if no key configured.
+ * The configured Anthropic API key, resolved through the CONNECTOR'S OWN
+ * registered provider surface (cinatra#3202) — the same road
+ * `llm-credential-fingerprint.ts` already takes, and the only road that sees a
+ * key held by the connection service.
+ *
+ * WHY THIS IS NOT A DATABASE READ. The connector deliberately purges its legacy
+ * plaintext connector-config row the moment it holds a verified
+ * connection-service pointer, so that a stale plaintext key can never shadow
+ * the securely held credential on later reads. Host code that read that row
+ * therefore saw NOTHING for every connection-service-backed key, and every
+ * consumer of that read silently degraded to "no Anthropic key configured" —
+ * permanently, because the row is deleted rather than stale. The connector's
+ * surface prefers the pointer and keeps the legacy row as ITS OWN fallback, so
+ * asking the surface is strictly more correct than asking the row.
+ *
+ * THREE OUTCOMES, same discipline as `readLiveCredentialFingerprint`:
+ *  - the surface answers a key      -> that key (authoritative);
+ *  - the surface answers nothing    -> null (AUTHORITATIVE absent: the
+ *                                     connector, which owns the fallback, says
+ *                                     there is no key — never second-guess it
+ *                                     by re-reading the row it just purged);
+ *  - the surface is UNREADABLE      -> (connector not installed/active, no key
+ *                                     reader, or the reader threw) degrade to
+ *                                     the legacy row, which is exactly the
+ *                                     behaviour every caller had before.
  */
-export function deriveApiKeyFingerprint(): string | null {
+export async function resolveConfiguredAnthropicApiKey(): Promise<string | null> {
+  const surface = getLlmProviderSurface("anthropic");
+  if (surface && typeof surface.getConfiguredAPIKey === "function") {
+    try {
+      const key = await surface.getConfiguredAPIKey();
+      const trimmed = typeof key === "string" ? key.trim() : "";
+      return trimmed.length > 0 ? trimmed : null;
+    } catch {
+      // UNREADABLE, not authoritative-absent. The thrown error may echo
+      // credential material, so it is deliberately neither logged nor
+      // propagated; fall through to the degraded read below.
+    }
+  }
   const conn = readAnthropicConnectionFromDatabase();
   const apiKey = typeof conn?.apiKey === "string" ? conn.apiKey.trim() : "";
-  if (!apiKey) return null;
+  return apiKey.length > 0 ? apiKey : null;
+}
+
+/**
+ * Non-reversible digest of a raw key. HMAC-SHA256 keyed by BETTER_AUTH_SECRET
+ * when available (defence-in-depth), else plain SHA-256. Pure: it neither reads
+ * nor logs anything, and the raw key never leaves the caller.
+ */
+function fingerprintApiKey(apiKey: string): string {
   const secret = process.env.BETTER_AUTH_SECRET?.trim();
-  const digest = secret
+  return secret
     ? createHmac("sha256", secret).update(apiKey).digest("hex")
     : createHash("sha256").update(apiKey).digest("hex");
-  return digest;
+}
+
+/**
+ * Non-reversible fingerprint of the configured Anthropic API key. NEVER the raw
+ * key; never logged. Returns null if no key is configured. The key is resolved
+ * through {@link resolveConfiguredAnthropicApiKey}, so this is async.
+ */
+export async function deriveApiKeyFingerprint(): Promise<string | null> {
+  const apiKey = await resolveConfiguredAnthropicApiKey();
+  if (!apiKey) return null;
+  return fingerprintApiKey(apiKey);
 }
 
 /**
@@ -516,10 +569,17 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
     return { ok: true, outcomes: [] };
   }
 
-  const fp = deriveApiKeyFingerprint();
-  if (!fp) {
+  // ONE resolution serves BOTH uses (cinatra#3202): the namespace fingerprint
+  // AND the upload client's key. They used to be two independent reads of the
+  // legacy connector-config row, so once the connector purged that row for a
+  // connection-service-backed key BOTH came back empty — the fingerprint went
+  // null (setup's initial-sync step could never commit) and, had it not, the
+  // upload client would have been handed an empty key anyway.
+  const apiKey = await resolveConfiguredAnthropicApiKey();
+  if (!apiKey) {
     return { ok: true, outcomes: [] }; // no Anthropic key configured ⇒ nothing to mirror
   }
+  const fp = fingerprintApiKey(apiKey);
   let env: string;
   try {
     env = deriveEnvironmentNamespace();
@@ -533,8 +593,6 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
     };
   }
 
-  const conn = readAnthropicConnectionFromDatabase();
-  const apiKey = typeof conn?.apiKey === "string" ? conn.apiKey.trim() : "";
   const client = new FetchAnthropicCustomSkillsClient(apiKey);
 
   const engine = new AnthropicSkillSyncEngine(
@@ -640,7 +698,7 @@ export function ensureAnthropicSkillSyncMapRegistered(): void {
 
   const statePort: AnthropicSyncMapStatePort = {
     readRow: async (catalogSkillId) => {
-      const fp = deriveApiKeyFingerprint();
+      const fp = await deriveApiKeyFingerprint();
       if (!fp) return null;
       let env: string;
       try {
@@ -682,7 +740,7 @@ export function ensureAnthropicSkillSyncMapRegistered(): void {
   // try/catch (dispatch must never break).
   const leasePort: AnthropicSkillLeasePort = {
     acquire: async ({ catalogSkillId, anthropicSkillId, anthropicVersion }) => {
-      const fp = deriveApiKeyFingerprint();
+      const fp = await deriveApiKeyFingerprint();
       if (!fp) return;
       let env: string;
       try {
