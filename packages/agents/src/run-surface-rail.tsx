@@ -128,14 +128,14 @@ export function useRunStepSelection() {
  * and a 1px border that is transparent at rest never drew it.
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+  "h-auto items-start justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
 
 /**
  * The same row, for one that cannot be opened: neither the hover affordance nor
  * the press animation of a row that does something (cinatra#2970).
  */
 export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
+  "h-auto items-start justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
@@ -186,7 +186,11 @@ export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
 // graph of four route-budgeted routes and the route-graph ratchet refused it.
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {
-  return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
+  // `mt-0.5` centres the label's own 20px line box in the 24px circle beside it
+  // (cinatra#3225 item 3, fix leg 8). The row aligns to its FIRST text line, so
+  // a single-line row is drawn exactly where it always was and a wrapped one
+  // keeps its first line on the circle rather than pushing the circle down.
+  return cn("mt-0.5 text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
 }
 
 /**

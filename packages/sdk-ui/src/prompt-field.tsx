@@ -798,8 +798,17 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
         {isEmpty && placeholder && (
           <span
             aria-hidden="true"
+            // THE SENTENCE CLEARS THE SEND CONTROL'S CORNER (cinatra#3222 item
+            // 3). The editable box below reserves that corner with `pr-14`; this
+            // floating sentence reserved the LEFT inset only, so a reading whose
+            // sentence is long enough to wrap — the review reading's, the longest
+            // of the drawing's five — ran its last line under the round control.
+            // The drawing gives the window "the same field, the same send
+            // control, in the same place": the control stands BESIDE the
+            // sentence, never on it, so the sentence's box is the editable box's
+            // box on BOTH sides.
             className={cn(
-              "pointer-events-none absolute top-0 py-3 text-sm leading-6 text-muted-foreground select-none",
+              "pointer-events-none absolute top-0 py-3 pr-14 text-sm leading-6 text-muted-foreground select-none",
               hasLeftMenu ? "left-1" : "left-4",
             )}
           >

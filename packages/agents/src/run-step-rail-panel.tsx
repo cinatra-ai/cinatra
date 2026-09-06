@@ -175,7 +175,10 @@ export function RunStepRailPanel({
                     drops every other prop, so a data-* attribute placed there
                     never reaches the DOM. */}
                 <div
-                  className="flex w-full min-w-0 items-center gap-1"
+                  // The indicator sits on the label's FIRST line, never centred
+                  // over a wrapped block (cinatra#3225 item 3, fix leg 8) — the
+                  // rule the shared row class states for every rail row.
+                  className="flex w-full min-w-0 items-start gap-1"
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                 >

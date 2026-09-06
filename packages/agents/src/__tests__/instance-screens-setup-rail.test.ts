@@ -119,7 +119,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
     // these three (cinatra#3068 fix leg 2), so the schedule is not numbered 1
     // over a step the person already took.
     expect(SETUP_BRANCH).toContain(
-      "buildSetupRailSteps(setupSteps, inputRailSteps.length)",
+      // The list the rail is built from is the composed one (cinatra#3221 item
+      // 3, fix leg 8: no Skills entry the run has already gone past); the
+      // OFFSET rule this case pins is unchanged.
+      "buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length)",
     );
     expect(STEP_ROWS_SRC).toContain("label={RUN_SURFACE_RAIL_LABELS[step.key]}");
     expect(STEP_ROWS_SRC).toContain(

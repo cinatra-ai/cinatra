@@ -100,7 +100,10 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
     // The three setup steps renumber around however many input rows stand
     // above them.
     expect(TRIGGER_SCREEN).toContain(
-      "buildSetupRailSteps(setupSteps, inputRailSteps.length)",
+      // The list the rail is built from is the composed one (cinatra#3221 item
+      // 3, fix leg 8: no Skills entry the run has already gone past); the
+      // OFFSET rule this case pins is unchanged.
+      "buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length)",
     );
     expect(TRIGGER_SCREEN).toContain(
       "const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];",

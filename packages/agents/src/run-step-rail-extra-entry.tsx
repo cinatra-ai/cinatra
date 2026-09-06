@@ -68,9 +68,19 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * measured at 7.5px above and 6.5px below the drawing's 4px and 4px. The row
  * keeps its focus indicator: the base's `focus-visible:ring-3` ring is what
  * draws focus here, and a border transparent at rest never drew it.
+ *
+ * AND THE ROW IS ALIGNED TO ITS FIRST TEXT LINE (cinatra#3225 item 3, fix leg
+ * 8). A rail label WRAPS inside the 208px column (cinatra#3226), and the shared
+ * `Button` centres its children over the whole box: on a wrapped row the circle
+ * therefore drifted DOWN, off the line it names, and the marks either side of it
+ * stopped reading against that line — the fourth proof round measured 6px above
+ * the mark and 15px below it, then 15 and 6, where the drawing gives one gap.
+ * The circle belongs on the FIRST line of the label it stands for, which is the
+ * alignment the lifecycle row already stated for itself; it is the ROW's rule,
+ * so it is stated once here and every row of every rail reads it.
  */
 export const RUN_PAGE_RAIL_ROW_CLASS =
-  "h-auto w-full min-w-0 gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
+  "h-auto w-full min-w-0 items-start gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
 
 /**
  * THE LABEL FITS THE RAIL COLUMN (cinatra#3226, the fourth proof round's
@@ -88,8 +98,17 @@ export const RUN_PAGE_RAIL_ROW_CLASS =
  * rows carry their whole name. `min-w-0` is what lets the flex row give the
  * label back to the column instead of growing past it; `break-words` catches a
  * single long token that no wrap point can break.
+ *
+ * AND ITS FIRST LINE SITS ON THE CIRCLE (cinatra#3225 item 3, fix leg 8). Once
+ * the row aligns to its first text line, the label's own line box is what the
+ * circle is read against: `leading-5` makes that box 20px — the SAME box the
+ * run-surface rail's rows compose, which is one rail with one rhythm rather
+ * than two — and `mt-0.5` centres it in the 24px circle, so a single-line row
+ * is drawn exactly where it always was and a wrapped one keeps its first line
+ * on the circle instead of pushing the circle down the block.
  */
-export const RUN_PAGE_RAIL_TITLE_CLASS = "min-w-0 break-words whitespace-normal text-start";
+export const RUN_PAGE_RAIL_TITLE_CLASS =
+  "mt-0.5 min-w-0 leading-5 break-words whitespace-normal text-start";
 
 /**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
@@ -231,15 +250,14 @@ export function RailExtraEntry({
     // StepperTitle accepts only {children, className} and drops every other
     // prop, so a data-* attribute placed there never reaches the DOM.
     <div
-      // A lifecycle entry's reason wraps to several lines, so its indicator
-      // aligns to the FIRST line rather than the block centre.
+      // EVERY entry's indicator aligns to the FIRST line rather than the block
+      // centre (cinatra#3225 item 3, fix leg 8). It was the lifecycle row's own
+      // rule, because a lifecycle reason was the first label anyone had seen
+      // wrap; a work step's name wraps in the same column (cinatra#3226) and
+      // drifted its circle down the block exactly the same way.
       // The row spans the rail column and may SHRINK inside it, which is what
       // lets a long label wrap instead of running past the column (cinatra#3226).
-      className={
-        isLifecycle
-          ? "flex w-full min-w-0 items-start gap-1"
-          : "flex w-full min-w-0 items-center gap-1"
-      }
+      className="flex w-full min-w-0 items-start gap-1"
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
       data-rail-gated-step={isGate ? "true" : undefined}
@@ -265,7 +283,7 @@ export function RailExtraEntry({
           // gate row that stated its own box is how the rail came to compose
           // two rhythms in the first place.
           className={cn(
-            "flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex items-start rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-gate-link={entry.gate.reviewTaskId}
@@ -279,7 +297,7 @@ export function RailExtraEntry({
         <Link
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className={cn(
-            "flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex items-start rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-verification-link={entry.verification.reviewTaskId}
@@ -300,15 +318,14 @@ export function RailExtraEntry({
         // `min-h-8` keeps every single-line row at exactly the height it had.
         <StepperTrigger
           className={cn(
-            // The row's own box is the shared row class's (`h-auto`, content
-            // sized, cinatra#3225) — no `min-h-8` floor, which held this row at
-            // the 32px the drawing does not draw.
+            // The row's own box AND its alignment are the shared row class's
+            // (`h-auto`, content sized, `items-start`, cinatra#3225) — no
+            // `min-h-8` floor, which held this row at the 32px the drawing does
+            // not draw, and no second copy of the first-line rule here: once the
+            // row is allowed to grow, the Button's own `items-center` would
+            // centre the indicator against the whole wrapped block, on THIS row
+            // as on every other one.
             RUN_PAGE_RAIL_ROW_CLASS,
-            // Once the row is allowed to grow, the Button's own `items-center`
-            // would centre the indicator against the whole wrapped block. A
-            // lifecycle indicator belongs on the FIRST line — the same
-            // alignment the wrapper above states.
-            isLifecycle && "items-start"
           )}
           tabIndex={-1}
         >
@@ -392,6 +409,19 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   const parkedTrailingStep = parkedTrailingIndex === -1 ? null : spineLength + parkedTrailingIndex + 1;
 
   if (status === "pending_input" || status === "queued") return 1;
+
+  // THE RUN PARKED AT ITS SCHEDULE (cinatra#3221, fix leg 8). The scheduling
+  // gate is the drawing's second gate entry and it parks on two statuses of its
+  // own -- `pending_trigger` while the choice is outstanding, `armed` once the
+  // choice named an instant. Neither was a branch here, so a run standing at
+  // its schedule fell through to the function's last line and elected the FIRST
+  // row: the fourth proof round measured exactly that, nothing highlighted on
+  // the very step the reader was standing at. The gate's own trailing row wins,
+  // the same rule the review gate above takes; with no trailing row of its own
+  // the rail is left exactly as it was.
+  if (status === "pending_trigger" || status === "armed") {
+    return parkedTrailingStep ?? 1;
+  }
 
   if (status === "pending_approval") {
     // THE GATE THE RUN IS PARKED AT WINS, WHATEVER STEP PRODUCED THE WORK

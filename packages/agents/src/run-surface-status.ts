@@ -178,6 +178,28 @@ export function runStandsAtMidRunScreenMoment(
 }
 
 /**
+ * IS THE RUN STANDING AT ITS SCHEDULE? (cinatra#3221, fix leg 8.)
+ *
+ * THE THIRD GATE CLASS, ASKED OF THE SAME RECORDED FACT. Leg 6 closed the
+ * mid-run context gate and leg 7 the work review gate; the fourth proof round
+ * came back with the SCHEDULING reading still electing nothing -- a run stopped
+ * in front of its schedule step drew a rail with no entry highlighted, and the
+ * still-to-come Skills row standing above the step it was stopped at.
+ *
+ * The run states this moment itself: the coordinator writes `schedule` on the
+ * run's own row when it parks there (`stateRunScheduleMoment`), on BOTH statuses
+ * the park uses -- `pending_trigger` while the person's choice is outstanding
+ * and `armed` once the choice named an instant. So the rail reads the row here,
+ * exactly as it reads the other two moments, and how a moment is spelled never
+ * leaves this module (PLAN (B) section 6: "no screen re-derives a moment").
+ */
+export function runStandsAtScheduleMoment(
+  lifecycleMoment: string | null | undefined,
+): boolean {
+  return lifecycleMoment === "schedule";
+}
+
+/**
  * WHERE A WAIT'S NOTIFICATION SHOULD LAND (cinatra#2930, epic #2926 W3).
  *
  * The plan: "When a run waits at a moment, the notification links to the

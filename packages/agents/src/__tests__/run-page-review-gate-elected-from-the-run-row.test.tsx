@@ -151,6 +151,7 @@ import type { AgentRunRecord } from "../store";
 import { RunStepRailPanel } from "../run-step-rail-panel";
 import type { RunStepRailEntry } from "../run-step-rail";
 import { electRunRailActiveStep } from "../run-step-rail-extra-entry";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 
 const TEST_AUTHORITY = { orgId: "org-test", can: () => true };
 const RUN_ID = "run-3221-leg7";
@@ -233,7 +234,15 @@ function makeTemplate() {
           stepNumber: 2,
           requiresApproval: true,
           hitlOwnedBy: "childAgent",
-          xRenderer: "@cinatra-ai/reviewer-agent:output",
+          // THE GATE'S OWN RENDERER IDENTITY, NOT A RETIRED ONE (fix leg 8).
+          // This fixture named the retired reviewer package's renderer, an
+          // identity the retirement gate holds at EXACT ZERO across the whole
+          // tree (`reviewer-auditor-retirement-identity.test.ts`), so leg 7's
+          // own proof file turned the build red. The marked artifact-review
+          // gate emits `ARTIFACT_REVIEW_REDIRECT_RENDERER_ID` (`execution.ts`),
+          // which is the identity this policy step stands for: the fixture
+          // names the live one and the gate it exercises is unchanged.
+          xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
           schema: { properties: {} },
           artifactReviewTargetsInput: TARGETS_INPUT,
         },

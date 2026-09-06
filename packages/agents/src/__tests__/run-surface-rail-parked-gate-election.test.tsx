@@ -489,8 +489,11 @@ describe("the run screen reads the parked gate ONCE and hands it to both halves"
   // frame contract forbids. The fact is read ABOVE the frame answer for exactly
   // this reason, so the order is pinned too.
   it("counts the parked gate in the frame answer the panels are handed", () => {
+    // AND THE SCHEDULING PARK IS COUNTED IN THE SAME ANSWER (cinatra#3221, fix
+    // leg 8): a run stopped at its schedule mounts the rail on its own too, and
+    // the frame the panels are handed is one answer, not one per gate class.
     expect(SCREEN_SRC).toMatch(
-      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedGateStep;/,
+      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedScheduleStep \|\|\s*\n\s*parkedGateStep;/,
     );
     const factAt = SCREEN_SRC.indexOf("const parkedGateStep = runParkedAtTrailingGate({");
     const frameAt = SCREEN_SRC.indexOf("const railFramesTheRunDetail =");
