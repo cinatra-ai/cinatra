@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "../../vitest.placeholder-db-url";
 
 const root = path.resolve(__dirname, "../..");
 const serverOnlyStub = path.join(__dirname, "tests/__stubs__/server-only.ts");
@@ -50,7 +51,7 @@ export default defineConfig({
     env: {
       SUPABASE_DB_URL:
         process.env.SUPABASE_DB_URL ??
-        "postgres://unused:unused@localhost:5432/unused",
+        ROOT_SUITE_PLACEHOLDER_DB_URL,
     },
   },
 });
