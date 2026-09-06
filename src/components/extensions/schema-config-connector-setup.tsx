@@ -88,6 +88,18 @@ export type SchemaConfigConnectorSetupProps = {
   recheck?: () => Promise<ConnectorReadinessReading>;
   /** Host content belonging to the SETUP surface only (the sharing section). */
   footer?: ReactNode;
+  /**
+   * The route's crumb-publisher island (cinatra#3215). The dispatch route
+   * resolves the vendor / connector display names in ITS server render, after
+   * its access checks, and hands the island down; this shape mounts it as the
+   * first child of the page, exactly where each of the two collapsed
+   * schema-config branches mounted it before they became one render
+   * (cinatra#3214). REQUIRED, so a setup page that forgot to publish — and so
+   * drew the raw slugs in the breadcrumbs — cannot type-check. Host-owned and
+   * opaque here: this shape reads nothing out of it and no connector supplies
+   * one.
+   */
+  crumbTrail: ReactNode;
 };
 
 export function SchemaConfigConnectorSetup({
@@ -103,6 +115,7 @@ export function SchemaConfigConnectorSetup({
   connectedLabel,
   recheck,
   footer,
+  crumbTrail,
 }: SchemaConfigConnectorSetupProps) {
   return (
     <ConnectorSetupPage
@@ -111,6 +124,7 @@ export function SchemaConfigConnectorSetup({
       divider={divider}
       className="flex flex-col gap-6 pb-8"
     >
+      {crumbTrail}
       <Suspense fallback={null}>
         <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
       </Suspense>

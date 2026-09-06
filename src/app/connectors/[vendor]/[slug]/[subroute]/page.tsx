@@ -243,7 +243,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // (`connectorNameCrumbFallbackLabel`) — one fallback, stated in one place.
   //
   // Rendered on EVERY surviving branch of this route, so no reading of a
-  // connector page draws the raw slugs.
+  // connector page draws the raw slugs. The schema-config branch renders it
+  // through the shared setup shape below — cinatra#3214 collapsed that
+  // branch's two layouts into ONE render, so the island reaches both the
+  // probe-declaring and the probe-less connector as that shape's first child
+  // rather than through two branch-level mounts.
   const vendorDisplayName = catalogEntry?.vendorIdentity?.name ?? null;
   const crumbTrail = (
     <CrumbContributions
@@ -338,6 +342,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     const headerDivider = !(installId && hasTabs);
     return (
       <SchemaConfigConnectorSetup
+        crumbTrail={crumbTrail}
         displayName={displayName}
         divider={headerDivider}
         installId={installId}

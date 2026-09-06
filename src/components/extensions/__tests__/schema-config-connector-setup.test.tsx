@@ -105,6 +105,10 @@ async function renderSetup(props: Partial<SetupProps> & { surface: SetupProps["s
         isAdmin={false}
         initialValues={{}}
         connected={false}
+        // The route's crumb-publisher island is a client island wired to the
+        // shell's pathname/epoch context; this shape only mounts what it is
+        // handed, so the shape's own tests hand it nothing to mount.
+        crumbTrail={null}
         {...props}
       />,
     );
