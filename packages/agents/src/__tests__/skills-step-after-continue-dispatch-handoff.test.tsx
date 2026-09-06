@@ -1,58 +1,46 @@
 // @vitest-environment jsdom
 /**
- * THE RAIL AND THE TAB STRIP AFTER CONTINUE, ON THE REAL CLIENT ROAD
- * (cinatra#3184, fix leg 3).
+ * THE RAIL AND THE TAB STRIP ACROSS THE DISPATCH HANDOFF (cinatra#3184, fix
+ * leg 4).
  *
- * WHAT WAS MEASURED, and where. The second graded reading of this branch shot
- * the Skills step on a dev boot and read two of this issue's own cells wrong:
- * right after Continue the rail drew the settled Skills row ALONE
- * (`railOrder=["Skills"]`), and on the re-opened settled Skills row the strip
- * lit Setup over a Skills-only detail (`tabsLit=["Setup"]`). The frames taken on
- * a FRESH load read correctly, which is why the seam was first read as client
- * state.
+ * WHAT THE ROUND MEASURED, and why the leg before this one did not move it. Fix
+ * leg 3 took `pending_approval` out of the status shortcut, its tests went
+ * green, and the next graded reading of this branch reproduced the headline on
+ * the same run row at the pushed head: after Continue the rail carried ONE entry
+ * and the strip lit Setup, while a fresh load of that same row read four entries
+ * and lit nothing.
  *
- * IT IS NOT CLIENT STATE. The two runs the graded frames were shot on carry, in
- * the lane's own database, `status = pending_approval` with NO step result, NO
- * run message and NO streamed text -- and the runs the fresh-load frames were
- * shot on are a different, never-decided set that never left `pending_input`.
- * Answering the skills question RELEASES the run, and the gate it parks at next
- * writes `pending_approval` behind it. `runHasExecutionRecord` read that status
- * as "in an execution, with or without output yet", so the one fact both
- * `railDrawsUpcomingRunSteps` and `runGateStepInFrame` ride on flipped the
- * moment Continue was pressed: the rail dropped every still-to-come row and the
- * strip lit Setup again.
+ * THE ROW THE REFRESH ACTUALLY BRINGS BACK IS `queued`, NOT `pending_approval`.
+ * Driven on the boot: the run row went `pending_input` -> `queued` -> then
+ * `pending_approval`, the decision's own round trip returned as soon as the
+ * dispatch landed, and the run page's server render read the row 1.9s BEFORE it
+ * moved on -- at `queued`, with no step result, no run message and no streamed
+ * text. Nothing re-rendered the page after. So leg 3 modelled the wrong row:
+ * `queued` was still in the shortcut, `runHasExecutionRecord` answered true from
+ * the bare status, `railDrawsUpcomingRunSteps` dropped every still-to-come row
+ * and `runGateStepInFrame` handed the strip Setup back.
  *
- * AND THE ROW THIS FILE MODELS IS NOT THE ROW THE REFRESH BRINGS BACK
- * (cinatra#3184 fix leg 4). Driven on the boot, the refresh renders the run at
- * `queued` -- the dispatch the release fires, one status BEFORE the park this
- * file walks to -- which is why every assertion below stayed green while the
- * boot kept reproducing the one-entry rail. The reading this file pins is real
- * and stays; the transition the round actually takes is driven next door, in
- * `skills-step-after-continue-dispatch-handoff.test.tsx`.
+ * AND THE RUN'S OWN INPUT ROW WENT WITH THEM, which is the fourth entry. In the
+ * handoff the run has answered no form and is asked none, so both clauses of
+ * `runCarriesInputSteps` said the rail carries no input step -- the row the
+ * drawing keeps "still to come" below the entry just settled.
  *
- * WHAT THIS FILE MEASURES, and how it differs from the prop-level pin beside it
- * (`skills-step-rail-is-never-one-entry.test.tsx`, which renders the rail off
- * computed props and never presses anything). This drives the REAL transition:
- * the real hold card's real Continue button, the real decision action, the real
- * `router.refresh()` the row fires -- and the refresh hands the page tree the
- * server props recomputed from the run row the database actually holds after the
- * decision. Then the rail's rows and the strip's lit tab are read back off the
- * rendered page, twice: right after Continue, and again after the reader presses
- * the settled Skills row (the rail's own client selection).
+ * WHAT THIS FILE MEASURES. The real transition through the composed page tree:
+ * the real hold card's real Continue, the real decision action, the real
+ * `router.refresh()` the row fires -- and the refresh hands the tree the server
+ * props recomputed from the run row the handoff actually holds. The rail's rows
+ * and the strip's lit tab are read back off the rendered page three times: at
+ * the question, right after Continue with no reload, and again after the reader
+ * presses the settled Skills row.
  *
  * Run:
  *   cd packages/agents && npx vitest run \
- *     src/__tests__/skills-step-after-continue-client-transition.test.tsx
+ *     src/__tests__/skills-step-after-continue-dispatch-handoff.test.tsx
  */
 import React from "react";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// THE SERVER RENDER THE REFRESH BRINGS BACK. `router.refresh()` re-renders the
-// server tree without remounting the client one, so the harness below hands the
-// refresh a callback that advances its run row -- the page tree then recomputes
-// every server prop from the advanced row, which is exactly what the framework
-// does on the live road.
 const wired = vi.hoisted(() => ({ refreshed: { current: null as null | (() => void) } }));
 
 vi.mock("next/navigation", () => ({
@@ -83,24 +71,42 @@ import {
   railDrawsUpcomingRunSteps,
   runGateStepInFrame,
   runHasExecutionRecord,
+  runInDispatchHandoff,
   runPageActiveTab,
   upcomingRunRailStepKeys,
 } from "../instance-screens";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { RecommendationRailStepRow } from "../recommendation-rail-step";
+import { buildRunInputRailSteps } from "../run-input-rail-steps";
+import {
+  buildRunInputSteps,
+  openRunInputStepKey,
+  runAtInputMoment,
+  runCarriesInputSteps,
+} from "../run-input-steps";
 import { RecommendationHoldCard } from "../run-recommendation-chip-row";
 import { RunSurfaceRail, type RunSurfaceRailStep } from "../run-surface-rail";
-import { runSurfaceStepDrawsGlyph } from "../run-surface-rail-step";
+import {
+  runSurfaceRailNumberedCount,
+  runSurfaceStepDrawsGlyph,
+} from "../run-surface-rail-step";
 import { buildSetupRailSteps } from "../setup-run-surface-steps";
 
-const RUN_ID = "run-3184-continue";
+const RUN_ID = "run-3184-handoff";
 const PKG = "@cinatra-ai/author-agent";
-const HOLD_REF = "hold-ref-3184-continue";
+const HOLD_REF = "hold-ref-3184-handoff";
 
 /**
- * THE RUN ROW, in the two readings the graded frames were shot at -- both read
- * off the lane's own database rather than invented here.
+ * THE AGENT'S OWN FORM -- one required, visible field, unanswered throughout
+ * this walk, exactly as the run on the boot carried it (the release log names
+ * the field the run parks on next).
  */
+const INPUT_SCHEMA = {
+  required: ["spec"] as const,
+  properties: { spec: { title: "Spec" } } as const,
+};
+
+/** The run row, in the three readings the live drive walked through. */
 type RunRow = {
   status: string;
   stepResultCount: number;
@@ -120,12 +126,11 @@ const RUN_HELD_AT_THE_GATE: RunRow = {
 };
 
 /**
- * The same run one press later, exactly as the database holds it for the two
- * runs cells 3 and 4 were shot on: released, parked at the next gate, and
- * carrying no history of its own yet.
+ * THE ROW THE REFRESH BRINGS BACK. Released, dispatched, and carrying nothing of
+ * its own -- the second or two the page is actually rendered at.
  */
-const RUN_AFTER_CONTINUE: RunRow = {
-  status: "pending_approval",
+const RUN_IN_THE_HANDOFF: RunRow = {
+  status: "queued",
   stepResultCount: 0,
   runMessageCount: 0,
   streamedTextLength: 0,
@@ -154,7 +159,7 @@ const HELD = {
   recommendations: [pill("skill-a", "Skill A", 1), pill("skill-b", "Skill B", 2)],
 };
 
-/** The one fact the rail's rows and the strip's lit tab both ride on. */
+/** The one fact the rail's rows, the input span and the lit tab all ride on. */
 function runHasHistory(row: RunRow): boolean {
   return runHasExecutionRecord({
     runStatus: row.status,
@@ -165,11 +170,42 @@ function runHasHistory(row: RunRow): boolean {
 }
 
 /**
- * The run page's rail for this run, composed through the SAME three calls the
- * screen makes -- the gate row, then the steps still to come, the glyph row at
- * the head and the numbered ones beneath.
+ * The run's input steps and the two answers the page derives from them, composed
+ * through exactly the calls the screen makes.
+ */
+function inputSpanFor(row: RunRow) {
+  const atInputMoment = runAtInputMoment({
+    runStatus: row.status,
+    // No interrupt is derivable in this walk: the run is either at
+    // `pending_input` (where the status alone answers) or inside the handoff
+    // (where no gate exists yet to derive one from).
+    interrupt: null,
+  });
+  const steps = buildRunInputSteps({
+    required: [...INPUT_SCHEMA.required],
+    properties: INPUT_SCHEMA.properties,
+    inputParams: {},
+    atInputMoment,
+  });
+  const inRail = runCarriesInputSteps(
+    steps,
+    atInputMoment,
+    runInDispatchHandoff({ runStatus: row.status, hasExecutionRecord: runHasHistory(row) }),
+  );
+  return { steps, inRail, openKey: openRunInputStepKey(steps) };
+}
+
+/** The label the agent's one form takes on the rail -- read, never asserted. */
+const INPUT_STEP_LABEL = inputSpanFor(RUN_HELD_AT_THE_GATE).steps[0]?.label ?? "NO INPUT STEP";
+
+/**
+ * The run page's rail for this run: the gate row, the run's own input row
+ * beneath it, then the steps still to come -- the glyph row at the head and the
+ * numbered ones under it, in the screen's own order.
  */
 function railFor(row: RunRow): RunSurfaceRailStep[] {
+  const span = inputSpanFor(row);
+  const detail = <div data-testid="run-detail">the run detail</div>;
   const railSteps: RunSurfaceRailStep[] = [
     {
       key: "recommendation",
@@ -184,10 +220,13 @@ function railFor(row: RunRow): RunSurfaceRailStep[] {
       reached: true,
     },
   ];
+  if (span.inRail) {
+    railSteps.push(...buildRunInputRailSteps(span.steps, detail));
+  }
   const upcoming = upcomingRunRailStepKeys({
     drawUpcoming: railDrawsUpcomingRunSteps({
-      inputStepIsOpen: false,
-      inputStepsInRail: false,
+      inputStepIsOpen: span.openKey !== null,
+      inputStepsInRail: span.inRail,
       gateStepInRail: true,
       hasExecution: runHasHistory(row),
     }),
@@ -206,7 +245,10 @@ function railFor(row: RunRow): RunSurfaceRailStep[] {
   }
   if (numbered.length > 0) {
     railSteps.push(
-      ...buildSetupRailSteps(numbered.map(asStep), railSteps.length - head.length - 1),
+      ...buildSetupRailSteps(
+        numbered.map(asStep),
+        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)),
+      ),
     );
   }
   return railSteps;
@@ -214,9 +256,10 @@ function railFor(row: RunRow): RunSurfaceRailStep[] {
 
 /** The strip's answer, composed the way the screen composes it. */
 function activeTabFor(row: RunRow): "setup" | "none" {
+  const span = inputSpanFor(row);
   return runPageActiveTab({
-    inputStepIsOpen: false,
-    inputStepsInRail: false,
+    inputStepIsOpen: span.openKey !== null,
+    inputStepsInRail: span.inRail,
     scheduleStepInFrame: false,
     gateStepInFrame: runGateStepInFrame({
       gateStepOpens: true,
@@ -233,7 +276,7 @@ function activeTabFor(row: RunRow): "setup" | "none" {
 function RunPage(): React.ReactElement {
   const [row, setRow] = React.useState<RunRow>(RUN_HELD_AT_THE_GATE);
   React.useEffect(() => {
-    wired.refreshed.current = () => setRow(RUN_AFTER_CONTINUE);
+    wired.refreshed.current = () => setRow(RUN_IN_THE_HANDOFF);
     return () => {
       wired.refreshed.current = null;
     };
@@ -277,6 +320,8 @@ function litTabs(container: HTMLElement): string[] {
 const boxes = (c: HTMLElement) =>
   Array.from(c.querySelectorAll<HTMLElement>("[data-skills-step-checkbox]"));
 
+const WHOLE_LIFECYCLE = ["Skills", INPUT_STEP_LABEL, "Schedule", "Review"];
+
 beforeEach(() => {
   confirmRunRecommendationAction.mockReset();
   skipRunRecommendationAction.mockReset();
@@ -291,15 +336,14 @@ afterEach(() => {
   cleanup();
 });
 
-describe("the run page after the Skills step's Continue is pressed", () => {
-  it("keeps the whole lifecycle on the rail and lights no tab, held and settled alike", async () => {
+describe("the run page across the dispatch handoff Continue opens", () => {
+  it("keeps the run's whole lifecycle on the rail and lights no tab", async () => {
     const view = render(<RunPage />);
     await waitFor(() => expect(boxes(view.container)).toHaveLength(2));
 
-    // THE READING BEFORE THE PRESS, so the readings after it are a transition
-    // and not a fixture: the rail is the run's whole lifecycle and the strip
-    // lights nothing over the step in the frame.
-    expect(railRowTitles(view.container)).toEqual(["Skills", "Schedule", "Review"]);
+    // THE READING BEFORE THE PRESS, so what follows is a transition and not a
+    // fixture: four rows, and the strip lights nothing over the step in frame.
+    expect(railRowTitles(view.container)).toEqual(WHOLE_LIFECYCLE);
     expect(litTabs(view.container)).toEqual([]);
 
     const button = view.container.querySelector<HTMLElement>("[data-skills-step-continue]");
@@ -309,20 +353,21 @@ describe("the run page after the Skills step's Continue is pressed", () => {
     });
     await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
 
-    // THE REFRESH THE ROW FIRED brought the advanced run row back.
+    // THE REFRESH THE ROW FIRED brought the handoff row back.
     await waitFor(() =>
       expect(
         view.container
           .querySelector<HTMLElement>("[data-testid='run-page']")
           ?.getAttribute("data-run-status"),
-      ).toBe("pending_approval"),
+      ).toBe("queued"),
     );
 
-    // CELL 3 -- right after Continue. The rail is never the live tip alone.
-    expect(railRowTitles(view.container)).toEqual(["Skills", "Schedule", "Review"]);
+    // RIGHT AFTER CONTINUE, no reload. The rail is never the live tip alone,
+    // and the run's own next question keeps its place still to come.
+    expect(railRowTitles(view.container)).toEqual(WHOLE_LIFECYCLE);
     expect(litTabs(view.container)).toEqual([]);
 
-    // CELL 4 -- the reader presses the settled Skills row. That press is the
+    // AND WHEN THE READER PRESSES THE SETTLED SKILLS ROW. That press is the
     // rail's own client state, and neither reading may move under it.
     const settledRow = view.container.querySelector<HTMLElement>(
       "[data-recommendation-rail-step]",
@@ -333,39 +378,59 @@ describe("the run page after the Skills step's Continue is pressed", () => {
     });
 
     expect(view.container.querySelector("[data-testid='settled-skills-card']")).not.toBeNull();
-    expect(railRowTitles(view.container)).toEqual(["Skills", "Schedule", "Review"]);
+    expect(railRowTitles(view.container)).toEqual(WHOLE_LIFECYCLE);
     expect(litTabs(view.container)).toEqual([]);
   });
 });
 
-describe("the fact both readings ride on", () => {
-  // A run parked at a gate BEFORE it has produced anything is the counterexample
-  // the status shortcut could not answer; a run parked at a gate that HAS
-  // produced something still reads as the execution it is.
-  it("reads the record for a run parked at an approval gate with nothing behind it", () => {
-    expect(runHasHistory(RUN_AFTER_CONTINUE)).toBe(false);
-    expect(runHasHistory({ ...RUN_AFTER_CONTINUE, runMessageCount: 1 })).toBe(true);
-    expect(runHasHistory({ ...RUN_AFTER_CONTINUE, stepResultCount: 1 })).toBe(true);
-    expect(runHasHistory({ ...RUN_AFTER_CONTINUE, streamedTextLength: 12 })).toBe(true);
+describe("the facts the handoff reading rides on", () => {
+  it("reads a dispatched run with nothing behind it as no execution yet", () => {
+    expect(runHasHistory(RUN_IN_THE_HANDOFF)).toBe(false);
+    for (const carried of [
+      { stepResultCount: 1 },
+      { runMessageCount: 1 },
+      { streamedTextLength: 12 },
+    ]) {
+      expect(runHasHistory({ ...RUN_IN_THE_HANDOFF, ...carried })).toBe(true);
+    }
   });
 
   it("still reads a run that is IN its execution as one", () => {
     for (const status of ["running", "waiting_trigger"]) {
-      expect(runHasHistory({ ...RUN_AFTER_CONTINUE, status })).toBe(true);
+      expect(runHasHistory({ ...RUN_IN_THE_HANDOFF, status })).toBe(true);
     }
   });
 
-  // AND `queued` IS NOT ONE OF THEM (cinatra#3184 fix leg 4). This file pinned
-  // it as a dispatched run whose history had started, on the reasoning that the
-  // status "is reached only by dispatching the run". The graded round after this
-  // leg refuted that: the row the refresh brings back IS `queued`, it carries
-  // nothing, and reading it as an execution is what collapsed the rail on the
-  // boot. `skills-step-after-continue-dispatch-handoff.test.tsx` drives that
-  // transition; the shortcut is pinned here beside the status it sat in.
-  it("reads a run that has only been queued as no execution yet", () => {
-    expect(runHasHistory({ ...RUN_AFTER_CONTINUE, status: "queued" })).toBe(false);
+  it("names the handoff, and only the handoff", () => {
     expect(
-      runHasHistory({ ...RUN_AFTER_CONTINUE, status: "queued", stepResultCount: 1 }),
+      runInDispatchHandoff({ runStatus: "queued", hasExecutionRecord: false }),
     ).toBe(true);
+    expect(
+      runInDispatchHandoff({ runStatus: "queued", hasExecutionRecord: true }),
+    ).toBe(false);
+    for (const status of [
+      "pending_input",
+      "pending_approval",
+      "running",
+      "completed",
+      "failed",
+      "armed",
+      null,
+    ]) {
+      expect(runInDispatchHandoff({ runStatus: status, hasExecutionRecord: false })).toBe(false);
+    }
+  });
+
+  it("keeps the run's unanswered form on the rail across the handoff, and nowhere else", () => {
+    const steps = buildRunInputSteps({
+      required: [...INPUT_SCHEMA.required],
+      properties: INPUT_SCHEMA.properties,
+      inputParams: {},
+      atInputMoment: false,
+    });
+    expect(runCarriesInputSteps(steps, false)).toBe(false);
+    expect(runCarriesInputSteps(steps, false, true)).toBe(true);
+    // And no form is drawn for it: the row rides unopened.
+    expect(openRunInputStepKey(steps)).toBeNull();
   });
 });
