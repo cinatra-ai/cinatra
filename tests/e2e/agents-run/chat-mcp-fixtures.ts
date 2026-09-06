@@ -15,6 +15,7 @@
  */
 import type { AgentFixture } from "./fixtures";
 import { AGENT_FIXTURES } from "./fixtures";
+import type { ExpectedArtifactRows } from "./objects-assertions";
 
 export type ChatMcpFixture = {
   packageName: string;
@@ -31,6 +32,15 @@ export type ChatMcpFixture = {
   expectedTerminalStatus?: "completed" | "failed" | "stopped";
   /** Run timeout (ms). Default 240_000. */
   runTimeoutMs?: number;
+  /**
+   * cinatra#3208 — the artifact ROWS this run owes, read back from the run's
+   * own structured output rather than hard-coded. Declaring it makes the
+   * fixture assert what the run FILED, not only that it reached a terminal
+   * status: a run completion that materialized against a declaration the run
+   * did not execute lands `failed`, and one that quietly filed nothing would
+   * otherwise still read as a pass here.
+   */
+  expectedArtifactRows?: ExpectedArtifactRows;
 };
 
 function fixtureFor(packageName: string): AgentFixture {
@@ -110,6 +120,15 @@ export const CHAT_MCP_FIXTURES: ReadonlyArray<ChatMcpFixture> = [
       "Invoke the @cinatra-ai/blog-idea-generator-agent for the topic 'example domains' — generate one short blog idea.",
     expectedTerminalStatus: "completed",
     runTimeoutMs: 1_200_000,
+    // cinatra#3208 — the agent's flow binds `ideas` as a fan-out over
+    // @cinatra-ai/blog-idea-artifact, one artifact per member, each titled from
+    // its own first line behind "Title:". Terminal status alone said nothing
+    // about whether those rows were ever filed.
+    expectedArtifactRows: {
+      objectType: "@cinatra-ai/blog-idea-artifact:blog-idea",
+      countFromOutput: "ideas",
+      titlePrefix: "Title:",
+    },
   },
   {
     packageName: "@cinatra-ai/blog-draft-writer-agent",

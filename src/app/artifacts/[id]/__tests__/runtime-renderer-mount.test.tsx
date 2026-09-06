@@ -35,6 +35,7 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
       slot: "detail",
       representations: [],
       propsApiVersion: 1,
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
       load: async () => ({ default: () => null }),
     },
   },
@@ -71,6 +72,7 @@ const okActivate = { materialize: async () => {}, verify: async () => true };
 function props(propsApiVersion = 1): ArtifactRendererProps {
   return {
     propsApiVersion,
+    edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     artifact: {
       id: "art_1",
       title: "t",
