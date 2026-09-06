@@ -16,6 +16,7 @@ import type { RunStepRailEntry } from "./run-step-rail";
 import {
   RailExtraEntry,
   RUN_PAGE_RAIL_INDICATOR_CLASS,
+  RUN_PAGE_RAIL_INERT_ROW_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
 } from "./run-step-rail-extra-entry";
@@ -164,14 +165,24 @@ export function RunStepRailPanel({
                   {/* A row that opens nothing is not drawn as a control
                       (cinatra#3002). The step-result row used to render inside
                       a StepperTrigger — a button, ticked and numbered like the
-                      rows that DO open — and clicking it did nothing. Same
-                      indicator, same title, same geometry (the trigger's own
-                      spacing is carried here, from the shared row constant so
-                      the two rows cannot drift); no button. StepperIndicator and
-                      StepperTitle read the item context, not the trigger, so
-                      both still show this row's real state. */}
+                      rows that DO open — and clicking it did nothing. Taking
+                      the button away was not enough: the row went on drawing
+                      the same circle, numeral, title and box as the rows that
+                      do open, so on pixels nothing told a reader it does not
+                      open, and the sixth proof round read the same picture
+                      back. It now takes the rail's own reading for a row a
+                      reader cannot press (RUN_PAGE_RAIL_INERT_ROW_CLASS), which
+                      this rail already draws for a step still ahead. The
+                      GEOMETRY is untouched — the trigger's own spacing is
+                      carried here from the shared row constant so the two rows
+                      cannot drift — and StepperIndicator and StepperTitle read
+                      the item context, not the trigger, so the row still shows
+                      its real state. */}
                   {entry.openable === false ? (
-                    <div className={`flex items-center ${RUN_PAGE_RAIL_ROW_CLASS}`}>
+                    <div
+                      className={`flex items-center ${RUN_PAGE_RAIL_ROW_CLASS} ${RUN_PAGE_RAIL_INERT_ROW_CLASS}`}
+                      data-rail-inert=""
+                    >
                       {indicatorNode}
                       {titleNode}
                     </div>
