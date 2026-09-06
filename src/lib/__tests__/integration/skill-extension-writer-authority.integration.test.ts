@@ -42,6 +42,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The ROOT vitest config aliases `@/lib/database` to a STUB. This suite needs
 // the REAL module — the whole point is that `upsertSkill`'s catalog+lifecycle
@@ -61,7 +62,7 @@ vi.mock("../../../../packages/skills/src/skill-packages", async (importOriginal)
 
 const TEST_SCHEMA = "cinatra_test_skill_ext_writer_2274";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 

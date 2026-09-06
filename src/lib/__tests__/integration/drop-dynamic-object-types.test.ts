@@ -33,12 +33,13 @@ import {
 // The ledger every consumer sees is the manifest.json + manifest.d/ union.
 import { readManifestUnion } from "../../../../migrations/manifest-reader.mjs";
 import { connect, createTestSchema, dropSchema, insertObject } from "./_fixture";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused") &&
+  !isPlaceholderDbUrl(dbUrl) &&
   !dbUrl.includes("build:build@127.0.0.1:5432/build");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");

@@ -5,7 +5,7 @@
 //
 // Wraps the shared <InstalledExtensionCard> (the published design-system
 // Installed-extensions card, agent variant: coloured accent panel + byline +
-// two-line description, Run + "More details", no version/status row) and lifts
+// three-line description, Run + "More details", no version/status row) and lifts
 // the §V detail-modal open state so the SAME modal is driven by TWO sibling
 // hit-areas:
 //   • the RIGHT "More details" link (the modal's own linkTrigger), and
@@ -95,7 +95,8 @@ export function AgentAllCard({
       kindLabel="Agent"
       vendor={vendor}
       description={row.description || undefined}
-      descriptionLineClamp={2}
+      // §IV (cinatra#3227): "The description is capped at three lines."
+      descriptionLineClamp={3}
       // No `version` / `status` — the Agent card is the Installed-extensions
       // card minus the version + Active/Archived indicator (cinatra#1007).
       accentDetailHref={hasDetail ? row.detailHref! : undefined}

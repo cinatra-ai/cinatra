@@ -28,7 +28,7 @@ const DB_URL = process.env.SUPABASE_DB_URL?.trim() ?? "";
 const HAS_REAL_DB =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   DB_URL !== "" &&
-  !DB_URL.includes("unused:unused@");
+  !isPlaceholderDbUrl(DB_URL);
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
@@ -74,6 +74,7 @@ import {
   listPublicationOperationsForArtifact,
 } from "@/lib/artifacts/publication-ledger";
 import { projectLinkedinMemberPostDraft } from "@/lib/blog/member-post-draft-projection";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const PACK = "@cinatra-ai/linkedin-artifacts";
 const LINKEDIN_POST_DRAFT = "@cinatra-ai/linkedin:post-draft";

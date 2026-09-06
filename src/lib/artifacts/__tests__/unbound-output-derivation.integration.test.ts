@@ -42,6 +42,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import { z } from "zod";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The produces SOURCE (a registry manifest read) is controlled per-template so
 // the seam sees a validated `produces` without a live registry. The typing seam
@@ -76,7 +77,7 @@ vi.mock("@/lib/notifications", () => ({
 const TEST_SCHEMA = "cinatra_test_unbound_derivation_1893";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+  DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-1893-deriv";
 const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
