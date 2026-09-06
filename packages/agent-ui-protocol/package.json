@@ -15,7 +15,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@a2ui/web_core": "0.10.0",
+    "@a2ui/web_core": "0.10.6",
     "@ag-ui/core": "0.0.58",
     "vitest": "^4.1.10"
   }
