@@ -59,7 +59,12 @@ function SuggestionChipFixture({
   // The READER'S local marks, the same shape the card holds them in. A press
   // toggles membership and nothing else — the drawn state, the control and its
   // name are the component's to decide.
-  const [dismissed, setDismissed] = useState<Readonly<Record<string, true>>>({});
+  const [dismissed, setDismissed] = useState<Readonly<Record<string, true>>>(
+    // A row may start from a mark the reader has already made (cinatra#3164):
+    // the set is still the only state here, and the component still decides
+    // everything drawn from it.
+    fixture.startsDismissed === true ? { [fixture.suggestion.id]: true } : {},
+  );
   const onToggleMark = useCallback((id: string) => {
     setDismissed((current) => {
       if (current[id]) {
