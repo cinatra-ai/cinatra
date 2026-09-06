@@ -35,6 +35,139 @@
     "review-card-dashboard": { "$ref": "review-target-header" },
     "review-card-portlet": { "$ref": "review-target-header" },
     "review-card-cms-page": { "$ref": "review-target-header" },
+    "review-composer-focus": { "$ref": "review-composer-row" },
+    "review-composer-bound": { "$ref": "review-composer-row" },
+    "review-composer-ambiguous": { "$ref": "review-composer-row" },
+    "review-composer-unbound": { "$ref": "review-composer-row" },
+    "review-composer-unbound-card": { "$ref": "review-composer-row" },
+    "composer-bound-acting": { "$ref": "review-composer-row" },
+    "chat-composer-primary": { "$ref": "chat-composer-field" },
+    "schedule-card-first-shown": { "$ref": "schedule-card" },
+    "schedule-card-confirm-floor": { "$ref": "schedule-card" },
+    "schedule-card-configured": { "$ref": "schedule-card" },
+    "schedule-card-save-floor": { "$ref": "schedule-card" },
+    "schedule-card-expired": { "$ref": "schedule-card" },
+    "schedule-card-expired-floor": { "$ref": "schedule-card" },
+    "schedule-card-fired": { "$ref": "schedule-card" },
+    "schedule-card-fired-recurring": { "$ref": "schedule-card" },
+    "schedule-card-fired-recurring-floor": { "$ref": "schedule-card" },
+    "run-step-rail": {
+      "manifest": "app-artifact-review",
+      "selector": "[data-conformance-id=\"run-step-rail\"] (the run detail's left step rail, mounted on the conformance harness under [data-surface-id=\"run-step-rail\"]). Rows: [data-slot=\"stepper-item\"], each carrying data-state=completed|active|inactive — what makes \"the step the run is paused on is highlighted; steps already passed sit above it, steps still to come below\" readable off the DOM. The rail declares what selecting a step does on its own root (data-action).",
+      "requires": [
+        {
+          "file": "packages/agents/src/run-step-rail-panel.tsx",
+          "literals": [
+            "data-conformance-id=\"run-step-rail\"",
+            "data-action=\"open-run-step -> step-detail\""
+          ]
+        },
+        {
+          "file": "src/components/reui/stepper.tsx",
+          "literals": ["data-slot=\"stepper-item\"", "data-state={state}"]
+        }
+      ]
+    },
+    "suggestion-dismissed": { "$ref": "suggestion-chip" },
+    "verification-verified": { "$ref": "verification-card" },
+    "verification-drift": { "$ref": "verification-card" },
+    "verification-findings-not-met": { "$ref": "verification-card" },
+    "verification-in-thread": { "$ref": "verification-card" },
+    "state-loading": { "$ref": "review-gate-state" },
+    "state-restricted": { "$ref": "review-gate-state" },
+    "state-no-longer-open": { "$ref": "review-gate-state" },
+    "state-absent": { "$ref": "review-gate-state" },
+    "suggestion-floor": { "$ref": "review-decision-floor" },
+    "tier-metadata-floor": { "$ref": "review-target-metadata-floor" },
+    "review-target-in-thread": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"review-target-in-thread\"][data-variant=\"populated\"] [data-conformance-id=\"review-target-header\"] — the REAL inert target header the review card draws above the island, mounted on the conformance harness route inside a chat-thread host declaration. The `name` field is the TYPE's display label, carried both as the value of [data-review-target-type] and as that element's text; the artifact's own title and type id are published on the harness root as data-review-target-title / data-review-target-object-type so the driver names a source of truth rather than whatever the header rendered, and the fixture's title and type label share no token. The two other readings are their own variants: data-variant=\"loading\" draws the shipped [data-conformance-id=\"review-gate-loading\"] skeleton, and data-variant=\"error\" draws §IV's \"no longer open\" panel [data-conformance-id=\"review-gate-blocked\"][data-blocked-reason] with its refresh back to the live gate.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-target-header\"",
+            "data-review-target-type={header.typeLabel}",
+            "data-review-target-revision={revision.full}"
+          ]
+        },
+        {
+          "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
+          "literals": [
+            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        }
+      ]
+    },
+    "review-states-outside-chat": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"review-states-outside-chat\"][data-variant=\"populated\"] — the SAME review readings as review-target-in-thread, mounted inside a page-gate-region host declaration instead of a chat-thread one, which is §XIII.1's whole claim (nothing moves but the frame). state kind:artifact is read off the header's mono line: the artifact's own type id plus the revision the gate PINNED, carried as [data-review-target-revision], with the pinned marker on it. The manifest's continue-review action is on this wave's surface-readiness list (cinatra#3100).",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-target-header\"",
+            "data-review-target-type={header.typeLabel}",
+            "data-review-target-revision={revision.full}"
+          ]
+        },
+        {
+          "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
+          "literals": [
+            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        }
+      ]
+    },
+    "run-progress-placeholder-in-thread": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"run-progress-placeholder-in-thread\"][data-variant=\"populated\"] [data-conformance-id=\"review-gate-placeholder\"] — the REAL placeholder the run card draws before the output has been generated. It has one reading and that reading IS the loading one: role=\"status\", aria-busy, the card's own fixed name and the design system's spinning arc. The driver grades the absences the drawing fixes as hard as the presences — no status word, no result, and nothing to press.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-placeholder\"",
+            "aria-busy=\"true\"",
+            "Agentic Run Progress",
+            "<LoadingSpinner className=\"size-4\" />"
+          ]
+        }
+      ]
+    },
+    "reader-state-matrix": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"reader-state-matrix\"][data-variant=\"populated\"] [data-reader-state] — §IX's two MOUNTED reader readings, produced by handing the shipped chip row the two different inputs the review card itself hands it (`onToggleMark` exactly when the reader may decide): a mark handler (live, a real press target) and no mark handler (read-only — plain elements with no press target and the component's own reason sentence). Restricted is never drawn as a disabled card. The matrix's third row — a reader who may not read the target — is on the wave's surface-readiness list: that absence is decided inside the review card behind an authorized resolve, and an empty suggestion set is not a stand-in for it.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"suggestion-chips\"",
+            "data-suggestion-chips-mode={recorded ? \"recorded\" : interactive ? \"live\" : \"read-only\"}",
+            "conformanceId: \"suggestion-accepted\"",
+            "onToggleMark={state.canDecide ? onToggleMark : undefined}",
+            "Deciding these needs approve access on this run."
+          ]
+        }
+      ]
+    },
     "extension-install-panel": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
@@ -532,6 +665,38 @@
           "literals": ["data-conformance-id=\"notifications-degraded\""]
         }
       ]
+    },
+    "review-gate-loading": {
+      "manifest": "app-artifact-review",
+      "selector": "harness [data-surface-id=\"review-gate-loading\"][data-variant] (populated + the declared loading reading). Real surface: the [data-conformance-id=\"review-gate-loading\"] skeleton the gate draws in each target slot while the host prepares it — a busy region that reports nothing.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": ["data-conformance-id=\"review-gate-loading\"", "aria-busy=\"true\""]
+        },
+        {
+          "file": "src/app/design-fixtures/conformance/review-gate-state-fixtures.tsx",
+          "literals": ["<ReviewGateLoading />", "data-surface-id={fixture.surface}"]
+        }
+      ]
+    },
+    "review-gate-blocked": {
+      "manifest": "app-artifact-review",
+      "selector": "harness [data-surface-id=\"review-gate-blocked\"][data-variant] (populated + the declared error reading). Real surface: the [data-conformance-id=\"review-gate-blocked\"] panel, carrying its reason from the drawing's closed set on data-blocked-reason and the refresh back to the live gate on [data-action=\"refresh-gate -> live-gate\"].",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        },
+        {
+          "file": "src/app/design-fixtures/conformance/review-gate-state-fixtures.tsx",
+          "literals": ["<ReviewGateBlocked reason={REVIEW_GATE_BLOCKED_FIXTURE_REASON}"]
+        }
+      ]
     }
   },
   "shared": {
@@ -545,6 +710,157 @@
             "data-conformance-id=\"review-target-header\"",
             "data-review-target-type={header.typeLabel}",
             "data-review-target-revision={revision.full}"
+          ]
+        }
+      ]
+    },
+    "review-composer-row": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={mount}] [data-conformance-id=\"review-composer-focus\"] \u2014 the REAL ComposerFocusRow, the shipped row above the review floor, mounted on the conformance harness route inside a chat-thread host declaration and fed by the shipped useComposerFocusBinding inside the shipped LifecycleComposerFocusProvider. The row carries its reading on itself as data-composer-bound and data-composer-ambiguous, and draws exactly one sentence per reading: [data-conformance-id=\"review-composer-bound\"] / \"review-composer-ambiguous\" / \"review-composer-unbound\". Its ONE control carries the MANIFEST'S OWN action name as data-action, written as the action-and-outcome pair and moving with the reading (\"release-review-composer -> unbound\" while bound, \"focus-review-composer -> bound\" while not), so a driver cannot press the control in one reading and report the other reading's outcome. The harness holds only WHICH open review the reader chose; resolveComposerTarget decides the reading, and the shipped row decides the sentence, the control and its name.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-composer-focus\"",
+            "data-composer-bound={binding.bound ? \"true\" : \"false\"}",
+            "data-composer-ambiguous={binding.ambiguous ? \"true\" : \"false\"}",
+            "\"release-review-composer -> unbound\"",
+            "\"focus-review-composer -> bound\"",
+            "data-conformance-id=\"review-composer-bound\"",
+            "data-conformance-id=\"review-composer-ambiguous\"",
+            "data-conformance-id=\"review-composer-unbound\""
+          ]
+        }
+      ]
+    },
+    "chat-composer-field": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"chat-composer-primary-field\"] [data-conformance-id=\"chat-composer-primary\"] \u2014 the REAL PromptField, the one component the conversation column and the embedded widget both mount as the conversation's chat box, carrying the two declarations the column makes on it: `primary`, which is what gives it the heavier `border-line-strong` edge a card's subordinate note field never takes, and the conformance id naming the role it plays. The surface declares no field, action or state: \u00a7I's contract here is the input's STANDING, not what it sends.",
+      "requires": [
+        {
+          "file": "packages/sdk-ui/src/prompt-field.tsx",
+          "literals": [
+            "conformanceId?: string;",
+            "primary ? \"border-line-strong\" : \"border-line\""
+          ]
+        },
+        {
+          "file": "packages/chat/src/conversation-column.tsx",
+          "literals": [
+            "conformanceId=\"chat-composer-primary\"",
+            "primary"
+          ]
+        }
+      ]
+    },
+    "schedule-card": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"schedule-proposal-card\"] — the REAL drawn schedule card: the shipped part `ScheduleProposalCard` itself composes, mounted on the conformance harness route inside a chat-thread host declaration. Nine surfaces over the drawing's FIVE readings, because the drawing annotates the card and the floor beneath it separately; the mount carries the manifest surface id, since nothing in the product carries a schedule-card-* id. The rows are [data-conformance-id=\"schedule-option-rows\"] (one [data-schedule-option] per row) and the floor is [data-conformance-id=\"schedule-proposal-floor\"], ABSENT by design on a spent one-off. The floor's controls are addressed by their shipped attribute values (confirm-schedule-proposal, save-schedule-changes, cancel-trigger-schedule) and the driver map binds each to the manifest's own action name (confirm-schedule / save-schedule / cancel-schedule) — the same reconciliation the PINNED scheduling-step-configured surface already uses for the same two operations, rather than a rename of values a ratified capture record and the one-card gate's anchor set both address. A state variant here is what the card draws AROUND a decision: loading is the in-flight floor between a press and an answer, error is [data-conformance-id=\"schedule-proposal-refusal\"]. The harness supplies only the resolved state and body and the one answer the decision endpoint gives, all in the protocol's own types; every drawn consequence is computed by the shipped component, which src/app/design-fixtures/conformance/__tests__/lifecycle-schedule-card-fixture.test.tsx pins at the source.",
+      "requires": [
+        {
+          "file": "packages/agents/src/schedule-proposal-card.tsx",
+          "literals": [
+            "export function ScheduleProposalCardBody",
+            "data-conformance-id=\"schedule-proposal-card\"",
+            "data-conformance-id=\"schedule-option-rows\"",
+            "data-conformance-id=\"schedule-proposal-floor\"",
+            "data-conformance-id=\"schedule-proposal-expired\"",
+            "data-conformance-id=\"schedule-proposal-refusal\"",
+            "data-conformance-id=\"schedule-saved\"",
+            "data-schedule-option={rowKind}",
+            "data-action=\"confirm-schedule-proposal\"",
+            "data-action=\"save-schedule-changes\"",
+            "data-action=\"cancel-trigger-schedule\""
+          ]
+        },
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        }
+      ]
+    },
+    "verification-card": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"verification-card\"] — the REAL VerificationSummaryCard, mounted on the conformance harness route inside a host declaration and drawn from an authorized resolve answer the suite seeds at the card's own seam (the card draws no DOM before one). The card carries data-lifecycle-card-state (advisory) and data-lifecycle-card-host; the outcome pill is the shipped StatusPill carrying data-verification-outcome; the two pinned revisions sit in [data-verification-revisions]; the before/after table is [data-verification-field-diff], one row per inspected field carrying data-diff-field and the SERVER's own data-diff-in-scope mark; the reading's provenance is a service comment in [data-verification-advisory] keyed by data-advisory-author-kind. §VII gives the card no floor at all, so the drivers assert that nothing on it is pressable.",
+      "requires": [
+        {
+          "file": "packages/agents/src/verification-summary-card.tsx",
+          "literals": [
+            "data-conformance-id=\"verification-card\"",
+            "data-lifecycle-card-state={state.state}",
+            "data-lifecycle-card-host={host}",
+            "data-verification-outcome={body.outcome}",
+            "data-verification-revisions=\"\"",
+            "data-verification-field-diff=\"\"",
+            "data-diff-field={row.field}",
+            "data-diff-in-scope={inScope ? \"true\" : \"false\"}",
+            "data-verification-advisory=\"\"",
+            "data-advisory-author-kind={comment.authorKind}"
+          ]
+        }
+      ]
+    },
+    "review-gate-state": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id={surface}] [data-conformance-id=\"review-gate-card\"][data-lifecycle-card-state] — the REAL ReviewGateCard on §IV's state ladder, drawn from an authorized resolve answer the suite seeds at the card's own seam. The rungs are the shipped components: [data-conformance-id=\"review-gate-loading\"] (loading), the decision bar [data-conformance-id=\"review-decision-bar\"] with its terminal controls disabled and [data-conformance-id=\"review-decision-disabled\"] shown (restricted), [data-conformance-id=\"review-gate-blocked\"][data-blocked-reason] offering [data-action=\"refresh-gate -> live-gate\"] (no longer open), and NO card DOM at all for absent — proved against a sibling mount that drew under the same seeded seam.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-card\"",
+            "data-lifecycle-card-state={state.state}",
+            "data-lifecycle-card-host={host}"
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-states.tsx",
+          "literals": [
+            "data-conformance-id=\"review-gate-loading\"",
+            "data-conformance-id=\"review-gate-blocked\"",
+            "data-blocked-reason={reason}",
+            "data-action=\"refresh-gate -> live-gate\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-decision-bar.tsx",
+          "literals": [
+            "data-conformance-id=\"review-decision-bar\"",
+            "data-conformance-id=\"review-decision-disabled\"",
+            "data-action=\"comment-review -> annotated\"",
+            "data-action=\"approve-review -> resolved\"",
+            "data-action=\"reject-review -> resolved\""
+          ]
+        }
+      ]
+    },
+    "review-decision-floor": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"suggestion-floor\"] [data-conformance-id=\"review-decision-bar\"] — the ONE decision floor the suggestion chips ride on (§VIII: the chips carry no submit of their own), drawn by the review card beneath [data-conformance-id=\"suggestion-chips\"]. The marks the floor would carry are stated by [data-conformance-id=\"suggestion-accepted-count\"]. The floor may not be composed outside the card, so this surface is driven through the card exactly as a host draws it.",
+      "requires": [
+        {
+          "file": "packages/agents/src/review-decision-bar.tsx",
+          "literals": [
+            "data-conformance-id=\"review-decision-bar\"",
+            "data-conformance-id=\"suggestion-accepted-count\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/review-gate-card.tsx",
+          "literals": ["data-conformance-id=\"suggestion-chips\"", "<ReviewDecisionBar"]
+        }
+      ]
+    },
+    "review-target-metadata-floor": {
+      "manifest": "app-lifecycle-cards",
+      "selector": "[data-surface-id=\"tier-metadata-floor\"] [data-review-target-floor] — the shipped review-target bridge's FLOOR arm (§III: where no renderer resolves, the target falls to the metadata floor, which says so). The element carries the reason plus data-review-floor-package / data-review-floor-slot, and the sanitized one-line diagnostic is the role=status paragraph composed by reviewTargetFloorDiagnostic; the host's generic read-only view is drawn beneath it, which is why a floored target is never blank.",
+      "requires": [
+        {
+          "file": "src/app/artifacts/[id]/review-target-mount.tsx",
+          "literals": [
+            "data-review-target-floor={reason}",
+            "data-review-floor-package={packageName ?? \"\"}",
+            "data-review-floor-slot={slot}",
+            "review target unavailable — ${pkg}slot"
           ]
         }
       ]
