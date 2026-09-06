@@ -30,6 +30,7 @@ import {
   type PermissionsFormDraftValue,
 } from "@/components/permissions-form-draft";
 import type { AvailableScopes } from "@/components/access-combobox";
+import { GITHUB_ROAD_VISIBILITY_COPY } from "./repository-package-intake";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 // "Latest code from the default branch" is represented as an empty ref so it
@@ -217,8 +218,19 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
               </Button>
             )}
           </div>
+          {/* cinatra#3204 (criterion 10) — THE VISIBILITY CLAIM, MADE TRUE.
+              This used to read "Public github.com repositories only". The road
+              never enforced that: the server path validates the host and the
+              reference shape and then reads through this instance's
+              AUTHENTICATED GitHub connection, rejecting nothing on visibility.
+              Rather than adding a public-only refusal — which would break the
+              private-repository case the authenticated client already serves —
+              the claim now describes what actually happens. The copy is the
+              single exported constant the intake module owns, so the promise
+              and the behaviour cannot drift apart again. */}
           <FieldDescription>
-            Public github.com repositories only. Paste the full URL (e.g. <code className="text-foreground">https://github.com/owner/repo</code>).
+            {GITHUB_ROAD_VISIBILITY_COPY} Paste the full URL (e.g.{" "}
+            <code className="text-foreground">https://github.com/owner/repo</code>).
           </FieldDescription>
         </Field>
       </FieldGroup>
@@ -325,7 +337,15 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
 
           {/* Optional access & ownership capture. Collapsed by default. When
               opened, the values are threaded through installGitHubSkillExtension
-              and applied atomically after the package row exists. */}
+              and applied atomically after the package row exists.
+
+              cinatra#3204 (criterion 17): this is the package's RUN VISIBILITY
+              and ownership — NOT the install scope, which is the question the
+              File tab now asks with the store's own picker ("Install for"). The
+              two are labelled apart so an operator is never asked one question
+              twice with two different meanings. The install-scope picker
+              reaches this tab with the repository install road (see the PR body
+              for what remains). */}
           <div className="flex flex-col gap-3">
             <Button
               type="button"
@@ -336,8 +356,8 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
               disabled={isInstalling}
             >
               {advancedOpen
-                ? "Hide access & ownership"
-                : "Configure access & ownership (advanced)"}
+                ? "Hide run visibility & ownership"
+                : "Configure run visibility & ownership (advanced)"}
             </Button>
             {advancedOpen && (
               <PermissionsFormDraft

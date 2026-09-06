@@ -39,6 +39,10 @@ import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
 import { publishAgentTemplateAndBindVersion } from "./publish-template";
 import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
+import { resolveInstallRowAnchor, sameRowAnchor } from "@cinatra-ai/extensions/canonical-types";
+import { verifyReceivedArchiveDigest } from "./received-package-digest";
+import { authorizeUploadInstallScope } from "./upload-install-authorization";
+import { uploadAccessResourceKindFor } from "./upload-install-scope";
 import { logAuditEvent } from "@/lib/authz";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
@@ -246,6 +250,34 @@ export async function importAgentTemplate(
       policy?: import("./auth-policy-types").AgentAuthPolicy;
       coOwnerUserIds?: string[];
     };
+    /**
+     * The INSTALL SCOPE the operator configured on the Upload screen
+     * (cinatra#3204) — the store's own question, asked with the store's own
+     * picker: WHO IS THIS EXTENSION INSTALLED FOR.
+     *
+     * It is a different question from `permissions` above, which carries the
+     * agent's RUN VISIBILITY (who may list / read / execute its runs). Both are
+     * kept, separately labelled on the screen, because collapsing them would
+     * make one control silently answer the other's question.
+     *
+     * When present the road changes in three ways, all of them the store road's
+     * behaviour: the canonical row anchors at the chosen target instead of a
+     * derivation the operator never saw; the actor's AUTHORITY to install at
+     * that target is asserted server-side before anything is written; and the
+     * audience policy is persisted FAIL-CLOSED — a failed write rolls a fresh
+     * upload back rather than leaving it at the broader default.
+     *
+     * ABSENT — every programmatic caller, and the MCP import handler — keeps
+     * today's behaviour byte-for-byte.
+     */
+    installScope?: { pickerValue: string };
+    /**
+     * The D2 content digest the intake computed over the delivered tree
+     * (cinatra#3204). Recorded on the canonical row's `local` provenance, so the
+     * row states WHICH BYTES were installed rather than only that an upload
+     * happened. Absent = no attestation recorded, as before.
+     */
+    packageContentDigest?: string;
     /** UI upload path only (owner ruling, PR #2658): after the archive lands,
      *  flip the template live AND bind its compiled version in the ONE
      *  transactional store operation (`publishAgentTemplateAndBindVersion`) —
@@ -261,7 +293,8 @@ export async function importAgentTemplate(
   // the template so /configuration/extensions list views can show "installed by"
   // and supports per-template access-policy gates.
   const creatorId = session.user?.id ?? undefined;
-  const { permissions, publishAndBind, ...coreOptions } = options ?? {};
+  const { permissions, publishAndBind, installScope: installScopeInput, packageContentDigest, ...coreOptions } =
+    options ?? {};
   // cinatra#2616: this admin action is a package-name IDENTITY CLAIM. Thread the
   // session's active organization as the claimant so an import cannot take over
   // a name another organization already holds. A session with no active org
@@ -269,6 +302,35 @@ export async function importAgentTemplate(
   const claimantOrgId =
     (session as { session?: { activeOrganizationId?: string | null } }).session
       ?.activeOrganizationId ?? null;
+  // cinatra#3204 (criteria 13-15) — RESOLVE AND AUTHORIZE THE INSTALL SCOPE
+  // FIRST. It runs before the archive is imported, so a target the actor may
+  // not install at, or a value that is not an installable scope at all, writes
+  // nothing: no template, no version, no canonical row.
+  const installScope = installScopeInput
+    ? await authorizeUploadInstallScope(
+        session as unknown as { user: { id: string; role?: string | null }; session?: { activeOrganizationId?: string | null } | null },
+        installScopeInput.pickerValue,
+      )
+    : null;
+
+  // The canonical row anchor. With a configured scope it comes from the CHOSEN
+  // TARGET through `resolveInstallRowAnchor` — the one rule that turns an
+  // install request into the tuple a row is written at. Without one it is the
+  // actor-derived default, which is byte-identical to the
+  // `claimantOrgId ? "organization" : "platform"` derivation this replaced, so
+  // every existing caller anchors exactly where it always did.
+  const rowAnchor = installScope
+    ? installScope.rowAnchor
+    : resolveInstallRowAnchor(claimantOrgId, null);
+
+  // cinatra#3204 (D2) — VERIFY THE ATTESTATION, do not relay it. The digest is
+  // recomputed here over the archive that actually arrived; a mismatch throws
+  // BEFORE the import, so a substituted package writes nothing. `verifiedDigest`
+  // is what this process computed, never what the request claimed.
+  const verifiedDigest = packageContentDigest
+    ? await verifyReceivedArchiveDigest(zipBase64, packageContentDigest)
+    : null;
+
   const result = await importAgentTemplateCore(zipBase64, nameOverride, {
     ...coreOptions,
     creatorId,
@@ -304,8 +366,69 @@ export async function importAgentTemplate(
     }
   }
 
+  // cinatra#3204 (criterion 13) — THE INSTALL-SCOPE AUDIENCE, FAIL-CLOSED.
+  //
+  // The upload road used to write its access policy NON-FATALLY: a failed write
+  // became a toast, and the extension stayed live at the BROADER default the
+  // operator had just narrowed away from. That is the one failure mode an
+  // access control must not have. The store road has always compensated instead,
+  // and this is the same contract: the policy goes through the sanctioned
+  // uniform install-time access contract, and a failure rolls a FRESH upload
+  // back rather than leaving it installed at a scope nobody chose.
+  //
+  // It runs BEFORE the go-live flip below, so a rolled-back upload was never
+  // active and never served.
+  if (installScope) {
+    try {
+      const { setExtensionInstallAccess } = await import(
+        "@cinatra-ai/extensions/install-access-contract"
+      );
+      await setExtensionInstallAccess({
+        kind: uploadAccessResourceKindFor("agent"),
+        resourceId: result.templateId,
+        ...(installScope.policy ? { policy: installScope.policy } : {}),
+        installedByUserId: creatorId ?? null,
+      });
+    } catch (accessErr) {
+      const detail = accessErr instanceof Error ? accessErr.message : String(accessErr);
+      if (!result.upserted) {
+        // FRESH upload — remove it. Nothing was published or bound yet, so this
+        // leaves the instance exactly as it was before the upload.
+        try {
+          const { deleteAgentTemplate } = await import("./store");
+          await deleteAgentTemplate(result.templateId);
+        } catch (rollbackErr) {
+          // LOUD: an upload that could not be scoped AND could not be removed is
+          // a live template at the wrong audience. Say so; do not mask it behind
+          // the original error.
+          throw new Error(
+            `The uploaded extension could not be scoped (${detail}), and removing it again also ` +
+              `failed (${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}). ` +
+              `Agent template ${result.templateId} needs manual removal — it is installed but its ` +
+              `access was never configured.`,
+          );
+        }
+        throw new Error(
+          `The uploaded extension could not be installed at the chosen scope (${detail}). ` +
+            `Nothing was installed.`,
+        );
+      }
+      // An UPDATE of a package that was already installed: its previous access
+      // stands and must not be destroyed. Surface the partial state honestly
+      // rather than reporting a scope that was not applied.
+      throw new Error(
+        `The extension was updated, but the chosen install scope could not be applied (${detail}). ` +
+          `Its previous access is unchanged — re-apply the scope from the extension's permissions page.`,
+      );
+    }
+  }
+
   if (permissions) {
     const { policy, coOwnerUserIds } = permissions;
+    // The RUN-VISIBILITY policy (a different question from the install scope
+    // above) keeps its established non-fatal write: it is the agent's own run
+    // policy, editable afterwards on the agent's permissions surface, and a
+    // failure to seed it has never been a reason to refuse the upload.
     if (policy) {
       try {
         const { saveExtensionAccessPolicy } = await import("@cinatra-ai/extensions/permissions-actions");
@@ -394,14 +517,24 @@ export async function importAgentTemplate(
             {
               id: `iext_${randomUUID().slice(0, 12)}`,
               packageName: template.packageName,
-              ownerLevel: claimantOrgId ? "organization" : "platform",
-              ownerId: claimantOrgId,
-              organizationId: claimantOrgId,
+              // cinatra#3204 (criterion 15): the anchor comes from the CHOSEN
+              // TARGET, resolved through `resolveInstallRowAnchor`. The retired
+              // derivation produced an organization anchor whenever the session
+              // had an active org, whichever scope the operator had picked — so
+              // a "Workspace: All" upload landed org-anchored and reached only
+              // that organization.
+              ownerLevel: rowAnchor.ownerLevel,
+              ownerId: rowAnchor.ownerId,
+              organizationId: rowAnchor.organizationId,
               kind: "agent",
               source: {
                 type: "local",
                 path: `agent-template:${result.templateId}`,
                 resolvedCommitOrTreeHash: `upload@${template.packageVersion ?? "0.0.0"}`,
+                // cinatra#3204 (D2): WHICH BYTES were installed, when the intake
+                // computed a digest over the delivered tree. A revision label is
+                // not an attestation; this is.
+                ...(verifiedDigest ? { contentDigest: verifiedDigest } : {}),
               },
               version: template.packageVersion ?? undefined,
               requiredInProd: false,
@@ -420,6 +553,37 @@ export async function importAgentTemplate(
           warnings.push(
             "This package is archived in the installed-extensions store — restore it from the Archived tab on /configuration/extensions to relist it.",
           );
+        } else if (installScope) {
+          // cinatra#3204: a RE-UPLOAD of an already-registered package is a
+          // template upsert — the canonical row is not re-written, so it keeps
+          // the anchor it was first installed at. When the operator picked a
+          // different scope this time, the picker's answer did NOT move the
+          // row, and saying nothing would let the screen imply that it had.
+          // Re-anchoring an existing row is the lifecycle primitive's own
+          // operation, with supersession rules of its own; it is named as the
+          // next leg rather than improvised here.
+          const live = existingRows.filter(
+            (r) => r.status === "active" || r.status === "locked",
+          );
+          if (
+            live.length > 0 &&
+            !live.some((r) =>
+              sameRowAnchor(
+                {
+                  ownerLevel: r.ownerLevel,
+                  ownerId: r.ownerId ?? null,
+                  organizationId: r.organizationId ?? null,
+                },
+                rowAnchor,
+              ),
+            )
+          ) {
+            warnings.push(
+              "This package is already installed at a different scope. The upload updated the agent, " +
+                "but the installed-extensions entry keeps the scope it was first installed at — change it " +
+                "from /configuration/extensions.",
+            );
+          }
         }
       }
     } catch (err) {

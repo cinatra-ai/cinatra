@@ -33,9 +33,12 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
-import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
+import {
+  InstallScopePickerBody,
+  installAudienceLabel,
+  resolveInstallScopeSelection,
+} from "./install-scope-field";
 import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import { useCardFace, InstallPanelCancelButton } from "./card-face-switcher";
@@ -124,27 +127,6 @@ export type ExtensionInstallScopePanelProps = {
   displayName: string;
 };
 
-/**
- * Human-readable AUDIENCE fragment for the success toast. Workspace rows read
- * exactly as their dropdown rows do — the canonical audience vocabulary
- * (`Workspace: All` = every workspace user; `Workspace: Admins only` = admins).
- * Installer AUTHORITY copy is a different dimension and is not touched here.
- */
-function audienceLabelFor(
-  target: { level: InstallTargetLevel },
-  pickerValue: string,
-  ownerEntityNames: Record<string, string>,
-): string {
-  const entityName = ownerEntityNames[pickerValue];
-  if (target.level === "workspace") return "Workspace: All";
-  if (target.level === "admin") return "Workspace: Admins only";
-  if (target.level === "team") return entityName ? `team ${entityName}` : "team";
-  if (target.level === "project") {
-    return entityName ? `project ${entityName}` : "project";
-  }
-  return entityName ? `everyone in ${entityName}` : "your organization";
-}
-
 export function ExtensionInstallScopePanel({
   packageName,
   packageVersion,
@@ -198,47 +180,14 @@ export function ExtensionInstallScopePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Derive AccessCombobox props from the SERVER-COMPUTED rows (same shape the
-  // popup used) — a row can never appear without its server-decided
-  // disabled/reason state.
-  const availableScopes = {
-    teams: installTargets
-      .filter((t) => t.level === "team")
-      .map((t) => ({ id: t.id, name: ownerEntityNames[t.value] ?? t.label })),
-    projects: installTargets
-      .filter((t) => t.level === "project")
-      .map((t) => ({ id: t.id, name: ownerEntityNames[t.value] ?? t.label })),
-    orgName: ownerEntityNames[`org:${activeOrgId}`] ?? "",
-    orgId: activeOrgId,
-    workspaceExposed: false,
-  };
-  const installWorkspaceScopes = installTargets.some(
-    (t) => t.level === "workspace" || t.level === "admin",
+  // The picker's props and the committability gate come from the SHARED field
+  // (./install-scope-field), which the Upload screen mounts too — one
+  // derivation of "which rows exist, which are disabled, which selection may be
+  // submitted", not two that agree until one of them changes.
+  const selection = resolveInstallScopeSelection(
+    { installTargets, ownerEntityNames, activeOrgId },
+    value,
   );
-  const disabledScopes = installTargets
-    .filter((t) => t.disabled)
-    .map((t) => t.value);
-  const disabledReasons: Record<string, string> = Object.fromEntries(
-    installTargets
-      .filter((t) => t.disabled)
-      .map((t) => [t.value, t.reason ?? "Not available"]),
-  );
-
-  // Committability (cinatra#2372): the ONE gate every single-mode install
-  // consumer reads instead of bare value-truthiness. This panel is the newest
-  // such consumer — it landed (cinatra#2373) while the model was parked, so it
-  // shipped with a `!value` gate; the model supersedes that here, exactly as it
-  // does in both install dialogs. Synthetic/degenerate rows (a mismatched or
-  // empty-tail org token, an unhydrated team/project id) and any
-  // server-disabled target are never committable. The context mirrors the
-  // AccessCombobox props below so the gate and the rendered rows can never
-  // disagree about what is offered.
-  const selectedOption = resolveFlatAccessOption(value, availableScopes, {
-    disabledScopes,
-    ownerOffered: false,
-    workspaceOffered: installWorkspaceScopes,
-    adminOffered: installWorkspaceScopes,
-  });
 
   const failureMessageForResult = (
     result: MarketplaceInstallFailureResult,
@@ -269,7 +218,7 @@ export function ExtensionInstallScopePanel({
     // target.
     if (!ready) return;
     const target = pickerValueToInstallTarget(value, activeOrgId);
-    if (!target || !selectedOption.committable) {
+    if (!target || !selection.committable) {
       reportFailure(
         "Pick who can access this extension before installing — the current selection is not an installable audience.",
       );
@@ -289,7 +238,7 @@ export function ExtensionInstallScopePanel({
       if (isRedirectError(error)) {
         // SUCCESS — toast, return the card to idle, re-throw so Next navigates.
         toast.success(
-          `Installed ${name} for ${audienceLabelFor(target, value, ownerEntityNames)}`,
+          `Installed ${name} for ${installAudienceLabel(target, value, ownerEntityNames)}`,
         );
         closePanel();
         throw error;
@@ -327,41 +276,23 @@ export function ExtensionInstallScopePanel({
           below stay fixed, so the face never grows past the card's box. The
           picker's popover is PORTALLED, so it is never clipped by this. */}
       <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
-        {availability.state === "no-active-organization" ? (
-          // Names the ACTUAL problem — a session without an active
-          // organization has no audience to install for, whatever the
-          // viewer's roles are. No picker, no submit, action not invocable.
-          <p className="text-sm text-muted-foreground">
-            Installing needs an active organization. Switch to one of your
-            organizations, then install {name}.
-          </p>
-        ) : availability.state === "no-installable-scope" ? (
-          // Existing role-oriented empty state — copy unchanged.
-          <Alert variant="destructive">
-            <AlertDescription>
-              You need org admin, team admin, or project ownership to install
-              extensions.
-            </AlertDescription>
-          </Alert>
-        ) : (
+        <InstallScopePickerBody
+          context={{ installTargets, ownerEntityNames, activeOrgId, availability }}
+          value={value}
+          onValueChange={setValue}
+          pickerId={pickerId}
+          subjectName={name}
           // Stable picker hook on a wrapper (the shared AccessCombobox owns its
-          // own prop contract and does not spread unknown attributes).
-          <div data-testid="extension-install-panel-picker">
-            <AccessCombobox
-              id={pickerId}
-              value={value}
-              onValueChange={setValue}
-              availableScopes={availableScopes}
-              isAdmin={false}
-              disabledScopes={disabledScopes}
-              disabledReasons={disabledReasons}
-              // Hide the "owner" row (not an install target). The two workspace
-              // AUDIENCE rows are offered with their server-decided state.
-              installMode
-              installWorkspaceScopes={installWorkspaceScopes}
-            />
-          </div>
-        )}
+          // own prop contract and does not spread unknown attributes). This
+          // panel is a CONFORMANCE-COVERED surface, so the attribute is written
+          // here, in the covered file, rather than passed to the shared field
+          // as a string: the contract check reads this file for it verbatim.
+          // The wrapper reaches only the picker — the two empty states stay
+          // exactly the bare nodes they have always been.
+          wrapPicker={(picker) => (
+            <div data-testid="extension-install-panel-picker">{picker}</div>
+          )}
+        />
       </div>
 
       {/* Visually hidden failure mirror. The VISIBLE failure surface is the
@@ -381,7 +312,7 @@ export function ExtensionInstallScopePanel({
       {/* Fixed action row (spec §I.1: Cancel / Install now, right-aligned). */}
       <form action={handleSubmit} className="flex flex-none justify-end gap-2">
         <InstallPanelCancelButton />
-        {ready ? <InstallPanelSubmitButton disabled={!selectedOption.committable} /> : null}
+        {ready ? <InstallPanelSubmitButton disabled={!selection.committable} /> : null}
       </form>
     </div>
   );

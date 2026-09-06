@@ -52,6 +52,7 @@ import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
 // extension marketplace screen — see install-target-picker.ts).
 import { InstallScopeDialog } from "./components/install-scope-dialog";
 import { buildInstallTargetPickerContext } from "./install-target-picker";
+import { resolveInstallPanelAvailability } from "@cinatra-ai/extensions/screens/install-panel-availability";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -872,6 +873,31 @@ export async function AgentBuilderImportScreen() {
     isAdmin || orgRole === "org_owner" || orgRole === "org_admin";
   const uploadScopes = { orgs, projects, canGrantWorkspace };
 
+  // cinatra#3204 (criterion 11) — THE INSTALL-SCOPE CONTEXT.
+  //
+  // Resolved with the SAME server computation the marketplace grid uses, so the
+  // Upload screen offers the same rows, with the same server-decided enabled
+  // state and the same tooltips, and resolves the same three availability
+  // states in the same fixed order. `includeWorkspaceScopes: true` matches the
+  // marketplace: the two workspace audiences are always offered and are
+  // platform-admin-only to install, which the server enforces.
+  const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
+    await buildInstallTargetPickerContext({
+      session,
+      orgRole,
+      includeWorkspaceScopes: true,
+    });
+  const installScopeContext = {
+    installTargets,
+    ownerEntityNames,
+    activeOrgId: activeOrgId ?? "",
+    availability: resolveInstallPanelAvailability({
+      activeOrgId: activeOrgId ?? "",
+      installTargets,
+      fallbackDefaultValue: pickerFallbackValue,
+    }),
+  };
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -892,7 +918,10 @@ export async function AgentBuilderImportScreen() {
           </TabsListRow>
           <TabsContent value="agent">
             <div className="soft-panel rounded-card px-6 py-5 max-w-xl">
-              <ImportAgentForm availableScopes={uploadScopes} />
+              <ImportAgentForm
+                availableScopes={uploadScopes}
+                installScopeContext={installScopeContext}
+              />
             </div>
           </TabsContent>
           <TabsContent value="skill">
