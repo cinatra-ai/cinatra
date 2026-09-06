@@ -1891,10 +1891,12 @@ export function ChatMessagesView({
   }, [messages, hasActiveStream, theme]);
 
   // Shared click handler for assistant markdown content: handles
-  // copy-code buttons (inside fenced code blocks) and table copy/CSV
-  // download actions. Both the legacy `message.content` div and the new
+  // copy-code buttons (inside fenced code blocks) and the chat table's
+  // row-pagination controls. Both the legacy `message.content` div and the new
   // `OrderedPartsSection` text parts wear this handler so the buttons
-  // work the same way regardless of which render path is active.
+  // work the same way regardless of which render path is active. (The table
+  // header strip's copy/download controls are gone — cinatra#3230; the
+  // renderer emits none, so no branch handles them.)
   const handleAssistantMarkdownClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const codeBtn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action='copy-code']");
     if (codeBtn) {
@@ -1918,29 +1920,6 @@ export function ChatMessagesView({
         );
       }
       return;
-    }
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".chat-table-action");
-    if (!btn) return;
-    const tableId = btn.dataset.tableId;
-    const action = btn.dataset.action;
-    if (action === "copy" && tableId) {
-      const table = document.getElementById(tableId);
-      if (table) {
-        const rows = Array.from(table.querySelectorAll("tr"));
-        const text = rows.map((row) =>
-          Array.from(row.querySelectorAll("th, td")).map((cell) => cell.textContent?.trim() ?? "").join("\t"),
-        ).join("\n");
-        void navigator.clipboard.writeText(text);
-      }
-    } else if (action === "download" && btn.dataset.csv) {
-      const csv = btn.dataset.csv.replace(/\\n/g, "\n");
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "table.csv";
-      a.click();
-      URL.revokeObjectURL(url);
     }
   }, []);
 
