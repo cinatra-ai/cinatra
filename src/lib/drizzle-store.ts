@@ -4,7 +4,6 @@ import { eq, notInArray } from "drizzle-orm";
 // composition; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
-import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import {
   capabilityOwnershipGrantSchemaQueries,
@@ -2201,6 +2200,8 @@ $body$` },
     // persisted on clean RUN_FINISHED by external-sse-proxy. Nullable;
     // legacy rows + internal runs + incomplete externals remain NULL.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS streamed_text text` },
+    // produced_review_park: cinatra#3046 fix leg 12 — the withheld terminal write a produced-review park is holding, as the park's OWN column. It replaces a marker that lived inside the mutable step_results JSON, where any unrelated whole-column write erased it silently, so a parked run read back as not parked. Written and cleared in the same guarded transaction as the parked status and the terminal write. Additive and nullable (the streamed_text precedent on the line above; the schema-migration gate scopes a new nullable column additive, so no numbered migration). Its own NEW line — never appended to a line that already carries DDL and never folded into the CREATE, either of which rewrites deployed schema text.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS produced_review_park text` },
     // a2a_context_id: fasta2a conversation context ID for WayFlow resume.
     // Resume sends a new message into the same context so the flow continues from
     // the input-required checkpoint rather than starting a fresh conversation.
@@ -4295,19 +4296,13 @@ export function buildUpsertJsonRowQuery(
  * those raw columns, so this function emits raw SQL via the QueryInput
  * shape used by `runPostgresQueriesSync`.
  */
-// Import the literal unions from @cinatra-ai/skills so a
-// typo (e.g. "workspaces" instead of "workspace") fails typecheck instead of
-// hitting `skill_pkg_owner_scope_chk` at runtime mid-transaction.
-export type SkillPackageIdentity = {
-  owner_scope: OwnerScope;
-  owner_id: string | null;
-  binding_scope: BindingScope;
-  source_kind: SourceKind;
-  vendor: string | null;
-  package: string | null;
-  agent_template_id: string | null;
-  skill_slug: string;
-};
+export type {
+  ExtensionLifecycleAuditRow,
+  SkillPackageIdentity,
+} from "./drizzle-store-row-shapes";
+
+import type { SkillPackageIdentity } from "./drizzle-store-row-shapes";
+import type { ExtensionLifecycleAuditRow } from "./drizzle-store-row-shapes";
 
 export function buildUpsertSkillPackageQuery(
   schemaName: string,
@@ -4395,19 +4390,6 @@ export function buildDeleteRowsNotInQuery(
 // This function produces a parameterized INSERT that database.ts runs via
 // runPostgresQueriesSync (same pattern as all other write helpers in this file).
 // ---------------------------------------------------------------------------
-export type ExtensionLifecycleAuditRow = {
-  id: string;
-  actorId: string;
-  actorType: string;
-  orgId: string | null;
-  operation: string;
-  packageName: string;
-  packageVersion: string | null;
-  destroyedRowSnapshot: unknown;
-  danglingReferences: unknown;
-  reason: string | null;
-};
-
 export function buildInsertExtensionLifecycleAuditQuery(
   schemaName: string,
   row: ExtensionLifecycleAuditRow,

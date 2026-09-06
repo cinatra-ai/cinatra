@@ -25,13 +25,14 @@
 // So this file pins two things that have to hold together: the arc is drawn with
 // a REGISTERED token, and that token is the indigo one.
 //
-// AND `--color-mustard-ink` IS REGISTERED NOW. The theme block binds it for the
-// warm tint the same wrapper carries behind the arc (`bg-mustard-ink/15`), so
-// the ABSENCE is the history of the defect, not the present state of the theme.
-// What still has to hold is the invariant that absence exposed, and that is
-// what this file pins: the arc's own COLOUR utility is the registered indigo,
-// and the mustard token may reach this wrapper only as a background, never as
-// the arc's text colour.
+// AND `--color-mustard-ink` IS REGISTERED NOW, though this card no longer draws
+// with it (cinatra#3046, fix leg 12). The tint used to be a warm ground behind
+// the arc; the drawing's band holds the arc alone, the tenth graded reading
+// measured the tile as chrome the drawing does not give, and it is gone. The
+// token stays registered for the surfaces that do draw it. So the ABSENCE is the
+// history of the defect, not the present state of the theme, and what still has
+// to hold is the invariant that absence exposed: the arc's own COLOUR utility is
+// the registered indigo, and the mustard token never paints it.
 //
 // THE DARK READING IS THE ITEM ALREADY TRACKED ON THIS PULL REQUEST. The
 // registered indigo token resolves to the drawing's `#364e81` in light and to
@@ -64,24 +65,26 @@ function registersColourToken(name: string): boolean {
   return new RegExp(`--color-${name}\\s*:`).test(GLOBALS);
 }
 
-/** The wrapper the shared spinner takes its `currentColor` from. */
-function arcWrapper(root: HTMLElement): HTMLElement {
+/** The arc itself, which carries its own colour now (cinatra#3046, fix leg 12).
+ *  It used to take `currentColor` from a wrapper tile; the drawing's band holds
+ *  the arc directly, so the colour utility is on the node it paints. */
+function arcClasses(root: HTMLElement): string {
   const placeholder = root.querySelector<HTMLElement>(
     '[data-conformance-id="review-gate-placeholder"]',
   );
   expect(placeholder).not.toBeNull();
   const svg = placeholder!.querySelector("svg");
   expect(svg).not.toBeNull();
-  const wrapper = svg!.parentElement;
-  expect(wrapper).not.toBeNull();
-  return wrapper as HTMLElement;
+  // An SVG element's `className` is an SVGAnimatedString, never a string — the
+  // attribute is the one reading that works on both kinds of node.
+  return svg!.getAttribute("class") ?? "";
 }
 
 describe("the placeholder's spinning icon", () => {
   it("is drawn with a colour token the theme actually registers", () => {
     const { container } = render(<ReviewGatePlaceholder />);
 
-    const classes = arcWrapper(container).className.split(/\s+/);
+    const classes = arcClasses(container).split(/\s+/);
     const colourUtility = classes.find((c) => c.startsWith("text-"));
     expect(colourUtility).toBeDefined();
     const token = colourUtility!.replace(/^text-/, "").replace(/\/.*$/, "");
@@ -91,7 +94,7 @@ describe("the placeholder's spinning icon", () => {
   it("takes the indigo arc's own token, not the inherited foreground", () => {
     const { container } = render(<ReviewGatePlaceholder />);
 
-    const classes = arcWrapper(container).className;
+    const classes = arcClasses(container);
     expect(classes).toMatch(/\btext-primary\b/);
     // The unregistered utility that painted the measured foreground.
     expect(classes).not.toMatch(/\btext-mustard-ink\b/);
@@ -117,16 +120,17 @@ describe("the token the arc now takes", () => {
     expect(registersColourToken("mustard-ink")).toBe(true);
     expect(GLOBALS).toMatch(/--color-mustard-ink:\s*var\(--mustard-ink\)/);
 
-    // What the absence exposed, and what still has to hold: the mustard token
-    // reaches this wrapper only as a BACKGROUND. The arc's own colour utility
-    // is never built on it, so no later tint can take the arc back to
-    // `currentColor`.
+    // What the absence exposed, and what still has to hold: the arc's own colour
+    // utility is never built on the mustard token, so no later tint can take the
+    // arc back to `currentColor`. And the tint reaches this card NOWHERE now —
+    // the drawing's band holds the arc alone (fix leg 12).
     const { container } = render(<ReviewGatePlaceholder />);
-    const classes = arcWrapper(container).className.split(/\s+/);
-    const mustard = classes.filter((c) => /mustard-ink(\/|$)/.test(c));
-    expect(mustard.length).toBeGreaterThan(0);
-    expect(mustard.every((c) => c.startsWith("bg-"))).toBe(true);
-    expect(classes.some((c) => c.startsWith("text-mustard-ink"))).toBe(false);
+    const classes = arcClasses(container).split(/\s+/);
+    expect(classes.some((c) => /mustard-ink(\/|$)/.test(c))).toBe(false);
+    const box = container.querySelector<HTMLElement>(
+      '[data-conformance-id="review-gate-placeholder"]',
+    );
+    expect(box!.innerHTML).not.toMatch(/mustard-ink/);
   });
 });
 

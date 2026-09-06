@@ -87,6 +87,9 @@ export interface ResumeSweepSummary {
   delivered: number;
   alreadyAdvanced: number;
   retryable: number;
+  /** cinatra#3007 — runs released from their produced output's review this pass:
+   *  the terminal write each of them parked instead of making. */
+  releasedFromReview: number;
   /** cinatra#2485 C — intents closed WITHOUT sending because the run fell out
    *  of the agent's install scope. Counted separately from `failed`: it is a
    *  decision, not an error. */
@@ -107,17 +110,25 @@ export async function deliverArtifactReviewResumeIntent(
   const { gateId, reviewTaskId, leaseToken, kind, responseText } = intent;
 
   // S1 AUTO-created review gate (cinatra#2039, epic #2037): a `lifecycle-review:`
-  // reviewTaskId names a policy-created gate whose producing run continuation is
-  // the lifecycle CONTINUATION PARK (released by the gate-maintenance drain once
-  // the gate resolves), NOT a WayFlow resume. The decision core still commits a
-  // resume-outbox intent for every terminal decision; for an auto-gate that intent
-  // has no WayFlow wire, so mark it done here (idempotent, lease-guarded) instead
-  // of churning it toward dead-letter down a route it can never travel.
+  // reviewTaskId names a policy-created gate whose producing run has no WayFlow
+  // resume to take — the run has already done its work and is waiting only for
+  // this decision.
+  //
+  // cinatra#3007 — SO THIS IS WHERE THE DECISION RELEASES IT. The producing run
+  // parked at its review moment carrying the terminal write it withheld;
+  // `releaseHeldRun` performs that write now, with whichever terminal status this
+  // decision implies. It is idempotent and re-drivable by construction (a run that
+  // is not parked, is parked for another reason, or is still held by a second
+  // undecided gate is left exactly as it is), which is what lets an at-least-once
+  // outbox drive it. A run that never parked — every auto-gate opened before this
+  // fix, and every produced event with no agent run behind it — simply reports
+  // `not-parked` and the intent is marked done as it always was.
   if (isAutoReviewTaskId(reviewTaskId)) {
     if (!leaseToken) return "retryable";
+    await releaseRunForResolvedAutoGate(gateId);
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
-      `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); run continuation is the lifecycle park — marked ${ok ? "done" : "LEASE-LOST"}`,
+      `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); the decision released the producing run — marked ${ok ? "done" : "LEASE-LOST"}`,
     );
     return ok ? "already-advanced" : "lease-lost";
   }
@@ -357,6 +368,70 @@ export async function deliverArtifactReviewResumeIntent(
 }
 
 /**
+ * Perform the terminal write the gate's producing run parked instead of making
+ * (cinatra#3007). Best-effort AND idempotent: `releaseHeldRun` re-reads the run
+ * and the decisions itself, so a duplicate drive is a no-op, and a failure here
+ * never fails the delivery that called it — the release drain below re-drives
+ * every still-parked run whose gates are decided.
+ */
+async function releaseRunForResolvedAutoGate(gateId: string): Promise<void> {
+  try {
+    const { readGateRunOwner, releaseHeldRun } = await import("./run-produced-review-hold");
+    const owner = await readGateRunOwner(gateId);
+    if (!owner) return;
+    const outcome = await releaseHeldRun(owner.runId, mintAgentRunExecutionAuthority(owner.orgId));
+    if (outcome.released) {
+      console.log(
+        `[artifact-review-resume] gate=${gateId} run=${owner.runId} released by the decision → ${outcome.terminal}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[artifact-review-resume] gate=${gateId} produced-review release failed (the release drain re-drives it):`,
+      err,
+    );
+  }
+}
+
+/**
+ * Release every run still parked on a produced-output review whose gates are all
+ * decided (cinatra#3007).
+ *
+ * The decision path above covers a human approve/reject, because those commit a
+ * resume intent. Two decisions do NOT: an EXPIRY auto-resolves an optional gate
+ * with a bare CAS and mints no intent, and a crash between the CAS and the
+ * release leaves a decided gate with a parked run behind it. This pass is what
+ * makes the release total — the same durable-drain posture the outbox itself has.
+ */
+const PRODUCED_REVIEW_RELEASE_LIMIT = 50;
+
+async function releaseDecidedProducedReviewParks(
+  limit: number,
+  summary: ResumeSweepSummary,
+): Promise<void> {
+  try {
+    const { listReleasableHeldRuns, releaseHeldRun } = await import(
+      "./run-produced-review-hold"
+    );
+    for (const run of await listReleasableHeldRuns(limit)) {
+      try {
+        const outcome = await releaseHeldRun(run.runId, mintAgentRunExecutionAuthority(run.orgId));
+        if (outcome.released) summary.releasedFromReview += 1;
+      } catch (err) {
+        summary.failed += 1;
+        console.error(
+          `[artifact-review-resume] produced-review release failed for run=${run.runId} — left parked for the next pass:`,
+          err,
+        );
+      }
+    }
+  } catch (err) {
+    summary.failed += 1;
+    console.error("[artifact-review-resume] produced-review release drain failed:", err);
+  }
+}
+
+/**
  * Drain a batch of deliverable resume intents. Per-intent failures are TALLIED
  * (never rethrown) so one broken row can never poison the queue — the row stays
  * pending and the next cycle (after lease expiry) re-claims it (the sweep is the
@@ -371,6 +446,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     delivered: 0,
     alreadyAdvanced: 0,
     retryable: 0,
+    releasedFromReview: 0,
     refusedOutOfScope: 0,
     failed: 0,
   };
@@ -413,4 +489,11 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
       );
     }
   }
-  return summary;}
+  // The decision-driven release above reaches every approve/reject; this reaches
+  // the two decisions that mint no intent (an expiry, and a crash after the CAS).
+  // Its OWN bound, not the intent batch's: an intent delivery is a WayFlow resume
+  // and is deliberately small, while a release is one guarded CAS, and the
+  // candidate query returns only runs that are actually releasable.
+  await releaseDecidedProducedReviewParks(PRODUCED_REVIEW_RELEASE_LIMIT, summary);
+  return summary;
+}

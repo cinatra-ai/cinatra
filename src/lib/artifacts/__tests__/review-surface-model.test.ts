@@ -308,28 +308,52 @@ describe("the settled copy names the outcome and its decider", () => {
   });
 
   it("names the decider when there is one to name", () => {
+    // The titles are the DRAWING's three readings and nothing else: an approved
+    // gate is the drawing's "Continued", and both turn-back outcomes read its
+    // "Changes requested". The line's own sentence still says which turn-back
+    // this was, and `data-review-outcome` still carries all three.
     expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Approved by Dana Okonkwo",
-      body: "The gate is resolved and the run has been released to continue.",
+      title: "Continued by Dana Okonkwo",
+      body: "Decided on the revision above.",
     });
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
-      "Rejected by Dana Okonkwo",
+      "Changes requested by Dana Okonkwo",
     );
     expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
       "Changes requested by Dana Okonkwo",
     );
   });
 
+  it("keeps the three outcomes readable apart — on the reading and on the record", () => {
+    // THE SENTENCE IS ONE SENTENCE NOW (cinatra#3046, fix leg 17; cinatra#3293).
+    // It used to be three, and this case used to require that. The ratified
+    // drawing gives the settled marker ONE sentence — "Decided on the revision
+    // above." — under a pill that carries the reading; the clause a drawn
+    // example adds after it ("These are the words that will be sent") is the
+    // DISPLAY's statement about the artifact reviewed, which the artifact type's
+    // own display owns and the host may not write for it.
+    //
+    // So what must stay readable apart is the OUTCOME, and it does, twice over:
+    // the drawing's own two readings on the title, and all three values on
+    // `data-review-outcome`, which is what routing and the audit trail read.
+    const bodies = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).body);
+    expect(new Set(bodies).size).toBe(1);
+    expect(bodies[0]).toBe("Decided on the revision above.");
+    const titles = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).title);
+    expect(new Set(titles)).toEqual(new Set(["Continued", "Changes requested"]));
+    expect(reviewSettledCopy("approved").title).toBe("Continued");
+  });
+
   it("reads as a finished sentence with no decider at all", () => {
     // The resolver drops a decider it cannot name safely, so the copy must not
-    // depend on one: never "Approved by" and a dangling nothing.
+    // depend on one: never "Continued by" and a dangling nothing.
     for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
       const { title } = reviewSettledCopy(outcome);
       expect(title.endsWith(" by")).toBe(false);
       expect(title.includes(" by ")).toBe(false);
     }
-    expect(reviewSettledCopy("approved").title).toBe("Approved");
-    expect(reviewSettledCopy("rejected").title).toBe("Rejected");
+    expect(reviewSettledCopy("approved").title).toBe("Continued");
+    expect(reviewSettledCopy("rejected").title).toBe("Changes requested");
     expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
   });
 
@@ -338,7 +362,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // fact about what the reviewer's own press started. A settled card has not
     // read that, so it may not assert it.
     expect(reviewSettledCopy("changes_requested").body).toBe(
-      "The gate is resolved and the reviewed work has been turned back for repair.",
+      "Decided on the revision above.",
     );
     expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
   });
@@ -374,7 +398,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    expect(line).toBe("organization · organization · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -389,7 +413,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -406,7 +430,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts[3]).toBe("updated 8 min ago");
     expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
   });
 
@@ -421,7 +445,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {

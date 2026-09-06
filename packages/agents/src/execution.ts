@@ -739,6 +739,667 @@ const EXTERNAL_A2A_SUCCESS_STATE = "completed";
  * Exported for the honesty suite; the ONLY production call site is the external
  * dispatch branch in `runAgentBuilderExecutionJobInner`.
  */
+// ---------------------------------------------------------------------------
+// cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
+//
+// The artifacts a run produces are written mid-flow, and each write splices a
+// durable produced-event row into its own transaction. Whether one of those
+// outputs opens a review is decided by the orchestration core, which used to be
+// reached only by a recurring drain — so the gate was minted seconds AFTER the
+// terminal write, onto a run that had already finished and has no legal edge
+// back. The decided reading said the run had been released to continue when
+// there was nothing left to release.
+//
+// So the decision is taken BEFORE every terminal edge this file owns, through
+// the one seam below: the run's own production is drained inline (the same one
+// core, never a second copy of it), and if a review opens, the run parks in
+// `pending_approval` carrying the terminal write it is withholding.
+// `releaseHeldRun` performs that write when the decision lands. A run whose
+// output opens no review is untouched and takes its terminal edge immediately,
+// exactly as before.
+//
+// The seam is a DYNAMIC import for the same reason the materializer is: this
+// file sits in the locked dev-perf routes' reachable graph, and the hold module
+// reaches the review store.
+// ---------------------------------------------------------------------------
+
+/**
+ * The terminal write being withheld, carried STRUCTURALLY.
+ *
+ * Declared here rather than imported so this file adds no static edge to the
+ * hold module — the same duplication precedent the hold module itself keeps for
+ * `WithheldDerivationOutbox`. The value is handed over verbatim.
+ */
+type WithheldTerminalWrite = {
+  status: "completed" | "failed";
+  error?: string;
+  derivationOutbox?: {
+    orgId: string;
+    templateId: string;
+    packageVersion: string | null;
+    createdBy: string | null;
+    content: string;
+    contentIsJson: boolean;
+    contentHash: string;
+  };
+};
+
+/**
+ * The produced-review hold could not be recorded ANYWHERE — not as a park, not
+ * as anything else — so no later pass can see that this run still owes a review.
+ *
+ * Thrown rather than swallowed: the alternative is an attempt that reports
+ * success over a `running` row nothing will converge, which is the shape of the
+ * defect this fix exists to remove. The withheld write is put on its own delayed
+ * delivery before the throw, so the run still converges; the throw is what keeps
+ * the failed attempt visible instead of silently green.
+ */
+export const PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS = 15 * 1000;
+
+/**
+ * How many times a run may re-deliver on an unrecordable hold before the attempt
+ * fails for good. BOUNDED for the same reason the scope-recheck park is: a write
+ * fault is either a blip that clears in seconds, or permanent — and a permanent
+ * one must surface as a failed job with an operator signal rather than a run that
+ * re-delays forever. The run is NEVER landed terminal at the cap: a terminal
+ * write over an unproven review is the defect itself.
+ */
+export const MAX_PRODUCED_REVIEW_HOLD_PARKS = 5;
+
+/**
+ * How large the carried terminal payload may be before the re-delivery drops it.
+ *
+ * The park write failing means the run's OWN row never received the payload
+ * either, so the re-delivered attempt is the only thing that still has it — it
+ * has to travel on the job. But job data is a queue record, not a place to put
+ * an unbounded run output, so an oversized payload is left behind and the
+ * recovery lands the run with what its row already holds. Bounded loss on a rare
+ * write fault, against an unbounded queue record on every one.
+ *
+ * Measured on the SERIALIZED record in UTF-8 bytes, the unit the queue stores it
+ * in — not in string length, which counts UTF-16 code units and undercounts a
+ * multibyte payload by up to two thirds. The reduced record is bounded on its
+ * own too: an error text that alone exceeds the cap is cut and marked, so what
+ * the re-delivery carries is under the cap on every branch.
+ */
+export const PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES = 256_000;
+
+/** The terminal write still owed, as a re-delivered attempt carries it. */
+export type ProducedReviewRecovery = {
+  withheld: WithheldTerminalWrite;
+  /** The terminal step-results payload, when it fits (see the cap above). */
+  stepResults?: unknown[];
+};
+
+export class ProducedReviewHoldUnpersistedError extends Error {
+  readonly runId: string;
+  readonly delayMs: number;
+  /** Carried so the re-delivered attempt can finish the run without re-executing
+   *  it: the same verdict, payload and derivation capture the failed attempt was
+   *  withholding. */
+  readonly recovery: ProducedReviewRecovery;
+  /** Whether the recovery was handed to its durable delivery before this was
+   *  raised. `false` means the queue could not take it either, so nothing but an
+   *  operator can finish the run — which is why it is logged as an error there
+   *  and reported here rather than left implicit. */
+  readonly delivered: boolean;
+  /** True when the chain reached its cap, so NOTHING should re-deliver it: the
+   *  cap is the operator signal, and re-entering the road past it would loop. */
+  readonly capped: boolean;
+  /** The chain this raise belongs to, and the ordinal its delivery carries — so
+   *  a holder of an execution job can enter the SAME road in place, with the
+   *  same job data, when the producer connection could not queue it. */
+  readonly chain: string;
+  readonly nextPark: number;
+  constructor(args: {
+    runId: string;
+    recovery: ProducedReviewRecovery;
+    delivered?: boolean;
+    capped?: boolean;
+    chain?: string;
+    nextPark?: number;
+    delayMs?: number;
+  }) {
+    const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
+    super(
+      `run ${args.runId}: the produced-output review hold could not be recorded — ` +
+        `the run keeps its non-terminal status and ` +
+        (args.delivered
+          ? `the terminal write it still owes is queued for delivery in ${delayMs}ms`
+          : `the terminal write it still owes could NOT be queued — it needs an operator`),
+    );
+    this.name = "ProducedReviewHoldUnpersistedError";
+    this.runId = args.runId;
+    this.delayMs = delayMs;
+    this.recovery = args.recovery;
+    this.delivered = args.delivered ?? false;
+    this.capped = args.capped ?? false;
+    this.chain = args.chain ?? "";
+    this.nextPark = args.nextPark ?? 1;
+  }
+}
+
+/**
+ * Ask the review question before a terminal write. `true` ⇒ the caller must
+ * write NO terminal status and announce NO terminal event: the run is waiting,
+ * and a run that is waiting has not finished.
+ *
+ * FAIL-CLOSED on a broken seam: `holdRunForProducedReview` is total by contract,
+ * so a throw here means the seam ITSELF is broken, and a broken seam cannot
+ * prove this run owes no review. Writing a terminal status on that is precisely
+ * the defect, so the run keeps its non-terminal status.
+ *
+ * @throws {ProducedReviewHoldUnpersistedError} when the hold is held but nothing
+ *   durable records it.
+ */
+async function producedReviewHoldsRun(args: {
+  runId: string;
+  orgId: string;
+  fromStatus: AgentRunStatus;
+  stepResults: readonly unknown[];
+  withheld: WithheldTerminalWrite;
+  authority: OrgWriteAuthority | undefined;
+  /** Which terminal edge is asking — log context only. */
+  where: string;
+  /** How many recovery deliveries this run's withheld write has already taken.
+   *  Only a recovery leg carries one; a first raise leaves it at zero. */
+  holdPark?: number;
+  /** Which recovery chain this raise belongs to. Only a recovery leg carries
+   *  one; a first raise mints a new chain. */
+  holdChain?: string;
+}): Promise<boolean> {
+  const { runId, where } = args;
+  let outcome: { held: boolean; reason: string };
+  try {
+    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+    outcome = await holdRunForProducedReview(
+      {
+        runId,
+        orgId: args.orgId,
+        fromStatus: args.fromStatus,
+        stepResults: args.stepResults,
+        withheld: args.withheld,
+      },
+      args.authority,
+    );
+  } catch (err) {
+    // The seam is total by contract, so reaching here means the seam ITSELF is
+    // broken — which records NOTHING. That is the same state as a failed park:
+    // the run keeps its non-terminal status, and the attempt must not report
+    // success over a hold nothing can see. So it takes the same exit.
+    console.error(
+      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write (fail-closed):`,
+      err,
+    );
+    throw await unpersistedHoldSentinel(runId, args);
+  }
+  if (!outcome.held) return false;
+  // The one held outcome with nothing durable behind it (the park write itself
+  // failed). The literal is read rather than imported for the no-static-edge
+  // reason above; the hold module exports it as `UNPERSISTED_HOLD_REASON` and its
+  // own suite pins the two together.
+  if (outcome.reason === "hold-unpersisted") {
+    throw await unpersistedHoldSentinel(runId, args);
+  }
+  return true;
+}
+
+/**
+ * How many shrink passes the error-text cut may take before the recovery gives
+ * up on carrying any of it. Each pass subtracts the measured overage in code
+ * units and a dropped code unit is worth at least one serialized byte, so the
+ * cut converges in one or two; the bound only makes the function total.
+ *
+ * Deliberately conservative on multibyte text, where a code unit is worth two or
+ * three bytes and the first pass therefore cuts more than strictly needed: under
+ * the cap is the requirement, landing exactly on it is not.
+ */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES = 6;
+/** Slack for the marker the cut appends, so the usual case converges in one pass. */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM = 128;
+
+/**
+ * The size of the queue record this object becomes: its UTF-8 BYTES, which is
+ * the unit the record is stored and capped in. `JSON.stringify(x).length` counts
+ * UTF-16 code units instead, so a multibyte payload measures as little as a
+ * third of what it costs. `Infinity` when it cannot be serialized at all — then
+ * it cannot ride the queue at any size.
+ */
+function producedReviewRecoveryBytes(recovery: ProducedReviewRecovery): number {
+  try {
+    const serialized = JSON.stringify(recovery);
+    return serialized === undefined
+      ? Number.POSITIVE_INFINITY
+      : Buffer.byteLength(serialized, "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** `slice` cuts on code UNITS and can split a surrogate pair in half; drop the
+ *  orphan so the kept text stays well-formed. */
+function sliceWholeCharacters(text: string, keep: number): string {
+  if (keep <= 0) return "";
+  const cut = text.slice(0, keep);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/** Says the text was cut, and by how much — counted in the same unit the cap is
+ *  in, so a reader of the landed run never mistakes a cut error for the whole
+ *  one and never has to guess what the number counts. String length would not do
+ *  it: it counts UTF-16 code units, so an astral character reports as two. */
+function markCutError(kept: string, totalBytes: number): string {
+  const dropped = totalBytes - Buffer.byteLength(kept, "utf8");
+  return (
+    `${kept}\n[error text truncated to fit the recovery payload cap: ` +
+    `${dropped} of ${totalBytes} bytes dropped]`
+  );
+}
+
+/**
+ * What the oversized case carries, bounded on its OWN rather than by whatever
+ * the dropped payload happened to leave behind: the verdict, plus as much of the
+ * error text as fits under the cap. The verdict is what the re-delivered attempt
+ * needs to land the run, so the text is what gives way; the derivation capture
+ * and the step results go whole, because they are the unbounded parts and the
+ * run's row already holds them.
+ */
+function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
+  recovery: ProducedReviewRecovery;
+  bytes: number;
+} {
+  const verdictOnly: ProducedReviewRecovery = { withheld: { status: withheld.status } };
+  const error = withheld.error;
+  if (error === undefined) {
+    return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+  }
+  const withError: ProducedReviewRecovery = { withheld: { status: withheld.status, error } };
+  const withErrorBytes = producedReviewRecoveryBytes(withError);
+  if (withErrorBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: withError, bytes: withErrorBytes };
+  }
+  const totalErrorBytes = Buffer.byteLength(error, "utf8");
+  let keep = error.length;
+  let over = withErrorBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  for (let pass = 0; pass < PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES; pass++) {
+    keep = Math.max(0, keep - over - PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM);
+    const cut: ProducedReviewRecovery = {
+      withheld: {
+        status: withheld.status,
+        error: markCutError(sliceWholeCharacters(error, keep), totalErrorBytes),
+      },
+    };
+    const cutBytes = producedReviewRecoveryBytes(cut);
+    if (cutBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+      return { recovery: cut, bytes: cutBytes };
+    }
+    if (keep === 0) break;
+    over = cutBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  }
+  // None of the text fits. The marker alone still states the omission, so an
+  // omitted error is never silently indistinguishable from an absent one.
+  const omitted: ProducedReviewRecovery = {
+    withheld: { status: withheld.status, error: markCutError("", totalErrorBytes) },
+  };
+  const omittedBytes = producedReviewRecoveryBytes(omitted);
+  if (omittedBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: omitted, bytes: omittedBytes };
+  }
+  // Not even the marker fits: the verdict alone still lands the run.
+  return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+}
+
+/** The terminal write reduced to what a re-delivered attempt can carry: the
+ *  whole thing when it fits the cap, else the verdict with its error text cut to
+ *  fit and marked. Measured in UTF-8 BYTES — the unit the queue record is stored
+ *  in — and under the cap on EVERY branch, the fallback included. */
+function buildProducedReviewRecovery(
+  runId: string,
+  withheld: WithheldTerminalWrite,
+  stepResults: readonly unknown[],
+): ProducedReviewRecovery {
+  const full: ProducedReviewRecovery = {
+    withheld,
+    ...(stepResults.length > 0 ? { stepResults: [...stepResults] } : {}),
+  };
+  const size = producedReviewRecoveryBytes(full);
+  if (size <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) return full;
+  const bounded = boundedProducedReviewFallback(withheld);
+  console.warn(
+    `[produced-review-hold] run=${runId} terminal payload too large to carry on the re-delivery ` +
+      `(${size} bytes) — the recovery carries the verdict in ${bounded.bytes} bytes and lands the ` +
+      `run with the payload its row already holds`,
+  );
+  return bounded.recovery;
+}
+
+/** The id prefix a withheld terminal write's delivery is keyed on. */
+export const PRODUCED_REVIEW_RECOVERY_JOB_PREFIX = "produced-review-recovery__";
+
+/** The delivery id for one chain's nth attempt. Keyed on the run, the CHAIN and
+ *  the ordinal — never on the run and the ordinal alone. The queue keeps settled
+ *  jobs by count (see the runtime's `removeOnComplete`/`removeOnFail`) and an
+ *  add on an id that is still held is a silent no-op, so an id that repeated
+ *  across chains would report a delivery it never made. A chain is minted per
+ *  raise, so its ids are its own; within a chain the ordinal still collapses a
+ *  redelivered leg onto the one queued recovery. */
+export function producedReviewRecoveryJobId(
+  runId: string,
+  chain: string,
+  ordinal: number,
+): string {
+  return `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}${runId}__${chain}__${ordinal}`;
+}
+
+/**
+ * Hand the withheld terminal write to the ONE road that can still finish the
+ * run: a delayed execution delivery carrying the recovery, consumed by the
+ * recovery leg at the top of the execution job (which re-executes nothing — it
+ * asks the review question again and finishes the run).
+ *
+ * Handed over HERE, at the single point the sentinel is raised, rather than by
+ * each caller. Four paths reach an unrecordable hold — the execution worker, the
+ * operator's resume, the resume primitive and the review-gate delivery sweep —
+ * and only the first owns a job it could re-deliver; the other three would each
+ * need their own hand-off, and a fifth path added later would silently drop the
+ * write again. Raised-point delivery means no caller holds the payload, so no
+ * caller can lose it, and there is exactly one carrier and one consumer.
+ *
+ * IDEMPOTENT: the delivery is keyed on the run, its chain and the ordinal, so a
+ * leg redelivered at the same ordinal collapses onto the one queued recovery
+ * instead of forking it. Two callers racing the SAME run raise two chains and
+ * queue two recoveries; that is deliberate — the alternative is a shared id that
+ * a settled job of an earlier chain still holds, which the queue would swallow
+ * silently. Both chains reach the same STATUS: the run is parked or terminal
+ * either way, and the terminal write is one CAS with one winner. They do not
+ * arbitrate the parked payload between them — `parkRun` writes the marker it was
+ * handed — so a run with two competing withheld writes lands the later one. Both
+ * are legitimate terminal writes for the same run, and the CAS would have picked
+ * one regardless; making the marker first-writer-wins belongs to the park itself.
+ *
+ * BOUNDED: it carries exactly what `buildProducedReviewRecovery` built, which is
+ * already under `PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES` on every branch.
+ *
+ * CAPPED: past `MAX_PRODUCED_REVIEW_HOLD_PARKS` nothing further is queued. A
+ * write fault that survives that many deliveries is permanent, and looping on it
+ * forever hides it. The run is NEVER landed terminal at the cap — a terminal
+ * write over an unproven review is the defect this path exists to prevent — so
+ * the cap surfaces as an operator signal over a run that is still non-terminal.
+ *
+ * Best-effort by necessity and never fail-open: a delivery that cannot be queued
+ * is reported on the sentinel and the sentinel is raised regardless. A holder of
+ * an execution job re-enters the SAME road in place when that happens — the
+ * producer connection is fail-fast by design while a worker's own connection
+ * rides a brief outage out, so the two are not interchangeable and the second
+ * on-ramp is not a second road.
+ */
+async function deliverProducedReviewRecovery(args: {
+  runId: string;
+  recovery: ProducedReviewRecovery;
+  park: number;
+  chain: string;
+}): Promise<{ delivered: boolean; capped: boolean }> {
+  const { runId, recovery, park, chain } = args;
+  if (park >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not record its hold across ${park} deliveries — ` +
+        `no further recovery is queued; the run keeps its non-terminal status`,
+    );
+    return { delivered: false, capped: true };
+  }
+  const next = park + 1;
+  try {
+    const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+    const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+      {
+        runId,
+        producedReviewHold: recovery,
+        producedReviewHoldPark: next,
+        producedReviewHoldChain: chain,
+      },
+      {
+        delay: PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
+        // One shot per delivery: the leg re-raises and queues the next ordinal
+        // itself, so a BullMQ-level retry would only double the chain.
+        attempts: 1,
+        jobId: producedReviewRecoveryJobId(runId, chain, next),
+        // The leg anchors the run's own org-scoped dispatch authority; it must
+        // not inherit the resuming principal's frame.
+        inheritActorContext: false,
+      },
+    );
+    console.warn(
+      `[produced-review-hold] run=${runId} hold unrecorded — recovery queued in ` +
+        `${PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS}ms (delivery ${next})`,
+    );
+    return { delivered: true, capped: false };
+  } catch (err) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not queue the recovery delivery — the run keeps ` +
+        `its non-terminal status and nothing is written over the unproven review:`,
+      err,
+    );
+    return { delivered: false, capped: false };
+  }
+}
+
+/** Build the bounded recovery, put it on its delivery, and return the sentinel
+ *  for the caller to throw. The one exit for a hold nothing durable records, so
+ *  both raise sites take the same road. Returned rather than thrown so the
+ *  `throw` stays at the call site, where it reads as the terminator it is. */
+async function unpersistedHoldSentinel(
+  runId: string,
+  args: {
+    withheld: WithheldTerminalWrite;
+    stepResults: readonly unknown[];
+    holdPark?: number;
+    holdChain?: string;
+  },
+): Promise<ProducedReviewHoldUnpersistedError> {
+  const recovery = buildProducedReviewRecovery(runId, args.withheld, args.stepResults);
+  const park = args.holdPark ?? 0;
+  const chain = args.holdChain ?? randomUUID();
+  const outcome = await deliverProducedReviewRecovery({ runId, recovery, park, chain });
+  return new ProducedReviewHoldUnpersistedError({
+    runId,
+    recovery,
+    delivered: outcome.delivered,
+    capped: outcome.capped,
+    chain,
+    nextPark: park + 1,
+  });
+}
+
+/**
+ * The re-delivered attempt for a run whose hold could not be recorded
+ * (cinatra#3007). It re-executes NOTHING: the run already did its work and is
+ * sitting non-terminal because the previous attempt could not write down that it
+ * still owed a review. This asks the question again and finishes it — a park if
+ * something holds the run, the withheld terminal write if nothing does.
+ *
+ * Raises `ProducedReviewHoldUnpersistedError` again while the write still fails,
+ * queueing the NEXT delivery of the same chain up to the chain's cap before it
+ * does. The run is never landed terminal on an unproven review.
+ */
+export async function recoverProducedReviewHold(args: {
+  runId: string;
+  run: { orgId: string; status: AgentRunStatus };
+  recovery: ProducedReviewRecovery;
+  authority: OrgWriteAuthority | undefined;
+  /** Which delivery this is, so a hold that still cannot be recorded queues the
+   *  NEXT one and the cap counts the chain rather than restarting it. */
+  park?: number;
+  /** The chain this delivery belongs to, so the next one keeps its identity. */
+  chain?: string;
+}): Promise<void> {
+  const { runId, run, recovery, authority } = args;
+  const withheld = recovery.withheld;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: run.status,
+      // The payload the failed attempt was withholding, when it could travel.
+      // Empty ⇒ the park keeps the row's OWN step results (see `parkRun`), which
+      // is the most that survived.
+      stepResults: recovery.stepResults ?? [],
+      withheld,
+      authority,
+      where: "hold recovery",
+      holdPark: args.park,
+      holdChain: args.chain,
+    })
+  ) {
+    console.log(`[produced-review-hold] run=${runId} recovery recorded the hold`);
+    return;
+  }
+  // Nothing holds the run, so the terminal write the previous attempt never made
+  // is owed now — with its payload and, on the success edge, its derivation
+  // capture, exactly as the original transition would have carried them.
+  //
+  // The CAS comes FIRST and the announcement only after it LANDS: a terminal
+  // event published ahead of the write would tell every client the run ended
+  // even when a concurrent stop or release owned the row. That is the order
+  // every other terminal path here uses.
+  let transitioned = true;
+  await transitionRunStatus(
+    runId,
+    run.status,
+    withheld.status,
+    {
+      ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+      ...(recovery.stepResults ? { stepResults: recovery.stepResults } : {}),
+      ...(withheld.status === "completed" ? { completedAt: new Date() } : {}),
+      ...(withheld.status === "completed" && withheld.derivationOutbox
+        ? { derivationOutbox: withheld.derivationOutbox }
+        : {}),
+    },
+    authority,
+  ).catch((e) => {
+    if (e instanceof RunTransitionError && e.code === "stale_from_status") {
+      transitioned = false;
+      console.log(
+        `[produced-review-hold] run=${runId} left ${run.status} concurrently — recovery announces nothing`,
+      );
+      return;
+    }
+    throw e;
+  });
+  if (!transitioned) return;
+  // The terminal-success tail, in the order the immediate edge takes it: the
+  // unbound-output derivation enqueue for a capture that committed with the CAS,
+  // then the announcement, then the autosave sidecar. A recovery that stopped at
+  // the announcement would land a run that is terminal but missing the sidecars
+  // every other run of the same verdict gets — the derivation waits on the sweep
+  // instead of the one-shot job, and the autosave, which has no sweep behind it,
+  // never happens at all.
+  if (withheld.status === "completed" && withheld.derivationOutbox) {
+    try {
+      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
+        { runId, orgId: run.orgId },
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          jobId: `unbound-output-derive__${runId}`,
+          inheritActorContext: false,
+        },
+      );
+    } catch (e) {
+      console.warn(
+        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+  await Promise.resolve(
+    publishAgUiEvent(
+      runId,
+      (withheld.status === "completed"
+        ? { type: "RUN_FINISHED", threadId: runId, runId, status: "completed", timestamp: Date.now() }
+        : {
+            type: "RUN_ERROR",
+            threadId: runId,
+            runId,
+            message: withheld.error ?? "the run ended without recording its result",
+            timestamp: Date.now(),
+          }) as never,
+    ),
+  ).catch(() => undefined);
+  if (withheld.status === "completed") {
+    runSkillAutosaveOnRunCompletion(runId).catch((e) => {
+      console.warn(`[skill-autosave] autosave failed, run=${runId}`, e);
+    });
+  }
+  console.log(
+    `[produced-review-hold] run=${runId} recovery performed the withheld ${withheld.status} write`,
+  );
+}
+
+/**
+ * Land a WayFlow DISPATCH failure — the transport never delivered the task, or
+ * `handleWayflowTaskState` itself threw — asking the review question first.
+ *
+ * cinatra#3007: `sendTask` is BLOCKING and the flow runs inside it, calling back
+ * into cinatra as it goes, so a transport failure can arrive AFTER the flow has
+ * already written an artifact. That output opens a review exactly as a completed
+ * run's does, and `failed` is just as terminal as `completed`. So this edge asks
+ * the same question at the same moment as the others: a held run announces no
+ * end, because it has not reached one.
+ */
+export async function failRunOnWayflowDispatchError(args: {
+  runId: string;
+  orgId: string;
+  runError: string;
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  const { runId, orgId, runError, authority } = args;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId,
+      fromStatus: "running",
+      stepResults: [],
+      withheld: { status: "failed", error: runError },
+      authority,
+      where: "wayflow dispatch",
+    })
+  ) {
+    return;
+  }
+  // Terminal-consistency for the durable AG-UI log (cinatra#809):
+  // RUN_STARTED was already published before sendTask, so a dispatch
+  // failure must also publish RUN_ERROR — otherwise the log ends on
+  // RUN_STARTED and every later page load replays the run into a phantom
+  // "running" state. Mirrors the handleWayflowTaskState failed branch
+  // (publish first, then transition). Best-effort like every publish —
+  // a Redis outage must not block the failed transition.
+  try {
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: runError,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+  } catch {
+    /* best-effort: an event log that throws synchronously must not block the transition */
+  }
+  await transitionRunStatus(runId, "running", "failed", { error: runError }, authority).catch(
+    (e) => {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+      throw e;
+    },
+  );
+}
+
 export async function finalizeExternalA2ARun(args: {
   authority: OrgWriteAuthority | undefined;
   runId: string;
@@ -851,11 +1512,34 @@ export async function finalizeExternalA2ARun(args: {
         ]
       : undefined;
 
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      recordedOutcomes.length,
-    );
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, recordedOutcomes.length)
+      : null;
+
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: "running",
+      stepResults: terminalStepResults ?? [],
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          : { status: "completed" },
+      authority,
+      where: "external-a2a",
+    })
+  ) {
+    return;
+  }
+
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,
@@ -1676,11 +2360,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         }),
-      failRun: (error) =>
-        transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+      failRun: async (error) => {
+        // cinatra#3007 — even here, `failed` is terminal. A run that wrote an
+        // artifact in an earlier node has produced output a review may be open
+        // on, and the invariant does not make an exception for an
+        // infrastructure failure: the run holds at that review and the decision
+        // releases it to the failure it was going to reach anyway.
+        if (
+          await producedReviewHoldsRun({
+            runId,
+            orgId: run.orgId,
+            fromStatus,
+            stepResults: [],
+            withheld: { status: "failed", error },
+            authority,
+            where: "human gate",
+          })
+        ) {
+          return;
+        }
+        await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        });
+      },
     });
     return;
   }
@@ -1688,6 +2391,23 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   if (taskState === "failed") {
     const firstFailPart = task.status?.message?.parts?.[0] as { text?: string } | undefined;
     const errMsg = firstFailPart?.text ?? "WayFlow task failed";
+    // cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
+    // mid-flow and then failed has produced output a review may be open on, so
+    // the same question is asked here, BEFORE the terminal announcement: a run
+    // that parks announces no end, because it has not reached one.
+    if (
+      await producedReviewHoldsRun({
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: [],
+        withheld: { status: "failed", error: errMsg },
+        authority,
+        where: "wayflow failed",
+      })
+    ) {
+      return;
+    }
     await Promise.resolve(
       publishAgUiEvent(runId, {
         type: "RUN_ERROR",
@@ -1886,15 +2606,41 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     },
   ];
 
+  // The failure verdict is settled BEFORE the review hold below, because the hold
+  // has to carry whichever terminal write it is withholding — a failed run's just
+  // as much as a green one's.
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, artifactMaterializations.length)
+      : null;
+
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus,
+      stepResults: terminalStepResults,
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          : { status: "completed", ...(derivationOutbox ? { derivationOutbox } : {}) },
+      authority,
+      where: "wayflow completed",
+    })
+  ) {
+    return;
+  }
+
   // cinatra#2486 — the surfaced-failure edge. Both `running->failed` and
   // `pending_approval->failed` are legal, matching the two terminal-success
   // edges below (the `fromStatus === "completed"` re-entry already returned
   // above, so no illegal `completed->failed` edge is reachable here).
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      artifactMaterializations.length,
-    );
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,
@@ -2119,6 +2865,11 @@ export async function runAgentBuilderExecutionJob(
     // Marks this leg as "the user just submitted the setup form", which is the
     // one leg that owes the trigger step before it may dispatch.
     resumedFromSetup?: boolean;
+    // cinatra#3007: set ONLY by the worker's unrecordable-hold re-delivery. Its
+    // presence makes this leg a hold recovery rather than a dispatch.
+    producedReviewHold?: ProducedReviewRecovery;
+    producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2161,6 +2912,10 @@ async function runAgentBuilderExecutionJobInner(
     scopeRecheckPark?: number;
     // cinatra#2523 — see the outer signature.
     resumedFromSetup?: boolean;
+    // cinatra#3007 — see the outer signature.
+    producedReviewHold?: ProducedReviewRecovery;
+    producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2187,6 +2942,30 @@ async function runAgentBuilderExecutionJobInner(
   // this worker drives — dispatch (run.execute) and terminal finalize
   // (run.complete) — including handleWayflowTaskState below.
   const executionAuthority = mintAgentRunExecutionAuthority(run.orgId);
+  // cinatra#3007 — a RE-DELIVERY that exists only to record a hold the previous
+  // attempt could not write. It dispatches nothing: the run already ran, and it
+  // is sitting non-terminal because that attempt could not write down that it
+  // still owed a produced-output review. Placed before the not-queued skip
+  // because the run this leg is for is precisely NOT queued.
+  const holdRecovery = data.producedReviewHold;
+  if (holdRecovery) {
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      console.log(
+        `[produced-review-hold] run ${runId} already ${run.status} — recovery leg has nothing to do`,
+      );
+      return;
+    }
+    await recoverProducedReviewHold({
+      runId,
+      run: { orgId: run.orgId, status: run.status as AgentRunStatus },
+      recovery: holdRecovery,
+      authority: executionAuthority,
+      park:
+        typeof data.producedReviewHoldPark === "number" ? data.producedReviewHoldPark : 0,
+      chain: data.producedReviewHoldChain,
+    });
+    return;
+  }
   if (run.status !== "queued") {
     // Federated children parked by WaitingForHumanError may retry
     // after resume transitions them to a terminal state. If the child reached
@@ -3125,6 +3904,12 @@ async function runAgentBuilderExecutionJobInner(
         streamCompletedCleanly: externalStreamCompletedCleanly,
       });
     } catch (err) {
+      // cinatra#3007 — an unrecordable hold is a decision this catch must not
+      // overrule: `finalizeExternalA2ARun` threw it precisely because no terminal
+      // status may be written for this run yet. Re-throwing keeps the attempt
+      // re-deliverable instead of converting it into the `failed` write the hold
+      // exists to prevent. (Same discrimination as the WayFlow dispatch catch.)
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       // Stream error OR an unexpected transition error from the finalize path.
       // Apply the same discrimination on the failed-branch transition.
       const failure = err instanceof Error ? err.message : String(err);
@@ -3357,33 +4142,26 @@ async function runAgentBuilderExecutionJobInner(
           ? { cause: (err as { cause?: unknown }).cause }
           : "",
       );
+      // cinatra#3007 — an unrecordable hold is already a decision this catch
+      // must not overrule: `handleWayflowTaskState` threw it precisely because
+      // no terminal status may be written for this run yet. Re-throwing keeps
+      // the attempt a retryable failure instead of converting it into the
+      // `failed` write the hold exists to prevent.
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       const runError = describeWayflowDispatchError(err, wayflowUrl, {
         // Read here (the single I/O point) and threaded in: the guidance
         // must match what THIS install recorded, not assume every install
         // owns a local runtime it can "start".
         runtimeMode: process.env.CINATRA_WAYFLOW_RUNTIME,
       });
-      // Terminal-consistency for the durable AG-UI log (cinatra#809):
-      // RUN_STARTED was already published before sendTask, so a dispatch
-      // failure must also publish RUN_ERROR — otherwise the log ends on
-      // RUN_STARTED and every later page load replays the run into a phantom
-      // "running" state. Mirrors the handleWayflowTaskState failed branch
-      // (publish first, then transition). Best-effort like every publish —
-      // a Redis outage must not block the failed transition.
-      await Promise.resolve(
-        publishAgUiEvent(runId, {
-          type: "RUN_ERROR",
-          threadId: runId,
-          runId,
-          message: runError,
-          timestamp: Date.now(),
-        } as never),
-      ).catch(() => undefined);
-      await transitionRunStatus(runId, "running", "failed", {
-        error: runError,
-      }, executionAuthority).catch((e) => {
-        if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-        throw e;
+      // cinatra#3007 — the review question comes first here too: `sendTask` is
+      // blocking, so the flow may already have produced an artifact when the
+      // transport failed. A held run gets no RUN_ERROR and no terminal write.
+      await failRunOnWayflowDispatchError({
+        runId,
+        orgId: run.orgId,
+        runError,
+        authority: executionAuthority,
       });
     }
     return;

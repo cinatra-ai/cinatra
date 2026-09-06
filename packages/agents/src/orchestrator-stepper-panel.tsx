@@ -85,8 +85,9 @@ import {
 // panel draws, so a run's terminal card reads the same on both panels.
 // The gate-level BLOCKED state (cinatra#3219) and the review screen's
 // PLACEHOLDER — both are the review surface's own states, drawn from the one
-// shipped component so this panel restates neither markup nor copy.
-import { ReviewGateBlocked, ReviewGatePlaceholder } from "./review-gate-states";
+// shipped component so this panel restates neither markup nor copy;
+// shortRunReference names the run in the muted-stream resolve (cinatra#3007).
+import { ReviewGateBlocked, ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
   ReviewGateCard,
@@ -113,7 +114,13 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { runStatusBadgeLabel, statusBadgeVariant } from "./run-surface-status";
+import {
+  resolveRunSurfaceStatus,
+  runStatusBadgeLabel,
+  runStreamMayBeMute,
+  statusBadgeVariant,
+} from "./run-surface-status";
+import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -1739,7 +1746,36 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     enabled: streamEnabled,
     initialStatus,
   });
-  const status = stream.status;
+  // THE STATUS THIS PAGE DRAWS (cinatra#3007, fix leg 9).
+  //
+  // It was `stream.status`, raw. cinatra#3046 established why that is wrong for
+  // exactly one shape and wrote the rule that corrects it — a run parked on its
+  // produced output's review announces nothing, so the stream's last word stays
+  // `running` for the whole park — and gave the rule to the conversation's
+  // panel, which had a tick of its own to read the row with. This surface had
+  // none, so it kept the raw reading: it drew a working run through the whole of
+  // a park, and the ONE shared review-slot reader below never took a single
+  // look, because that reader looks only under `completed` or the parked status
+  // and this page reported neither. The eighth graded reading measured it as an
+  // absence with its own window: no run page swapped its review card in, in
+  // either run, across 899 s, while the page followed the run onto its next step.
+  //
+  // So the row is read for exactly the window in which the stream cannot speak,
+  // and the same pure resolver both surfaces already share decides when it may
+  // overrule. Nothing else about this panel's reading of the stream changes.
+  const streamedStatus = stream.status;
+  const { rowStatus, rowProducedReviewPark, heardFromRun } = useRunRowWatch(runId, {
+    enabled: runStreamMayBeMute(streamEnabled, streamedStatus),
+  });
+  const status = resolveRunSurfaceStatus({
+    streamEnabled,
+    streamedStatus,
+    // This surface has no poll-derived status of its own: the stream IS its
+    // fallback, so `resolveStreamFirst` inside the resolver returns exactly the
+    // reading this line had before.
+    polledStatus: streamedStatus,
+    rowStatus,
+  });
   const interruptContext = stream.interruptContext;
   const runError = stream.error ?? _initialError;
 
@@ -2047,15 +2083,102 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // panel is served only on the run page, which is first-party and same-origin,
   // so it takes the default reader.
   const slotReader = useMemo(() => defaultRunReviewSlotReader(runId), [runId]);
-  const { slot: reviewSlot, mayStillOpen: reviewMayStillOpen } = useRunReviewSlot({
+  const {
+    slot: reviewSlot,
+    mayStillOpen: reviewMayStillOpen,
+    stillReading: reviewStillReading,
+  } = useRunReviewSlot({
     status,
     initial: initialReviewGate,
     read: slotReader,
+    // AND NOW THERE IS LIVENESS EVIDENCE TO PASS (cinatra#3007, fix leg 9).
+    //
+    // Leg 6 stated the omission rather than leaving it silent: this panel had no
+    // read of its own to offer, because a frame that never arrives is not
+    // evidence that anything is alive. The row watch above is that read — a look
+    // at this run, on this surface, that ANSWERED — so the reader's failure belt
+    // gets the same way back here that the conversation's panel has always had.
+    liveSignal: heardFromRun,
+    // AND THE EDGE THE STATUS COLUMN CANNOT SHOW, on this surface too. The run
+    // shape this defect was measured on parks onto a row that is already in the
+    // waiting status, so the only edge is the step the person was answering
+    // going away — which on this page is the stream's own interrupt being
+    // retired by its RESUME. Reading it raw, exactly as the conversation's panel
+    // reads its own.
+    stepOnFile: effectiveInterruptContext !== null,
   });
+
+  // IS THIS RUN HELD ON THE REVIEW OF WHAT IT PRODUCED (cinatra#3007, fix leg
+  // 6)? The same reading the agentic panel takes, off the same shared reader,
+  // because it is the same run on the same page: the row's own answer beside
+  // the status, and the two together are what the park is.
+  //
+  // WHY THIS PANEL NEEDED IT. It draws the run page for a flow run, and its
+  // stage card is chosen by a ladder that has no arm for this state. A run
+  // parked on its produced output's review sits in `pending_approval` carrying
+  // the interrupt of the question it ALREADY answered, so the ladder reaches
+  // the approval branch, hands that spent interrupt to the approval card, and
+  // the card - which has nothing live to draw for a gate that is resolved -
+  // draws nothing. The rail beside it says Step 1 and Review; the column says
+  // nothing at all. Photographed on the fifth capture in both themes: "an empty
+  // block with no card, no spinner, no identity, no text".
+  //
+  // AND THE ROW'S OWN WORD IS READ BESIDE THE SLOT'S (cinatra#3046, fix leg 12).
+  // This line took the SLOT's answer alone. The conversation's panel has always
+  // ORed the row's word with it, for the reason its own comment gives: a slot
+  // answer is a second read on its own schedule, and between the park landing
+  // and that reader's next look the slot says nothing. On this surface the gap
+  // is not a gap but the whole window — the tenth graded reading measured the
+  // conversation landing the card 4.3 s and 4.7 s after the gate row while this
+  // page drew no card across 567 one-second polls in either palette. The row
+  // watch above was already reading the route that serves the park and throwing
+  // the field away; it hands it on now, so this reading is the same two halves,
+  // in the same order, that the conversation's panel takes.
+  const parkedOnProducedReview =
+    status === "pending_approval" &&
+    (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
 
   let stageCard: ReactNode = null;
 
-  if (status === "failed") {
+  if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {
+    // THE PARK'S OWN ARM, first because every arm below it is about a different
+    // state and two of them would swallow this one. It is the same two halves
+    // the agentic panel draws, in the same order and from the same reader: the
+    // review card once the gate row exists, and until then the quiet
+    // placeholder - "the card frame, and a spinning icon", in the box the
+    // review screen will fill. Never an empty column.
+    //
+    // AND THE PLACEHOLDER HALF CARRIES THE READER'S OWN BOUNDS (cinatra#3007,
+    // fix leg 6, convergence). This panel's only liveness evidence is the row
+    // watch above (fix leg 9), so its failure belt has a way back but its read
+    // ceiling still ends. A spinner drawn on `ref === null` alone would
+    // outlive them: the last answer this reader ever got still says the run is
+    // parked, so the arm would hold a spinning icon for the life of the tab
+    // after the reader had stopped looking for the row that would end it. That
+    // is the spinner nothing can end. So the placeholder half is held only
+    // while someone is still reading for it, and once the bounds are spent the
+    // run page falls back to the ladder below - the rendering it had before
+    // this leg - rather than to a wait with nobody behind it. The card half is
+    // unconditional: a gate row this reader has already seen does not stop
+    // existing because the reader stopped looking.
+    stageCard = reviewSlot.ref ? (
+      <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
+    ) : (
+      <Card data-run-review-slot="working">
+        <CardContent className="p-6">
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
+        </CardContent>
+      </Card>
+    );
+  } else if (status === "failed") {
     stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
@@ -2205,6 +2328,32 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       ) : null;
   }
 
+  // AND NO PAUSED RUN LEAVES AN EMPTY COLUMN (cinatra#3007, fix leg 6). The
+  // ladder above is a chain of states, and a state it does not recognise leaves
+  // `stageCard` at its initial null - which on this panel is not "draw nothing",
+  // it is a bare rounded region beside a step rail that says the run is waiting
+  // for a review. The park's own arm covers the reading that was measured; this
+  // covers the class, so the next unrecognised pause draws the placeholder
+  // rather than a hole. It holds only while the slot's reader is still looking,
+  // for the same reason every other wordless box on this page does.
+  if (stageCard === null && status === "pending_approval" && reviewStillReading) {
+    stageCard = (
+      <Card data-run-review-slot="working">
+        <CardContent className="p-6">
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
+        </CardContent>
+      </Card>
+    );
+  }
+
   // Embed mode: render only the stage card. Used by the parent panel's Dev
   // Stepper View to inline a child agent's stage card without rendering the
   // child's stepper, header, or section chrome. The stage card's own Card
@@ -2294,7 +2443,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         <span className="text-sm">Starting dev preview…</span>
       </div>
     );
-  } else if (replayStepIndex !== null) {
+  } else if (replayStepIndex !== null && !parkedOnProducedReview) {
     // Read-only HITL replay — read-only replay surface for a completed HITL gate.
     // The effectiveInterruptContext effect clears replayStepIndex when a new
     // interrupt arrives, so replay can coexist with pending_approval status.

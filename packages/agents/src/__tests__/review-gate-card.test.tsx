@@ -1689,10 +1689,12 @@ describe("a settled card that knows its outcome", () => {
 
   it("names the outcome AND the decider", async () => {
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
-    expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
-    );
+    expect(container.textContent).toContain("Continued by Dana Okonkwo");
+    // THE DRAWN SENTENCE (cinatra#3046, fix leg 17; cinatra#3293). Every drawn
+    // settled marker opens with these words; what a drawn example puts AFTER
+    // them is the display's own continuation about the artifact reviewed, which
+    // the artifact type's display owns and the host never writes.
+    expect(container.textContent).toContain("Decided on the revision above.");
     expect(
       container
         .querySelector('[data-conformance-id="review-gate-settled"]')
@@ -1700,15 +1702,41 @@ describe("a settled card that knows its outcome", () => {
     ).toBe("approved");
   });
 
-  it("names each of the three recorded outcomes", async () => {
+  it("names each of the three recorded outcomes in the drawing's own words", async () => {
+    // The DRAWING carries three readings — "Review requested", "Continued" and
+    // "Changes requested" — and the line may use no others. Continued is the
+    // only settled reading it has, so an approved gate reads Continued; the
+    // drawing words the turn-back road "Changes requested" and has no separate
+    // word for a rejection, so both turn-backs read that.
+    //
+    // The three outcomes stay three: `data-review-outcome` carries the recorded
+    // one unchanged on every reading, which is what routing and the audit trail
+    // read.
+    //
+    // AND THE SENTENCE IS ONE SENTENCE (cinatra#3046, fix leg 17; cinatra#3293).
+    // It used to be three, each of them the decision bar's post-press line minus
+    // its leading verb. The drawing gives the marker one sentence — "Decided on
+    // the revision above." — under a pill that carries the reading, and the
+    // clause a drawn example adds after it is the DISPLAY's statement about the
+    // artifact ("These are the words that will be sent"), never the host's. The
+    // decision bar keeps its own three lines, untouched: they report the press
+    // the reviewer just made, which is a different thing said at a different
+    // moment.
     const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Approved by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
+      ["approved", "Continued by Dana Okonkwo"],
+      ["rejected", "Changes requested by Dana Okonkwo"],
       ["changes_requested", "Changes requested by Dana Okonkwo"],
     ];
     for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
+      expect(container.textContent).toContain("Decided on the revision above.");
+      expect(container.textContent).not.toContain("The gate is resolved");
+      expect(
+        container
+          .querySelector('[data-conformance-id="review-gate-settled"]')
+          ?.getAttribute("data-review-outcome"),
+      ).toBe(outcome);
       cleanup();
     }
   });
@@ -1740,10 +1768,10 @@ describe("a settled card that knows its outcome", () => {
   it("states the outcome ALONE when no decider can be named", async () => {
     // The resolver drops a decider it cannot name safely rather than reaching
     // for an identifier, so the card must read as a finished sentence without
-    // one — never "Approved by" and a dangling nothing.
+    // one — never "Continued by" and a dangling nothing.
     const container = await settledWith("approved");
-    expect(container.textContent).toContain("Approved");
-    expect(container.textContent).not.toContain("Approved by");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Continued by");
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
@@ -1759,7 +1787,7 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Approved by Dana Okonkwo");
+      expect(html).toContain("Continued by Dana Okonkwo");
     }
   });
 
@@ -1785,7 +1813,7 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued by Dana Okonkwo");
   });
 });
 
@@ -1820,8 +1848,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
   const DISPOSITIONS = [
-    ["approved", "Approved by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
+    ["approved", "Continued by Dana Okonkwo"],
+    ["rejected", "Changes requested by Dana Okonkwo"],
     ["changes_requested", "Changes requested by Dana Okonkwo"],
   ] as const;
 
@@ -1875,7 +1903,7 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued by Dana Okonkwo");
       cleanup();
     }
   });

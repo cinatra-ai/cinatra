@@ -21,6 +21,7 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-s
 import {
   listReviewGatesForRun,
   readReviewGate,
+  isParkedOnProducedReview,
   readRunReviewSlot,
   readVerificationRecordsForGates,
 } from "./artifact-review-gate-store";
@@ -1249,6 +1250,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // AND WHETHER THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). The page
+        // already knows — it read the run and it read the slot — so the panel is
+        // handed the answer rather than made to discover it, exactly as the two
+        // facts beside it are. A run parked on its produced output's review
+        // therefore draws that review on its FIRST paint here, with no frame of
+        // the question it already answered in front of it.
+        producedReviewPark: isParkedOnProducedReview(run),
       }
     : null;
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their

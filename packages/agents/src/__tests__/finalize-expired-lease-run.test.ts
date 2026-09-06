@@ -41,6 +41,9 @@ const shared = vi.hoisted(() => ({
   auditEvents: [] as Record<string, unknown>[],
   expireRunStream: vi.fn(async () => undefined),
   dispatchRunWaitTransition: vi.fn(async () => undefined),
+  /** cinatra#3007 — does the run still owe a produced-output review? Default NO,
+   *  so every pre-existing proof below reads exactly as it always did. */
+  hasUnresolvedProducedReview: vi.fn(async () => false),
 }));
 
 function sqlText(query: unknown): string {
@@ -112,6 +115,14 @@ vi.mock("../db", async () => {
   };
 });
 
+// cinatra#3007 — the finalizer asks the produced-review question on its own
+// fenced transaction before it may terminalize anything. Mocked here so this
+// suite controls the ANSWER rather than the store behind it: what is pinned is
+// what the finalizer does with each answer.
+vi.mock("../run-produced-review-hold", () => ({
+  hasUnresolvedProducedReview: shared.hasUnresolvedProducedReview,
+}));
+
 vi.mock("@cinatra-ai/a2a", async (orig) => {
   const actual = await orig<typeof import("@cinatra-ai/a2a")>();
   return { ...actual, expireRunStream: shared.expireRunStream };
@@ -146,6 +157,7 @@ beforeEach(() => {
   shared.runRow = { status: "running" };
   shared.kernelAnswers.organization = { archivedAt: "2026-07-01T00:00:00Z", archiveEpoch: 3 };
   shared.kernelAnswers.leaseHeld = true;
+  shared.hasUnresolvedProducedReview.mockResolvedValue(false);
 });
 
 describe("finalizeExpiredLeaseRun — kernel ruling", () => {
@@ -271,5 +283,61 @@ describe("finalizeExpiredLeaseRun — the real settle (non-terminal run)", () =>
     expect(shared.expireRunStream).not.toHaveBeenCalled();
     expect(shared.dispatchRunWaitTransition).not.toHaveBeenCalled();
     expect(shared.auditEvents).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3007 — the finalizer is the ONE other writer that can terminalize a
+// run, and it used to write `failed` without asking whether the run's produced
+// output had opened a review. A run parked on an undecided review would be
+// terminalized by an unrelated sweep, and the decision would then have nothing
+// left to release — the very defect, reached from the other side.
+// ---------------------------------------------------------------------------
+describe("finalizeExpiredLeaseRun — a run that still owes a produced-output review", () => {
+  it("HELD: no CAS, no meta write, no lease settle — and the run is not terminalized", async () => {
+    shared.runRow = { status: "pending_approval" };
+    shared.hasUnresolvedProducedReview.mockResolvedValue(true);
+
+    const outcome = await finalizeExpiredLeaseRun(ORG, RUN);
+
+    expect(outcome).toEqual({ outcome: "skipped", reason: "produced-review-unresolved" });
+    // The whole point: NOTHING was written. No `set:failed`, no settle DELETE.
+    expect(shared.log).toEqual([]);
+    expect(shared.updateCalls).toBe(0);
+    // ...and no post-commit fan-out either: this call landed no transition.
+    expect(shared.expireRunStream).not.toHaveBeenCalled();
+    expect(shared.dispatchRunWaitTransition).not.toHaveBeenCalled();
+    expect(shared.auditEvents).toEqual([]);
+  });
+
+  it("asks with the run's OWN org and id, on the fence's transaction", async () => {
+    shared.hasUnresolvedProducedReview.mockResolvedValue(true);
+    await finalizeExpiredLeaseRun(ORG, RUN);
+    const call = shared.hasUnresolvedProducedReview.mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      unknown,
+    ];
+    expect([call[0], call[1]]).toEqual([ORG, RUN]);
+    // Third argument is the executor: the fenced tx, not the ambient db handle.
+    expect(call[2]).toBeDefined();
+  });
+
+  it("an ALREADY-TERMINAL run is still a lease-only settle — the question is never asked", async () => {
+    shared.runRow = { status: "completed" };
+    shared.hasUnresolvedProducedReview.mockResolvedValue(true);
+
+    const outcome = await finalizeExpiredLeaseRun(ORG, RUN);
+
+    expect(outcome).toEqual({ outcome: "settled", mode: "lease-only" });
+    expect(shared.log).toEqual(["settle"]);
+    expect(shared.hasUnresolvedProducedReview).not.toHaveBeenCalled();
+  });
+
+  it("NOT HELD: the settle is byte-identical to before — CAS, meta, settle", async () => {
+    shared.hasUnresolvedProducedReview.mockResolvedValue(false);
+    const outcome = await finalizeExpiredLeaseRun(ORG, RUN);
+    expect(outcome).toEqual({ outcome: "settled", mode: "run-and-lease", from: "running", won: true });
+    expect(shared.log).toEqual(["set:failed", "set:failed", "settle"]);
   });
 });

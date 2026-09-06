@@ -132,6 +132,18 @@ const boxes = (c: HTMLElement) =>
 const continueButton = (c: HTMLElement) =>
   c.querySelector<HTMLElement>("[data-skills-step-continue]");
 
+// A CARD REMEMBERS THIS RUN'S LAST AUTHORITATIVE ANSWER (cinatra#3007, fix leg
+// 10), so a REBUILT card redraws it instead of blanking while its own read is on
+// the wire. A browser drops that memory with the tab. A file that mounts many
+// cards for the SAME run id has no such boundary, so it takes one here — every
+// arm below starts from a card that has never been told anything.
+beforeEach(async () => {
+  const { forgetAuthorizedRecommendationAnswers } = await import(
+    "../run-recommendation-chip-row"
+  );
+  forgetAuthorizedRecommendationAnswers();
+});
+
 beforeEach(() => {
   holdStateMock.mockReset();
   confirmRunRecommendationAction.mockClear();
