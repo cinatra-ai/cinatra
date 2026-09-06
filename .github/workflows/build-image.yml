@@ -3745,13 +3745,47 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
+      # behind `type=gha` is only served to GitHub-hosted runners: on the
+      # self-hosted class this job routes to, buildx died inside the build at
+      # "importing cache manifest from gha" with an HTML error page where a
+      # cache manifest belongs, and the image build failed outright. So on a
+      # self-hosted runner the build caches to a directory the runner user owns
+      # under its OWN home, which persists between jobs on the same machine;
+      # GitHub-hosted runs keep `type=gha` byte-for-byte (the two-armed
+      # cache-from/cache-to expressions on the build step below).
+      # The directory is named for the gha scope it replaces — `buildkit`, the
+      # gha exporter's default when no `scope=` is given — so the two backends
+      # stay legible as the same cache.
+      # A local cache is PER MACHINE: a job landing on a different self-hosted
+      # runner than the one that populated it finds an empty directory, warns,
+      # and rebuilds — slower on a cold machine, never wrong.
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/buildx/buildkit"
+          # ONE cleanup line, self-hosted only, and BEFORE the build rather than
+          # after: buildx writes this cache with mode=max, so it grows without
+          # bound across jobs on this machine. Past 10 GiB, drop the directory
+          # and let this build repopulate it — one cold build costs far less
+          # than a full runner disk, and deleting AFTER the build would throw
+          # away exactly the cache the downstream re-export jobs read.
+          size_mb="$(du -sm "$dir" 2>/dev/null | cut -f1 || true)"
+          if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
       # the local docker daemon, then booted by the prod-boot e2e below. This
       # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
       # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
       # to prove the boots-without-private-extensions path before merge, and its
-      # `cache-to: type=gha,mode=max` below populates the shared gha cache so the
-      # downstream publish jobs re-export from cache instead of rebuilding. The
+      # `cache-to` below populates the shared build cache (`type=gha` on a
+      # GitHub-hosted runner, the runner-local `type=local` directory on a
+      # self-hosted one) so the downstream publish jobs re-export from cache
+      # instead of rebuilding. The
       # GHCR push and the prod-deploy dispatch moved OUT of this job (the
       # build-image e2e-split) — see the `publish-nonrelease-image`,
       # `publish-release-image`, and `release-dispatch` jobs below. Keeping
@@ -3770,8 +3804,8 @@ jobs:
           # MUST stay identical on the push step below so its cache hit is total.
           build-args: |
             CI=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Boot the image WITHOUT private extensions cloned (the checkout above
       # has no extensions/ tree at all): fresh Postgres + Redis on an isolated
@@ -3805,8 +3839,11 @@ jobs:
   #     the cross-repo `cinatra-release-published` repository_dispatch to ops
   #     that triggers the prod deploy. The real outward release action — paused.
   #
-  # All three re-export from the gha cache that `build` populated
-  # (cache-to: type=gha,mode=max), so none of them rebuilds the image; they are
+  # All three re-export from the build cache that `build` populated
+  # (`cache-to: type=gha,mode=max` on a GitHub-hosted runner; the runner-local
+  # `type=local` directory on a self-hosted one, which is per machine — a
+  # re-export landing on a different self-hosted runner rebuilds instead), so
+  # none of them normally rebuilds the image; they are
   # pure cache re-exports gated on `needs: build` (so the boot-e2e still gates
   # every publish). None is a REQUIRED status check — the required checks
   # (detect/test/e2e-rbac) are untouched, so a PR's mergeability is unaffected;
@@ -3869,6 +3906,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -3901,7 +3956,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # ---------------------------------------------------------------------------
   # upgrade-proof — the release recurrence barrier for the prod schema-sync
@@ -3979,6 +4034,24 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         if: ${{ steps.guard.outputs.release == 'true' }}
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ steps.guard.outputs.release == 'true' && runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         if: ${{ steps.guard.outputs.release == 'true' }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -4020,7 +4093,7 @@ jobs:
           tags: cinatra-upgrade-proof:candidate
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       - name: Upgrade proof from each previous-release base
         if: ${{ steps.guard.outputs.release == 'true' }}
@@ -4104,6 +4177,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -4136,7 +4227,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
   # release image is pushed AND the v-prefixed tag is confirmed resolvable in
