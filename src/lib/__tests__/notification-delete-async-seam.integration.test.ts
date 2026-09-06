@@ -60,10 +60,11 @@ import {
   setNotificationsHostAdapters,
 } from "@cinatra-ai/notifications/server";
 import type { NotificationsHostAdapters } from "@cinatra-ai/notifications/server";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost");
+  DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const describeDb = HAS_DB ? describe : describe.skip;
 
 /**

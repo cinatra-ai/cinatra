@@ -31,10 +31,11 @@ import { eq, sql } from "drizzle-orm";
 import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import { evaluateThenPark } from "@/lib/lifecycle/lifecycle-continuation";
 import { producedEventId, type ArtifactProducedEvent } from "@/lib/lifecycle/lifecycle-produced-event";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2038";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2038-lifecycle";
 

@@ -43,10 +43,11 @@ import {
 import { partitionBatchTargets, type BatchTarget } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2040";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2040-repair";
 

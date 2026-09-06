@@ -31,10 +31,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_offered_2906";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 
 let store: typeof import("@/lib/run-selected-skill-revisions");

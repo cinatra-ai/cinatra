@@ -27,12 +27,13 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@");
+  !isPlaceholderDbUrl(dbUrl);
 
 const ORG_A = `org_a_${randomUUID().slice(0, 8)}`;
 const ORG_B = `org_b_${randomUUID().slice(0, 8)}`;

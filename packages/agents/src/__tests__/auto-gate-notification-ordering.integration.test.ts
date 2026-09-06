@@ -48,10 +48,11 @@ import {
   dispatchAutoGateResolved,
   type RunWaitNotifier,
 } from "../run-wait-notifier";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_gate_notify_ordering_2864";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2864";
 const USER = "user-2864";

@@ -71,6 +71,27 @@ export function resolveInstanceVendorSegment(): string {
 }
 
 /**
+ * The identity a READ probe resolves its vendor segment from, or `null` when
+ * the identity store cannot answer.
+ *
+ * The identity lives in Postgres, so the read can fail for a reason that has
+ * nothing to do with this package: no database configured, or a database that
+ * refuses the connection. A read resolver must not crash on that — the same
+ * reasoning that drops an unsafe segment instead of throwing. The probe then
+ * runs under the first-party default alone and, finding nothing, returns
+ * `null` for the slug, which every caller already handles. The WRITE-side
+ * `resolveInstanceVendorSegment` stays fail-closed on purpose: a write must
+ * never land under a segment the instance did not name.
+ */
+function readIdentityForRead(): ReturnType<typeof readInstanceIdentity> {
+  try {
+    return readInstanceIdentity();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The deduped, FILESYSTEM-SAFE vendor-segment candidates for READ probes
  * (operator vendor first, then first-party). Unsafe identity-derived segments
  * are dropped (not thrown) here because the read resolvers return `null` on a
@@ -79,7 +100,7 @@ export function resolveInstanceVendorSegment(): string {
  */
 export function safeVendorSegmentsForRead(): string[] {
   const out: string[] = [];
-  const identity = readInstanceIdentity();
+  const identity = readIdentityForRead();
   const instanceSegment = identity
     ? ((identity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
        (identity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace ??

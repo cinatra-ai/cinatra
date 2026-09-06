@@ -15,6 +15,7 @@
  * without a database, a thread or a socket.
  */
 import { writeFileSync } from "node:fs";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "@/lib/test-support/placeholder-db-url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /** What the fake worker writes for the next call. */
@@ -40,7 +41,7 @@ vi.mock("node:worker_threads", () => ({
 const { runPostgresQueriesSync, serializeWorkerError } = await import("@/lib/postgres-sync");
 
 const CALL = {
-  connectionString: "postgres://unused:unused@localhost:1/unused",
+  connectionString: ROOT_SUITE_PLACEHOLDER_DB_URL,
   queries: [{ text: "SELECT 1" }],
 };
 

@@ -37,12 +37,13 @@ import {
   type TestDeliverySendPort,
 } from "../test-delivery-send-port";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@");
+  !isPlaceholderDbUrl(dbUrl);
 
 // The ORM (packages/agents/src/schema.ts) qualifies every table under the schema
 // named by SUPABASE_SCHEMA (default "cinatra") — the same schema the fixture

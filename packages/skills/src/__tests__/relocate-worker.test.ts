@@ -18,6 +18,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("server-only", () => ({}));
 
@@ -38,7 +39,7 @@ vi.mock("../skills-store", async (importOriginal) => {
 const dbUrl = process.env.SUPABASE_DB_URL;
 // The unused:unused sentinel is the config's "env var is set but points at no
 // real server" placeholder; treat it (and any empty value) as no DB.
-const hasRealDb = !!dbUrl && !dbUrl.includes("//unused:unused@");
+const hasRealDb = !!dbUrl && !isPlaceholderDbUrl(dbUrl);
 const runDbTests = hasRealDb;
 const describeIfDb = runDbTests ? describe : describe.skip;
 

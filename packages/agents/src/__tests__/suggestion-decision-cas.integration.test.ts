@@ -49,10 +49,11 @@ import {
   type GateSuggestionSnapshotPayload,
 } from "@/lib/lifecycle/lifecycle-suggestion-producer";
 import type { CoreAnalysisTarget } from "@/lib/lifecycle/lifecycle-core-analysis";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_suggestion_cas_2571";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2571";
 

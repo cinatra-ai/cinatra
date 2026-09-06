@@ -18,12 +18,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@");
+  !isPlaceholderDbUrl(dbUrl);
 
 const ORG = "org-hitl-prims";
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation

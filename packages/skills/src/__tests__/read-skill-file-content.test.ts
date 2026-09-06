@@ -6,8 +6,32 @@
 // mirrors it into `data/skills/...` so subsequent reads stay inside the default
 // root.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
+
+// The containment contract is decided BEFORE anything touches storage, so this
+// file must never reach a database to prove it. `readSkillFileContent` resolves
+// its roots through `readConnectorConfigFromDatabase`, a synchronous Postgres
+// read: unmocked it now raises the refused connection (a failed query is a
+// failure, never an empty result set — cinatra#3254) and the caller sees
+// ECONNREFUSED instead of the containment refusal under test. Pin the two roots
+// at the values the connector config defaults to, exactly as the sibling
+// path-injection suite does.
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/database", () => ({
+  readConnectorConfigFromDatabase: vi.fn(() => ({
+    dataPath: "data/skills",
+    storePath: "data/skill-store",
+  })),
+  writeConnectorConfigToDatabase: vi.fn(),
+  readSkillCatalogFromDatabase: vi.fn(() => ({ skillPackages: [], skills: [] })),
+  replaceSkillCatalogInDatabase: vi.fn(),
+  getPostgresConnectionString: vi.fn(() => ""),
+  postgresSchema: "public",
+}));
+vi.mock("@/lib/postgres-sync", () => ({
+  runPostgresQueriesSync: vi.fn(),
+}));
 
 import {
   getSkillStoreRootPath,

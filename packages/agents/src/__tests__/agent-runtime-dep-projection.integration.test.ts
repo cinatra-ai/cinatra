@@ -17,12 +17,13 @@
 // Skips when no DB is configured (same pattern as store-auth-policy.integration).
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@");
+  !isPlaceholderDbUrl(dbUrl);
 
 // A required + an optional connector edge, object-valued (the cinatra#1056
 // widening). The `requirement` is the field a plain-string legacy column could
