@@ -346,6 +346,28 @@ describe("the REAL manifest", () => {
     expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-30/);
   });
 
+  it("the branch pin this merge superseded is recorded, and row 9 does not contradict its own arm", () => {
+    const m = manifest();
+    // The merge-forward of 2026-09-02 took the drawings' main line pin over the
+    // pin this branch had been reading its rows against. A superseded pin is a
+    // FACT about what was read, so it is recorded rather than dropped -- but it
+    // never stood on this manifest's own line, so it is recorded BESIDE the
+    // trail and never inside it, where it would claim a move that displaced
+    // nothing.
+    expect(m.specCommitDrift.supersededOnMerge).toContain("0c484154b069c6369a33c1375056126289888997");
+    expect(m.specCommitDrift.supersededOnMerge.length).toBeGreaterThan(120);
+    const trail = [m.specCommit, m.specCommitDrift.previousPin, ...m.specCommitDrift.priorPins].join("\n");
+    expect(trail).not.toContain("0c484154b069c6369a33c1375056126289888997");
+    // Row 9's note and the arm it points at are ONE claim. The arm takes the
+    // byte comparison over all four hosts, the review page's gate region
+    // included, so the note may not still say that host keeps the per-chip row.
+    const row = m.rows[8];
+    const fourHosts = row.unitProofs.find((proof) => /all four hosts/.test(proof.testName));
+    expect(fourHosts, JSON.stringify(row.unitProofs)).toBeDefined();
+    expect(row.note).not.toMatch(/keeps the per-chip row until its own change lands/);
+    expect(row.note).toMatch(/NO LONGER TRUE/);
+  });
+
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
     const row = manifest().rows[14];
     expect(row.disposition, row.criterion.slice(0, 40)).toBe("MISSING");

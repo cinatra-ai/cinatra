@@ -65,7 +65,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
       "repo": "cinatra-ai/blog-image-matcher-skill",
-      "resolvedSha": "f202c230d58a0a62a6650be5dec2531918d521c3"
+      "resolvedSha": "3f7b23422450c66b5d1a7dfbe6a0e375b1f227e1"
     },
     {
       "packageName": "@cinatra-ai/blog-image-prompt-agent",
@@ -105,7 +105,7 @@
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
       "repo": "cinatra-ai/blog-writing-skill",
-      "resolvedSha": "d1e12f6400ee912086d873a2b687aa36f5ed7954"
+      "resolvedSha": "22f4f573090b67cde51bf20484238d34d4cd857d"
     },
     {
       "packageName": "@cinatra-ai/brand-voice-artifact",
@@ -115,7 +115,7 @@
     {
       "packageName": "@cinatra-ai/brand-voice-matcher-skill",
       "repo": "cinatra-ai/brand-voice-matcher-skill",
-      "resolvedSha": "85cef0636e8b05ebcea2b49f46d5f650c9fc7ffe"
+      "resolvedSha": "83cdecb65a9714a69de0fbf868f2e50cf4025e3f"
     },
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/web-research-skill",
       "repo": "cinatra-ai/web-research-skill",
-      "resolvedSha": "a725dd400f48f2b0009c3c7795788c911ed1ab22"
+      "resolvedSha": "58b073bc7a2a4ac9626b07e41ecee5e3218d87a2"
     },
     {
       "packageName": "@cinatra-ai/web-scrape-agent",
