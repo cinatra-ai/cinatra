@@ -1,3 +1,7 @@
+// A work step is named by its work, never by an ordinal (cinatra#3226) — the
+// ladder lives in one leaf, read here and by the spine projection.
+import { stepRecordWorkName } from "./step-work-name";
+
 // ---------------------------------------------------------------------------
 // Run step-rail merge contract (cinatra#2066, C1; epic #2037).
 //
@@ -300,6 +304,15 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         if (hasResult) e.status = "completed";
       });
     } else {
+      // NAMED BY ITS WORK, OR NOT DRAWN (cinatra#3226). The ratified drawing's
+      // rail names every entry by the work done — "A work step shows what it
+      // did" — never by its position; this entry used to be labelled `Step N`.
+      // The ladder (`step-work-name.ts`): the record's own name, then its
+      // description, then the name of the work it produced. A record that
+      // names nothing is not a step the rail can show at a glance, so it takes
+      // no entry rather than a number.
+      const workName = stepRecordWorkName(result);
+      if (workName === null) return;
       const key = `stepResult:${i}`;
       const ordinal = templateMaxOrdinal + 1 + surplusRank;
       surplusRank += 1;
@@ -309,7 +322,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
           key,
           ordinal,
           kind: "step",
-          label: `Step ${i + 1}`,
+          label: workName,
           status: hasResult ? "completed" : "upcoming",
         }),
         "stepResult",
