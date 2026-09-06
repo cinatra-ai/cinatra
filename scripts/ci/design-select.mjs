@@ -26,8 +26,9 @@
 //     documentation-only diff),
 //   * a shared primitive, a workspace-package source file, a stylesheet, a
 //     token/theme file, a dependency, an app layout, a pinned conformance
-//     manifest, the suite config, the generated extension manifest, or this
-//     selector itself changed,
+//     manifest, the suite config, the generated extension manifest, this
+//     selector, the suite it is proved by, or the workflow that runs the suite
+//     changed,
 //   * DESIGN_SELECT=all is set (the documented override).
 //
 // The base-resolution road is the one the sibling design-pin gates already
@@ -48,7 +49,15 @@
 //   node scripts/ci/design-select.mjs --run       # run Playwright on the plan
 //   node scripts/ci/design-select.mjs --out f.json
 //   node scripts/ci/design-select.mjs --changed src/app/x.tsx   # dry run only
+//   node scripts/ci/design-select.mjs --run --plan f.json  # run a PUBLISHED plan
 //   DESIGN_SELECT=all node scripts/ci/design-select.mjs --run
+//
+// The workflow boundary (cinatra#3268): a cheap job in front of the suite takes
+// the decision ONCE (`--out design-select.json`, bound to the event's frozen
+// pull_request.base.sha) and publishes it; the expensive job runs `--plan` on
+// that same file, so the install, the build and the boot are paid only when the
+// published mode is not "none". `--plan` never re-decides, and a plan it cannot
+// trust is a hard failure rather than a silent skip.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -66,6 +75,11 @@ const ROUTE_LEAF_NAMES = ["page", "route"];
 const ROUTE_LEAF_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 const APP_DIR = "src/app";
 const ROUTE_SUBTREE_DEPTH = 3;
+// The workflow that runs this suite, and the suites that prove this selector.
+// Both are widening classes (see WIDENING_RULES) rather than plain source
+// files: they govern the selection instead of being selected by it.
+const SUITE_WORKFLOW = ".github/workflows/design-visual-verify.yml";
+const SELECTOR_TEST = /^scripts\/ci\/__tests__\/design-select[A-Za-z0-9-]*\.test\.mjs$/;
 
 // Aliases are READ from tsconfig.json, never assumed. "@/" is src/, but the
 // workspace aliases matter too: packages/*/src modules import "@/..." back
@@ -226,6 +240,22 @@ export const WIDENING_RULES = [
     id: "selector",
     why: "the selection logic itself changed, so it must not narrow its own proof",
     applies: (p) => p === "scripts/ci/design-select.mjs",
+  },
+  {
+    id: "selector-test",
+    // The tests are what the selection is GUARANTEED to do. A change to them
+    // changes that guarantee, and a run narrowed by the very logic under test
+    // would prove the guarantee against a handful of families at most.
+    why: "the selector's own unit suite defines what the selection may skip",
+    applies: (p) => SELECTOR_TEST.test(p),
+  },
+  {
+    id: "suite-workflow",
+    // The workflow is the gate: it decides whether the suite runs at all, on
+    // what boot, and which families the expensive job receives. It must not
+    // certify its own selection with a narrowed run.
+    why: "this workflow decides whether the suite runs at all and on what boot",
+    applies: (p) => p === SUITE_WORKFLOW,
   },
 ];
 
@@ -742,6 +772,111 @@ export function playwrightArgs(result) {
   return ["test", "-c", DESIGN_CONFIG, ...(result.mode === "all" ? [] : result.specs)];
 }
 
+const PLAN_MODES = new Set(["all", "subset", "none"]);
+
+/**
+ * A PUBLISHED plan, read back by the job that runs Playwright.
+ *
+ * The selection is taken once, in a cheap job, against the event's frozen base
+ * commit; the expensive job consumes THAT decision rather than taking a second
+ * one. Which makes the plan file a contract, and every way it can arrive wrong
+ * — absent, truncated, hand-edited, left over from another run — an error the
+ * caller must FAIL on. The one outcome that must never come out of a damaged
+ * plan is a silent "none": a skip that reports success is a suite that stopped
+ * running and told nobody.
+ *
+ * @param {string} source
+ * @param {{knownSpecs?: string[] | null}} [options]
+ * @returns {{plan: object} | {error: string}}
+ */
+export function parsePlan(source, { knownSpecs = null } = {}) {
+  if (typeof source !== "string" || source.trim() === "") {
+    return { error: "the published selection plan is empty" };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(source);
+  } catch (error) {
+    return { error: `the published selection plan is not JSON (${error.message})` };
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: "the published selection plan is not an object" };
+  }
+  if (!PLAN_MODES.has(raw.mode)) {
+    return {
+      error: `the published selection plan carries no known mode (${JSON.stringify(raw.mode)})`,
+    };
+  }
+  if (!Array.isArray(raw.specs) || raw.specs.some((spec) => typeof spec !== "string" || spec === "")) {
+    return { error: "the published selection plan carries no spec list" };
+  }
+  if (raw.mode === "subset" && raw.specs.length === 0) {
+    return { error: "the published selection plan selects a subset of no families" };
+  }
+  if (raw.mode === "none" && raw.specs.length > 0) {
+    return { error: "the published selection plan skips the suite yet names families" };
+  }
+  if (knownSpecs) {
+    const known = new Set(knownSpecs);
+    const stranger = raw.specs.find((spec) => !known.has(spec));
+    if (stranger) {
+      return {
+        error: `the published selection plan names ${stranger}, which is not a spec file of this suite`,
+      };
+    }
+  }
+  return {
+    plan: {
+      mode: raw.mode,
+      specs: raw.specs,
+      reasons: Array.isArray(raw.reasons) ? raw.reasons : [],
+      summary: typeof raw.summary === "string" ? raw.summary : "",
+    },
+  };
+}
+
+function runPlaywright(result) {
+  const args = playwrightArgs(result);
+  console.log(`  playwright ${args.join(" ")}`);
+  const local = join(REPO_ROOT, "node_modules", ".bin", "playwright");
+  const bin = existsSync(local) ? local : "playwright";
+  const run = spawnSync(bin, args, { cwd: REPO_ROOT, stdio: "inherit", env: process.env });
+  if (run.error) {
+    console.error(`design suite: could not start playwright (${run.error.message})`);
+    return 1;
+  }
+  return run.status ?? 1;
+}
+
+/** Run (or just show) the plan a previous job published. Never re-decides. */
+function runPublishedPlan(planPath, shouldRun) {
+  let source;
+  try {
+    source = readFileSync(resolve(REPO_ROOT, planPath), "utf8");
+  } catch (error) {
+    console.error(
+      `design suite: the published selection plan ${planPath} could not be read (${error.message})`,
+    );
+    return 1;
+  }
+  const { plan, error } = parsePlan(source, { knownSpecs: discoverSpecFiles() });
+  if (error) {
+    console.error(`design suite: ${error} — refusing to run from ${planPath}`);
+    return 1;
+  }
+  console.log(plan.summary || `design suite: published plan ${plan.mode}`);
+  console.log(`  plan: ${planPath} (${plan.mode}, ${plan.specs.length} families)`);
+  for (const reason of plan.reasons) {
+    if (reason && typeof reason === "object") console.log(`  ${reason.family}  <-  ${reason.because}`);
+  }
+  if (!shouldRun) return 0;
+  if (plan.mode === "none") {
+    console.log("  the published plan skips the suite — Playwright not started");
+    return 0;
+  }
+  return runPlaywright(plan);
+}
+
 function printPlan(result, diff) {
   console.log(result.summary);
   console.log(`  diff: ${diff.reason}`);
@@ -757,6 +892,30 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const shouldRun = argv.includes("--run");
   const outIndex = argv.indexOf("--out");
   const outPath = outIndex >= 0 ? argv[outIndex + 1] : null;
+  // --plan CONSUMES a decision instead of taking one: the cheap job in front
+  // of the suite already selected against the event's frozen base commit, and
+  // a second selection here could only disagree with the first.
+  const planIndex = argv.indexOf("--plan");
+  const planPath = planIndex >= 0 ? argv[planIndex + 1] : null;
+  // Branch on the FLAG, never on the value. `--run --plan` with the path lost
+  // (an unset variable, a shell expansion that came back empty, a hand-typed
+  // invocation) would otherwise fall through to an ordinary diff selection and
+  // could answer "none" - a green expensive job that ran no test at all, which
+  // is the one outcome this whole road exists to make impossible.
+  if (planIndex >= 0) {
+    if (typeof planPath !== "string" || planPath === "" || planPath.startsWith("--")) {
+      console.error(
+        "design suite: --plan needs the path of a published selection plan " +
+          `(got ${planPath === undefined ? "nothing" : JSON.stringify(planPath)})`,
+      );
+      return 1;
+    }
+    if (argv.includes("--changed")) {
+      console.error("design suite: --plan consumes a published decision; --changed invents one");
+      return 1;
+    }
+    return runPublishedPlan(planPath, shouldRun);
+  }
   // A dry-run aid: classify a hypothetical change list instead of the real
   // diff, so the selection can be shown for a change that is not checked out.
   // Never honoured together with --run, which must judge the real diff.
@@ -789,16 +948,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   if (!shouldRun) return 0;
   if (result.mode === "none") return 0;
 
-  const args = playwrightArgs(result);
-  console.log(`  playwright ${args.join(" ")}`);
-  const local = join(REPO_ROOT, "node_modules", ".bin", "playwright");
-  const bin = existsSync(local) ? local : "playwright";
-  const run = spawnSync(bin, args, { cwd: REPO_ROOT, stdio: "inherit", env: process.env });
-  if (run.error) {
-    console.error(`design suite: could not start playwright (${run.error.message})`);
-    return 1;
-  }
-  return run.status ?? 1;
+  return runPlaywright(result);
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
