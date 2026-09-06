@@ -100,7 +100,10 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
     // The three setup steps renumber around however many input rows stand
     // above them.
     expect(TRIGGER_SCREEN).toContain(
-      "buildSetupRailSteps(setupSteps, inputRailSteps.length)",
+      // The list the rail is built from is the composed one (cinatra#3221 item
+      // 3, fix leg 8: no Skills entry the run has already gone past); the
+      // OFFSET rule this case pins is unchanged.
+      "buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length)",
     );
     expect(TRIGGER_SCREEN).toContain(
       "const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];",
@@ -139,12 +142,12 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
   });
 });
 
-describe("the you-are-here anchor names the input step", () => {
-  it("hands the page header the step's own name while the run stands at it", () => {
-    expect(SETUP_SCREEN).toContain("stepCrumbLabel={openInputStep?.label ?? null}");
-    expect(SETUP_SCREEN).toContain(
-      "const openInputStep = runInputSteps.find((step) => step.open) ?? null;",
-    );
+describe("the trail names no step (cinatra#3223)", () => {
+  it("hands the page header no step crumb: a step is a reading inside the run's route, not a route", () => {
+    // The ratified drawing's Breadcrumb section: "'Agents › Agent run › Review'
+    // is not a possible breadcrumb". The you-are-here anchor is the rail row.
+    expect(SETUP_SCREEN).not.toContain("stepCrumbLabel");
+    expect(SETUP_SCREEN).not.toContain("openInputStep?.label");
   });
 });
 

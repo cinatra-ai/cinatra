@@ -61,7 +61,7 @@ vi.mock("@/lib/notifications", () => ({
 }));
 
 vi.mock("@/lib/anthropic-skill-sync-service", () => ({
-  deriveApiKeyFingerprint: () => fingerprint,
+  deriveApiKeyFingerprint: async () => fingerprint,
   deriveEnvironmentNamespace: () => "test-env",
   syncCatalogSkillsToAnthropicStrict: () => strictSync(),
 }));

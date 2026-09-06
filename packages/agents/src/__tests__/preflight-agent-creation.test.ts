@@ -22,7 +22,7 @@ const dbMock = vi.hoisted(() => ({
 vi.mock("@/lib/database", () => dbMock);
 
 const svcMock = vi.hoisted(() => ({
-  deriveApiKeyFingerprint: vi.fn(() => "fp_test"),
+  deriveApiKeyFingerprint: vi.fn(async () => "fp_test"),
   deriveEnvironmentNamespace: vi.fn(() => "schema=cinatra;db=test"),
   buildSyncCandidates: vi.fn(async () => [] as unknown[]),
 }));
@@ -80,7 +80,7 @@ beforeEach(() => {
   dbMock.readAgentCreationLlmProviderFromDatabase.mockReturnValue(null);
   dbMock.readAgentCreationModelFromDatabase.mockReturnValue(null);
   dbMock.readAnthropicSkillSyncEnabledFromDatabase.mockReturnValue(false);
-  svcMock.deriveApiKeyFingerprint.mockReturnValue("fp_test");
+  svcMock.deriveApiKeyFingerprint.mockResolvedValue("fp_test");
   svcMock.deriveEnvironmentNamespace.mockReturnValue("schema=cinatra;db=test");
   svcMock.buildSyncCandidates.mockResolvedValue([]);
   daoMock.readSyncRow.mockResolvedValue(null);

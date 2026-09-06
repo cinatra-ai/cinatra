@@ -28,16 +28,6 @@ type AgentPageLayoutProps = {
   showTriggerTab?: boolean;
   extensionIdentifier?: string | null;
   extensionHref?: string | null;
-  /**
-   * THE STEP THE RUN DETAIL IS SHOWING (cinatra#3068 fix leg 2), or null.
-   *
-   * The you-are-here anchor names the run's steps: the schedule step is named
-   * because it answers at its own sub-route, and a step that answers on the
-   * run's OWN path -- the agent's input form, the rail's first entry -- has no
-   * segment to be named by. So the page hands its name over, and it is appended
-   * after the run's own crumb through the one crumb channel.
-   */
-  stepCrumbLabel?: string | null;
   children: ReactNode;
 };
 
@@ -138,7 +128,6 @@ export function AgentPageLayout({
   showTriggerTab = false,
   extensionIdentifier,
   extensionHref,
-  stepCrumbLabel = null,
   children,
 }: AgentPageLayoutProps) {
   const [runName, setRunName] = useState(initialRunName);
@@ -170,23 +159,17 @@ export function AgentPageLayout({
     const instancePath = `/agents/${agentId}/${instanceId}`;
     publishCrumbContributions(pathname, crumbEpoch, [
       { prefix: instancePath, label: crumbLabel },
-      // THE STEP, APPENDED AFTER THE RUN (cinatra#3068 fix leg 2). A step is
-      // not a route, so it carries no path of its own and is NON-NAVIGABLE: it
-      // names where the reader is, and the rail beside it is what moves them.
-      // Route-scoped like every synthesized crumb -- it applies only while this
-      // route is the current one, so it cannot leak into the next.
-      ...(stepCrumbLabel
-        ? [
-            {
-              prefix: `${instancePath}#step`,
-              label: stepCrumbLabel,
-              appendAfter: instancePath,
-              nonNavigable: true,
-            },
-          ]
-        : []),
+      // AND NO STEP AFTER IT (cinatra#3223). The layout used to append a third
+      // crumb here naming the step the run detail was showing. The ratified
+      // drawing's Breadcrumb section: "A breadcrumb always reflects the
+      // navigation hierarchy — the route the page sits on, not the thing the
+      // page happens to be about", and "'Agents › Agent run › Review' is not a
+      // possible breadcrumb — the review is read on its run's own route, under
+      // that run's trail." A step is a reading inside this one route, not a
+      // route of its own, so it is not a crumb at all; the rail beside the
+      // detail is the you-are-here anchor.
     ]);
-  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel, stepCrumbLabel]);
+  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
 
   // Listen for cross-component name updates from HitlApprovalCard:

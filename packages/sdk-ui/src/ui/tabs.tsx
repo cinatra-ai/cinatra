@@ -107,23 +107,35 @@ function TabsContent({
 // connectors), the etched rule here is the decorative `.divider-etched` utility
 // (from `@cinatra-ai/design/utilities.css`, already imported by every Cinatra
 // surface) on a `role="none"` element — the identical rendered paired-line.
+//
+// cinatra#3228 — `trailingRule={false}` omits the rule (host parity). A view
+// that mounts a Toolbar directly beneath this row hands the rule's place to
+// the toolbar: "never stack a toolbar and the etched paired rule". Every other
+// view keeps the rule (the default).
 function TabsListRow({
   className,
   children,
+  trailingRule = true,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.List>) {
+}: React.ComponentProps<typeof TabsPrimitive.List> & {
+  /** Draw the trailing etched rule (default). Pass false when a Toolbar is
+   *  mounted directly beneath the row and takes the rule's place. */
+  trailingRule?: boolean
+}) {
   return (
     <div className="grid grid-cols-[auto_1fr] items-end">
       <TabsList className={cn("border-b-0", className)} {...props}>
         {children}
       </TabsList>
-      <div
-        role="none"
-        aria-hidden
-        data-slot="separator"
-        data-major
-        className="divider-etched self-end bg-transparent"
-      />
+      {trailingRule ? (
+        <div
+          role="none"
+          aria-hidden
+          data-slot="separator"
+          data-major
+          className="divider-etched self-end bg-transparent"
+        />
+      ) : null}
     </div>
   )
 }

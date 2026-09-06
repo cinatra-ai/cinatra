@@ -26,7 +26,7 @@ const { syncStrictMock, listAllSyncRowsMock } = vi.hoisted(() => ({
 
 vi.mock("@/lib/anthropic-skill-sync-service", () => ({
   syncCatalogSkillsToAnthropicStrict: syncStrictMock,
-  deriveApiKeyFingerprint: () => "fp",
+  deriveApiKeyFingerprint: async () => "fp",
   deriveEnvironmentNamespace: () => "env",
 }));
 vi.mock("@/lib/anthropic-skill-sync-dao", () => ({
