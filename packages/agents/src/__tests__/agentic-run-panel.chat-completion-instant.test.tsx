@@ -196,16 +196,28 @@ describe.each(MOUNTS)(
       expect(screen.queryByText(FINAL_ANSWER)).not.toBeNull();
     });
 
-    it("keeps the fallback when the transcript really carries nothing yet", async () => {
+    // FIX LEG 5 (cinatra#3002) CORRECTS THIS PIN. It used to assert the
+    // load-failure sentence here, and the fifth proof round showed why that is
+    // wrong: this IS the held-open read, and a read that has not come back has
+    // failed at nothing. The conservative half of the pin is unchanged — the
+    // card still names no place it has no evidence for — but the sentence it
+    // draws while waiting is now a true one. See
+    // agentic-run-panel.completed-in-flight-reading.test.tsx for the pair of
+    // instants (waiting, then the row arriving) on the real client path.
+    it("names no place, and asserts no failure, while the read is still out", async () => {
       const { AgenticRunPanel } = await import("../agentic-run-panel");
       render(<AgenticRunPanel {...baseProps({ ...mountProps })} />);
 
-      await waitFor(() =>
-        expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
-      );
-      // Nothing is known here — the conservative reading is the true one.
-      expect(screen.queryByText(FALLBACK_SENTENCE)).not.toBeNull();
+      const card = await waitFor(() => {
+        const node = document.querySelector("[data-run-completion]");
+        expect(node).not.toBeNull();
+        return node as HTMLElement;
+      });
+      // Nothing is known here, so the card points at nothing…
       expect(screen.queryByText(RATIFIED_SENTENCE)).toBeNull();
+      // …and nothing has failed, so it claims no failure either.
+      expect(screen.queryByText(FALLBACK_SENTENCE)).toBeNull();
+      expect(card.getAttribute("data-run-completion-evidence")).toBe("pending");
     });
   },
 );

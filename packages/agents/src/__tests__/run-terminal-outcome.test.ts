@@ -72,6 +72,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: false,
       outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -87,6 +88,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: false,
       outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -102,6 +104,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: true,
       outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -121,6 +124,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: true,
       outputEvidence: "step-results",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -138,6 +142,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: true,
       outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -162,6 +167,7 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: true,
       outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -181,7 +187,35 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: false,
       outputEvidence: "none",
       evidenceIndeterminate: true,
+      // FIX LEG 5: and it is still ON ITS WAY. A caller that does not track its
+      // read means exactly this by a null evidence, and the reading it owes the
+      // user here is not the one it owes a read that came back empty-handed.
+      evidencePending: true,
     });
+  });
+
+  // FIX LEG 5 (cinatra#3002). The SAME null evidence, with the caller stating
+  // that its read has come back and could not say. The fifth proof round read
+  // the conversation at the live completion instant and saw "could not be
+  // loaded" over a run whose row was written seconds before and arrived
+  // seconds after, with no reload — because these two states were one.
+  it("separates a read still in flight from a read that came back with nothing", () => {
+    const stillReading = resolveRunTerminalOutcome({
+      status: "completed",
+      evidence: null,
+      evidenceRead: "pending",
+    });
+    const cameBackEmptyHanded = resolveRunTerminalOutcome({
+      status: "completed",
+      evidence: null,
+      evidenceRead: "settled",
+    });
+    // Both stay conservative: neither may name a place or claim emptiness.
+    expect(stillReading).toMatchObject({ evidenceIndeterminate: true, outputEvidence: "none" });
+    expect(cameBackEmptyHanded).toMatchObject({ evidenceIndeterminate: true, outputEvidence: "none" });
+    // And they are told apart, which is the whole point.
+    expect(stillReading).toMatchObject({ evidencePending: true });
+    expect(cameBackEmptyHanded).toMatchObject({ evidencePending: false });
   });
 
   // Codex round-2 finding. A BROKEN output read used to be swallowed into an
@@ -205,6 +239,8 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: false,
       outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read came back; whatever else is unknown, it is not still running.
+      evidencePending: false,
     });
   });
 
@@ -231,6 +267,8 @@ describe("resolveRunTerminalOutcome", () => {
       outputRenderedBelow: false,
       outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read came back; whatever else is unknown, it is not still running.
+      evidencePending: false,
     });
   });
 

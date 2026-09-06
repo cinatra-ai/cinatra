@@ -353,7 +353,11 @@ describe("RunCompletionCard — transcriptCarriesOutput (cinatra#3002)", () => {
     expect(screen.queryByText(/could not be loaded here/i)).toBeNull();
   });
 
-  it("keeps the conservative sentence when the host claims nothing", async () => {
+  // FIX LEG 5 (cinatra#3002) CORRECTS THIS PIN. The floor staying off is the
+  // part that matters and is unchanged; the sentence underneath it is not the
+  // load-failure one, because this read is merely still out. The failed-read
+  // and unlinkable-rows pins above keep that sentence honest.
+  it("keeps the conservative reading, without claiming a failure, when the host claims nothing", async () => {
     readRunOutputEvidenceMock.mockImplementationOnce(
       () => new Promise<never>(() => {}),
     );
@@ -366,10 +370,15 @@ describe("RunCompletionCard — transcriptCarriesOutput (cinatra#3002)", () => {
       />,
     );
 
-    expect(screen.queryByText(/could not be loaded here/i)).not.toBeNull();
+    expect(screen.queryByText(/could not be loaded here/i)).toBeNull();
     expect(
       screen.queryByText(/its output is in the run transcript below/i),
     ).toBeNull();
+    expect(
+      document
+        .querySelector("[data-run-completion]")
+        ?.getAttribute("data-run-completion-evidence"),
+    ).toBe("pending");
   });
 
   it("never turns a run that produced nothing into one that did", async () => {

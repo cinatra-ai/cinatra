@@ -428,6 +428,25 @@ export type RunTerminalOutcome =
        * space (confirmation-round finding).
        */
       evidenceIndeterminate: boolean;
+      /**
+       * True when the read that would settle the question is STILL RUNNING
+       * (cinatra#3002, fix leg 5).
+       *
+       * A strict subset of {@link evidenceIndeterminate}, and the distinction is
+       * the whole point. The indeterminate flag alone covered two states that
+       * owe the reader different sentences: a read that CAME BACK and could not
+       * establish anything, and a read that has not come back yet. The fifth
+       * proof round read a conversation at the live completion instant and saw
+       * the first state's sentence — "its output could not be loaded" — over a
+       * run whose transcript row had been written seconds earlier and which
+       * drew that row seconds later with no reload. Nothing had failed; the
+       * card had simply asked, and not yet been answered.
+       *
+       * A caller holding this flag must stay as conservative as it is for any
+       * indeterminate outcome — name no place, claim no emptiness — but must
+       * NOT assert a failure that has not happened.
+       */
+      evidencePending: boolean;
     }
   | { kind: "completed-no-output" };
 
@@ -448,6 +467,16 @@ export const COMPLETED_STATUS = "completed";
 export function resolveRunTerminalOutcome(input: {
   status: string;
   evidence: RunOutputEvidence | null;
+  /**
+   * Whether the caller's evidence read has come back (cinatra#3002, fix leg 5).
+   *
+   * Only consulted when `evidence` is null, where it is the difference between
+   * "still asking" and "asked, and could not be told". Omitted means `pending`:
+   * a caller that does not track its read has, by construction, one outstanding
+   * — and the conservative reading of an untracked null is the one that asserts
+   * no failure.
+   */
+  evidenceRead?: "pending" | "settled";
 }): RunTerminalOutcome {
   if (input.status !== COMPLETED_STATUS) return { kind: "not-terminal" };
   const evidence = input.evidence;
@@ -461,6 +490,8 @@ export function resolveRunTerminalOutcome(input: {
       outputRenderedBelow: false,
       outputEvidence: "none",
       evidenceIndeterminate: true,
+      // …and, unless the caller says its read has landed, it is still running.
+      evidencePending: input.evidenceRead !== "settled",
     };
   }
   if (evidence.outputs.length > 0) {
@@ -470,6 +501,7 @@ export function resolveRunTerminalOutcome(input: {
       outputRenderedBelow: false,
       outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     };
   }
   // Ordered BEFORE the indeterminate branches on purpose: transcript/step
@@ -489,6 +521,7 @@ export function resolveRunTerminalOutcome(input: {
       outputRenderedBelow: true,
       outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     };
   }
   if (evidence.hasStepResults) {
@@ -498,6 +531,7 @@ export function resolveRunTerminalOutcome(input: {
       outputRenderedBelow: true,
       outputEvidence: "step-results",
       evidenceIndeterminate: false,
+      evidencePending: false,
     };
   }
   // Either the produced-output read failed, or it succeeded but every row it
@@ -512,6 +546,9 @@ export function resolveRunTerminalOutcome(input: {
       outputRenderedBelow: false,
       outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read is BACK — it just could not settle the question. This is the
+      // state the load-failure sentence belongs to, and the only one.
+      evidencePending: false,
     };
   }
   return { kind: "completed-no-output" };
