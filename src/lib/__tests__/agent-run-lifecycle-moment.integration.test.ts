@@ -39,7 +39,7 @@ import {
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost");
 const describeDb = HAS_DB ? describe : describe.skip;
 
 const IN_DEDICATED_LANE = process.env.CINATRA_LIFECYCLE_MOMENT_REALDB === "1";
