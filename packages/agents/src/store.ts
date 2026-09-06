@@ -1555,7 +1555,7 @@ export async function createAgentRun(
     title: input.title ?? null,
     sourceType: input.sourceType ?? "agent_builder",
     sourceId: input.sourceId ?? null,
-    packageVersion: input.packageVersion ?? null,
+    packageVersion: await resolveRunPackagePin(input),
     a2aTaskId: input.a2aTaskId ?? null,
     parentRunId: input.parentRunId ?? null,
     // all new runs created via this path have AG-UI SSE capability.
@@ -3228,6 +3228,7 @@ export async function createAgentRunPendingInput(
     actor: input.scopeActor ?? null,
   });
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
+  const packageVersionToPin = await resolveRunPackagePin(input);
   // persist-at-dispatch OBO ceiling — same derivation as createAgentRun, so a
   // pending-input run (incl. the recurring-trigger clone) carries the chain the
   // mint path re-derives. A copied projectId (recurring clone) flows in here.
@@ -3245,6 +3246,7 @@ export async function createAgentRunPendingInput(
         id,
         templateId: input.templateId,
         versionId: versionIdToPin,
+        packageVersion: packageVersionToPin,
         runBy: input.runBy,
         // propagate org boundary; column is NOT NULL after the DDL.
         orgId: input.orgId,
@@ -3366,6 +3368,77 @@ export async function recordRunLifecycleMoment(
   );
 }
 
+// ---------------------------------------------------------------------------
+// THE PINS A RUN CARRIES FROM ITS TEMPLATE (cinatra#2960, cinatra#3035).
+//
+// Two of them, and they are the same act: at the moment a run is created it
+// records WHICH declaration it is running, so nothing it does later depends on
+// what the template or the registry happens to say by then.
+//
+//   the VERSION pin  `agent_runs.version_id` — the template's newest version
+//                    row at creation time.
+//   the PACKAGE pin  `agent_runs.package_version` — the semver the template is
+//                    bound to, for a template that came from a package.
+//
+// THE PACKAGE PIN IS WHY THIS SECTION SAYS SO MUCH. Every dispatch road already
+// read the template's `packageVersion` — to fence the runnable gate's
+// dependency edges — and then dropped it on the floor: the row was written with
+// an empty `package_version`, and the W7 admission seam then refuses an
+// unpinned run every packaged tool its own package declares. That rule
+// (src/lib/extension-run-package, "UNPINNED IS UNRESOLVED") is right and stays:
+// without a version there is no ONE declaration to bind an admission to, and
+// reading whatever is published now would let a republish widen a running
+// flow's reach. What was wrong is that a run of a package-bound template
+// arrived there unpinned at all, so an agent failed at its first packaged tool
+// call with its own caller unresolved.
+//
+// DERIVED ONCE, AT THE CREATION PRIMITIVES. The pin is a property of the
+// TEMPLATE, not of the caller, so it is resolved where the row is written
+// rather than copied by each dispatch road — five of which had already
+// forgotten it (the chat/widget primitive, the run page, the dev preview, the
+// registry road and the agent-to-agent adapter), and a sixth would forget it
+// next. The creation fence (scripts/audit/run-creation-fence.mjs) is what makes
+// "the two creation primitives" the same set as "every producer". It lives in
+// this module, beside those primitives, so the dispatch spine gains no module.
+//
+// A CALLER'S OWN PIN STILL WINS. The agent-to-agent road pins at request time,
+// and that pin names the version a peer asked for; the template's binding is
+// the fallback for every road that states none.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads a template's package binding. Injectable so the resolver below can be
+ * exercised without a database.
+ */
+export type TemplatePackageVersionReader = (templateId: string) => Promise<string | null>;
+
+/**
+ * A BLANK STRING IS NOT A PIN. An empty or whitespace-only version reaches the
+ * admission seam as "unresolved" either way, so it is normalized here: the
+ * column then carries null rather than a value that reads like a pin and is not
+ * one.
+ */
+function pinOrNull(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/**
+ * The package version a template is bound to, or null for a template that came
+ * from no package. NARROW on purpose: this is read on every run creation, and
+ * `readAgentTemplateById` would deserialize a whole template to answer one
+ * column.
+ */
+export async function readAgentTemplatePackageVersion(
+  templateId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ packageVersion: agentTemplates.packageVersion })
+    .from(agentTemplates)
+    .where(eq(agentTemplates.id, templateId))
+    .limit(1);
+  return pinOrNull(rows[0]?.packageVersion);
+}
+
 /**
  * Returns the most recently created agent_versions row id for the template, or null
  * if the template has no versions yet.
@@ -3380,6 +3453,23 @@ export async function readLatestAgentVersionIdForTemplate(
     .orderBy(desc(agentVersions.createdAt))
     .limit(1);
   return rows[0]?.id ?? null;
+}
+
+/**
+ * THE PACKAGE PIN A RUN IS CREATED WITH.
+ *
+ * The caller's own pin when it states one; otherwise the template's binding;
+ * null when neither names a version — which is the unpackaged case, and is
+ * exactly the state the admission seam is entitled to refuse.
+ */
+export async function resolveRunPackagePin(
+  input: { templateId: string; packageVersion?: string | null },
+  deps: { readTemplatePackageVersion?: TemplatePackageVersionReader } = {},
+): Promise<string | null> {
+  const declared = pinOrNull(input.packageVersion);
+  if (declared !== null) return declared;
+  const read = deps.readTemplatePackageVersion ?? readAgentTemplatePackageVersion;
+  return pinOrNull(await read(input.templateId));
 }
 
 /**
