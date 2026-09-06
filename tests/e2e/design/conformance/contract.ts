@@ -951,18 +951,25 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-save-floor":
     case "schedule-card-fired-recurring-floor":
-      // NO `cancel-schedule` DRIVER, AND NOT BECAUSE ONE WAS SKIPPED. The
-      // fired-recurring floor is annotated with a SECOND act, and the shipped
-      // card draws that control only where the plan puts it: Cancel schedule is
-      // the page step's and the run card's, never the conversation's, so on the
-      // in-thread host the card draws no such control at all — absent by rule
-      // rather than disabled. A driver wave cannot settle that: either the
-      // drawing gives the in-conversation floor an act the product deliberately
-      // withholds there, or the product withholds an act the drawing grants. It
-      // is named on the wave's readiness list for the drawing to answer, and it
-      // is NOT approximated through the run-card host — these nine surfaces are
-      // the conversation's readings, and asserting one of them on another host
-      // would prove something the drawing never said.
+      // NO `cancel-schedule` DRIVER — AND THE REASON CHANGED (cinatra#3174 fix
+      // leg 5). It used to be that the shipped card drew that control only on
+      // the two page hosts, so the in-conversation floor had no such control to
+      // drive. That is no longer the product: the ratified drawing's own
+      // fired-recurring example draws the card IN A CHAT THREAD with "Save
+      // changes" and "Cancel schedule" side by side, and the second graded proof
+      // round failed the floor against it, so the host map was retired and the
+      // control is now drawn wherever `canCancel` says the schedule is
+      // recurring — this host included.
+      //
+      // What is missing now is the HARNESS's half, not the product's: a fixture
+      // row declares ONE answer for its decision endpoint, and this row's is
+      // `saved`, so a cancel press here could only ever be answered with the
+      // outcome of a save. Giving the row a per-op answer is its own change with
+      // its own proof, and this leg is a forward-merge; the act stays on the
+      // wave's readiness list, now for the harness to answer rather than the
+      // drawing. It is still NOT approximated through the run-card host — these
+      // nine surfaces are the conversation's readings, and asserting one of them
+      // on another host would prove something the drawing never said.
       driver.actions["save-schedule"] = {
         outcome: "rearmed",
         run: async (_page, root) => {
