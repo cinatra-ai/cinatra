@@ -123,6 +123,7 @@ import {
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
 import {
+  electRunRailActiveStep,
   RailExtraEntry,
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
@@ -1101,9 +1102,11 @@ function HitlApprovalCard({
       promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
       onSubmit={handlePromptSubmit}
-      // Opt in to paperclip attachments. Setup gates hide the paperclip because
-      // the setup-loop server omits userResponse.
-      enableAttachments={!isSetupGateTaskId(interruptContext.reviewTaskId)}
+      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
+      // drawing's §X names the window's parts — the panel, the field, the send
+      // control, the placement, the access rule — and a leading control is not
+      // among them: "Nothing else about the window changes from one reading to
+      // the next." This mount used to opt the field into one; no reading does.
     />
     </div>
     </>
@@ -1322,6 +1325,15 @@ function StepperColumn({
                   completed={isCompleted}
                   loading={isLoading}
                   disabled={devStepperMode ? false : s.index > activeStep}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
                   className="items-start !flex-none"
                 >
                   <div
@@ -1390,6 +1402,15 @@ function StepperColumn({
                   step={displayStep}
                   completed={entry.status === "completed" || entry.status === "resolved"}
                   data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
                   className="items-start !flex-none"
                 >
                   <RailExtraEntry
@@ -1882,22 +1903,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stepperSteps.find((s) => s.stepNumber === policyStepNum)?.index ?? policyStepNum;
 
   const activeStep = (() => {
-    if (status === "pending_input" || status === "queued") return 1;
-    if (status === "pending_approval" && currentStepNumber !== null) {
-      if (awaitingNextStep) return toDisplayIndex(currentStepNumber) + 1;
-      return toDisplayIndex(currentStepNumber);
-    }
-    if (status === "running") {
-      return toDisplayIndex(highestStepNumberRef.current || 0) + 1;
-    }
-    if (status === "completed" || status === "stopped") {
-      return stepperSteps.length + 1;
-    }
-    if (status === "failed") {
-      // Show the step that was active when the run failed, not "all done".
-      return toDisplayIndex(highestStepNumberRef.current) || 1;
-    }
-    return 1;
+    // THE STEP THE RUN IS PAUSED ON IS HIGHLIGHTED (cinatra#3221). The election
+    // lives in `run-step-rail-extra-entry.tsx`, pure, and is read against the
+    // ratified
+    // drawing there: a gate the run is parked on — on the spine or as one of
+    // the trailing rows below — is the one highlighted entry, and a rail with
+    // nothing pending highlights none. The display indices are the rail's own:
+    // the spine takes 1..N and the trailing rows continue from N+1.
+    return electRunRailActiveStep({
+      status,
+      currentStepNumber,
+      awaitingNextStep,
+      highestStepNumber: highestStepNumberRef.current,
+      spine: stepperSteps,
+      railExtras,
+    });
   })();
 
   // ---------------------------------------------------------------------------

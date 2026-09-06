@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "../../vitest.placeholder-db-url";
 
 const serverOnlyStub = path.join(__dirname, "tests/__stubs__/server-only.ts");
 // cinatra#2582: the breakdown's pure row formatters are exported from the table
@@ -26,7 +27,7 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     env: {
-      SUPABASE_DB_URL: "postgres://unused:unused@localhost:5432/unused",
+      SUPABASE_DB_URL: ROOT_SUITE_PLACEHOLDER_DB_URL,
     },
   },
 });

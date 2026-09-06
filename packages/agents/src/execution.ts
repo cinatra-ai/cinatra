@@ -18,7 +18,11 @@ import {
 } from "./store";
 // cinatra#3002 — the run's transcript receipt (the writer this path skipped).
 import { recordRunFinalResponseMessage } from "./run-final-response-receipt";
-import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
+import {
+  onAgentHitl,
+  onRunStoppedAtReviewGate,
+  stateRunScheduleMoment,
+} from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -1444,8 +1448,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
     // guarantee holds even when the positional resolve throws (e.g. Redis fault).
     let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null } | null = null;
+    // IS THIS GATE THE AGENT ASKING FOR CONTEXT? (cinatra#3221, fix leg 6.)
+    //
+    // READ HERE, ABOVE THE RESOLVER, so the answer survives the catch below: the
+    // resolver can throw, and the park's own moment must not depend on whether
+    // the renderer resolved. The predicate is the same shape test the renderer
+    // branch already runs, asked once and kept.
+    const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
     try {
-      if (isContextSelectorInterruptPayload(spreadFromOutput)) {
+      if (gateAsksForContext) {
         wayflowXRenderer =
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
@@ -1704,13 +1715,50 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           `[artifact-review-gate] run=${runId} task=${task.id} pinned review targets + routed to ${reviewSurfaceUrl}`,
         );
         // Same transition tail as the legacy interrupt path below.
+        //
+        // AND THE RUN STATES THE MOMENT IT IS STOPPED AT (cinatra#3221, fix leg
+        // 7). The rail elects the entry a run is parked on from the run's own
+        // row, and this park wrote no moment at all: a run stopped in front of
+        // its work review therefore said nothing about where it stood, so the
+        // page elected nothing on the very gate the reader was looking at.
+        // `review` is the moment the closed set already names for it, and the
+        // card it mounts is this gate's own.
+        const reviewMomentRun = {
+          id: runId,
+          orgId: run.orgId,
+          status: "pending_approval" as const,
+        };
         if (fromStatus === "pending_approval") {
+          // A gate that arrives on an ALREADY-PARKED run performs no transition
+          // — `pending_approval -> pending_approval` is not a legal edge — so
+          // there is no winning CAS to hang the record on. The run is standing
+          // at THIS gate now, and the row has to say so (and name this gate's
+          // card, not the previous one's). The writer carries its own
+          // `onlyWhileStatus` guard, so a run that left the park records
+          // nothing.
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
-          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-          throw e;
-        });
+        // AFTER THE WINNING TRANSITION, never before it and never on a lost one:
+        // winning is the only proof the run is really parked here.
+        let parkedAtReview = false;
+        try {
+          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          parkedAtReview = true;
+        } catch (e) {
+          if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
+        }
+        if (parkedAtReview) {
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
+        }
         return;
       }
       // invalid-targets (no gate pinned) → fall through to the legacy HITL
@@ -1768,7 +1816,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // lost its artifact strands the run exactly as hard on the second visit as
     // on the first.
     const wayflowGateId = `wayflow-${task.id}`;
-    await parkRunOnHumanGate({
+    const parkOutcome = await parkRunOnHumanGate({
       runId,
       gateLabel: `WayFlow gate ${wayflowGateId}`,
       alreadyParked: fromStatus === "pending_approval",
@@ -1802,17 +1850,59 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         }),
-      parkRun: () =>
-        transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, for the reason the setup loop states it there:
+        // winning is the only proof the run is really parked here, and a record
+        // written before the transition can outlive a concurrent stop.
+        //
+        // THE CONTEXT GATE ONLY (cinatra#3221, fix leg 6). The caution beside the
+        // setup loop stands unchanged: an ordinary WayFlow gate is an APPROVAL of
+        // work already done, and recording it as an input ask would make every
+        // surface tell a review gate as "needs your input". A CONTEXT gate is not
+        // that gate — it is the agent asking the human to pick what it should
+        // work from, which is what the `hitl` moment IS — and it is the fourth
+        // gate the ratified drawing names, the one the rail carries nowhere else.
+        // Its moment was never written, so the row the run page reads carried no
+        // moment, the rail's classifier read false, and the page elected nothing
+        // on the very gate the reader was standing at. Every other WayFlow gate
+        // leaves this branch untouched and its row byte-identical.
+        if (gateAsksForContext) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: wayflowGateId,
+            authority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         }),
     });
+    // AND ON A RE-EMIT, WHICH PARKS NOTHING. A gate that arrives while the run is
+    // ALREADY `pending_approval` performs no transition — `pending_approval ->
+    // pending_approval` is not a legal edge — so `parkRun` never runs and the
+    // moment above is never stated. The run is nonetheless standing at THIS
+    // context gate now, and the row has to say so (and name this gate's screen,
+    // not the previous one's). `onAgentHitl` carries its own
+    // `onlyWhileStatus` guard, so a run that left the park between the read-back
+    // and here records nothing.
+    if (gateAsksForContext && parkOutcome.outcome === "re-emitted") {
+      await onAgentHitl({
+        run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+        screenRef: wayflowGateId,
+        authority,
+      });
+    }
     return;
   }
 

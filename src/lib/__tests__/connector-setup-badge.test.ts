@@ -112,3 +112,49 @@ describe("dispatch route: no top-right badge; wp-assistant Setup-tab status card
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3214 — the drawn setup shape is NOT gated on a declared status-probe.
+//
+// The ratified drawing (specs/app-connectors.html §II) draws ONE setup page for
+// every schema-config connector — "a single generic form, never per-connector
+// layout … splits into two columns". The route used to branch on
+// `findStatusProbeActionId(...)` and hand a probe-less connector a bare
+// single-column body with no Connection status card at all. The shape is now
+// rendered through ONE shared component for every schema-config connector; the
+// declared probe id only decides WHICH road the card's Check takes.
+// ---------------------------------------------------------------------------
+describe("dispatch route: one setup shape for every schema-config connector (#3214)", () => {
+  const ROUTE_SRC = readFileSync(
+    join(
+      __dirname,
+      "..",
+      "..",
+      "app",
+      "connectors",
+      "[vendor]",
+      "[slug]",
+      "[subroute]",
+      "page.tsx",
+    ),
+    "utf8",
+  );
+
+  it("no longer gates the two-column shape on a declared status-probe", () => {
+    expect(ROUTE_SRC).not.toMatch(/if \(statusProbeActionId\)/);
+  });
+
+  it("renders the schema-config branch through ONE shared setup component", () => {
+    const mounts = ROUTE_SRC.match(/<SchemaConfigConnectorSetup\b/g) ?? [];
+    expect(mounts).toHaveLength(1);
+  });
+
+  it("seeds that one shape with the host readiness state and the re-check road", () => {
+    const mount = ROUTE_SRC.match(/<SchemaConfigConnectorSetup\b[\s\S]*?\/>/);
+    expect(mount).not.toBeNull();
+    // Scoped to THAT component's own JSX site: a `recheck` threaded into some
+    // other card mount elsewhere in the route must not satisfy this pin.
+    expect(mount![0]).toMatch(/connected=\{badgeState\.connected\}/);
+    expect(mount![0]).toMatch(/recheck:? ?\{?recheckConnectorReadiness/);
+  });
+});

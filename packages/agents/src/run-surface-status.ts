@@ -203,6 +203,54 @@ export function classifyRunWaitInterrupt(
 }
 
 /**
+ * IS THE RUN STANDING AT THE SCREEN THE AGENT OPENED MID-RUN? (cinatra#3221,
+ * fix leg 3.)
+ *
+ * A SECOND QUESTION OF THE SAME RECORDED FACT, ASKED HERE BECAUSE EVERY MOMENT
+ * READING IS ASKED HERE. The run page's rail elects a trailing entry for the
+ * mid-run human screen -- the fourth gate the ratified drawing names, and the
+ * only one the rail carries nowhere else -- and before it can elect it, it has
+ * to know which moment the run is standing at. PLAN (B) section 6, The runner:
+ * "A waiting run's row states its moment, card kind and card reference; a wait
+ * for a setup field and a wait for a review are told apart from the row alone,
+ * and no screen re-derives a moment." So the rail asks THIS, and how a moment
+ * is spelled never leaves this module.
+ *
+ * WHY NOT `classifyRunWaitInterrupt`. That one answers a COPY question about an
+ * INTERRUPT, and beneath the recorded fact it keeps two heuristics and a
+ * fail-closed `"approval"`. The rail asks about the RUN's own recorded moment
+ * and nothing else: a row that states no moment elects no trailing entry. Same
+ * recorded fact, two questions, one module reading it.
+ */
+export function runStandsAtMidRunScreenMoment(
+  lifecycleMoment: string | null | undefined,
+): boolean {
+  return lifecycleMoment === "hitl";
+}
+
+/**
+ * IS THE RUN STANDING AT ITS SCHEDULE? (cinatra#3221, fix leg 8.)
+ *
+ * THE THIRD GATE CLASS, ASKED OF THE SAME RECORDED FACT. Leg 6 closed the
+ * mid-run context gate and leg 7 the work review gate; the fourth proof round
+ * came back with the SCHEDULING reading still electing nothing -- a run stopped
+ * in front of its schedule step drew a rail with no entry highlighted, and the
+ * still-to-come Skills row standing above the step it was stopped at.
+ *
+ * The run states this moment itself: the coordinator writes `schedule` on the
+ * run's own row when it parks there (`stateRunScheduleMoment`), on BOTH statuses
+ * the park uses -- `pending_trigger` while the person's choice is outstanding
+ * and `armed` once the choice named an instant. So the rail reads the row here,
+ * exactly as it reads the other two moments, and how a moment is spelled never
+ * leaves this module (PLAN (B) section 6: "no screen re-derives a moment").
+ */
+export function runStandsAtScheduleMoment(
+  lifecycleMoment: string | null | undefined,
+): boolean {
+  return lifecycleMoment === "schedule";
+}
+
+/**
  * WHERE A WAIT'S NOTIFICATION SHOULD LAND (cinatra#2930, epic #2926 W3).
  *
  * The plan: "When a run waits at a moment, the notification links to the

@@ -1641,17 +1641,12 @@ export function AgenticRunPanel({
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
       onSubmit={handlePromptSubmit}
       resetSignal={currentXRenderer}
-      // Opt in to paperclip uploads. The panel captures uploads, calls our
-      // onSubmit with the 2nd arg, we persist into pendingAttachmentsRef, and
-      // the active-gate submit paths wrap the `userResponse` text with the
-      // WayFlow envelope at Continue time. Setup gates intentionally omit
-      // `userResponse` because the setup-loop server path doesn't read it, so
-      // the paperclip is hidden for those gates to prevent attaching files that
-      // would never reach the flow.
-      enableAttachments={
-        !!effectiveHitlContext &&
-        !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
-      }
+      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
+      // drawing's §X names the window's parts — the panel, the field, the send
+      // control, the placement, the access rule — and a leading control is not
+      // among them: "Nothing else about the window changes from one reading to
+      // the next." This mount used to opt the field into the paperclip on the
+      // gate reading alone; no reading does now.
     />
     </div>
   );
@@ -2392,14 +2387,12 @@ export function AgenticRunPanel({
           ))}
         </div>
       ) : (
-        // Suppressed under the completion card: "No messages yet." next to
-        // "Run finished without output" reads as a run that is still coming,
-        // which is precisely the frozen-in-place impression this fixes.
-        !showCompletionCard && (
-          <p className="text-sm text-muted-foreground">
-            {status === "queued" ? "Waiting to start..." : "No messages yet."}
-          </p>
-        )
+        // NOTHING ABOVE AN EMPTY EXCHANGE (cinatra#3222). The ratified drawing,
+        // §IX: "There is no panel above an empty exchange — the window is the
+        // field alone until the first message." The "No messages yet." /
+        // "Waiting to start..." line used to stand here, above the window's
+        // empty field, on every host that draws no rail; it stands nowhere now.
+        null
       )}
     </section>
     {hitlConversationPanelNode}
