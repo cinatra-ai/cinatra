@@ -149,6 +149,15 @@ export {
 } from "./agent-run-serde";
 export type { AgentRunScopeStage, RunScopeRef } from "./agent-run-serde";
 
+import type {
+  AgentForkRecord,
+  CreateAgentForkInput,
+  CreateRegistryEntryInput,
+  CreateShareBindingInput,
+  RegistryEntryRecord,
+  ShareBindingRecord,
+} from "./store-registry-records";
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -2714,54 +2723,20 @@ export async function readAgentVersionsByTemplate(
 
 // ---------------------------------------------------------------------------
 // Domain types — agent_registry_entries
+//
+// The shapes themselves live in ./store-registry-records (a vertical slice of
+// plain row types); they are re-exported here unchanged, so every caller keeps
+// importing them from the store.
 // ---------------------------------------------------------------------------
 
-export type RegistryEntryRecord = {
-  id: string;
-  templateId: string;
-  versionId: string;
-  orgId: string;
-  publishedBy: string;
-  semver: string;
-  title: string;
-  description: string | null;
-  toolAccess: string[];          // parsed from JSON on read
-  riskLevel: string;
-  hasApprovalGates: boolean;
-  changelog: string | null;
-  status: string;
-  createdAt: Date;
+export type {
+  AgentForkRecord,
+  CreateAgentForkInput,
+  CreateRegistryEntryInput,
+  CreateShareBindingInput,
+  RegistryEntryRecord,
+  ShareBindingRecord,
 };
-
-export type CreateRegistryEntryInput = Omit<RegistryEntryRecord, "id" | "createdAt" | "toolAccess"> & {
-  toolAccess: string[];           // store serializes to JSON
-};
-
-export type ShareBindingRecord = {
-  id: string;
-  registryEntryId: string;
-  subjectType: string;
-  subjectId: string;
-  canView: boolean;
-  canRun: boolean;
-  canEditDraft: boolean;
-  canPublish: boolean;
-  canApprove: boolean;
-  grantedBy: string;
-  createdAt: Date;
-};
-
-export type CreateShareBindingInput = Omit<ShareBindingRecord, "id" | "createdAt">;
-
-export type AgentForkRecord = {
-  id: string;
-  registryEntryId: string;
-  forkedTemplateId: string;
-  forkedBy: string;
-  createdAt: Date;
-};
-
-export type CreateAgentForkInput = Omit<AgentForkRecord, "id" | "createdAt">;
 
 // ---------------------------------------------------------------------------
 // CRUD — agent_registry_entries

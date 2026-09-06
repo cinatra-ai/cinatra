@@ -2032,12 +2032,22 @@ function useRecommendationHoldState(params: {
       // across the whole budget; a genuine withdrawal costs the sum of those
       // delays and then lands. The rule also disarms itself once it fires,
       // because the answer it files is the `none` it was suppressing.
+      //
+      // AND IT COVERS ONLY AN ANSWER THIS INSTANCE FILED ITSELF. A seeded answer
+      // is a redraw of what this document was last told, not a reading this card
+      // has taken: it exists so a rebuilt card does not blank while its own read
+      // is still on the wire. The moment that read LANDS, whatever it says is the
+      // card's own first reading and it wins — the reader may have changed under
+      // a document that was never reloaded, and a run really can be released
+      // carrying neither a selection nor a skip. An inherited answer is a seed,
+      // never a verdict to weigh a landed one against.
       const filed = filedAnswerRef.current;
       if (
         state.state === "none" &&
         filed !== null &&
         filed.runId === requestRunId &&
-        filed.state.state !== "none"
+        filed.state.state !== "none" &&
+        seededAnswerRunIdRef.current !== requestRunId
       ) {
         const consecutive =
           emptyLooksRef.current !== null && emptyLooksRef.current.runId === requestRunId

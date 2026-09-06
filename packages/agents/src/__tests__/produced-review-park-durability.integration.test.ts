@@ -31,7 +31,7 @@
  * only in `step_results`.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
- *   SUPABASE_DB_URL=postgres://user:pass@127.0.0.1:5432/db \
+ *   SUPABASE_DB_URL=postgres://user:pass@localhost:5432/db \
  *     pnpm --filter @cinatra-ai/agents test:integration produced-review-park-durability
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";

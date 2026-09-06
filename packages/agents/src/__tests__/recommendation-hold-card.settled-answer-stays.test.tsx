@@ -255,6 +255,40 @@ describe("the settled card survives an empty answer (cinatra#3007, fix leg 10)",
     ).toHaveLength(0);
   });
 
+  it("lets a FRESH card's own first look overrule an answer it only INHERITED", async () => {
+    // THE OTHER EDGE OF THE KEPT ANSWER. The answer is kept so a card that was
+    // torn down and rebuilt while a slow read was on the wire does not blank a
+    // row somebody is reading. It is NOT a second authority: a rebuilt card that
+    // has never been told anything itself must yield to the FIRST answer it gets,
+    // including an empty one — the reader may have changed, the run may have been
+    // released, and this card has no reading of its own to weigh against it.
+    //
+    // The withheld-empty rule therefore covers only an answer this instance filed
+    // ITSELF; an inherited one is a seed, not a verdict.
+    holdStateMock.mockImplementation(async () => CONFIRMED);
+    await mountCard("run-3007-inherited");
+    await waitFor(() => {
+      expect(document.querySelectorAll(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}`)).toHaveLength(
+        1,
+      );
+    });
+    cleanup();
+
+    // A FRESH card for the same run, in a document that answers `none` — the
+    // reader is not the one the remembered answer was issued to.
+    holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    const { container } = await mountCard("run-3007-inherited");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelectorAll(CARD_ROOT),
+      "the inherited row goes as soon as this card's own look answers",
+    ).toHaveLength(0);
+  });
+
   it("still draws nothing when the FIRST answer is `none` — a run that was never held", async () => {
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await mountCard("run-3007-never-held");

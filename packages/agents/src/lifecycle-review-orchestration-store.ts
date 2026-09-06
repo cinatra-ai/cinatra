@@ -849,7 +849,7 @@ async function drainProductionForRun(
   // reach the coalescing path and be double-gated by a batch partition gate.
   const repair = await repairForRun(runId);
   const open = await resolveOpenBatchEpoch(orgId, runId);
-  // PRE-FIX EPOCH QUARANTINE (Codex rounds 1–2). FAIL CLOSED on an open epoch
+  // PRE-FIX EPOCH QUARANTINE (review rounds 1–2). FAIL CLOSED on an open epoch
   // only a pre-fix seal can have produced: touch nothing, leave every member
   // pending (so an external effect stays HELD), and report it for ops. Same
   // posture as the partition emit-conflict path below. Unreachable on

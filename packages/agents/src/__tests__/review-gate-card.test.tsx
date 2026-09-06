@@ -1689,7 +1689,7 @@ describe("a settled card that knows its outcome", () => {
 
   it("names the outcome AND the decider", async () => {
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued by Dana Okonkwo");
     expect(container.textContent).toContain(
       "The gate is resolved and the run has been released to continue.",
     );
@@ -1700,15 +1700,34 @@ describe("a settled card that knows its outcome", () => {
     ).toBe("approved");
   });
 
-  it("names each of the three recorded outcomes", async () => {
-    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Approved by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
+  it("names each of the three recorded outcomes in the drawing's own words", async () => {
+    // The DRAWING carries three readings — "Review requested", "Continued" and
+    // "Changes requested" — and the line may use no others. Continued is the
+    // only settled reading it has, so an approved gate reads Continued; the
+    // drawing words the turn-back road "Changes requested" and has no separate
+    // word for a rejection, so both turn-backs read that.
+    //
+    // The three outcomes stay three: `data-review-outcome` carries the recorded
+    // one unchanged on every reading, which is what routing and the audit trail
+    // read, and the sentence under the heading still says which turn-back it was.
+    const cases: Array<[Parameters<typeof settledWith>[0], string, string]> = [
+      ["approved", "Continued by Dana Okonkwo", "released to continue"],
+      ["rejected", "Changes requested by Dana Okonkwo", "turned back."],
+      [
+        "changes_requested",
+        "Changes requested by Dana Okonkwo",
+        "turned back for repair.",
+      ],
     ];
-    for (const [outcome, title] of cases) {
+    for (const [outcome, title, sentence] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
+      expect(container.textContent).toContain(sentence);
+      expect(
+        container
+          .querySelector('[data-conformance-id="review-gate-settled"]')
+          ?.getAttribute("data-review-outcome"),
+      ).toBe(outcome);
       cleanup();
     }
   });
@@ -1740,10 +1759,10 @@ describe("a settled card that knows its outcome", () => {
   it("states the outcome ALONE when no decider can be named", async () => {
     // The resolver drops a decider it cannot name safely rather than reaching
     // for an identifier, so the card must read as a finished sentence without
-    // one — never "Approved by" and a dangling nothing.
+    // one — never "Continued by" and a dangling nothing.
     const container = await settledWith("approved");
-    expect(container.textContent).toContain("Approved");
-    expect(container.textContent).not.toContain("Approved by");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Continued by");
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
@@ -1759,7 +1778,7 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Approved by Dana Okonkwo");
+      expect(html).toContain("Continued by Dana Okonkwo");
     }
   });
 
@@ -1785,7 +1804,7 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued by Dana Okonkwo");
   });
 });
 
@@ -1820,8 +1839,8 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
   const DISPOSITIONS = [
-    ["approved", "Approved by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
+    ["approved", "Continued by Dana Okonkwo"],
+    ["rejected", "Changes requested by Dana Okonkwo"],
     ["changes_requested", "Changes requested by Dana Okonkwo"],
   ] as const;
 
@@ -1875,7 +1894,7 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued by Dana Okonkwo");
       cleanup();
     }
   });

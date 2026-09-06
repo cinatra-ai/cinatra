@@ -4,7 +4,6 @@ import { eq, notInArray } from "drizzle-orm";
 // composition; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
-import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import {
   capabilityOwnershipGrantSchemaQueries,
@@ -4297,19 +4296,13 @@ export function buildUpsertJsonRowQuery(
  * those raw columns, so this function emits raw SQL via the QueryInput
  * shape used by `runPostgresQueriesSync`.
  */
-// Import the literal unions from @cinatra-ai/skills so a
-// typo (e.g. "workspaces" instead of "workspace") fails typecheck instead of
-// hitting `skill_pkg_owner_scope_chk` at runtime mid-transaction.
-export type SkillPackageIdentity = {
-  owner_scope: OwnerScope;
-  owner_id: string | null;
-  binding_scope: BindingScope;
-  source_kind: SourceKind;
-  vendor: string | null;
-  package: string | null;
-  agent_template_id: string | null;
-  skill_slug: string;
-};
+export type {
+  ExtensionLifecycleAuditRow,
+  SkillPackageIdentity,
+} from "./drizzle-store-row-shapes";
+
+import type { SkillPackageIdentity } from "./drizzle-store-row-shapes";
+import type { ExtensionLifecycleAuditRow } from "./drizzle-store-row-shapes";
 
 export function buildUpsertSkillPackageQuery(
   schemaName: string,
@@ -4397,19 +4390,6 @@ export function buildDeleteRowsNotInQuery(
 // This function produces a parameterized INSERT that database.ts runs via
 // runPostgresQueriesSync (same pattern as all other write helpers in this file).
 // ---------------------------------------------------------------------------
-export type ExtensionLifecycleAuditRow = {
-  id: string;
-  actorId: string;
-  actorType: string;
-  orgId: string | null;
-  operation: string;
-  packageName: string;
-  packageVersion: string | null;
-  destroyedRowSnapshot: unknown;
-  danglingReferences: unknown;
-  reason: string | null;
-};
-
 export function buildInsertExtensionLifecycleAuditQuery(
   schemaName: string,
   row: ExtensionLifecycleAuditRow,

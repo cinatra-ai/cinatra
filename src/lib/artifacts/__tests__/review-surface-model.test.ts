@@ -308,28 +308,39 @@ describe("the settled copy names the outcome and its decider", () => {
   });
 
   it("names the decider when there is one to name", () => {
+    // The titles are the DRAWING's three readings and nothing else: an approved
+    // gate is the drawing's "Continued", and both turn-back outcomes read its
+    // "Changes requested". The line's own sentence still says which turn-back
+    // this was, and `data-review-outcome` still carries all three.
     expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Approved by Dana Okonkwo",
+      title: "Continued by Dana Okonkwo",
       body: "The gate is resolved and the run has been released to continue.",
     });
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
-      "Rejected by Dana Okonkwo",
+      "Changes requested by Dana Okonkwo",
     );
     expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
       "Changes requested by Dana Okonkwo",
     );
   });
 
+  it("keeps the three outcomes readable apart in the line's own sentence", () => {
+    // Two outcomes share a heading, so the sentence beneath it is what tells a
+    // reader which turn-back this was. It may never collapse.
+    const bodies = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).body);
+    expect(new Set(bodies).size).toBe(3);
+  });
+
   it("reads as a finished sentence with no decider at all", () => {
     // The resolver drops a decider it cannot name safely, so the copy must not
-    // depend on one: never "Approved by" and a dangling nothing.
+    // depend on one: never "Continued by" and a dangling nothing.
     for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
       const { title } = reviewSettledCopy(outcome);
       expect(title.endsWith(" by")).toBe(false);
       expect(title.includes(" by ")).toBe(false);
     }
-    expect(reviewSettledCopy("approved").title).toBe("Approved");
-    expect(reviewSettledCopy("rejected").title).toBe("Rejected");
+    expect(reviewSettledCopy("approved").title).toBe("Continued");
+    expect(reviewSettledCopy("rejected").title).toBe("Changes requested");
     expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
   });
 

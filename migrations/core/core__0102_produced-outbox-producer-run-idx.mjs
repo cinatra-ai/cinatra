@@ -1,4 +1,4 @@
-// core__0101 — index `artifact_produced_outbox` by its PRODUCING RUN (cinatra#3007).
+// core__0102 — index `artifact_produced_outbox` by its PRODUCING RUN (cinatra#3007).
 //
 // The operator-upgrade twin of the bootstrap leaf's new index in
 // `src/lib/artifacts/artifact-review-gate-schema.ts`, added in the SAME PR.
@@ -32,11 +32,13 @@
 // transaction, which `CREATE INDEX CONCURRENTLY` cannot join, and every other
 // index on this table was created the same plain way by the bootstrap DDL.
 //
-// SEQ 0101 — strictly greater than the max shipped seq on origin/main
-// (core__0099 artifact-produced-outbox-object-snapshot-mint-emitter); 0100 is
-// left to an in-flight sibling migration. A concurrent lane may land the next
-// seq first, in which case a rename-only renumber is normal (FLAGGED for the
-// coordinator's train).
+// SEQ 0102 — strictly greater than the max shipped seq on origin/main
+// (core__0101 agent-template-executed-artifact-bindings). 0100 and 0101 both
+// landed on the main line while this change was open, so this module has been
+// renumbered by rename only, twice: the sequence is a position in the shared
+// ledger, never an identity, and the runner refuses a duplicate seq at boot.
+// A concurrent lane may land the next seq first again, in which case another
+// rename-only renumber is normal.
 // migrations/** is HIGH-RISK: owner approval required; the lane never merges.
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it, and safe

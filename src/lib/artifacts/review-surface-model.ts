@@ -93,7 +93,7 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
 // would be asserting a live state it has not read.
 //
 // THE DECIDER IS OPTIONAL AND ITS ABSENCE IS QUIET. A gate whose decider has no
-// safely displayable name reads "Approved" rather than "Approved by" and a
+// safely displayable name reads "Continued" rather than "Continued by" and a
 // dangling nothing — and never an identifier pressed into service as a name.
 
 /** The closed outcome axis a settled review card can name.
@@ -113,12 +113,12 @@ export function reviewSettledCopy(
   switch (outcome) {
     case "approved":
       return {
-        title: `Approved${by}`,
+        title: `Continued${by}`,
         body: "The gate is resolved and the run has been released to continue.",
       };
     case "rejected":
       return {
-        title: `Rejected${by}`,
+        title: `Changes requested${by}`,
         body: "The gate is resolved and the reviewed work has been turned back.",
       };
     case "changes_requested":
@@ -151,15 +151,32 @@ export function reviewSettledCopy(
  * The sibling leg that settles the card IN PLACE after a typed decision (pull
  * request 3072) reads this same function, which is what keeps the header it
  * re-draws and the line it re-draws from disagreeing about the same gate.
+ *
+ * THE WORDS ARE THE DRAWING'S, AND ONLY THE DRAWING'S. The ratified drawing
+ * carries three readings: "Review requested", "Continued" and "Changes
+ * requested". Continued is the ONLY settled reading a display has — the floor's
+ * terminal press is Continue, and there is no second status after it — so an
+ * approved gate reads "Continued". The drawing draws the turn-back road as
+ * Regenerate opening a successor gate and words it "Changes requested"; it has
+ * no word of its own for a rejection, so the rejected outcome reads the same
+ * turn-back words rather than a heading invented here. An earlier revision of
+ * this change did invent two ("Review approved" / "Review rejected"); a heading
+ * is not the place to add vocabulary to a ratified surface.
+ *
+ * THE OUTCOME AXIS IS UNTOUCHED BY THAT. Approve, reject and changes-requested
+ * remain three outcomes on the wire, three values on the settled panel's own
+ * `data-review-outcome`, and three distinct sentences on the line beneath the
+ * heading — which is where a reader is told which turn-back this was, and what
+ * every routing decision reads. What is shared is the two or three words a
+ * heading is.
  */
 export function reviewGateHeaderTitle(
   outcome: ReviewSettledOutcome | null | undefined,
 ): string {
   switch (outcome) {
     case "approved":
-      return "Review approved";
+      return "Continued";
     case "rejected":
-      return "Review rejected";
     case "changes_requested":
       return "Changes requested";
     default:

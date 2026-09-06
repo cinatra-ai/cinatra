@@ -88,14 +88,44 @@ describe("reviewTargetRowFacts — the meta line's updated time", () => {
   });
 });
 
-describe("reviewGateHeaderTitle — the resolved reading records how it was settled", () => {
+describe("reviewGateHeaderTitle \u2014 the settled reading, in the drawing's own words", () => {
+  // THE DRAWING CARRIES THREE READINGS AND NO MORE: "Review requested",
+  // "Continued" and "Changes requested". Continued is the ONLY settled reading a
+  // display has \u2014 the ratified floor's terminal press is Continue, and there is
+  // no second status after it. "Review approved" / "Review rejected" were words
+  // this change invented for a heading the drawing had already written, so the
+  // header now says only what the drawing says.
   it.each([
-    ["approved", "Review approved"],
-    ["rejected", "Review rejected"],
+    // The gate released the run: the drawing's terminal reading.
+    ["approved", "Continued"],
+    // The reviewed work was turned back. The drawing draws that road as
+    // Regenerate -> a successor gate and words it "Changes requested"; it has no
+    // separate word for a rejection, and a heading may not invent one. The
+    // three-way outcome axis is untouched \u2014 it stays on the wire and on the
+    // settled panel's own `data-review-outcome`, which is what routing reads.
+    ["rejected", "Changes requested"],
     ["changes_requested", "Changes requested"],
   ] as const)("a %s gate reads %s", (outcome, title) => {
     expect(reviewGateHeaderTitle(outcome)).toBe(title);
-    expect(reviewGateHeaderTitle(outcome)).not.toBe("Review requested");
+  });
+
+  it("never puts a word on screen that the drawing does not carry", () => {
+    const drawn = new Set(["Review requested", "Continued", "Changes requested"]);
+    for (const outcome of [
+      "approved",
+      "rejected",
+      "changes_requested",
+      null,
+      undefined,
+    ] as const) {
+      expect(drawn.has(reviewGateHeaderTitle(outcome))).toBe(true);
+    }
+    // Named explicitly, because these two strings are the departure this leg
+    // removes: a re-introduction must fail here rather than on a reshoot.
+    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
+      expect(reviewGateHeaderTitle(outcome)).not.toBe("Review approved");
+      expect(reviewGateHeaderTitle(outcome)).not.toBe("Review rejected");
+    }
   });
 
   it("a gate with no outcome to name keeps the request wording", () => {
@@ -106,14 +136,14 @@ describe("reviewGateHeaderTitle — the resolved reading records how it was sett
   });
 
   it("the header and the settled line are one reading of one outcome", () => {
-    // Not the same words — a heading has no decider and no sentence — but the
-    // same closed set, so the two cannot disagree about which gate this is.
+    // Same vocabulary, one register apart: the line may name the decider, the
+    // heading never does. So the heading IS the line with the decider taken off,
+    // and the two can no longer disagree about which gate this is.
     for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
-      const line = reviewSettledCopy(outcome).title.toLowerCase();
-      const header = reviewGateHeaderTitle(outcome).toLowerCase();
-      const word = outcome === "changes_requested" ? "changes" : outcome.slice(0, 6);
-      expect(line).toContain(word);
-      expect(header).toContain(word);
+      expect(reviewSettledCopy(outcome).title).toBe(reviewGateHeaderTitle(outcome));
+      expect(reviewSettledCopy(outcome, "Dana Okonkwo").title).toBe(
+        `${reviewGateHeaderTitle(outcome)} by Dana Okonkwo`,
+      );
     }
   });
 });
