@@ -100,6 +100,13 @@ on:
       - "tests/e2e/config/design.config.ts"
       - "tests/e2e/config/base.ts"
       - "tests/e2e/design/**"
+      # The selector that decides WHETHER this workflow's expensive job runs
+      # and WHICH families it runs (cinatra#3268), and the suites that prove
+      # it. A change to any of them must be judged by the whole suite, so the
+      # workflow has to be triggered by it in the first place.
+      - "scripts/ci/design-select.mjs"
+      - "scripts/ci/__tests__/design-select.test.mjs"
+      - "scripts/ci/__tests__/design-select-workflow.test.mjs"
       - ".github/workflows/design-visual-verify.yml"
 
 concurrency:
@@ -107,14 +114,199 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE SELECTION, TAKEN IN FRONT OF THE COST (cinatra#3268 item 2).
+  #
+  # The selector alone narrows only the PLAYWRIGHT INVOCATION: by the time it
+  # speaks inside pixel-diff, the install, the 79-extension clone, the
+  # production build and the standalone boot have already been paid — six to
+  # ten minutes on a change that renders nothing. So the decision moves in
+  # front of the cost, into a job that owns a checkout, a node and the pinned
+  # companion clone the graph cannot be read without - and nothing else: no
+  # dependency install, no build, no browser, no boot. The expensive job below
+  # runs only when that decision is not "none".
+  #
+  # The two dependency-free contract checks MOVED here with it (they are not
+  # duplicated): they need no install either, and they must keep running on a
+  # change the suite itself skips — a testid contract break or a re-widened
+  # coverage allowlist is red whether or not any pixel moved.
+  #
+  # This job publishes its plan as an artifact and pixel-diff CONSUMES that
+  # file (`--plan`). One selection, taken once, against the base commit this
+  # run's event froze — rather than a second selection below that could
+  # disagree with the first.
+  select:
+    name: design suite selection
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      families: ${{ steps.plan.outputs.families }}
+      summary: ${{ steps.plan.outputs.summary }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the selection is a DIFF against the recorded base
+          # commit, and a merge base needs both sides. Same reason (and same
+          # cheap-gate shape) as the design-pin-drift job in gates.yml.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # No `cache: pnpm` — nothing here installs a dependency. The pin
+          # keeps the two moved checks and the selector on the same node they
+          # run on inside pixel-diff today.
+          node-version: "24"
+
+      # Conformance stable-id contract (cinatra#985): pin integrity of the
+      # committed manifests + every covered surface still carries its stable
+      # data-testid attributes. Dependency-free node script — runs before the
+      # expensive job is even considered, so a contract break fails in seconds.
+      - name: conformance testid contract
+        run: node scripts/design/check-conformance-testids.mjs
+
+      # Coverage ratchet (cinatra#985): the not-yet-covered allowlist is
+      # SHRINK-ONLY vs the PR base — an added (or re-added) surface is a red.
+      #
+      # cinatra#2430 — compare against THIS RUN'S OWN recorded base commit,
+      # pinned as a SHA. This replaces a
+      # `git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:…"`
+      # that resolved the base branch's LIVE TIP at step-execution time while
+      # HEAD is the merge commit GitHub froze into the run's event. The two can
+      # legitimately disagree: on a RE-RUN of an older run the frozen HEAD still
+      # carries exemptions the base has since removed, and the shrink-only
+      # comparison reads those as "added vs base" — a hard red on a PR that
+      # touched nothing. github.event.pull_request.base.sha is frozen in this
+      # run's event (the workflow triggers on `pull_request` only, so it is
+      # always present), which makes the comparison a property of the snapshot
+      # under test. Same class as the extension-README gate fix in cinatra#2212.
+      #
+      # NOT a merge base (unlike cinatra#2212's gate, which diffs): this check
+      # is snapshot set-inclusion — it reads the allowlist file AT the ref, so
+      # it needs no common ancestor. A merge base would be strictly weaker here
+      # (it can reintroduce an exemption the base dropped after the PR forked).
+      #
+      # The fetch-by-SHA below is kept although this job checks out full
+      # history: it is what makes the step correct on its own terms rather than
+      # on a neighbouring `with:` block nobody reads when editing it.
+      #
+      # The script FAILS CLOSED when the ref is unresolvable; so does this step.
+      - name: conformance coverage ratchet (shrink-only)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ]; then
+            echo "conformance ratchet FAILED: this run's event carries no pull_request.base.sha — refusing to run the ratchet against an unknown base" >&2
+            exit 1
+          fi
+          # The recorded base commit is normally already here (full history);
+          # it is fetched BY SHA if it is not.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}" \
+              || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} could not be fetched — the ratchet must not fail open" >&2; exit 1; }
+          fi
+          git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null \
+            || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} is unresolvable in this checkout — the ratchet must not fail open" >&2; exit 1; }
+          echo "conformance ratchet base: ${BASE_SHA} (recorded PR base commit)"
+          node scripts/design/check-conformance-ratchet.mjs "${BASE_SHA}"
+
+      # THE DECISION. Bound to the SAME frozen base commit as the ratchet
+      # above, for the same reason: a live branch tip can move under a re-run
+      # and silently change what this run decided to skip. An absent base sha
+      # is refused rather than guessed — the selector's own fail-open would
+      # widen to the whole suite, but a run that cannot say what it is
+      # comparing against must not be the run that decides what to skip.
+      #
+      # A non-zero exit here fails the job and pixel-diff never starts. That is
+      # the correct direction: the only unacceptable outcome is a silent
+      # "none" — a suite that stopped running while reporting success.
+      # THE GRAPH NEEDS THE EXTENSION TREE ON DISK.
+      #
+      # extensions/ is NOT in this repository: the companion repos are cloned
+      # into it, and tsconfig maps every "@cinatra-ai/*" alias into that tree.
+      # Without it the walk hits an unresolved in-repo import the very first
+      # time it reaches src/lib/generated/extensions.server.ts, and the
+      # selector then does the only safe thing it can with a graph it cannot
+      # trust: it widens to ALL. Measured on a bare checkout of this branch's
+      # base, a docs-only diff comes back "running ALL families - the import
+      # @cinatra-ai/anthropic-connector/register ... could not be resolved".
+      # So without this step the job in front of the cost would never skip
+      # anything and the whole change would save nothing.
+      #
+      # Pure git + node - no pnpm, no dependency install, no build, no browser:
+      # the same pinned companion checkout the expensive job already performs,
+      # measured at 34s, 88s and 78s in the last three runs against the six to
+      # ten minutes of setup and the twenty-six to thirty minutes of suite that
+      # a skip avoids. It runs AFTER the two contract checks so a contract
+      # break still fails in seconds without paying for it.
+      - name: Clone companion extension repos (pinned)
+        uses: ./.github/actions/clone-extensions
+
+      - name: select the design spec families
+        id: plan
+        env:
+          DESIGN_SELECT_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DESIGN_SELECT_DIFF_BASE:-}" ]; then
+            echo "design suite selection FAILED: this run's event carries no pull_request.base.sha — refusing to select against an unknown base" >&2
+            exit 1
+          fi
+          node scripts/ci/design-select.mjs --out design-select.json
+          node -e '
+            const fs = require("node:fs");
+            const plan = JSON.parse(fs.readFileSync("design-select.json", "utf8"));
+            const line = (key, value) => key + "=" + String(value).replace(/\r?\n/g, " ") + "\n";
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              line("mode", plan.mode)
+                + line("families", JSON.stringify(plan.specs))
+                + line("summary", plan.summary),
+            );
+          '
+
+      - name: publish the selection plan
+        # The expensive job reads THIS file rather than deciding again.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: design-select-plan
+          path: design-select.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: say what will run
+        # Through `env`, never interpolated into the script: the summary and
+        # the family list carry PATHS OUT OF THE DIFF, which a pull request
+        # author chooses. A file name is not a command.
+        env:
+          PLAN_SUMMARY: ${{ steps.plan.outputs.summary }}
+          PLAN_MODE: ${{ steps.plan.outputs.mode }}
+          PLAN_FAMILIES: ${{ steps.plan.outputs.families }}
+        run: |
+          {
+            echo "### ${PLAN_SUMMARY}"
+            echo ""
+            echo "mode: \`${PLAN_MODE}\`"
+            echo ""
+            echo "families: \`${PLAN_FAMILIES}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   pixel-diff:
     name: /design-fixtures pixel-diff + axe
+    needs: select
+    # The whole point of the job above: a change that renders nothing does not
+    # pay the install, the build and the boot. A skipped job reports success,
+    # and this context is not a required one today (only design-pin-drift is,
+    # among the design contexts), so the skip changes no branch rule. Should
+    # this context ever BE required, the road is an always-running final status
+    # job that reports on behalf of the skip — not the removal of this `if`.
+    if: ${{ needs.select.outputs.mode != 'none' }}
     # Opt-in larger-runner lever (mirrors build-image's build/e2e jobs). Zero-risk
     # no-op (stays ubuntu-latest) until the org/repo variable CI_BUILD_RUNNER is set.
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
     # Post-cutover the build compiles the app + 79 cloned extensions, so the
     # prod build + standalone boot + suite needs more than the old 15 min.
-    timeout-minutes: 45
+    timeout-minutes: 70
 
     # The standalone PRODUCTION server runs instrumentation.node.ts register()
     # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
@@ -223,59 +415,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Conformance stable-id contract (cinatra#985): pin integrity of the
-      # committed manifests + every covered surface still carries its stable
-      # data-testid attributes. Dependency-free node script — runs before the
-      # expensive install/build so a contract break fails in seconds.
-      - name: conformance testid contract
-        run: node scripts/design/check-conformance-testids.mjs
-
-      # Coverage ratchet (cinatra#985): the not-yet-covered allowlist is
-      # SHRINK-ONLY vs the PR base — an added (or re-added) surface is a red.
-      #
-      # cinatra#2430 — compare against THIS RUN'S OWN recorded base commit,
-      # pinned as a SHA. This replaces a
-      # `git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:…"`
-      # that resolved the base branch's LIVE TIP at step-execution time while
-      # HEAD is the merge commit GitHub froze into the run's event. The two can
-      # legitimately disagree: on a RE-RUN of an older run the frozen HEAD still
-      # carries exemptions the base has since removed, and the shrink-only
-      # comparison reads those as "added vs base" — a hard red on a PR that
-      # touched nothing. github.event.pull_request.base.sha is frozen in this
-      # run's event (the workflow triggers on `pull_request` only, so it is
-      # always present), which makes the comparison a property of the snapshot
-      # under test. Same class as the extension-README gate fix in cinatra#2212.
-      #
-      # NOT a merge base (unlike cinatra#2212's gate, which diffs): this check
-      # is snapshot set-inclusion — it reads the allowlist file AT the ref, so
-      # it needs no common ancestor. A merge base would be strictly weaker here
-      # (it can reintroduce an exemption the base dropped after the PR forked).
-      #
-      # NO `--depth` on the fetch: the depth-1 branch re-fetch is exactly the
-      # cinatra#2212 anti-pattern, and the pinned SHA costs no more without it
-      # (measured on this repo: ~10-27 MiB / ~1.5 s either way, because the
-      # checkout is already shallow and the server only sends the delta).
-      #
-      # The script FAILS CLOSED when the ref is unresolvable; so does this step.
-      - name: conformance coverage ratchet (shrink-only)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ]; then
-            echo "conformance ratchet FAILED: this run's event carries no pull_request.base.sha — refusing to run the ratchet against an unknown base" >&2
-            exit 1
-          fi
-          # The default-depth checkout holds only the merge commit, so the
-          # recorded base commit is normally fetched here, BY SHA.
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "${BASE_SHA}" \
-              || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} could not be fetched — the ratchet must not fail open" >&2; exit 1; }
-          fi
-          git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null \
-            || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} is unresolvable in this checkout — the ratchet must not fail open" >&2; exit 1; }
-          echo "conformance ratchet base: ${BASE_SHA} (recorded PR base commit)"
-          node scripts/design/check-conformance-ratchet.mjs "${BASE_SHA}"
+      # The plan the `select` job published, downloaded rather than recomputed.
+      # Re-running the selector here would take a SECOND decision — bound to
+      # the same frozen base, so it should agree, but "should agree" is not a
+      # binding. This binds it: what runs below is the exact file the cheap job
+      # wrote, and the run step refuses to start on a plan it cannot read.
+      - name: fetch the published selection plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: design-select-plan
+          path: .
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
@@ -397,9 +546,17 @@ jobs:
         # server above. Wrapped in `timeout` (above the Playwright budget) so
         # a hung run is killed, not left to the job cap; 1200s covers the
         # added conformance project on the shared boot.
+        #
+        # `--plan` is `pnpm test:e2e:design` (which is this same selector with
+        # `--run`) reading the PUBLISHED decision instead of taking its own:
+        # the families below are the families the `select` job named, and a
+        # plan file that is absent or damaged fails the step rather than
+        # quietly running nothing.
         env:
           E2E_REUSE_SERVER: "1"
-        run: timeout --kill-after=60 1200 pnpm test:e2e:design
+        run: >-
+          timeout --kill-after=60 2400
+          node scripts/ci/design-select.mjs --run --plan design-select.json
 
       - name: Dump standalone server log on failure
         # Next.js omits server-component error messages from the CLIENT response

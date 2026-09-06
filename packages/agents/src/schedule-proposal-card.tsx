@@ -164,6 +164,7 @@ import type {
   TriggerScheduleProposalPendingView,
   TriggerScheduleProposalSettledView,
   TriggerScheduleProposalExpiredView,
+  TriggerScheduleProposalViewBody,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 import { Button } from "@/components/ui/button";
@@ -430,6 +431,73 @@ export function ScheduleProposalCard({
   );
 
   if (!present || state === null || body === null) return null;
+
+  return (
+    <ScheduleProposalCardBody
+      state={state}
+      body={body}
+      onDecide={decide}
+      onAdjustAndConfirm={async (schedule) => {
+        const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
+        if (outcome.kind === "confirmed") refresh();
+        return outcome;
+      }}
+      // CONFIRM ON AN EXPIRED CARD PROPOSES AGAIN AND CONFIRMS THE REPLACEMENT
+      // (plan (A) §7.2 step 2). The expired token is unspendable, so a bare
+      // confirm could never land; the composite is what makes one press mean
+      // what the plan says it means. It is the SAME composite an edited live
+      // proposal performs, on the same endpoint, under the same authorization.
+      onRepropose={async (schedule) => {
+        const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
+        if (outcome.kind === "reproposed") setLiveRef(outcome.ref);
+        if (outcome.kind === "confirmed") refresh();
+        return outcome;
+      }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAWN CARD — everything §VI draws, once the resolve has answered
+// ---------------------------------------------------------------------------
+
+/**
+ * §VI's card AS IT IS DRAWN: the host frame, the card's own attributes, and the
+ * one phase the resolved body selects.
+ *
+ * WHY THIS IS A PART OF ITS OWN, AND EXPORTED. The same reason `SuggestionChips`
+ * is one on the review card (cinatra#3156): the drawing is machine-checked
+ * surface by surface, and the checker has to draw exactly what the product
+ * draws. `ScheduleProposalCard` cannot draw at all without an authorized server
+ * resolve, and the conformance harness is sessionless by contract, so the
+ * checker composes THIS part — the shipped one, the one the card itself composes
+ * — rather than a look-alike. Nothing is reimplemented around it: the card above
+ * still owns the ref, the resolve, the re-resolve after a landed decision and
+ * the reading it reports to the turn, and hands the answer here.
+ *
+ * IT DECIDES NOTHING ITS CALLER COULD DECIDE FOR IT. The host is READ from the
+ * declaration rather than passed, the phase is chosen from the body the server
+ * sent, and both absences below are this card's own — drawn as nothing, never as
+ * a disabled card.
+ */
+export function ScheduleProposalCardBody({
+  state,
+  body,
+  onDecide,
+  onAdjustAndConfirm,
+  onRepropose,
+}: {
+  state: LifecycleCardState;
+  body: TriggerScheduleProposalViewBody;
+  onDecide: (
+    op: ScheduleDecisionOp,
+    schedule?: ProposedSchedule,
+  ) => Promise<ScheduleDecisionOutcome>;
+  onAdjustAndConfirm: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  onRepropose: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+}): ReactElement | null {
+  const host = useLifecycleCardHost();
+  if (host === null) return null;
   // `advisory` is not a schedule state (§VII owns it) and `absent` draws no DOM
   // at all. Both fail closed rather than draw a floor over nothing.
   if (state.state === "advisory" || state.state === "absent") return null;
@@ -443,30 +511,16 @@ export function ScheduleProposalCard({
         key={JSON.stringify(body.schedule)}
         body={body}
         state={state}
-        onDecide={decide}
-        onAdjustAndConfirm={async (schedule) => {
-          const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
-          if (outcome.kind === "confirmed") refresh();
-          return outcome;
-        }}
+        onDecide={onDecide}
+        onAdjustAndConfirm={onAdjustAndConfirm}
       />
     ) : body.phase === "expired" ? (
       <ExpiredPhase
         body={body}
-        // CONFIRM ON AN EXPIRED CARD PROPOSES AGAIN AND CONFIRMS THE REPLACEMENT
-        // (plan (A) §7.2 step 2). The expired token is unspendable, so a bare
-        // confirm could never land; the composite is what makes one press mean
-        // what the plan says it means. It is the SAME composite an edited live
-        // proposal performs, on the same endpoint, under the same authorization.
-        onRepropose={async (schedule) => {
-          const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
-          if (outcome.kind === "reproposed") setLiveRef(outcome.ref);
-          if (outcome.kind === "confirmed") refresh();
-          return outcome;
-        }}
+        onRepropose={onRepropose}
       />
     ) : (
-      <SettledPhase body={body} host={host} onDecide={decide} />
+      <SettledPhase body={body} host={host} onDecide={onDecide} />
     );
 
   return (
