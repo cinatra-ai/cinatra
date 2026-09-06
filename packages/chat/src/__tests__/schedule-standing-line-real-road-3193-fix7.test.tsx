@@ -25,9 +25,14 @@
  * the real card, resolved through the real refetch seam — and measures the words
  * a reader actually sees.
  *
- * WHAT IT DOES NOT MEASURE. The model's own lead-in is left exactly as it was
- * written: this turn draws the reading's line, it does not rewrite prose it did
- * not author.
+ * WHAT THE LEAD-IN DOES (corrected by fix leg 9). This file first measured the
+ * model's own lead-in standing beside the reading's line, because the line was
+ * added rather than substituted. A graded round then measured the shipped turn
+ * drawing TWO prose lines where every one of section VI's example turns draws
+ * ONE, so the settled readings now draw their sentence IN PLACE OF the lead-in.
+ * Nothing of the model's is read, matched or rewritten — it is not drawn. The
+ * count itself is measured next door, in
+ * `schedule-standing-line-single-prose-3193-fix9.test.tsx`.
  *
  *   pnpm --filter @cinatra-ai/chat exec vitest run \
  *     src/__tests__/schedule-standing-line-real-road-3193-fix7.test.tsx
@@ -279,12 +284,17 @@ describe("criterion 4 — a fired recurring schedule's turn says so, on the real
     expect(line.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("leaves the model's own lead-in exactly as it was written", async () => {
+  it("draws the reading's sentence in PLACE of the model's own lead-in", async () => {
     serveReading(RECURRING_BODY, true);
     const { container } = await mountProposalTurn("fired-recurring");
+    // Section VI's example turn for a recurring schedule that has fired draws
+    // one prose line and nothing above it (cinatra#3174 fix leg 9).
     await waitFor(() => {
-      expect(visibleText(container)).toContain(MODEL_LEAD_IN);
+      expect(visibleText(container)).toContain(RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE);
+      expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
     });
+    // The transcript's own history is untouched — only this turn's prose is.
+    expect(visibleText(container)).toContain("Run this every weekday at 9 in the morning.");
   });
 });
 

@@ -1011,13 +1011,28 @@ function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
  */
 function ProducedViewsSlot({
   slot,
+  onStandingLineChange,
   children,
 }: {
   slot: number;
+  /** THE ANSWER THIS SLOT OWES THE TURN (cinatra#3174 fix leg 9). Whether a
+   *  standing line is drawn here is decided by the CARD's own reported reading,
+   *  which only this container holds — and the prose the turn draws above this
+   *  slot is a SIBLING of it, so the answer has to travel one level up, exactly
+   *  as the run container's readings already do. Reported after mount, because
+   *  the reading itself is. */
+  onStandingLineChange?: (slot: number, drawn: boolean) => void;
   children: ReactNode;
 }): ReactElement {
   const [reading, setReading] = useState<ScheduleCardReading>("other");
   const line = standingScheduleLineFor(reading);
+  const drawn = line !== null;
+  useEffect(() => {
+    onStandingLineChange?.(slot, drawn);
+  }, [onStandingLineChange, slot, drawn]);
+  // A slot that leaves the turn is drawing nothing, so it says so on the way
+  // out and the prose it was standing for comes back.
+  useEffect(() => () => onStandingLineChange?.(slot, false), [onStandingLineChange, slot]);
   return (
     <ScheduleReadingReport onReading={setReading}>
       <div data-transcript-slot={slot}>
@@ -1142,11 +1157,53 @@ function OrderedPartsSection({
   useEffect(() => {
     onFiredRecurringRunsChange?.(scheduleFiredRecurringRunIds);
   }, [onFiredRecurringRunsChange, scheduleFiredRecurringRunIds]);
+  // WHICH SLOTS IN THIS TURN DRAW SECTION VI's OWN SENTENCE (cinatra#3174 fix
+  // leg 9). Section VI draws every one of its example turns the same way: one
+  // prose line, then the card. The settled readings — fired one-off, fired
+  // recurring, stopped — have a sentence OF THEIR OWN, and it is the turn's one
+  // line; the example turn for a recurring schedule that has fired carries
+  // "It is still recurring, so the rows below still take a change — it applies
+  // to the runs still to come." and nothing above it.
+  //
+  // Fix leg 7 drew that sentence BESIDE the model's own lead-in rather than in
+  // its place, on the reasoning that prose the model wrote is not this
+  // renderer's to touch. A graded round then measured the shipped turn drawing
+  // TWO prose lines on every settled reading, which is more than the drawing
+  // gives — and the drawing, not the reasoning, is the anchor. So the lead-in
+  // is not rewritten here either: it is not DRAWN, because the reading's own
+  // sentence is what this turn says.
+  //
+  // A LIST OF SLOTS, not a boolean, and the FIRST one decides: a turn can carry
+  // more than one produced-views slot, and what §VI rules out is prose standing
+  // ABOVE the sentence. Prose below a slot is not what this measured, and is
+  // left exactly as it was drawn.
+  //
+  // AND ONLY THE READINGS THAT HAVE A SENTENCE. A schedule that has never fired
+  // draws no line of its own, so its lead-in is the turn's ONE line and stays —
+  // which is what §VI's first-shown and configured examples draw.
+  const [standingLineSlots, setStandingLineSlots] = useState<readonly number[]>([]);
+  const onStandingLineChange = useCallback((slot: number, drawn: boolean) => {
+    setStandingLineSlots((prev) => {
+      const known = prev.includes(slot);
+      // Identity is preserved when nothing changed, so a slot that reports the
+      // same answer on every read cannot re-render the transcript.
+      if (drawn === known) return prev;
+      return drawn ? [...prev, slot].sort((a, b) => a - b) : prev.filter((s) => s !== slot);
+    });
+  }, []);
+  const firstStandingLineSlot = standingLineSlots.length === 0 ? null : standingLineSlots[0]!;
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
         if (part.kind === "text") {
+          // THE TURN'S ONE PROSE LINE IS THE DRAWN SENTENCE (cinatra#3174 fix
+          // leg 9) — see the note on `standingLineSlots`. Nothing is read,
+          // matched or rewritten: a text part standing above the slot that
+          // draws §VI's sentence is simply not drawn, and the transcript's own
+          // history — the reader's request, every earlier turn — is untouched
+          // because this decision is scoped to the parts of THIS turn.
+          if (firstStandingLineSlot !== null && idx < firstStandingLineSlot) return null;
           let raw = trimContent ? trimContent(part.content) : part.content;
           // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
           // construction: only the sentence this platform minted, only for a
@@ -1268,7 +1325,11 @@ function OrderedPartsSection({
         // A step that produced a view gets its own container at its own slot.
         if (slottedViews.length > 0) {
           return (
-            <ProducedViewsSlot key={`slot-${idx}`} slot={idx}>
+            <ProducedViewsSlot
+              key={`slot-${idx}`}
+              slot={idx}
+              onStandingLineChange={onStandingLineChange}
+            >
               {slottedViews}
             </ProducedViewsSlot>
           );

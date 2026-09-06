@@ -315,8 +315,11 @@ describe("criterion 4 — the stopped reading's own sentence, after a real press
       expect(visibleText(container)).toContain(STOPPED_RECURRING_SENTENCE);
     });
     expect(visibleText(container)).not.toContain(RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE);
-    // The model's own lead-in is not rewritten by any of this.
-    expect(visibleText(container)).toContain(MODEL_LEAD_IN);
+    // And the stopped reading's sentence is the turn's ONE prose line: section
+    // VI's example turns draw a single line above the card, so the model's own
+    // lead-in is not drawn beside it (cinatra#3174 fix leg 9). Nothing of the
+    // model's is read or rewritten — the reading's sentence is what is drawn.
+    expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
   }, 60_000);
 
   it("draws the line in the turn, above the card, never inside it", async () => {
