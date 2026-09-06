@@ -301,8 +301,9 @@ jobs:
     # this context ever BE required, the road is an always-running final status
     # job that reports on behalf of the skip — not the removal of this `if`.
     if: ${{ needs.select.outputs.mode != 'none' }}
-    # Opt-in larger-runner lever (mirrors build-image's build/e2e jobs). Zero-risk
-    # no-op (stays ubuntu-latest) until the org/repo variable CI_BUILD_RUNNER is set.
+    # Runner-class routing (mirrors build-image's build/e2e jobs). Zero-risk
+    # no-op (stays ubuntu-latest) until the org/repo variable CI_RUNNER_E2E is
+    # set: this is the end-to-end class, the class that stays on the box.
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Post-cutover the build compiles the app + 79 cloned extensions, so the
     # prod build + standalone boot + suite needs more than the old 15 min.
