@@ -110,6 +110,12 @@ type ArtifactReviewGateSeam = {
     runId: string,
     reviewTaskId: string,
   ): Promise<{ orgId: string; status: string } | null>;
+  /** cinatra#3035: every gate this run owns, so a per-artifact review can be
+   *  routed to the first artifact still waiting to be read. OPTIONAL on this
+   *  side: the seam is read off `globalThis`, so a binding from an older bundle
+   *  may not carry it, and a review that cannot ask which legs are done routes to
+   *  the first — which is where a person starts anyway. */
+  listGates?(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
 };
 function resolveArtifactReviewGateSeam(): ArtifactReviewGateSeam | null {
   return (
@@ -505,6 +511,11 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import {
+  nextUnresolvedLeg,
+  planPerArtifactReviewGates,
+  resolveDeclaredReviewTargets,
+} from "@/lib/artifacts/artifact-review-target";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {
@@ -1369,11 +1380,20 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       typeof wayflowArtifactReviewTargetsInput === "string" &&
       wayflowArtifactReviewTargetsInput.length > 0
     ) {
-      const reviewTaskId = `wayflow-${task.id}`;
-      const rawTargets =
-        (run.inputParams as Record<string, unknown> | null | undefined)?.[
-          wayflowArtifactReviewTargetsInput
-        ] ?? interruptPayload[wayflowArtifactReviewTargetsInput];
+      let reviewTaskId = `wayflow-${task.id}`;
+      // cinatra#3035 (epic #3023 W11) — THE MID-RUN TARGET SET. The pipeline's
+      // gate names references the materialize step minted DURING the run, so the
+      // value the gate's own pause carries is the one that matters; the run's
+      // start params are the fallback for a gate whose set is resolved at run
+      // start. Read the other way round (as `startParams ?? pausePayload` was), a
+      // start node that also lists the marked input — every compiled flow does,
+      // since a node input is a flow input with a default — shadowed the run's own
+      // projection with that default and the gate pinned nothing.
+      const rawTargets = resolveDeclaredReviewTargets({
+        inputName: wayflowArtifactReviewTargetsInput,
+        startParams: run.inputParams as Record<string, unknown> | null | undefined,
+        pausePayload: interruptPayload,
+      });
       // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
       // is (or already was) pinned — so exactly ONE decision path exists (the
       // review surface + resume-delivery worker). On an emit failure we do NOT
@@ -1470,18 +1490,61 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         if (coreDecision.review && coreDecision.targets) {
           pinnedTargets = coreDecision.targets;
         }
-        const emitResult = coreDecision.review
-          ? await gateSeam.emit({
-              runId,
-              orgId: run.orgId,
-              reviewTaskId,
-              targets: pinnedTargets,
-            })
-          : ({
-              ok: false as const,
-              code: "invalid-targets" as const,
-              message: coreDecision.why ?? "the review core opened no review",
-            });
+        // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. "The post's on
+        // its immutable reference, then each picture's on its own; the run parks
+        // at each." A decided set naming more than one artifact opens one gate per
+        // artifact, in the order the set named them; the person is routed to the
+        // first not yet decided, and the resume worker holds the run parked until
+        // the last of them lands. A set the core could not narrow (the fail-open
+        // branch keeps the marker's raw value) plans no legs and keeps the single
+        // emit this branch has always made.
+        const legs = coreDecision.review
+          ? planPerArtifactReviewGates({ reviewTaskId, targets: pinnedTargets })
+          : [];
+        type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
+        let emitResult: GateEmitResult;
+        if (legs.length > 1) {
+          // ONE EMIT PER ARTIFACT, in the order the set named them. Every leg is
+          // pinned now — a gate is immutable once pinned, so the whole review is
+          // frozen at the moment the run reached it — and the person is routed to
+          // the first leg still open. The routed leg's own emit decides the route,
+          // exactly as the single emit always did.
+          const emitted = new Map<string, GateEmitResult>();
+          for (const leg of legs) {
+            emitted.set(
+              leg.reviewTaskId,
+              await gateSeam.emit({
+                runId,
+                orgId: run.orgId,
+                reviewTaskId: leg.reviewTaskId,
+                targets: leg.targets,
+              }),
+            );
+          }
+          const known = (await gateSeam.listGates?.(runId).catch(() => [])) ?? [];
+          const next = nextUnresolvedLeg({ planned: legs, gates: known }) ?? legs[0];
+          reviewTaskId = next.reviewTaskId;
+          pinnedTargets = next.targets;
+          emitResult = emitted.get(next.reviewTaskId) ?? {
+            ok: false as const,
+            code: "invalid-targets" as const,
+            message: "the per-artifact review named a leg that was never emitted",
+          };
+        } else {
+          if (legs.length === 1) pinnedTargets = legs[0].targets;
+          emitResult = coreDecision.review
+            ? await gateSeam.emit({
+                runId,
+                orgId: run.orgId,
+                reviewTaskId,
+                targets: pinnedTargets,
+              })
+            : ({
+                ok: false as const,
+                code: "invalid-targets" as const,
+                message: coreDecision.why ?? "the review core opened no review",
+              });
+        }
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
