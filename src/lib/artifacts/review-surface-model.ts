@@ -103,29 +103,47 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
+/**
+ * THE SETTLED MARKER'S SENTENCE IS THE DRAWING'S SENTENCE (cinatra#3046, fix
+ * leg 17; cinatra#3293).
+ *
+ * Every drawn settled marker in the ratified drawing opens with these five
+ * words, whatever was reviewed and however it was decided. What FOLLOWS them in
+ * a drawn example is the display's own continuation — "These are the words that
+ * will be sent" over an email body, "The dashboard is live from here" over a
+ * dashboard, "The change went to the site, which published it at 09:20" over a
+ * page — and that clause is a statement about the reviewed artifact, which the
+ * artifact type's own display is the only thing on the surface entitled to make.
+ * The host writes the part that is the host's: the invariant sentence.
+ *
+ * The three sentences that stood here were the decision bar's post-press lines
+ * minus their leading verb. That kept the bar and the card saying one thing, but
+ * neither of them was saying the drawing's thing, and the bar's line is a report
+ * on the press the reviewer just made rather than the marker a reader meets
+ * afterwards. The bar keeps its own lines, unchanged.
+ */
+export const REVIEW_SETTLED_MARKER_SENTENCE = "Decided on the revision above.";
+
+/** The user-facing copy for a settled gate whose outcome is recorded. The pill's
+ *  reading + the drawn sentence; NO refresh (the component draws none) — the
+ *  reading is final.
+ *
+ *  THE OUTCOME IS ON THE PILL AND ON `data-review-outcome`, which is where the
+ *  drawing puts it and where every reader of this surface takes it from. The
+ *  sentence is invariant BY DESIGN: it names the revision the decision was taken
+ *  on, and that is true of all three outcomes. */
 export function reviewSettledCopy(
   outcome: ReviewSettledOutcome,
   decidedByName?: string,
 ): { title: string; body: string } {
   const by = decidedByName ? ` by ${decidedByName}` : "";
+  const body = REVIEW_SETTLED_MARKER_SENTENCE;
   switch (outcome) {
     case "approved":
-      return {
-        title: `Continued${by}`,
-        body: "The gate is resolved and the run has been released to continue.",
-      };
+      return { title: `Continued${by}`, body };
     case "rejected":
-      return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back.",
-      };
     case "changes_requested":
-      return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
-      };
+      return { title: `Changes requested${by}`, body };
   }
 }
 

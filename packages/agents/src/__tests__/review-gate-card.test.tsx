@@ -1690,9 +1690,11 @@ describe("a settled card that knows its outcome", () => {
   it("names the outcome AND the decider", async () => {
     const container = await settledWith("approved", "Dana Okonkwo");
     expect(container.textContent).toContain("Continued by Dana Okonkwo");
-    expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
-    );
+    // THE DRAWN SENTENCE (cinatra#3046, fix leg 17; cinatra#3293). Every drawn
+    // settled marker opens with these words; what a drawn example puts AFTER
+    // them is the display's own continuation about the artifact reviewed, which
+    // the artifact type's display owns and the host never writes.
+    expect(container.textContent).toContain("Decided on the revision above.");
     expect(
       container
         .querySelector('[data-conformance-id="review-gate-settled"]')
@@ -1709,20 +1711,27 @@ describe("a settled card that knows its outcome", () => {
     //
     // The three outcomes stay three: `data-review-outcome` carries the recorded
     // one unchanged on every reading, which is what routing and the audit trail
-    // read, and the sentence under the heading still says which turn-back it was.
-    const cases: Array<[Parameters<typeof settledWith>[0], string, string]> = [
-      ["approved", "Continued by Dana Okonkwo", "released to continue"],
-      ["rejected", "Changes requested by Dana Okonkwo", "turned back."],
-      [
-        "changes_requested",
-        "Changes requested by Dana Okonkwo",
-        "turned back for repair.",
-      ],
+    // read.
+    //
+    // AND THE SENTENCE IS ONE SENTENCE (cinatra#3046, fix leg 17; cinatra#3293).
+    // It used to be three, each of them the decision bar's post-press line minus
+    // its leading verb. The drawing gives the marker one sentence — "Decided on
+    // the revision above." — under a pill that carries the reading, and the
+    // clause a drawn example adds after it is the DISPLAY's statement about the
+    // artifact ("These are the words that will be sent"), never the host's. The
+    // decision bar keeps its own three lines, untouched: they report the press
+    // the reviewer just made, which is a different thing said at a different
+    // moment.
+    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
+      ["approved", "Continued by Dana Okonkwo"],
+      ["rejected", "Changes requested by Dana Okonkwo"],
+      ["changes_requested", "Changes requested by Dana Okonkwo"],
     ];
-    for (const [outcome, title, sentence] of cases) {
+    for (const [outcome, title] of cases) {
       const container = await settledWith(outcome, "Dana Okonkwo");
       expect(container.textContent).toContain(title);
-      expect(container.textContent).toContain(sentence);
+      expect(container.textContent).toContain("Decided on the revision above.");
+      expect(container.textContent).not.toContain("The gate is resolved");
       expect(
         container
           .querySelector('[data-conformance-id="review-gate-settled"]')

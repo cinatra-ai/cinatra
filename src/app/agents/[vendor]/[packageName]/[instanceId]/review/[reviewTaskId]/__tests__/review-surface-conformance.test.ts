@@ -237,6 +237,18 @@ const HOST_STANDARD_IDS = new Set([
   // SPEC_CONFORMANCE under its spec commit.
   "review-target-island-skeleton",
   "review-target-island-timeout",
+  // cinatra#3046 fix leg 17 (cinatra#3294) — the two parts of the SETTLED
+  // MARKER's drawn row, so a graded reading can address each of them.
+  //
+  // NAMED HONESTLY, like the anchors above: the COMPOSITION is the drawing's
+  // own and is quoted in the component — a wrapping flex row with the panel
+  // line, `var(--surface)` and 9px/12px padding, holding a pill with a 7px dot
+  // and then a 12px muted sentence — but the drawing's markup carries no
+  // conformance id on those two nodes, so the ids themselves are this surface's
+  // and are listed here rather than under SPEC_CONFORMANCE. The outer marker
+  // keeps its spec anchor, `review-gate-settled`, unchanged.
+  "review-gate-settled-pill",
+  "review-gate-settled-sentence",
 ]);
 
 function conformanceIdsIn(src: string): string[] {

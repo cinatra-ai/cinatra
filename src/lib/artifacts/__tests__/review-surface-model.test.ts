@@ -314,7 +314,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // this was, and `data-review-outcome` still carries all three.
     expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
       title: "Continued by Dana Okonkwo",
-      body: "The gate is resolved and the run has been released to continue.",
+      body: "Decided on the revision above.",
     });
     expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
       "Changes requested by Dana Okonkwo",
@@ -324,11 +324,24 @@ describe("the settled copy names the outcome and its decider", () => {
     );
   });
 
-  it("keeps the three outcomes readable apart in the line's own sentence", () => {
-    // Two outcomes share a heading, so the sentence beneath it is what tells a
-    // reader which turn-back this was. It may never collapse.
+  it("keeps the three outcomes readable apart — on the reading and on the record", () => {
+    // THE SENTENCE IS ONE SENTENCE NOW (cinatra#3046, fix leg 17; cinatra#3293).
+    // It used to be three, and this case used to require that. The ratified
+    // drawing gives the settled marker ONE sentence — "Decided on the revision
+    // above." — under a pill that carries the reading; the clause a drawn
+    // example adds after it ("These are the words that will be sent") is the
+    // DISPLAY's statement about the artifact reviewed, which the artifact type's
+    // own display owns and the host may not write for it.
+    //
+    // So what must stay readable apart is the OUTCOME, and it does, twice over:
+    // the drawing's own two readings on the title, and all three values on
+    // `data-review-outcome`, which is what routing and the audit trail read.
     const bodies = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).body);
-    expect(new Set(bodies).size).toBe(3);
+    expect(new Set(bodies).size).toBe(1);
+    expect(bodies[0]).toBe("Decided on the revision above.");
+    const titles = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).title);
+    expect(new Set(titles)).toEqual(new Set(["Continued", "Changes requested"]));
+    expect(reviewSettledCopy("approved").title).toBe("Continued");
   });
 
   it("reads as a finished sentence with no decider at all", () => {
@@ -349,7 +362,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // fact about what the reviewer's own press started. A settled card has not
     // read that, so it may not assert it.
     expect(reviewSettledCopy("changes_requested").body).toBe(
-      "The gate is resolved and the reviewed work has been turned back for repair.",
+      "Decided on the revision above.",
     );
     expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
   });

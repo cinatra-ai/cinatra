@@ -409,10 +409,22 @@ describe("a park written onto a row that is already parked on a question", () =>
       expect(screen.queryByRole("button", { name: /Re-check/i })).toBeNull();
       expect(document.querySelector("#field-idea")).toBeNull();
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
-      expect(
-        published[published.length - 1],
-        "the answered setup ask is still published as a live gate",
-      ).toBeNull();
+      // AWAITED RATHER THAN READ ONCE (cinatra#3046, fix leg 17). The placeholder
+      // above stopped being this assertion's synchronisation point on the
+      // conversation host: that host now draws the quiet box for the WHOLE
+      // working window, so the box is already standing while the park is still
+      // one look away. The property is unchanged and is still this run's own —
+      // the answered setup ask must not stay published as a live gate once the
+      // park is read — it is waited for instead of sampled at the instant an
+      // earlier paint happened to make true.
+      await waitFor(
+        () => {
+          if (published[published.length - 1] !== null) {
+            throw new Error("the answered setup ask is still published as a live gate");
+          }
+        },
+        { timeout: 30_000 },
+      );
     },
     60_000,
   );

@@ -707,21 +707,43 @@ describe("the swap happens on its own while the stream stays mute", () => {
         hitlContext: ANSWERED_INPUT_GATE,
       });
 
-      // THE WINDOW CLOSES on the look that answered with nothing: the run's own
-      // pause is drawn again, whatever each host draws for it. The placeholder
-      // is the reading under test and it is the same on both.
-      await waitFor(() => {
-        if (document.querySelector(PLACEHOLDER)) {
-          throw new Error("the pause is still buried behind a failing look");
-        }
-      }, { timeout: 25_000 });
-      // …and where the question's own fields are drawn inside this panel — the
-      // run page; the conversation's host draws them from the gate the panel
-      // publishes — they are back, with their control.
+      // THE WINDOW CLOSES on the look that answered with nothing — and what
+      // that means differs by host, because what the box is standing in front of
+      // differs by host (cinatra#3046, fix leg 17).
+      //
+      // ON THE RUN PAGE this panel IS the screen that draws the question, so the
+      // quiet box in front of it is exactly what would bury it. The box must go,
+      // and the question's own fields must be back with their control.
+      //
+      // IN A CONVERSATION this panel draws no question at all
+      // (`runCardOwnsLifecycleCopy` is false for `chat_thread`), so the box is
+      // not what a reader is missing and never was. The ratified drawing gives
+      // that box the quiet reading for the whole working window — "while the run
+      // is working that card is a placeholder for the review screen … It names
+      // no status, reports no result and draws nothing to press" — and the
+      // reader's roads to the question on this host are the thread's own
+      // sibling screen card and the gate descriptor this panel publishes.
+      // Neither is touched by a failing LOOK: the look reads the review slot,
+      // and the question is on the run's own row. The publish road is asserted
+      // directly in `agentic-run-panel.pause-with-nothing-to-draw.test.tsx`
+      // ("conversation — a question ON FILE gets the quiet box, and is still
+      // published"); what is pinned here is that the failing look does not take
+      // the drawn box away from the window the drawing gives it.
       if (surface === "agent-detail") {
+        await waitFor(() => {
+          if (document.querySelector(PLACEHOLDER)) {
+            throw new Error("the pause is still buried behind a failing look");
+          }
+        }, { timeout: 25_000 });
         await waitFor(() => {
           if (!document.querySelector("#field-idea")) {
             throw new Error("the question is still buried behind a failing look");
+          }
+        }, { timeout: 25_000 });
+      } else {
+        await waitFor(() => {
+          if (!document.querySelector(PLACEHOLDER)) {
+            throw new Error("the conversation lost the quiet box for the working window");
           }
         }, { timeout: 25_000 });
       }

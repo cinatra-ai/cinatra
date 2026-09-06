@@ -1961,8 +1961,57 @@ export function AgenticRunPanel({
     rawEffectiveHitlContext === null &&
     effectiveHitlContext === null;
   const conversationHostedPanel = ambientLifecycleHost === "chat_thread";
+  //
+  // AND A QUESTION THIS HOST DRAWS NO SCREEN FOR IS NOTHING TO DRAW EITHER
+  // (cinatra#3007, fix leg 17; cinatra#3290, #3291, #3292).
+  //
+  // `pauseWithNothingToDraw` above reads the ROW: it holds only while the run
+  // recorded no question at all. The thirteenth graded reading photographed the
+  // other half of the same window, on a conversation surface held open before
+  // the gate existed and in both palettes: a run `pending_approval` with a setup
+  // question still on its row, and a transcript that draws no screen for it —
+  // `runCardOwnsLifecycleCopy` is false for `chat_thread`, so the panel's own
+  // HITL screen card is not mounted in a conversation and the question is drawn,
+  // if at all, by the thread's own lifecycle card and by the prompt window. The
+  // box was therefore left with nothing pressable in it, and fell through to the
+  // run-progress reading at the foot of this file: the heading, an "Awaiting
+  // input" status badge and "No messages yet.".
+  //
+  // Against a drawing that gives this box one reading — "while the run is
+  // working that card is a placeholder for the review screen: the card frame,
+  // and a spinning icon … It names no status, reports no result and draws
+  // nothing to press." A status word and a result line are two of the three
+  // things that sentence forbids, and the arc it does give was drawn nowhere.
+  //
+  // AND NOTHING IS BURIED BY IT, WHICH IS WHY THIS IS THE CONVERSATION'S ARM
+  // ALONE. The sibling suite pins the opposite property — "a question ON FILE is
+  // never the quiet placeholder" — against burying a live thing a person has to
+  // answer. In a transcript nothing is buried: the thread mounts
+  // `AgentHitlScreenCard` for the same run as a SIBLING of this panel, always,
+  // self-gating on the run's own moment, and it is the screen that draws the
+  // fields and the Continue on this host. The question is on the page either
+  // way; what changes is only whether the box the REVIEW will land in also
+  // shouts a status over it. The composer descriptor this panel publishes is
+  // untouched, so the prompt-window road is exactly the road it was. On the RUN
+  // PAGE the panel IS the screen, so this arm is off it and the operator's
+  // recovery affordance is untouched.
+  //
+  // AND IT IS BOUNDED LIKE EVERY OTHER WORDLESS BOX HERE. It holds only while
+  // there is a question on the row to be working on AND the slot's reader can
+  // still look; a reader that has spent its budgets is not a wait, and holding
+  // an arc in front of one is the spinner nothing can end.
+  const questionThisHostDrawsNoScreenFor =
+    conversationHostedPanel &&
+    isPendingApproval &&
+    !markedReviewGate &&
+    !parkedOnProducedReview &&
+    !panelMountsHitlScreenCard &&
+    rawEffectiveHitlContext !== null &&
+    reviewStillReading;
   const pausePlaceholder =
-    conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;
+    conversationHostedPanel &&
+    ((pauseWithNothingToDraw && reviewStillReading) ||
+      questionThisHostDrawsNoScreenFor);
   const blockedOnInputGate =
     isPendingApproval &&
     !markedReviewGate &&
@@ -2046,12 +2095,21 @@ export function AgenticRunPanel({
       : (status === "completed" || parkedOnProducedReview) && !widgetHostedPanel
         ? reviewSlot.ref
         : null;
+  // AND THE ROW'S OWN PARK HOLDS THE BOX UP, not only a guess with a budget on
+  // it (cinatra#3007, fix leg 17). `reviewMayStillOpen` is the unheard window —
+  // "this surface has not heard back yet" — and it is spent by design. A run
+  // whose row SAYS it is parked on the review of what it produced is a fact in
+  // hand, and it is the state this box exists for, so the box stands while the
+  // park stands rather than for as long as a look has not answered. Without it a
+  // long park on a standing surface falls back to the run-progress reading
+  // exactly as the window above did, with the same status word over it.
   const runIsWorking =
     inPlaceReviewRef === null &&
     !blockedOnInputGate &&
     (status === "queued" ||
       status === "running" ||
-      ((reviewMayStillOpen || pausePlaceholder) && !widgetHostedPanel));
+      ((reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview) &&
+        !widgetHostedPanel));
 
   // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
   //

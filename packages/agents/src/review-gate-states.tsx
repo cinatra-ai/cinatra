@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
+import { CircleX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -64,10 +64,29 @@ export function ReviewGateBlocked({
 
 /**
  * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Changes requested by …", over the shipped sentence for
- * that outcome, and with the recorded suggestion chips still drawn above it by
- * the caller.
+ * §4.2). The card that knows what happened says so, over the drawn sentence,
+ * and with the recorded suggestion chips still drawn above it by the caller.
+ *
+ * AND IT IS THE DRAWN ROW, NOT A CENTRED GLYPH (cinatra#3046, fix leg 17;
+ * cinatra#3294). This was a 36px tinted tile holding a double-check mark, over
+ * two centred lines — a treatment nothing in the drawing gives it. The drawing
+ * draws this marker as ONE ROW, left-aligned with the display it sits under:
+ * `display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+ *  border:1px solid var(--line); border-radius:8px; background:var(--surface);
+ *  padding:9px 12px`, holding a pill — `border-radius:9999px`, a 7px dot, 12px
+ * semibold, tinted to the outcome — and then the sentence at 12px in
+ * `var(--muted)`. The thirteenth graded reading measured the centred treatment
+ * on both palettes; this is the row it should have been.
+ *
+ * THE TOKENS ARE THE REGISTERED ONES. The drawing's `--line` is `--line` here,
+ * its `--surface` is `--surface`, its `--muted` is `--muted-foreground`, and its
+ * `--green` on the settled pill is the status palette's `--success`, which is
+ * the token this component's tint already took. Nothing new is registered.
+ *
+ * THE ACTOR ON THE PILL IS NOT THIS CHANGE. The drawing's pill reads
+ * "Continued" alone; the name of the decider beside it is a departure already
+ * recorded against this branch and is deliberately left exactly where it was —
+ * the composition is what moves here, not the words.
  *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
@@ -90,27 +109,46 @@ export function ReviewGateSettled({
   decidedByName?: string;
 }) {
   const copy = reviewSettledCopy(outcome, decidedByName);
-  const Icon =
-    outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
   // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
-  // in the tint-over-token shape the shipped status chips already use.
+  // in the tint-over-token shape the shipped status chips already use — now on
+  // the drawn PILL rather than on a tile behind a glyph.
   const tone =
     outcome === "approved"
-      ? "bg-success/10 text-success"
+      ? "border-success/30 bg-success/10 text-success"
       : outcome === "rejected"
-        ? "bg-destructive/10 text-destructive"
-        : "bg-warning/10 text-warning";
+        ? "border-destructive/30 bg-destructive/10 text-destructive"
+        : "border-warning/30 bg-warning/10 text-warning";
+  const dotTone =
+    outcome === "approved"
+      ? "bg-success"
+      : outcome === "rejected"
+        ? "bg-destructive"
+        : "bg-warning";
   return (
     <div
       data-conformance-id="review-gate-settled"
       data-review-outcome={outcome}
-      className="rounded-control border border-line bg-surface-strong px-4 py-5 text-center"
+      // The drawn row: 8px corners, the panel line, the plain surface, 9px/12px
+      // padding, an 8px gap, and wrapping rather than truncating when the
+      // sentence outruns a narrow card.
+      className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-[9px]"
     >
-      <div className={`mx-auto mb-2.5 grid size-9 place-items-center rounded-lg ${tone}`}>
-        <Icon aria-hidden="true" className="size-[18px]" />
-      </div>
-      <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
+      <span
+        data-conformance-id="review-gate-settled-pill"
+        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] font-sans text-xs font-semibold ${tone}`}
+      >
+        {/* The drawn 7px dot, tinted to the outcome. Decorative: the pill's own
+            words carry the reading, and `data-review-outcome` carries it for a
+            machine. */}
+        <span aria-hidden="true" className={`size-[7px] rounded-full ${dotTone}`} />
+        {copy.title}
+      </span>
+      <span
+        data-conformance-id="review-gate-settled-sentence"
+        className="text-xs text-muted-foreground"
+      >
+        {copy.body}
+      </span>
     </div>
   );
 }
@@ -313,16 +351,26 @@ export function ReviewGatePlaceholder({
           fills, and the arc that claims something is still coming does not. */}
       <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
         {settled ? null : (
-          // THE ARC, AND ONLY THE ARC (cinatra#3046, fix leg 12). The drawn band
-          // holds one node: `viewBox 0 0 24 24`, `width:22px; height:22px`, a
-          // SINGLE stroked path in the indigo, spinning. What stood here drew two
-          // things the drawing does not: a 30px `rounded-lg bg-mustard-ink/15`
-          // tile behind the arc, and — inside the shared `LoadingSpinner` — a
-          // full `circle` at `stroke-opacity 0.25`, the grey track ring the arc
-          // runs on. The tenth graded reading measured both as undrawn chrome on
-          // the parked box in both palettes. The shared spinner is left alone
-          // (every other surface in the system draws the tracked one, and the
-          // drawing does not govern them); this box draws the node it is given.
+          // THE ARC, AND ONLY THE ARC (cinatra#3046, fix leg 12), DRAWN HERE
+          // RATHER THAN MOUNTED (fix leg 17; cinatra#3290). The drawn band holds
+          // one node: `viewBox 0 0 24 24`, `width:22px; height:22px`, a SINGLE
+          // stroked path in the indigo, spinning — the arc of Components
+          // § Skeleton / Spinner, to the path. What stood here before leg 12
+          // drew two things the drawing does not: a 30px `rounded-lg
+          // bg-mustard-ink/15` tile behind the arc, and — inside the older
+          // shared `LoadingSpinner` — a full `circle` at `stroke-opacity 0.25`,
+          // the grey track ring the arc runs on. The tenth graded reading
+          // measured both as undrawn chrome on the parked box in both palettes.
+          //
+          // AND IT STAYS DRAWN HERE, WHICH IS A DECISION, NOT AN OVERSIGHT. The
+          // registered `@/components/ui/spinner` is this same arc and would read
+          // identically on the surface; it is an icon-library component, and
+          // every suite that pins THIS box's arc stubs that library to null, so
+          // mounting it would make the one property these guards exist to
+          // measure — "the box draws the arc" — unmeasurable in exactly the
+          // place it is measured. The box therefore owns the node it is judged
+          // on. Its measures are the registered component's: `--primary`,
+          // 22px, spinning.
           <svg
             viewBox="0 0 24 24"
             fill="none"
