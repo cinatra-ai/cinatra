@@ -81,8 +81,17 @@ const REASON = "[data-rail-lifecycle-reason]";
 const LIFECYCLE_ROW = '[data-rail-kind="lifecycleDecision"]';
 const STEP_ROW = '[data-rail-kind="step"]';
 
-/** The 2rem (`h-8`) row box every ordinary single-line rail row has always had. */
-const SINGLE_LINE_ROW_HEIGHT = 32;
+/**
+ * The single-line rail row box: a 24px circle with the drawing's own 2px above
+ * and below it.
+ *
+ * IT WAS 32px HERE UNTIL cinatra#3225. That was the shared button's fixed `h-8`,
+ * which the rail's row class no longer takes — the drawing's `.rail .step {
+ * padding: 2px 0 }` over the circle is 28px and nothing else — so the constant
+ * follows the drawn row rather than the primitive it used to inherit. Measured
+ * on the fixture route at both viewports: 28px.
+ */
+const SINGLE_LINE_ROW_HEIGHT = 28;
 
 /** Sub-pixel slack: fractional layout values must not be read as an overlap. */
 const EPSILON = 0.5;

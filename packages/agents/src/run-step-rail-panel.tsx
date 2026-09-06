@@ -2,6 +2,8 @@
 
 import { Check } from "lucide-react";
 
+import { cn } from "@/lib/utils";
+
 import {
   Stepper,
   StepperIndicator,
@@ -18,6 +20,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_PAGE_RAIL_TITLE_CLASS,
 } from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -88,7 +91,17 @@ export function RunStepRailPanel({
       data-run-step-rail=""
       data-conformance-id="run-step-rail"
       data-action="open-run-step -> step-detail"
-      className="flex w-52 shrink-0 flex-col pt-1"
+      // NO TOP PADDING OF ITS OWN (cinatra#3225, fix leg 7). This panel is
+      // mounted as ONE MORE ENTRY inside the run surface's rail column, under
+      // the mark that stands between two entries — and that column already
+      // carries the rail's own 4px top offset. A second offset here landed
+      // BETWEEN the last row above and this panel's first row, so the one rail
+      // composed a 48px pitch at the join and the drawing's 44px everywhere
+      // else: measured on a real completed run, and the two rhythms the third
+      // proof round photographed. The column owns the rail's top offset; a
+      // panel drawn as the whole rail is wrapped by a column that states it
+      // (`instance-screens`), exactly as this one is.
+      className="flex w-52 shrink-0 flex-col"
       aria-label="Agent run steps"
     >
       <Stepper
@@ -131,7 +144,13 @@ export function RunStepRailPanel({
             }
 
             const titleNode = (
-              <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+              <StepperTitle
+                className={cn(
+                  // The step's own name fits the column (cinatra#3226).
+                  RUN_PAGE_RAIL_TITLE_CLASS,
+                  "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
+                )}
+              >
                 {entry.label}
               </StepperTitle>
             );
@@ -156,7 +175,7 @@ export function RunStepRailPanel({
                     drops every other prop, so a data-* attribute placed there
                     never reaches the DOM. */}
                 <div
-                  className="flex items-center gap-1"
+                  className="flex w-full min-w-0 items-center gap-1"
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                 >

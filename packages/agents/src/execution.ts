@@ -15,7 +15,11 @@ import {
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
-import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
+import {
+  onAgentHitl,
+  onRunStoppedAtReviewGate,
+  stateRunScheduleMoment,
+} from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -1580,13 +1584,50 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           `[artifact-review-gate] run=${runId} task=${task.id} pinned review targets + routed to ${reviewSurfaceUrl}`,
         );
         // Same transition tail as the legacy interrupt path below.
+        //
+        // AND THE RUN STATES THE MOMENT IT IS STOPPED AT (cinatra#3221, fix leg
+        // 7). The rail elects the entry a run is parked on from the run's own
+        // row, and this park wrote no moment at all: a run stopped in front of
+        // its work review therefore said nothing about where it stood, so the
+        // page elected nothing on the very gate the reader was looking at.
+        // `review` is the moment the closed set already names for it, and the
+        // card it mounts is this gate's own.
+        const reviewMomentRun = {
+          id: runId,
+          orgId: run.orgId,
+          status: "pending_approval" as const,
+        };
         if (fromStatus === "pending_approval") {
+          // A gate that arrives on an ALREADY-PARKED run performs no transition
+          // — `pending_approval -> pending_approval` is not a legal edge — so
+          // there is no winning CAS to hang the record on. The run is standing
+          // at THIS gate now, and the row has to say so (and name this gate's
+          // card, not the previous one's). The writer carries its own
+          // `onlyWhileStatus` guard, so a run that left the park records
+          // nothing.
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
-          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-          throw e;
-        });
+        // AFTER THE WINNING TRANSITION, never before it and never on a lost one:
+        // winning is the only proof the run is really parked here.
+        let parkedAtReview = false;
+        try {
+          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          parkedAtReview = true;
+        } catch (e) {
+          if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
+        }
+        if (parkedAtReview) {
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
+        }
         return;
       }
       // invalid-targets (no gate pinned) → fall through to the legacy HITL

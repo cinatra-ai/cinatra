@@ -587,6 +587,55 @@ export function upcomingRunRailStepKeys(params: {
 }
 
 /**
+ * THE GATES THAT STAND AFTER THE SKILLS QUESTION — the rail keys whose presence
+ * means the run has already moved past the point its skills would be asked at.
+ */
+const RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION: ReadonlySet<string> = new Set([
+  "schedule",
+  "review",
+  "gate",
+]);
+
+/**
+ * DOES AN UNREACHED SKILLS ENTRY STILL HEAD THE RAIL? (cinatra#3221 item 3, fix
+ * leg 7.)
+ *
+ * The ratified drawing, the review surface, section II ("The Skills step — the
+ * first entry on the rail"): "WHERE a run begins by recommending the skills it
+ * proposes to use, that question is the run's first gate — the first entry on
+ * the step rail, where it is named Skills, ahead of the work steps it would
+ * authorize." The condition is the sentence's own: the entry heads the rail
+ * where the run BEGINS there. Section I fixes the other half — "steps already
+ * passed sit above it, steps still to come below" — so an entry the run has not
+ * reached never stands above the entry it is standing on.
+ *
+ * WHAT THE THIRD PROOF ROUND MEASURED. At the SCHEDULING reading the rail drew
+ * the unreached Skills forecast row above the elected Schedule step: the row was
+ * pinned to the absolute head of the rail whatever else had already been drawn
+ * (cinatra#3047 fix leg 8, which put it there for the run whose first step is
+ * its own input form — the case this keeps unchanged, because an input form is
+ * one of "the work steps it would authorize").
+ *
+ * SO THE RULE IS THE SENTENCE'S CONDITION, not a new ordering: the entry heads
+ * the rail while the run has not passed the point it would be asked at, and is
+ * NOT DRAWN once the rail already carries a LATER gate the run has reached — its
+ * schedule, or the gate it is stopped at. A question the run went past is behind
+ * the reader, and a forecast row for it is neither passed work above nor work
+ * still to come below.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function upcomingSkillsEntryHeadsTheRail(
+  drawn: readonly { key: string; reached?: boolean }[],
+): boolean {
+  return !drawn.some(
+    (step) =>
+      RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION.has(step.key) && step.reached !== false,
+  );
+}
+
+/**
  * WHICH TAB THE RUN PAGE LIGHTS (cinatra#3068 fix leg 3).
  *
  * The ratified drawing, on a step drawn inside this frame: "A step shown inside
@@ -2080,7 +2129,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 settled: false,
                 surface: null,
               });
-              if (upcomingHeadKeys.length > 0) {
+              // AND ONLY WHILE THE RUN HAS NOT PASSED IT (cinatra#3221 item 3,
+              // fix leg 7). The head row is the drawing's own placement for the
+              // run's FIRST gate; once the rail carries a later gate the run has
+              // reached — its schedule, or the gate it is stopped at — the
+              // question is behind the reader and the forecast row is not drawn
+              // at all. See `upcomingSkillsEntryHeadsTheRail`.
+              if (upcomingHeadKeys.length > 0 && upcomingSkillsEntryHeadsTheRail(railSteps)) {
                 railSteps.unshift(
                   ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
                 );

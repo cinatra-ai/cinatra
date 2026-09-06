@@ -69,7 +69,27 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * keeps its focus indicator: the base's `focus-visible:ring-3` ring is what
  * draws focus here, and a border transparent at rest never drew it.
  */
-export const RUN_PAGE_RAIL_ROW_CLASS = "h-auto gap-2 border-0 px-0 py-0.5";
+export const RUN_PAGE_RAIL_ROW_CLASS =
+  "h-auto w-full min-w-0 gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
+
+/**
+ * THE LABEL FITS THE RAIL COLUMN (cinatra#3226, the fourth proof round's
+ * follow-up).
+ *
+ * The rail column is 208px wide and the row is drawn inside it. The shared
+ * `Button` the rows render through pins `whitespace-nowrap`, so a work step
+ * named by what it did — which is what the drawing asks a rail entry to say,
+ * and what this branch made the settled step say — ran straight out of the
+ * column and was cut by the detail card beside it: measured on the live boot
+ * at 208px of overflow past a 208px column, in both palettes.
+ *
+ * IT WRAPS, IT DOES NOT TRUNCATE, for the reason the lifecycle reason below
+ * already states: a clipped label answers nothing, and the drawing's own rail
+ * rows carry their whole name. `min-w-0` is what lets the flex row give the
+ * label back to the column instead of growing past it; `break-words` catches a
+ * single long token that no wrap point can break.
+ */
+export const RUN_PAGE_RAIL_TITLE_CLASS = "min-w-0 break-words whitespace-normal text-start";
 
 /**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
@@ -155,7 +175,12 @@ export function RailExtraEntry({
   const isPending = entry.status === "pending";
 
   const titleNode = (
-    <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+    <StepperTitle
+      className={cn(
+        RUN_PAGE_RAIL_TITLE_CLASS,
+        "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
+      )}
+    >
       {entry.label}
       {isGate && isResolved ? (
         <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
@@ -208,7 +233,13 @@ export function RailExtraEntry({
     <div
       // A lifecycle entry's reason wraps to several lines, so its indicator
       // aligns to the FIRST line rather than the block centre.
-      className={isLifecycle ? "flex items-start gap-1" : "flex items-center gap-1"}
+      // The row spans the rail column and may SHRINK inside it, which is what
+      // lets a long label wrap instead of running past the column (cinatra#3226).
+      className={
+        isLifecycle
+          ? "flex w-full min-w-0 items-start gap-1"
+          : "flex w-full min-w-0 items-center gap-1"
+      }
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
       data-rail-gated-step={isGate ? "true" : undefined}
@@ -229,7 +260,14 @@ export function RailExtraEntry({
         // avoid a button-in-anchor.
         <Link
           href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
-          className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          // ONE ROW BOX FOR EVERY ROW (cinatra#3225). The row's geometry is the
+          // shared declaration above, not a second copy written out here: a
+          // gate row that stated its own box is how the rail came to compose
+          // two rhythms in the first place.
+          className={cn(
+            "flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            RUN_PAGE_RAIL_ROW_CLASS,
+          )}
           data-rail-gate-link={entry.gate.reviewTaskId}
         >
           {indicatorNode}
@@ -240,7 +278,10 @@ export function RailExtraEntry({
         // VERIFICATION view — the before/after "Audit".
         <Link
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
-          className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(
+            "flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            RUN_PAGE_RAIL_ROW_CLASS,
+          )}
           data-rail-verification-link={entry.verification.reviewTaskId}
         >
           {indicatorNode}
@@ -353,14 +394,21 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   if (status === "pending_input" || status === "queued") return 1;
 
   if (status === "pending_approval") {
+    // THE GATE THE RUN IS PARKED AT WINS, WHATEVER STEP PRODUCED THE WORK
+    // (cinatra#3221, fix leg 7). A gate that arrives as a trailing entry is its
+    // own row, and that row is where the run stands: "The step the run is
+    // paused on is highlighted." The spine test used to be asked first, so a
+    // WORK REVIEW gate — which opens at a marked step and therefore arrives
+    // with that step's number on the live interrupt — elected the settled work
+    // step instead of the review entry the reader was standing at, and the
+    // third proof round measured exactly that: nothing elected on the gate.
+    // The spine reading below is unchanged for the gates that have no trailing
+    // row of their own.
+    if (parkedTrailingStep !== null) return parkedTrailingStep;
     // A gate that arrives ON the spine is the row the live interrupt names.
     if (currentStepNumber !== null && onSpine(currentStepNumber) && !awaitingNextStep) {
       return toDisplayIndex(currentStepNumber);
     }
-    // A gate that arrives as a TRAILING entry is its own row — whether the
-    // interrupt named no spine step, or the reader has already continued past
-    // the spine step it did name.
-    if (parkedTrailingStep !== null) return parkedTrailingStep;
     if (currentStepNumber !== null) {
       return awaitingNextStep ? toDisplayIndex(currentStepNumber) + 1 : toDisplayIndex(currentStepNumber);
     }

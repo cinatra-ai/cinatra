@@ -280,3 +280,94 @@ describe("one definition serves both rails (item 4)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE JOIN — where the run surface's own rows meet the page's rail (fix leg 7)
+//
+// The run page draws ONE rail out of two components: the gate rows that head
+// the column, then `RunStepRailPanel` as one more entry beneath them, with the
+// drawing's mark standing between. The panel carried a top offset of its OWN
+// inside a column that already states the rail's — so the pitch at the join
+// composed 48px where every other pair composed the drawing's 44px, which is
+// the "48px rows then 44px" the third proof round measured on a real completed
+// run. One rail is one rhythm at every pair, the join included.
+// ---------------------------------------------------------------------------
+import { RunStepRailPanel as JoinedPanel } from "../run-step-rail-panel";
+
+/** A nested rail's OWN vertical offset, which lands inside the pair above it. */
+function nestedTopOffset(row: HTMLElement, previous: HTMLElement): number {
+  const panel = row.closest<HTMLElement>("[data-run-step-rail]");
+  // Only an offset the row above does NOT sit inside enters that pair's gap.
+  if (!panel || panel.contains(previous)) return 0;
+  return resolve(panel.className, /^pt-(\d+(?:\.\d+)?)$/, px) ?? 0;
+}
+
+function joinedReading(): Reading {
+  const { container } = render(
+    <RunSurfaceRail
+      steps={surfaceSteps().slice(0, 2)}
+      rail={
+        <JoinedPanel
+          entries={panelEntries()}
+          activeOrdinal={null}
+          reviewHrefBase="/agents/v/p/run/review"
+        />
+      }
+      detail={<div>detail</div>}
+      initialSelection="input:0"
+    />,
+  );
+  const column = container.querySelector<HTMLElement>("[data-run-step-rail-column]")!;
+  const rows = Array.from(
+    column.querySelectorAll<HTMLElement>(
+      '[data-run-surface-rail-step], [data-slot="stepper-trigger"], a[data-rail-gate-link], a[data-rail-verification-link]',
+    ),
+  );
+  const marks = Array.from(
+    column.querySelectorAll<HTMLElement>(
+      '[data-run-surface-rail-separator], [data-slot="stepper-separator"]',
+    ),
+  );
+  return { rows, marks };
+}
+
+describe("the join composes the same pitch as every other pair (cinatra#3225)", () => {
+  it("reads ONE pitch down the whole composed rail, the join included", () => {
+    const { rows, marks } = joinedReading();
+    // two surface rows and the panel's four, with a mark between every pair.
+    expect(rows.length).toBe(6);
+    expect(marks.length).toBe(5);
+
+    const pitches = marks.map((mark, i) => {
+      const above = rowBox(rows[i]!);
+      const below = rowBox(rows[i + 1]!);
+      const m = markBox(mark);
+      return (
+        above.height -
+        above.circleCentre +
+        m.marginTop +
+        m.height +
+        m.marginBottom +
+        nestedTopOffset(rows[i + 1]!, rows[i]!) +
+        below.circleCentre
+      );
+    });
+
+    for (const pitch of pitches) expect(pitch).toBe(44);
+  });
+
+  it("the nested rail states no vertical offset of its own", () => {
+    const { container } = render(
+      <JoinedPanel
+        entries={panelEntries()}
+        activeOrdinal={null}
+        reviewHrefBase="/agents/v/p/run/review"
+      />,
+    );
+    const panel = container.querySelector<HTMLElement>("[data-run-step-rail]")!;
+    const vertical = tokens(panel.className).filter((t) =>
+      /^(pt|pb|py|mt|mb|my)-/.test(t),
+    );
+    expect(vertical).toEqual([]);
+  });
+});
