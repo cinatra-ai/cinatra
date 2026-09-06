@@ -793,14 +793,50 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
         </div>
       )}
 
-      {/* Editor area: contenteditable div with floating placeholder */}
-      <div className="relative min-w-0 flex-1">
+      {/* Editor area: the contenteditable box and the empty field's sentence,
+          STACKED IN ONE GRID CELL (cinatra#3222 item 3, fix leg 9).
+
+          The sentence used to float over the box, out of the flow, so it
+          contributed no height: the box's own min-height came from the `rows`
+          prop alone and the drawing's longest sentence — the review reading's,
+          "the sentence in the empty field" of the one prompt window — wrapped to
+          a second line that fell about 5px past the field's bottom border onto
+          the card ground. The fifth proof round measured it in both palettes.
+
+          Stacked, the sentence is IN the flow of its own grid cell, so the cell
+          — and the field around it — is as tall as the taller of the two, and
+          the sentence is inside the field's box on every line by construction,
+          for a sentence of any length and at any width the field is drawn at.
+          Nothing about the sentence itself is shortened or clipped, which is the
+          whole point: the drawing gives the window one field and one sentence,
+          and the field is what accommodates it.
+
+          The box is the LATER child, so it still paints over the sentence and
+          keeps the caret, the selection and the pointer; the sentence keeps
+          `pointer-events-none` and `select-none` and stays out of the
+          accessibility tree. */}
+      <div className="relative grid min-w-0 flex-1">
         {isEmpty && placeholder && (
           <span
             aria-hidden="true"
+            // THE SENTENCE CLEARS THE SEND CONTROL'S CORNER (cinatra#3222 item
+            // 3). The editable box below reserves that corner with `pr-14`; this
+            // floating sentence reserved the LEFT inset only, so a reading whose
+            // sentence is long enough to wrap — the review reading's, the longest
+            // of the drawing's five — ran its last line under the round control.
+            // The drawing gives the window "the same field, the same send
+            // control, in the same place": the control stands BESIDE the
+            // sentence, never on it, so the sentence's box is the editable box's
+            // box on BOTH sides.
             className={cn(
-              "pointer-events-none absolute top-0 py-3 text-sm leading-6 text-muted-foreground select-none",
-              hasLeftMenu ? "left-1" : "left-4",
+              // ONE CELL WITH THE BOX BELOW IT (cinatra#3222 item 3, fix leg 9):
+              // in the flow of that cell, so the field's box grows to hold the
+              // sentence's every line instead of the sentence spilling past it.
+              // The left inset is now the box's own padding rather than an
+              // offset, which is the same measurement stated the same way on
+              // both, and `pr-14` keeps reserving the send control's corner.
+              "pointer-events-none col-start-1 row-start-1 min-w-0 py-3 pr-14 text-sm leading-6 text-muted-foreground select-none",
+              hasLeftMenu ? "pl-1" : "pl-4",
             )}
           >
             {placeholder}
@@ -826,7 +862,10 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
           onPaste={handlePaste}
           style={editorStyle}
           className={cn(
-            "block w-full overflow-y-auto py-3 pr-14 text-sm leading-6 text-foreground outline-none transition",
+            // The second half of the stack (cinatra#3222 item 3, fix leg 9) —
+            // the same cell the sentence above takes, so the two are read as one
+            // box and the taller of them sizes it.
+            "col-start-1 row-start-1 block w-full min-w-0 overflow-y-auto py-3 pr-14 text-sm leading-6 text-foreground outline-none transition",
             hasLeftMenu ? "pl-1" : "pl-4",
             isDisabled && "cursor-not-allowed opacity-50",
           )}

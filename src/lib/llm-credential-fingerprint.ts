@@ -78,6 +78,25 @@ export function deriveKeyedCredentialFingerprint(
 }
 
 /**
+ * The keyed fingerprint for a raw credential under the HOST'S OWN secret — the
+ * one road every host-side fingerprint of a provider credential takes, so a
+ * credential is never digested twice by two different derivations.
+ *
+ * `null` when the host secret is unavailable: the same fail-closed outcome
+ * `readLiveCredentialFingerprint` reports as `host-secret-unavailable`. A
+ * caller must treat it as "no fingerprint" — never as licence to fall back to a
+ * weaker, unkeyed digest of the credential.
+ */
+export function deriveHostKeyedCredentialFingerprint(
+  provider: string,
+  rawCredential: string,
+): string | null {
+  const hostSecret = readHostSecret();
+  if (!hostSecret) return null;
+  return deriveKeyedCredentialFingerprint(provider, rawCredential, hostSecret);
+}
+
+/**
  * Read the LIVE configured credential for `provider` through the connector's
  * own async configured-connection surface and return its keyed fingerprint.
  *

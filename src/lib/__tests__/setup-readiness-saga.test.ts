@@ -93,7 +93,7 @@ function makePorts(over: Partial<SetupReadinessPorts> & { initialProvider?: stri
       stored.value = provider;
     },
     readStoredDefaultProvider: () => stored.value,
-    computeFingerprint: (p) => `fp-${p}`,
+    computeFingerprint: async (p) => `fp-${p}`,
     writeReceipt(receipt) {
       calls.push("writeReceipt");
       receipts.push(receipt);
@@ -426,7 +426,7 @@ describe("setup readiness saga — codex round-1 regressions", () => {
     // The fingerprint is captured before the proof and re-compared at commit.
     let calls = 0;
     const r = makePorts({
-      computeFingerprint: () => {
+      computeFingerprint: async () => {
         calls += 1;
         return calls === 1 ? "fp-before" : "fp-after-rotation";
       },

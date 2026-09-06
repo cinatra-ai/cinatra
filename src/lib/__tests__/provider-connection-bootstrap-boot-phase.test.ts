@@ -121,7 +121,7 @@ vi.mock("@/lib/authz/audit", () => ({
 // receipt seam. Pinned by setup-readiness-receipt.test.ts.
 vi.mock("@/lib/setup-readiness-saga", () => ({
   areProviderReadinessInputsSatisfied: () => true,
-  readSetupReadinessState: () => ({ ready: false, receipt: null }),
+  readSetupReadinessState: async () => ({ ready: false, receipt: null }),
   readSetupReadinessReceipt: () => null,
 }));
 

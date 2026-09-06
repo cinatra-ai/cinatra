@@ -26,6 +26,7 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
 // `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
@@ -257,6 +258,12 @@ export type TriggerScreenClientProps = {
    */
   statedSchedule?: ProposedSchedule | null;
   durationEstimate?: DurationEstimate | null;
+  /**
+   * How many steps the agent declares (cinatra#3224). Where the estimator has
+   * no reading — a freshly installed agent, no history — the Estimated run
+   * duration line is drawn over this count instead of being withheld.
+   */
+  declaredStepCount?: number | null;
   inputParams?: unknown;
   requiredFields?: unknown;
   properties?: unknown;
@@ -999,14 +1006,21 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             </div>
           </div>
 
-          {/* Estimated run duration — drawn only where there IS one to draw
-              (cinatra#3182 item 5, see `durationCopy`). */}
-          {props.durationEstimate ? (
-            <div className="flex flex-col gap-1">
-              <Label>Estimated run duration</Label>
-              <p className="text-sm text-muted-foreground">{durationCopy(props.durationEstimate)}</p>
-            </div>
-          ) : null}
+          {/* THE ESTIMATED RUN DURATION LINE, ALWAYS (cinatra#3224). The ratified
+              drawing gives it as part of the step's anatomy with no condition
+              on it — "An Estimated run duration line sits above the actions" —
+              and the re-opened Schedule step shows "the same Estimated run
+              duration". Where the estimator has no reading the line is drawn
+              over the agent's declared step count (`declaredDurationEstimate`),
+              never withheld and never a sentence saying it has no answer; this
+              supersedes the withheld-line rule the note above `durationCopy`
+              records from cinatra#3182 item 5. */}
+          <div className="flex flex-col gap-1" data-schedule-duration="">
+            <Label>Estimated run duration</Label>
+            <p className="text-sm text-muted-foreground" data-schedule-duration-copy="">
+              {durationCopy(props.durationEstimate ?? declaredDurationEstimate(props.declaredStepCount))}
+            </p>
+          </div>
 
           {/* Submit — absent entirely in the read-only reading (cinatra#2980):
               "no controls at all". A disabled Continue would still be a control,

@@ -52,7 +52,10 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 vi.mock("@/lib/anthropic-skill-sync-service", () => ({
-  deriveApiKeyFingerprint: () => deriveFp(),
+  deriveApiKeyFingerprint: async () => deriveFp(),
+  // cinatra#3202: the GC path resolves the raw key through the connector's
+  // registered surface too, not through the legacy connector-config row.
+  resolveConfiguredAnthropicApiKey: async () => "sk-test",
   deriveEnvironmentNamespace: () => deriveEnv(),
   // The GC service asserts GRACE > lease TTL at module load — the mock must
   // export the lease TTL constant or the import-time invariant check throws.
