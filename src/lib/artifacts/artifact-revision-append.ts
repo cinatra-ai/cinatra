@@ -304,7 +304,10 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
       },
       {
         text: `UPDATE "${schema}"."objects"
-   SET data = data || $1::jsonb, updated_at = now()
+   SET data = data || $1::jsonb,
+       version = COALESCE(version, 0) + 1,
+       graphiti_sync_status = 'pending',
+       updated_at = now()
  WHERE id = $2::text AND org_id = $3::text AND deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM "${schema}"."representation" r WHERE r.id = $4::text)`,
         values: [
@@ -320,6 +323,11 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
           representationRevisionId,
         ],
       },
+      projectionGuardedOnItsRepresentation(schema, {
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        representationRevisionId,
+      }),
       witnessGuardedOnItsRepresentation(schema, {
         orgId: input.orgId,
         artifactId: input.artifactId,
@@ -494,7 +502,10 @@ RETURNING id, revision`,
       },
       {
         text: `UPDATE "${schema}"."objects"
-   SET data = data || $1::jsonb, updated_at = now()
+   SET data = data || $1::jsonb,
+       version = COALESCE(version, 0) + 1,
+       graphiti_sync_status = 'pending',
+       updated_at = now()
  WHERE id = $2::text AND org_id = $3::text AND deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM "${schema}"."representation" r WHERE r.id = $4::text)`,
         values: [
@@ -509,6 +520,11 @@ RETURNING id, revision`,
           representationRevisionId,
         ],
       },
+      projectionGuardedOnItsRepresentation(schema, {
+        orgId: input.orgId,
+        artifactId: input.targetArtifactId,
+        representationRevisionId,
+      }),
       witnessGuardedOnItsRepresentation(schema, {
         orgId: input.orgId,
         artifactId: input.targetArtifactId,
@@ -567,6 +583,38 @@ RETURNING id, revision`,
  * states — "a witness that can commit without its representation (or vice versa)
  * is not a witness".
  */
+/**
+ * The PROJECTION ENQUEUE for the envelope this writer just patched — guarded on
+ * the same representation the patch is guarded on, so it fires exactly when the
+ * patch fired and never when the CTE above inserted nothing.
+ *
+ * The envelope patch beside it is a real change to an application-visible
+ * `objects` row: the artifact now points at a new representation revision. A row
+ * that changes without bumping `version` and without an outbox row is a row the
+ * graph projection never hears about, so the projected view keeps serving the
+ * SUPERSEDED revision while the table serves the new one — a drift no reader can
+ * see and no test would catch. This keeps the writer in the same class as the
+ * artifact stores beside it, artifact-creation.ts and its siblings: one
+ * transaction that carries its own version bump and its own
+ * `graphiti_projection_outbox` row, which is the condition the objects-writer
+ * drift gate names for a writer that is not yet routed through the canonical
+ * history-aware writer.
+ */
+function projectionGuardedOnItsRepresentation(
+  schema: string,
+  facts: { orgId: string; artifactId: string; representationRevisionId: string },
+): { text: string; values: unknown[] } {
+  return {
+    text: `INSERT INTO "${schema}"."graphiti_projection_outbox"
+  (id, object_id, object_version, org_id, operation, payload_hash, status, attempts)
+SELECT gen_random_uuid()::text, o.id, o.version, o.org_id, 'upsert', NULL, 'pending', 0
+  FROM "${schema}"."objects" o
+ WHERE o.id = $1::text AND o.org_id = $2::text AND o.deleted_at IS NULL
+   AND EXISTS (SELECT 1 FROM "${schema}"."representation" r WHERE r.id = $3::text)`,
+    values: [facts.artifactId, facts.orgId, facts.representationRevisionId],
+  };
+}
+
 function witnessGuardedOnItsRepresentation(
   schema: string,
   facts: Parameters<typeof buildArtifactWriterWitnessOp>[1],

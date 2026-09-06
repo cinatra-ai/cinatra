@@ -24,10 +24,11 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import type { ContextCandidate } from "@/lib/artifacts/context-route-support";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_context_inherit_3080";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-3080-context-inherit";
 const SLOT = "draftContext";

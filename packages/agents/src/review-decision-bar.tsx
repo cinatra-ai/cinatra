@@ -336,15 +336,31 @@ export function ReviewDecisionBar({
                 type="button"
                 variant="outline"
                 size="sm"
-                // AND IN BOTH PALETTES. The shared outline variant carries
-                // its own DARK ground and stroke (`dark:border-input`,
-                // `dark:bg-input-fill/30`), which would take this control
-                // off the drawing's tokens in the dark reading only. The
-                // drawing names one pair for both — `.btn.outline` is
-                // `var(--surface)` inside `var(--line-strong)`, and those two
-                // tokens are themselves redefined per palette — so the same
-                // two are asked for in the dark reading as well.
-                className="border-line-strong bg-surface text-foreground dark:border-line-strong dark:bg-surface"
+                // AND IN BOTH PALETTES (corrected, cinatra#3080 fix leg 9).
+                // The shared outline variant carries its own DARK ground and
+                // stroke (`dark:border-input`, `dark:bg-input-fill/30`), which
+                // would take this control off the drawing's tokens in the dark
+                // reading only, so both readings are named here. Fix leg 8
+                // named `--line-strong` for both on the premise that it is
+                // "redefined per palette". IT IS NOT, and it never will be:
+                // `.dark` deliberately leaves it undeclared because the
+                // etched-rule gate binds to its light value
+                // (src/app/__tests__/control-border-contrast.test.ts pins that).
+                // So the dark reading strokes the LIGHT palette's full navy on a
+                // dark control fill — measured on the live boot as
+                // `rgb(21, 33, 58)` over `lab(3.87 0.50 -12.27)`, an edge that is
+                // not there, while the light reading showed the drawing's
+                // outline. That is the two palettes disagreeing about one
+                // treatment. `--input` is the product's own answer to exactly
+                // this (cinatra#3107): it aliases `--line-control`, which IS
+                // `--line-strong` in the light palette — so the light reading is
+                // unchanged, #15213a byte for byte — and in the dark palette is
+                // the strengthened white-over-ground control boundary that
+                // clears the 3:1 non-text floor on every ground this control
+                // sits on. It is asked for in BOTH readings here because the
+                // shared variant names it for the dark one only. The FILL keeps
+                // `--surface`, which is genuinely per-palette.
+                className="border-input bg-surface text-foreground dark:border-input dark:bg-surface"
                 data-action="regenerate-review -> changes-requested"
                 disabled={!permissions.canDecide || pending}
                 aria-disabled={!permissions.canDecide}

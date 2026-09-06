@@ -29,8 +29,12 @@
 import { Client } from "pg";
 import { test, expect, type Page } from "@playwright/test";
 
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import {
   REVIEW_GATE_FIXTURE,
+  seedLifecycleReviewGate,
   seedMarkedReviewGateRun,
   waitForMarkedReviewGate,
   type FixtureReviewTarget,
@@ -39,8 +43,33 @@ import {
 const DATABASE_URL =
   process.env.SUPABASE_DB_URL ?? "postgresql://postgres:postgres@127.0.0.1:5434/postgres";
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
-const USER_ID = process.env.E2E_USER_ID ?? "";
-const ORG_ID = process.env.E2E_ORG_ID ?? "";
+/**
+ * THE ACTOR THE WALK SEEDS AS — the SAME person the browser is signed in as
+ * (cinatra#3080, fix leg 9). The gate is minted on a run this user owns and read
+ * back through that user's own authorization, so a seeding id that names anyone
+ * else produces a 404 rather than a floor. The setup project records the
+ * signed-in actor beside its cookie state; the environment may still state them
+ * explicitly, and an instance that has neither self-skips as before.
+ */
+function signedInActor(): { userId: string; orgId: string } {
+  const fromEnv = {
+    userId: process.env.E2E_USER_ID ?? "",
+    orgId: process.env.E2E_ORG_ID ?? "",
+  };
+  if (fromEnv.userId && fromEnv.orgId) return fromEnv;
+  try {
+    const recorded = JSON.parse(
+      readFileSync("tests/e2e/review-floor/.auth/actor.json", "utf8"),
+    ) as { userId?: unknown; orgId?: unknown };
+    return {
+      userId: typeof recorded.userId === "string" ? recorded.userId : "",
+      orgId: typeof recorded.orgId === "string" ? recorded.orgId : "",
+    };
+  } catch {
+    return { userId: "", orgId: "" };
+  }
+}
+
 
 /** The floor, as the shipped bar emits it. The anchors — not the visible words —
  *  are what a surface is pinned on, because a relabel that kept the old act
@@ -74,13 +103,25 @@ async function withPg<T>(fn: (client: Client) => Promise<T>): Promise<T> {
  * already exists in this instance. Deliberately DISCOVERED rather than created —
  * the floor is what is under test, not the upload path, and inventing a row the
  * artifact reader would refuse would prove nothing about either.
+ *
+ * THE TABLE IS `representation`, KEYED ON `artifact_id` (cinatra#3080, fix leg
+ * 9). This read used to name `object_representations (object_id)` — a table and
+ * a column this product has never declared. Postgres answers `42P01`, the helper
+ * throws, and every test below fails inside `openGate()` before a surface is
+ * drawn: the suite that IS acceptance item 9's live proof reported a harness
+ * error rather than a floor reading. The canonical row is
+ * `cinatra.representation`, whose artifact key is `artifact_id`
+ * (`buildCreateStoreSchemaQueries`, src/lib/drizzle-store.ts), and the node-tier
+ * `tests/e2e/__tests__/review-floor-live-spec-tables.test.ts` now reconciles
+ * every table named here against that DDL so the drift cannot come back
+ * unnoticed.
  */
 async function anyReadableTarget(): Promise<FixtureReviewTarget | null> {
   return withPg(async (c) => {
     const r = await c.query<{ artifact_id: string; representation_revision_id: string }>(
       `SELECT o.id AS artifact_id, r.id AS representation_revision_id
          FROM ${SCHEMA}.objects o
-         JOIN ${SCHEMA}.object_representations r ON r.object_id = o.id
+         JOIN ${SCHEMA}.representation r ON r.artifact_id = o.id
         WHERE o.deleted_at IS NULL
         ORDER BY r.created_at DESC
         LIMIT 1`,
@@ -94,12 +135,28 @@ async function anyReadableTarget(): Promise<FixtureReviewTarget | null> {
   });
 }
 
-async function gateDisposition(runId: string): Promise<{ status: string; disposition: string | null }> {
+/**
+ * The gate's own row. The REVIEW TASK is part of the address (cinatra#3080, fix
+ * leg 9): a run can carry more than one gate — the Regenerate walks open a
+ * lifecycle-road gate beside the run's own flow-authored one — and a read keyed
+ * on the run alone would answer with whichever row came back first. Omitted, it
+ * reads the run's single gate exactly as it always did.
+ */
+async function gateDisposition(
+  runId: string,
+  reviewTaskId?: string,
+): Promise<{ status: string; disposition: string | null }> {
   return withPg(async (c) => {
-    const r = await c.query<{ status: string; disposition: string | null }>(
-      `SELECT status, disposition FROM ${SCHEMA}.artifact_review_gates WHERE run_id = $1 LIMIT 1`,
-      [runId],
-    );
+    const r = reviewTaskId
+      ? await c.query<{ status: string; disposition: string | null }>(
+          `SELECT status, disposition FROM ${SCHEMA}.artifact_review_gates
+            WHERE run_id = $1 AND review_task_id = $2 LIMIT 1`,
+          [runId, reviewTaskId],
+        )
+      : await c.query<{ status: string; disposition: string | null }>(
+          `SELECT status, disposition FROM ${SCHEMA}.artifact_review_gates WHERE run_id = $1 LIMIT 1`,
+          [runId],
+        );
     return r.rows[0] ?? { status: "absent", disposition: null };
   });
 }
@@ -152,13 +209,50 @@ async function declareProducerRepairCapable(runId: string): Promise<void> {
 }
 
 /** A gate of the fixture agent, or null when this instance cannot make one. */
-async function openGate(): Promise<{ runId: string; reviewTaskId: string } | null> {
+async function openGate(
+  options: { inConversation?: boolean } = {},
+): Promise<{ runId: string; reviewTaskId: string; threadId: string | null } | null> {
+  // Read at CALL time, not at import time: the setup project writes this record,
+  // and a module-level read would run before it in a worker that loaded the file
+  // first.
+  const { userId: USER_ID, orgId: ORG_ID } = signedInActor();
   if (!USER_ID || !ORG_ID) return null;
   const target = await anyReadableTarget();
   if (!target) return null;
-  const runId = await seedMarkedReviewGateRun({ userId: USER_ID, orgId: ORG_ID, targets: [target] });
+  // The conversation is written BEFORE the job is enqueued, because the run
+  // outbox injects the moment's card into the turn it finds AT GATE EMISSION: a
+  // thread written afterwards is a thread the writer never saw.
+  const threadId = options.inConversation === true ? randomUUID() : null;
+  const runId = await seedMarkedReviewGateRun({
+    userId: USER_ID,
+    orgId: ORG_ID,
+    targets: [target],
+    ...(threadId === null ? {} : { chatTurn: { threadId } }),
+  });
   const gate = await waitForMarkedReviewGate(runId);
-  return { runId, reviewTaskId: gate.reviewTaskId };
+  return { runId, reviewTaskId: gate.reviewTaskId, threadId };
+}
+
+/**
+ * THE DEFAULT CONTAINER, READ OFF THE PRODUCT (cinatra#3080, fix leg 9).
+ *
+ * An unbound thread is addressed in the default assistant's container, and this
+ * walk must not hardcode which one that is: a bare `/chat` redirects to the
+ * canonical default, so the product itself names the container and the thread id
+ * is appended to it. Hardcoding a vendor and a slug here would make the walk
+ * pass or fail on a naming choice rather than on the floor.
+ */
+async function chatThreadUrl(page: Page, threadId: string): Promise<string> {
+  await page.goto("/chat", { waitUntil: "domcontentloaded" });
+  const container = new URL(page.url()).pathname.replace(/\/+$/, "");
+  // A session that expired lands on /sign-in, and appending a thread id to THAT
+  // would measure the sign-in page and report a missing card. Say what happened
+  // instead.
+  expect(
+    container.startsWith("/chat"),
+    `/chat resolved to ${container} — the walk is not signed in`,
+  ).toBe(true);
+  return `${container}/${threadId}`;
 }
 
 test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
@@ -176,15 +270,33 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
   test("item 1 — the RUN PAGE's review step draws the same three", async ({ page }) => {
     const gate = await openGate();
     test.skip(gate === null, "no seedable review gate on this instance");
-    await page.goto(`/agents/runs/${gate!.runId}`);
+    // THE RUN PAGE IS THE INSTANCE ROUTE (cinatra#3080, fix leg 9). This walk
+    // used to open `/agents/runs/<runId>`, which this product has no route for
+    // (`src/app/agents` carries `page.tsx`, `[vendor]/[packageName]/[instanceId]`,
+    // `reviews` and `executions`, and nothing else): the app answered
+    // "404 — Page not found", the card never appeared, and the failure read as a
+    // missing floor rather than a missing route. The run page is the instance
+    // route, which `runPageUrl` builds from the same fixture coordinates the
+    // review route already uses.
+    await page.goto(runPageUrl(gate!.runId));
     await expect(page.locator('[data-conformance-id="review-gate-card"]')).toBeVisible();
     await expectTheFloor(page);
   });
 
   test("item 1 — the CHAT thread's review card draws the same three", async ({ page }) => {
-    const gate = await openGate();
+    const gate = await openGate({ inConversation: true });
     test.skip(gate === null, "no seedable review gate on this instance");
-    await page.goto(`/chat?run=${gate!.runId}`);
+    // THE THREAD IS THE ADDRESS, NOT THE RUN (cinatra#3080, fix leg 9). This
+    // walk used to open `/chat?run=<runId>`, a road this product does not serve:
+    // `/chat` takes `<vendor>/<slug>[/instance]/<thread>` path segments and
+    // reads no run parameter at all, so the page answered with the default
+    // conversation, no card was ever there to find, and the failure read as a
+    // missing floor rather than a missing address. The card is written into the
+    // turn the run is playing out in, so the walk seeds that conversation and
+    // opens IT.
+    await page.goto(await chatThreadUrl(page, gate!.threadId!), {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page.locator('[data-conformance-id="review-gate-card"]')).toBeVisible();
     await expectTheFloor(page);
   });
@@ -223,12 +335,19 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     const gate = await openGate();
     test.skip(gate === null, "no seedable review gate on this instance");
     await declareProducerRepairCapable(gate!.runId);
-    await page.goto(reviewPageUrl(gate!.runId, gate!.reviewTaskId));
+    // THE GATE A REGENERATE CAN ACTUALLY BE SENT BACK THROUGH (fix leg 9). The
+    // change road serves the lifecycle gate family and refuses every other one
+    // by task id, so this walk stands at a lifecycle-road gate on the same run
+    // and the same pinned target. Pressing Regenerate on the run's own
+    // flow-authored gate measures the refusal instead — which is the arm below,
+    // and it is a different test.
+    const reviewTaskId = await seedLifecycleReviewGate(gate!.runId);
+    await page.goto(reviewPageUrl(gate!.runId, reviewTaskId));
 
     // An empty note is refused WITH A REASON, and nothing settles.
     await page.locator(FLOOR.regenerate).click();
     await expect(page.locator('[data-review-outcome="error"]')).toContainText("needs a note");
-    expect((await gateDisposition(gate!.runId)).status).toBe("pending");
+    expect((await gateDisposition(gate!.runId, reviewTaskId)).status).toBe("pending");
 
     // With words, it settles the gate as superseded and opens one successor.
     await page.getByTestId("review-rationale").fill("make the opening tighter");
@@ -236,7 +355,7 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     await expect(page.locator('[data-review-outcome="changes-requested"]')).toContainText(
       "Sent back to be made again",
     );
-    const after = await gateDisposition(gate!.runId);
+    const after = await gateDisposition(gate!.runId, reviewTaskId);
     expect(after.status).toBe("resolved");
     expect(after.disposition).toBe("changes_requested");
     expect(await repairCount(gate!.runId)).toBe(1);
@@ -291,7 +410,11 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     const gate = await openGate();
     test.skip(gate === null, "no seedable review gate on this instance");
     await declareProducerRepairCapable(gate!.runId);
-    const url = reviewPageUrl(gate!.runId, gate!.reviewTaskId);
+    // Same reason as the arm above: the race is between a Regenerate that lands
+    // and a Continue that arrives after it, so the gate has to be one the change
+    // road serves.
+    const reviewTaskId = await seedLifecycleReviewGate(gate!.runId);
+    const url = reviewPageUrl(gate!.runId, reviewTaskId);
     await page.goto(url);
 
     // A second tab, opened on the SAME pending gate, holds a live floor.
@@ -309,7 +432,7 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
     await stale.locator(FLOOR.continue).click();
     await expect(stale.locator('[data-conformance-id="review-gate-blocked"]')).toBeVisible();
 
-    const after = await gateDisposition(gate!.runId);
+    const after = await gateDisposition(gate!.runId, reviewTaskId);
     expect(after.disposition).toBe("changes_requested");
     expect(await repairCount(gate!.runId)).toBe(1);
     await stale.close();
@@ -326,12 +449,29 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
   test("item 1 — at 1440x900 the card's floor is reachable ABOVE the chat composer", async ({
     page,
   }) => {
-    const gate = await openGate();
+    const gate = await openGate({ inConversation: true });
     test.skip(gate === null, "no seedable review gate on this instance");
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`/chat?run=${gate!.runId}`);
+    await page.goto(await chatThreadUrl(page, gate!.threadId!), {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page.locator('[data-conformance-id="review-gate-card"]')).toBeVisible();
     await expectTheFloor(page);
+
+    // AT THE FOOT OF THE THREAD, which is where the defect lives. The composer
+    // is docked over the bottom of the stream, and what keeps the newest card
+    // out from under it is the room the stream RESERVES beneath its last element
+    // (`composer-reserved-space.ts`) - so the reading has to be taken with the
+    // stream at its bottom, the position the newest content is pinned to. Taken
+    // higher up it measures the scroll offset instead, and a card taller than
+    // the column reports its floor under the composer while the reservation
+    // beneath it is perfectly correct.
+    await page.evaluate(() => {
+      const stream = document.querySelector("[data-conversation-stream]");
+      if (stream) stream.scrollTop = stream.scrollHeight;
+    });
+    // The scroll has to settle before a box means anything.
+    await page.waitForTimeout(500);
 
     const composer = page.locator('[data-conformance-id="chat-composer-primary"]').first();
     const composerBox = await composer.boundingBox();
@@ -359,4 +499,10 @@ test.describe("cinatra#3080 — the review floor on the real surfaces", () => {
 function reviewPageUrl(runId: string, reviewTaskId: string): string {
   const { vendor, slug } = REVIEW_GATE_FIXTURE;
   return `/agents/${vendor}/${slug}/${runId}/review/${encodeURIComponent(reviewTaskId)}`;
+}
+
+/** The RUN page — the instance route the run opens at, same coordinates. */
+function runPageUrl(runId: string): string {
+  const { vendor, slug } = REVIEW_GATE_FIXTURE;
+  return `/agents/${vendor}/${slug}/${runId}`;
 }

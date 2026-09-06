@@ -39,5 +39,23 @@ export default defineConfig({
     ...desktopChrome,
     baseURL: BASE_URL,
   },
-  projects: [{ name: "review-floor" }],
+  // THE WALK IS BEHIND A SESSION (cinatra#3080, fix leg 9). Every surface this
+  // suite opens - the review page, the run page's review step, the chat thread -
+  // is authenticated, and this config carried no setup project and no stored
+  // state: each navigation was answered by /sign-in, and a walk that never
+  // reached a surface reported "no card", which reads exactly like a missing
+  // floor. Every other live suite here opens with the same two projects; so does
+  // this one now.
+  projects: [
+    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    {
+      name: "review-floor",
+      testMatch: /review-floor\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("review-floor", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
+  ],
 });

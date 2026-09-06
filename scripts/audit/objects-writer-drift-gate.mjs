@@ -87,6 +87,15 @@ const WRITER_ALLOWLIST = new Set([
   // Project-move cascade — UPDATE objects SET project_id; documented
   // legacy writer that a follow-up routes through canonical writer.
   "src/lib/resource-project-move.ts",
+  // cinatra#3080 revision-append writer — the same class as the artifact stores
+  // above. One transaction appends the representation, patches the artifact's
+  // envelope onto it, bumps the row's version, marks it pending for the graph
+  // projection and enqueues its own graphiti_projection_outbox row, every one of
+  // those guarded on the representation the transaction just inserted, so the
+  // patch and the projection can never disagree about whether the revision
+  // landed. Migration to the canonical writer is a follow-up with the artifact
+  // stores.
+  "src/lib/artifacts/artifact-revision-append.ts",
 ]);
 
 // Allowlisted glob roots — paths matching any prefix are exempt entirely.

@@ -106,23 +106,32 @@ describe("§VI — Regenerate stands on the OUTLINED ground, its glyph leading",
     expect(control(REGENERATE).getAttribute("data-variant")).not.toBe("secondary");
   });
 
-  it("asks for the outline variant, the surface fill and the strong stroke", () => {
+  it("asks for the outline variant, the surface fill and the control stroke", () => {
     renderBar();
     const button = control(REGENERATE);
     expect(button.getAttribute("data-variant")).toBe("outline");
     const classes = classesOf(button);
     expect(classes).toContain("bg-surface");
-    expect(classes).toContain("border-line-strong");
+    expect(classes).toContain("border-input");
+    // And NOT the token this arm pinned before the two readings were measured
+    // side by side: the strong line is declared in the light palette only, so
+    // naming it in both readings strokes the light palette's full navy on the
+    // dark control fill and the outline disappears in the dark reading.
+    expect(classes).not.toContain("border-line-strong");
   });
 
   it("asks for the same two tokens in the DARK reading", () => {
-    // The shared outline variant carries its own dark ground and stroke; the
-    // drawing names ONE pair for both palettes, and those tokens are redefined
-    // per palette rather than swapped for different ones.
+    // The shared outline variant carries its own dark ground and stroke, so the
+    // drawing's one pair is named for BOTH readings here. The pair is the
+    // surface fill and the control stroke, and both ARE redefined per palette,
+    // which is what one outline treatment across two palettes needs. The
+    // control stroke aliases the control line, which IS the strong line in the
+    // light palette, so the light reading is unchanged byte for byte.
     renderBar();
     const classes = classesOf(control(REGENERATE));
     expect(classes).toContain("dark:bg-surface");
-    expect(classes).toContain("dark:border-line-strong");
+    expect(classes).toContain("dark:border-input");
+    expect(classes).not.toContain("dark:border-line-strong");
   });
 
   it("keeps its glyph in FRONT of the label, as the drawing sets it", () => {
