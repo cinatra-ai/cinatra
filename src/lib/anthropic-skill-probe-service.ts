@@ -32,8 +32,6 @@ import {
   deriveAnthropicDisplayTitle,
 } from "@cinatra-ai/llm";
 
-import { readAnthropicConnectionFromDatabase } from "@/lib/database";
-
 /**
  * The probe skill's stable identity. Deterministic so a crashed setup run
  * cannot litter the workspace with a new probe skill per attempt: the
@@ -76,8 +74,14 @@ export type DisposableProbeSkill = {
  * path — a probe skill left behind is remote litter under the operator's key.
  */
 export async function createDisposableAnthropicProbeSkill(): Promise<DisposableProbeSkill> {
-  const conn = readAnthropicConnectionFromDatabase();
-  const apiKey = typeof conn?.apiKey === "string" ? conn.apiKey.trim() : "";
+  // The configured key comes from the CONNECTOR'S registered surface
+  // (cinatra#3202), never from the legacy connector-config row the connector
+  // purges once it holds a verified connection-service pointer. Imported lazily
+  // to keep the sync service off this module's static graph.
+  const { resolveConfiguredAnthropicApiKey } = await import(
+    "@/lib/anthropic-skill-sync-service"
+  );
+  const apiKey = await resolveConfiguredAnthropicApiKey();
   if (!apiKey) {
     // Fail closed BEFORE constructing a client: never attempt a remote write
     // with an empty key.

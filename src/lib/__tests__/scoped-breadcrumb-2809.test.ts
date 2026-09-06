@@ -68,11 +68,23 @@ describe("the agent-instance collapse is scope-base aware", () => {
   });
 
   it("survives on the DEEPEST scoped route — four crumbs, the scope crumb first", () => {
+    const crumbs = buildBreadcrumbTrail(`/teams/t1/agents/acme/writer/r1/settings`, {
+      contributions: [{ prefix: "/teams/t1", label: "Growth" }],
+    });
+    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "R1", "Settings"]);
+    expect(crumbs.some((c) => c.ellipsis)).toBe(false);
+  });
+
+  // BOTH DRAWINGS AT ONCE (forward leg 2). A STEP of the run contributes no
+  // crumb (cinatra#3223) — and the scope crumb still heads the trail, so the
+  // step suppression reads at the SCOPE-RELATIVE sub-route position, not at a
+  // fixed depth that a scope base would shift.
+  it("drops the step crumb under a scope base and keeps the scope crumb first", () => {
     const crumbs = buildBreadcrumbTrail(`/teams/t1/agents/acme/writer/r1/trigger`, {
       contributions: [{ prefix: "/teams/t1", label: "Growth" }],
     });
-    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "R1", "Schedule"]);
-    expect(crumbs.some((c) => c.ellipsis)).toBe(false);
+    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "R1"]);
+    expect(crumbs[0].href).toBe("/teams/t1");
   });
 
   it("shows the instance's HOME scope, never the path wandered in through", () => {

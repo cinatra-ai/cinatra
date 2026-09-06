@@ -188,6 +188,29 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // outage. A two-valued column with a default would silently claim "no
   // bindings" for every pre-existing row.
   hasArtifactBindings: boolean("has_artifact_bindings"),
+  // artifactBindings: the EXECUTED artifact-binding declaration (cinatra#3208),
+  // JSON-as-text exactly as trigger_mode / gated_steps / lifecycle_config are.
+  // Carries the normalized `outputs[].cinatra.artifact` bindings the compile
+  // that produced THIS template version actually found, together with the typed
+  // `cinatra.produces` refs they were validated against (grammar + serializer:
+  // artifact-binding.ts). Written by every install/recompile writer in the SAME
+  // statement as package_version, so the run-completion materializer's
+  // version-pin guard can trust the two together.
+  //
+  // WHY: until #3208 the materializer re-derived a run's bindings by re-reading
+  // the PACKAGE REGISTRY for the run's (package_name, package_version) pair,
+  // while execution was bound to this immutable template-version snapshot. When
+  // the registry copy of a version diverged from the copy the template was
+  // compiled from, the run was materialized against a declaration it never
+  // executed and failed AFTER all the model work was done. The materializer now
+  // reads THIS column and does not call the registry at all when it resolves.
+  //
+  // NULLABLE, three-valued ON PURPOSE, exactly like has_artifact_bindings: null
+  // means "unknown" — a row compiled before this column existed (no backfill),
+  // or a compile that could not see its sibling package.json (so binding <->
+  // produces parity was never established) — and falls through to the pre-#3208
+  // registry read, preserving that fail-closed posture byte for byte.
+  artifactBindings: text("artifact_bindings"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.

@@ -153,7 +153,12 @@ describe("the screen composes THROUGH the step, not beside it", () => {
     // of its own would be the composition the plan rules out. The frame is the
     // one that carries them since cinatra#2790 (S9f), because the run page now
     // has two gate steps in one rail.
-    const stepAt = SCREEN_SRC.indexOf("<RunSurfaceRail");
+    // THE MOUNT, NOT A ROW (cinatra#3221, fix leg 2). The screen also draws a
+    // `<RunSurfaceRailRow>` for the gate the run is parked on, and that tag
+    // shares this one's first fifteen characters — a bare prefix match found
+    // the row and read the frame as mounted above the detail it is handed. The
+    // mount is the tag that opens its own line.
+    const stepAt = SCREEN_SRC.indexOf("<RunSurfaceRail\n");
     expect(stepAt).toBeGreaterThan(detailEnd);
     expect(SCREEN_SRC).toContain('key: "schedule"');
   });
