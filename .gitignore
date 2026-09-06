@@ -90,6 +90,10 @@ agents/**/.cinatra-published.json
 playwright-report/
 playwright-report-design/
 test-results/
+# The design suite selection plan the CI select job writes and publishes
+# (scripts/ci/design-select.mjs --out). A committed copy would be a stale
+# decision sitting next to the live one.
+/design-select.json
 .playwright-mcp/
 # per-suite auth state + seed artifacts; keep each .auth/.gitignore anchor tracked.
 tests/e2e/**/.auth/*

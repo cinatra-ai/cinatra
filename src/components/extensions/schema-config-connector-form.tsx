@@ -16,7 +16,7 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { CheckIcon, CopyIcon, ListIcon, PlusIcon, Trash2Icon, Unplug } from "lucide-react";
 // The Connect action's glyph is the first-party joined plug (cinatra#2356) —
 // the SAME mark the status badge and the §I card grid draw for Connected.
 import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
@@ -42,6 +42,14 @@ import {
 } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   ConnectorSetupColumns,
   type ConnectorSetupConformanceId,
   type ConnectorSetupState,
@@ -53,7 +61,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -699,35 +707,82 @@ function NamedActionRow({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const run = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (field.confirm && !window.confirm(field.confirm)) return;
-    // Scope the input scan to THIS button's own form (see collectFormInputs).
-    const origin = e.currentTarget;
+  const [open, setOpen] = useState(false);
+  // The confirm button lives in a PORTAL (outside the form), so the input scan
+  // anchors on the TRIGGER, which is inside this form (see collectFormInputs).
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const run = useCallback(async (origin: Element | null) => {
     setPending(true);
     const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));
     setPending(false);
+    setOpen(false);
     // The outcome (Done. / error / schema-declared banner variant) TOASTs via
     // onActionResult — no in-form "Done."/error text.
     onActionResult(r);
-  }, [field.confirm, field.actionId, installId, onActionResult]);
+  }, [field.actionId, installId, onActionResult]);
   // The button IS the action: its text is the declared label, with NO FieldLabel
   // row echoing the same text above it (design §II — the form drops the
   // per-action section labels; a custom tab "ends in its own Save").
-  // While the action is in flight the button carries the SPINNER the rest of the
-  // app uses for a pending press (`instance-save-button`, the setup Continue
-  // button). A greyed-out button alone is not feedback: it reads exactly like a
-  // button that refused the press.
+  if (!field.confirm) {
+    return (
+      <Field>
+        <FieldContent>
+          {/* While the action is in flight the button carries the SPINNER the rest
+              of the app uses for a pending press (the instance save button, the
+              setup Continue button). A greyed-out button alone is not feedback: it reads
+              exactly like a button that refused the press. */}
+          <Button type="button" className="self-start" onClick={(e) => void run(e.currentTarget)} disabled={pending} aria-busy={pending}>
+            {field.label}
+            {/* The spinner sits on the primary ground, where the Spinner's own
+                text-primary stroke would be the same colour as the button: take
+                the colour override the component documents for exactly this
+                case, or the wait is invisible. */}
+            {pending ? <Spinner className="text-primary-foreground" /> : null}
+          </Button>
+          {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+        </FieldContent>
+      </Field>
+    );
+  }
+  // A declared `confirm` opens an AlertDialog — never a bare browser prompt
+  // (cinatra#3231; connectors surface §II). The declared text is the dialog's
+  // body; the action keeps its own label on the confirm button, in the primary
+  // (not destructive) treatment — a confirmed named action is consequential,
+  // not necessarily destructive.
   return (
     <Field>
       <FieldContent>
-        <Button type="button" className="self-start" onClick={run} disabled={pending} aria-busy={pending}>
-          {field.label}
-          {/* The spinner sits on the primary ground, where the Spinner's own
-              `text-primary` stroke would be the same colour as the button:
-              take the colour override the component documents for exactly
-              this case, or the "wait" is invisible. */}
-          {pending ? <Spinner className="text-primary-foreground" /> : null}
-        </Button>
+        <AlertDialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
+          <AlertDialogTrigger asChild>
+            <Button ref={triggerRef} type="button" className="self-start" disabled={pending} aria-busy={pending}>
+              {field.label}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{field.label}?</AlertDialogTitle>
+              <AlertDialogDescription>{field.confirm}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="named-action-confirm"
+                className={buttonVariants({ variant: "default" })}
+                disabled={pending}
+                aria-busy={pending}
+                onClick={(e) => {
+                  // Keep the dialog mounted through the async action; `run`
+                  // closes it once the request resolves.
+                  e.preventDefault();
+                  void run(triggerRef.current);
+                }}
+              >
+                {field.label}
+                {pending ? <Spinner className="text-primary-foreground" /> : null}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>
@@ -1049,6 +1104,22 @@ function rowTruthy(row: RecordRow, key: string): boolean {
   return v === true || (typeof v === "string" && v.length > 0);
 }
 
+/**
+ * The record-list field (cinatra#3231 brought it onto the ratified drawing):
+ *   - zero rows render the drawing's Empty state — "@/components/ui/empty":
+ *     centred, the dashed-circle icon, the 14px headline (`emptyState`) over
+ *     the 12px helper (`emptyStateDetail.helper`), and ONE primary action
+ *     ("Always include a single primary action button — never just empty
+ *     text") that moves focus to the field's own add control — the first
+ *     input of the add form in this same generated setup form;
+ *   - the per-row delete is a destructive action on the setup page, so it
+ *     opens an AlertDialog — "a Cancel outline beside the red … confirm —
+ *     never a bare browser prompt" (connectors surface §II), the same
+ *     primitives Disconnect uses above; its copy stays connector-neutral;
+ *   - the field header carries the label and nothing else: the drawing gives
+ *     the generated form no per-field header control. The list still reloads
+ *     on mount and after every write through the shared list epoch.
+ */
 function RecordListRow({
   field,
   installId,
@@ -1064,6 +1135,9 @@ function RecordListRow({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // The row whose delete awaits confirmation; drives the ONE AlertDialog below.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
 
   // The fetch body. Returns the resolved state; the caller decides whether to
   // apply it (so the mount/epoch effect can ignore a stale response after
@@ -1091,10 +1165,6 @@ function RecordListRow({
     }
   }, []);
 
-  const reload = useCallback(async () => {
-    applyResult(await fetchRows());
-  }, [fetchRows, applyResult]);
-
   // Reload on mount and whenever a write bumps the shared epoch. The fetch's
   // first setState runs after a microtask (see fetchRows), and a stale response
   // is dropped if the row unmounted mid-flight.
@@ -1109,25 +1179,43 @@ function RecordListRow({
     };
   }, [fetchRows, applyResult, listEpoch]);
 
-  const onDelete = useCallback(
-    async (id: string) => {
-      if (!field.deleteActionId) return;
-      if (!window.confirm("Delete this entry?")) return;
-      setDeletingId(id);
-      const r = await invokeAction(installId, field.deleteActionId, { id });
-      setDeletingId(null);
-      onActionResult(r); // bumps the epoch → reload
-    },
-    [field.deleteActionId, installId, onActionResult],
-  );
+  const confirmDelete = useCallback(async () => {
+    const id = confirmDeleteId;
+    if (!field.deleteActionId || id === null) return;
+    setConfirmDeleteId(null);
+    setDeletingId(id);
+    const r = await invokeAction(installId, field.deleteActionId, { id });
+    setDeletingId(null);
+    onActionResult(r); // bumps the epoch → reload
+  }, [confirmDeleteId, field.deleteActionId, installId, onActionResult]);
+
+  // The Empty state's single primary action: move keyboard focus to the add
+  // form's first enabled control in this same generated form — the first
+  // control that FOLLOWS this field in document order (the add form is
+  // declared after the list it feeds; a field declared before the list is not
+  // the list's own add control). The field itself carries no input.
+  const focusAddControl = useCallback(() => {
+    const fieldEl = fieldRef.current;
+    const form = fieldEl?.closest<HTMLElement>('[data-testid="schema-config-form"]');
+    if (!fieldEl || !form) return;
+    const candidates = form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+      'input:not([type="hidden"]), select, textarea',
+    );
+    for (const el of Array.from(candidates)) {
+      if (el.disabled || fieldEl.contains(el)) continue;
+      if ((fieldEl.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) continue;
+      el.focus();
+      return;
+    }
+  }, []);
+
+  const helper = field.emptyStateDetail?.helper;
+  const actionLabel = field.emptyStateDetail?.actionLabel ?? "Add entry";
 
   return (
-    <Field data-testid={`record-list-${field.listActionId}`}>
-      <div className="flex items-center justify-between gap-2">
+    <Field ref={fieldRef} data-testid={`record-list-${field.listActionId}`}>
+      <div data-testid="record-list-header">
         <FieldLabel>{field.label}</FieldLabel>
-        <Button type="button" variant="ghost" size="icon-xs" onClick={() => void reload()} aria-label="Refresh list" disabled={loading}>
-          <RefreshCwIcon />
-        </Button>
       </div>
       {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       <FieldContent className="gap-2">
@@ -1139,7 +1227,21 @@ function RecordListRow({
         {rows === null && loading ? (
           <FieldDescription>Loading…</FieldDescription>
         ) : rows && rows.length === 0 ? (
-          <FieldDescription data-testid="record-list-empty">{field.emptyState}</FieldDescription>
+          <Empty data-testid="record-list-empty" className="border border-line">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ListIcon aria-hidden="true" />
+              </EmptyMedia>
+              <EmptyTitle>{field.emptyState}</EmptyTitle>
+              {helper ? <EmptyDescription className="text-xs">{helper}</EmptyDescription> : null}
+            </EmptyHeader>
+            <EmptyContent>
+              <Button type="button" onClick={focusAddControl}>
+                <PlusIcon />
+                {actionLabel}
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : (
           (rows ?? []).map((row, i) => {
             const id = typeof row.id === "string" ? row.id : null;
@@ -1183,7 +1285,7 @@ function RecordListRow({
                     size="icon"
                     aria-label={`Delete ${rowText(row, field.itemTitleKey) || "entry"}`}
                     disabled={deletingId === id}
-                    onClick={() => void onDelete(id)}
+                    onClick={() => setConfirmDeleteId(id)}
                   >
                     <Trash2Icon />
                   </Button>
@@ -1193,6 +1295,37 @@ function RecordListRow({
           })
         )}
       </FieldContent>
+      {field.deleteActionId ? (
+        <AlertDialog
+          open={confirmDeleteId !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirmDeleteId(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Remove this entry from the list? This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="record-list-delete-confirm"
+                onClick={(e) => {
+                  // Close it ourselves once the id is read (see confirmDelete).
+                  e.preventDefault();
+                  void confirmDelete();
+                }}
+              >
+                <Trash2Icon />
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </Field>
   );
 }
