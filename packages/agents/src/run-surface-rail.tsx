@@ -51,7 +51,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { RUN_RAIL_MARK_CLASS } from "./run-step-rail-extra-entry";
+import { RUN_RAIL_MARK_CLASS, RUN_RAIL_PAIR_CLASS } from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -453,17 +453,25 @@ export function RunSurfaceRail({
         data-run-step-rail-column=""
         className="flex shrink-0 flex-col pt-1"
       >
-        {steps.map((step, index) => (
-          <Fragment key={step.key}>
-            {index > 0 ? <RunSurfaceRailSeparator /> : null}
-            {step.row}
-          </Fragment>
-        ))}
-        {/* The page's own rows are one more entry after the gate rows, so the
-            mark stands before them too. They carry their own separators
-            inside (`RunStepRailPanel`), which is why only the join is drawn
-            here. */}
-        {runSurfaceNodeExists(rail) && steps.length > 0 ? <RunSurfaceRailSeparator /> : null}
+        {/* EACH ROW AND THE MARK BENEATH IT SHARE ONE BOX (cinatra#3225 items
+            2 and 3, fix leg 9). The mark is centred in the gap between the two
+            circles it stands between — the drawing's own 6px, 8px, 6px stated
+            as a rule about the gap rather than about the flow — so it needs a
+            containing block that IS that gap, and the pair box is it. The page's
+            own rows are one more entry after these, so the last row carries a
+            mark too whenever they follow; they carry their own marks inside
+            (`RunStepRailPanel`), which is why only the join is drawn here. */}
+        {steps.map((step, index) => {
+          const markBelow = index < steps.length - 1 || runSurfaceNodeExists(rail);
+          return markBelow ? (
+            <div key={step.key} className={RUN_RAIL_PAIR_CLASS}>
+              {step.row}
+              <RunSurfaceRailSeparator />
+            </div>
+          ) : (
+            <Fragment key={step.key}>{step.row}</Fragment>
+          );
+        })}
         {rail}
       </div>
 

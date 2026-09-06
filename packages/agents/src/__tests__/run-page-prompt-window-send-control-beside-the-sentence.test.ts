@@ -95,8 +95,13 @@ describe("the review reading's sentence is not occluded by the send control", ()
   const width = control.find((t) => /^w-\d+$/.test(t))!;
   const corner = spacing(right.slice("right-".length)) + spacing(width.slice("w-".length));
 
-  const editor = classListContaining("block w-full overflow-y-auto");
-  const placeholder = classListContaining("pointer-events-none absolute top-0");
+  // Both boxes are read by the tokens that name them. The sentence is no longer
+  // drawn out of the flow (cinatra#3222 item 3, fix leg 9): it shares ONE grid
+  // cell with the editable box so the field's box grows to hold every line of
+  // it, which is what keeps the sentence inside the field. The corner it has to
+  // clear is the same corner either way.
+  const editor = classListContaining("block w-full min-w-0 overflow-y-auto");
+  const placeholder = classListContaining("pointer-events-none col-start-1 row-start-1");
 
   it("reserves the control's corner in the field's editable box", () => {
     const reserved = rightPadding(editor);
@@ -113,8 +118,10 @@ describe("the review reading's sentence is not occluded by the send control", ()
 
   it("mirrors the field's left inset on the same box, so the two are one box", () => {
     // The sentence already follows the field's left split; the right one is the
-    // half that was missing.
-    expect(placeholder.join(" ")).toContain("left-");
+    // half that was missing. Both halves are now stated the SAME way on the two
+    // boxes — as the box's own padding (fix leg 9) — rather than as an offset on
+    // one and a padding on the other.
+    expect(placeholder.join(" ")).toContain("pl-");
     expect(editor.join(" ")).toContain("pl-");
   });
 

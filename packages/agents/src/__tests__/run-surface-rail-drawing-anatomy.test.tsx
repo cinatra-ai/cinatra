@@ -189,8 +189,12 @@ describe("a separator stands between adjacent entries (item 2)", () => {
   it("puts one separator between every pair of adjacent rows, and none at the ends", () => {
     const { container } = renderRail();
     const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
-    const kinds = Array.from(column.children).map((child) =>
-      child.matches(SEP_SEL) ? "sep" : child.matches(ROW_SEL) ? "row" : "other",
+    // A row and the mark beneath it share ONE box (cinatra#3225 items 2 and 3,
+    // fix leg 9) — the box the mark is centred in — so the column's own reading
+    // is taken over the rows and marks it contains rather than over its direct
+    // children. The order down the rail is what is pinned, and it is unchanged.
+    const kinds = Array.from(column.querySelectorAll<HTMLElement>(`${SEP_SEL}, ${ROW_SEL}`)).map(
+      (child) => (child.matches(SEP_SEL) ? "sep" : "row"),
     );
 
     expect(kinds).toEqual(["row", "sep", "row", "sep", "row"]);
@@ -207,8 +211,14 @@ describe("a separator stands between adjacent entries (item 2)", () => {
     expect(sep.className).toContain("h-2");
     expect(sep.className).toContain("rounded-[1px]");
     expect(sep.className).toContain("bg-line");
-    expect(sep.className).toContain("my-1");
-    expect(sep.className).toContain("ml-[11px]");
+    // The 4px above and below is the drawing's rule about the GAP: the mark is
+    // centred in the span from one circle's bottom to the next circle's top,
+    // which on a one-line pair composes exactly those two numbers and which
+    // holds on a wrapped row too (cinatra#3225 items 2 and 3, fix leg 9).
+    expect(sep.className).toContain("!my-auto");
+    expect(sep.className).toContain("top-[26px]");
+    expect(sep.className).toContain("-bottom-0.5");
+    expect(sep.className).toContain("left-[11px]");
     // It is a mark, not a row: nothing to read out and nothing to press.
     expect(sep.getAttribute("aria-hidden")).toBe("true");
     expect(sep.textContent).toBe("");
@@ -217,11 +227,15 @@ describe("a separator stands between adjacent entries (item 2)", () => {
   it("separates the gate rows from the page's own rail below them", () => {
     const { container } = renderRail(<div data-testid="page-rail">steps</div>);
     const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
-    const children = Array.from(column.children);
     const pageRail = container.querySelector<HTMLElement>('[data-testid="page-rail"]')!;
-    const before = children[children.indexOf(pageRail) - 1]!;
+    // The mark at the join stands inside the pair box of the row above it (fix
+    // leg 9), which is the element immediately before the page's own rail.
+    const before = Array.from(column.children)[
+      Array.from(column.children).indexOf(pageRail) - 1
+    ]!;
 
-    expect(before.matches(SEP_SEL)).toBe(true);
+    expect(before.querySelector(SEP_SEL)).not.toBeNull();
+    expect(before.querySelector(SEP_SEL)!.nextElementSibling).toBeNull();
   });
 
   it("draws no separator for a rail of one entry", () => {

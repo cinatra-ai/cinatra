@@ -62,14 +62,16 @@ function resolve(className: string, pattern: RegExp, read: (m: RegExpMatchArray)
   let important = false;
   for (const raw of tokens(className)) {
     const bang = raw.startsWith("!");
-    const token = bang ? raw.slice(1) : raw;
+    const signed = bang ? raw.slice(1) : raw;
+    const negative = signed.startsWith("-");
+    const token = negative ? signed.slice(1) : signed;
     // A variant-scoped token (`group-data-[…]:h-12`) applies in the vertical
     // rail too; it is read at its own place in the list.
     const bare = token.includes(":") ? token.slice(token.lastIndexOf(":") + 1) : token;
     const m = bare.match(pattern);
     if (!m) continue;
     if (important && !bang) continue;
-    value = read(m);
+    value = (negative ? -1 : 1) * read(m);
     important = important || bang;
   }
   return value;
@@ -93,15 +95,46 @@ function rowBox(row: HTMLElement): Box {
   return { height, marginTop: 0, marginBottom: 0, circleCentre };
 }
 
-/** A MARK's box: its height and its vertical margins. */
-function markBox(mark: HTMLElement): Box {
+/**
+ * WHERE A MARK LANDS in the box it shares with the row above it, and how tall
+ * that box is (cinatra#3225 items 2 and 3, fix leg 9).
+ *
+ * The drawing's "margin: 4px 0" is one half of a rule about the GAP: the mark
+ * stands in the MIDDLE of the span from one circle's bottom to the next
+ * circle's top. On a one-line pair that composes the drawing's own two numbers
+ * exactly; stated that way it also survives a row whose label wraps, where the
+ * gap grows with the row's own lines and the mark stays in the middle of it.
+ * Read here whichever way the rail composes it.
+ */
+function markPlacement(mark: HTMLElement, above: Box) {
   const c = mark.className;
+  const pair = mark.parentElement;
+  expect(pair, "the mark stands inside the box it shares with its row").not.toBeNull();
+  const pb = resolve(pair!.className, /^pb-(\d+(?:\.\d+)?)$/, px) ?? 0;
   const height = resolve(c, /^h-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
+  const flat = (t: string) => t.replace(/^!/, "");
+
+  if (tokens(c).some((t) => flat(t) === "absolute")) {
+    const top = resolve(c, /^top-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
+    const bottomOffset = resolve(c, /^bottom-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
+    const pairHeight = above.height + pb;
+    const free = pairHeight - top - height - bottomOffset;
+    const marginTop = tokens(c).some((t) => flat(t) === "my-auto")
+      ? free / 2
+      : (resolve(c, /^my-(\d+(?:\.\d+)?)$/, px) ?? 0);
+    return { pairHeight, height, top: top + marginTop, bottom: top + marginTop + height };
+  }
+
   const m = resolve(c, /^m-(\d+(?:\.\d+)?)$/, px) ?? 0;
   const my = resolve(c, /^my-(\d+(?:\.\d+)?)$/, px);
-  const mt = resolve(c, /^mt-(\d+(?:\.\d+)?)$/, px);
-  const mb = resolve(c, /^mb-(\d+(?:\.\d+)?)$/, px);
-  return { height, marginTop: mt ?? my ?? m, marginBottom: mb ?? my ?? m, circleCentre: 0 };
+  const marginTop = resolve(c, /^mt-(\d+(?:\.\d+)?)$/, px) ?? my ?? m;
+  const marginBottom = resolve(c, /^mb-(\d+(?:\.\d+)?)$/, px) ?? my ?? m;
+  return {
+    pairHeight: above.height + marginTop + height + marginBottom + pb,
+    height,
+    top: above.height + marginTop,
+    bottom: above.height + marginTop + height,
+  };
 }
 
 type Reading = { rows: HTMLElement[]; marks: HTMLElement[] };
@@ -112,10 +145,10 @@ function rhythm({ rows, marks }: Reading) {
   return marks.map((mark, i) => {
     const above = rowBox(rows[i]!);
     const below = rowBox(rows[i + 1]!);
-    const m = markBox(mark);
-    const gapAbove = above.height - above.circleCentre - CIRCLE_PX / 2 + m.marginTop;
-    const gapBelow = m.marginBottom + below.circleCentre - CIRCLE_PX / 2;
-    const pitch = above.height - above.circleCentre + m.marginTop + m.height + m.marginBottom + below.circleCentre;
+    const m = markPlacement(mark, above);
+    const gapAbove = m.top - (above.circleCentre + CIRCLE_PX / 2);
+    const gapBelow = m.pairHeight + below.circleCentre - CIRCLE_PX / 2 - m.bottom;
+    const pitch = m.pairHeight - above.circleCentre + below.circleCentre;
     return { pitch, gapAbove, gapBelow };
   });
 }
@@ -208,9 +241,17 @@ describe("the mark on the run page's own panel rail carries the drawing's geomet
       expect(resolve(c, /^w-(\d+(?:\.\d+)?)$/, px)).toBe(2);
       expect(resolve(c, /^h-(\d+(?:\.\d+)?)$/, px)).toBe(8);
       expect(tokens(c)).toContain("rounded-[1px]");
-      expect(markBox(mark).marginTop).toBe(4);
-      expect(markBox(mark).marginBottom).toBe(4);
-      expect(tokens(c).some((t) => t === "ml-[11px]" || t === "ms-[11px]")).toBe(true);
+      // The 4px above and the 4px below, stated as the drawing's rule about the
+      // GAP so that it holds on a wrapped row too (fix leg 9): the mark is
+      // centred in the span between the two circles, and that span is the
+      // drawing's 6px, its 8px mark and its 6px on a one-line pair. Item 2
+      // below measures those numbers; here it is the declaration.
+      expect(tokens(c).some((t) => t === "!my-auto")).toBe(true);
+      expect(resolve(c, /^top-(\d+(?:\.\d+)?|\[\d+px\])$/, px)).toBe(26);
+      expect(resolve(c, /^bottom-(\d+(?:\.\d+)?|\[\d+px\])$/, px)).toBe(-2);
+      expect(
+        tokens(c).some((t) => t === "left-[11px]" || t === "ml-[11px]" || t === "ms-[11px]"),
+      ).toBe(true);
       // The line token, and no other ink: the primitive's `bg-muted` and the
       // old `bg-border` are both other inks.
       const inks = tokens(c).filter((t) => /^bg-/.test(t));
@@ -341,13 +382,10 @@ describe("the join composes the same pitch as every other pair (cinatra#3225)", 
     const pitches = marks.map((mark, i) => {
       const above = rowBox(rows[i]!);
       const below = rowBox(rows[i + 1]!);
-      const m = markBox(mark);
+      const m = markPlacement(mark, above);
       return (
-        above.height -
+        m.pairHeight -
         above.circleCentre +
-        m.marginTop +
-        m.height +
-        m.marginBottom +
         nestedTopOffset(rows[i + 1]!, rows[i]!) +
         below.circleCentre
       );

@@ -20,6 +20,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_RAIL_PAIR_CLASS,
   RUN_PAGE_RAIL_TITLE_CLASS,
 } from "./run-step-rail-extra-entry";
 
@@ -131,7 +132,12 @@ export function RunStepRailPanel({
                   step={displayStep}
                   completed={isCompleted}
                   data-rail-skipped={isSkipped ? "true" : undefined}
-                  className="items-start !flex-none"
+                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
+                  // containing block the mark beneath this row is centred in, and
+                  // the 16px slot that mark no longer contributes in flow. A row
+                  // with no mark under it does not take it, so the rail still ends
+                  // on its last row.
+                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
                 >
                   <RailExtraEntry
                     entry={entry}
@@ -168,7 +174,12 @@ export function RunStepRailPanel({
                 completed={isCompleted}
                 disabled={entry.status === "upcoming" && !isActive}
                 data-rail-skipped={isSkipped ? "true" : undefined}
-                className="items-start !flex-none"
+                // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
+                // containing block the mark beneath this row is centred in, and
+                // the 16px slot that mark no longer contributes in flow. A row
+                // with no mark under it does not take it, so the rail still ends
+                // on its last row.
+                className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
               >
                 {/* The rail ANCHORS live on this wrapper, not on StepperTitle:
                     the reui StepperTitle accepts only {children, className} and

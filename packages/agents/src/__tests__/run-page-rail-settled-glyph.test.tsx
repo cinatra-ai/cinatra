@@ -263,12 +263,18 @@ describe("the run page's own rail carries the drawing's rhythm too (item 2, conv
 
     expect(marks.length).toBeGreaterThan(0);
     for (const mark of marks) {
-      // 4px above and below -- the whole gap between two entries. Red before
-      // this change: the vendored separator's own `m-0.5` stood at 2px and the
-      // rail overrode only the height and the ink.
-      expect(mark.className).toContain("my-1");
+      // 4px above and below -- the whole gap between two entries -- stated as
+      // the drawing's rule about the GAP rather than about the flow, so that it
+      // holds on a wrapped row too (cinatra#3225 items 2 and 3, fix leg 9): the
+      // mark is centred in the span from one circle's bottom to the next
+      // circle's top, which on a one-line pair IS the drawing's 4 and 4. Red
+      // before the first of those changes: the vendored separator's own `m-0.5`
+      // stood at 2px and the rail overrode only the height and the ink.
+      expect(mark.className).toContain("!my-auto");
+      expect(mark.className).toContain("top-[26px]");
+      expect(mark.className).toContain("-bottom-0.5");
       // 11px in from the column edge, which is where the drawing puts it.
-      expect(mark.className).toContain("ml-[11px]");
+      expect(mark.className).toContain("left-[11px]");
       expect(mark.className).not.toMatch(/(?:^|\s)ms-3(?:\s|$)/);
       // The 8px height the drawing states.
       expect(mark.className).toContain("!h-2");
@@ -281,8 +287,8 @@ describe("the run page's own rail carries the drawing's rhythm too (item 2, conv
     // round grades three rails that agree only by accident.
     expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("border-0");
     expect(RUN_PAGE_RAIL_ROW_CLASS).toContain("py-0.5");
-    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("my-1");
-    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("ml-[11px]");
+    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("!my-auto");
+    expect(RUN_PAGE_RAIL_SEP_CLASS).toContain("left-[11px]");
 
     for (const module of [
       "run-step-rail-panel.tsx",

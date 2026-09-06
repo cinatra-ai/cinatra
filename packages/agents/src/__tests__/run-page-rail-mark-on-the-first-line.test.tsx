@@ -75,12 +75,14 @@ function resolve(
   let important = false;
   for (const raw of tokens(className)) {
     const bang = raw.startsWith("!");
-    const token = bang ? raw.slice(1) : raw;
+    const signed = bang ? raw.slice(1) : raw;
+    const negative = signed.startsWith("-");
+    const token = negative ? signed.slice(1) : signed;
     const bare = token.includes(":") ? token.slice(token.lastIndexOf(":") + 1) : token;
     const m = bare.match(pattern);
     if (!m) continue;
     if (important && !bang) continue;
-    value = read(m);
+    value = (negative ? -1 : 1) * read(m);
     important = important || bang;
   }
   return value;
@@ -139,12 +141,54 @@ function rowBox(row: HTMLElement, lines: number) {
   return { height, circleCentre, align, py, title };
 }
 
-function markBox(mark: HTMLElement) {
+/**
+ * WHERE THE MARK LANDS inside the box it shares with the row above it
+ * (cinatra#3225 items 2 and 3, fix leg 9).
+ *
+ * The drawing's 4px above the mark and 4px below it are the two halves of one
+ * rule: the mark stands in the MIDDLE of the gap between the two circles it
+ * separates. Stated that way it survives a row whose label wraps — the gap
+ * grows with the row's own lines and the mark stays in the middle of it — so
+ * the mark is centred in its pair box rather than pushed down the flow by the
+ * row's wrapped lines. Read here whichever way the rail composes it.
+ */
+function markPlacement(mark: HTMLElement, above: ReturnType<typeof rowBox>) {
   const c = mark.className;
+  const pair = mark.parentElement;
+  expect(pair, "the mark stands inside the box it shares with its row").not.toBeNull();
+  const pb = resolve(pair!.className, /^pb-(\d+(?:\.\d+)?)$/, px) ?? 0;
   const height = resolve(c, /^h-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
-  const my = resolve(c, /^my-(\d+(?:\.\d+)?)$/, px);
-  const m = resolve(c, /^m-(\d+(?:\.\d+)?)$/, px) ?? 0;
-  return { height, marginTop: my ?? m, marginBottom: my ?? m };
+
+  if (tokens(c).some((t) => t.replace(/^!/, "") === "absolute")) {
+    const top = resolve(c, /^top-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
+    const bottomOffset = resolve(c, /^bottom-(\d+(?:\.\d+)?|\[\d+px\])$/, px) ?? 0;
+    const pairHeight = above.height + pb;
+    const free = pairHeight - top - height - bottomOffset;
+    const marginTop = tokens(c).some((t) => t.replace(/^!/, "") === "my-auto")
+      ? free / 2
+      : (resolve(c, /^my-(\d+(?:\.\d+)?)$/, px) ?? 0);
+    return { pairHeight, height, top: top + marginTop, bottom: top + marginTop + height };
+  }
+
+  const my = resolve(c, /^my-(\d+(?:\.\d+)?)$/, px) ?? resolve(c, /^m-(\d+(?:\.\d+)?)$/, px) ?? 0;
+  return {
+    pairHeight: above.height + my + height + my + pb,
+    height,
+    top: above.height + my,
+    bottom: above.height + my + height,
+  };
+}
+
+/** The two gaps around the mark that stands under a row of `lines` lines. */
+function gaps(rows: HTMLElement[], marks: HTMLElement[], index: number, lines: number) {
+  const above = rowBox(rows[index]!, lines);
+  const below = rowBox(rows[index + 1]!, 1);
+  const mark = markPlacement(marks[index]!, above);
+  return {
+    above: mark.top - (above.circleCentre + CIRCLE_PX / 2),
+    below: mark.pairHeight + below.circleCentre - CIRCLE_PX / 2 - mark.bottom,
+    height: mark.height,
+  };
 }
 
 /** One work step whose name is what it did — the label that wraps. */
@@ -211,38 +255,35 @@ describe.each(PALETTES)("the rail's rows, in the %s palette", (palette) => {
     }
   });
 
-  it("keeps the mark's own margins the drawing's 4 above and 4 below", () => {
+  it("keeps the drawing's own 4 above the mark and 4 below it on a one-line pair", () => {
     const { container } = inPalette();
+    const rows = rowElements(container);
     const marks = markElements(container);
     expect(marks.length).toBeGreaterThan(0);
-    for (const mark of marks) {
-      const box = markBox(mark);
-      expect(box.marginTop).toBe(4);
-      expect(box.marginBottom).toBe(4);
-      expect(box.height).toBe(8);
+    for (let i = 0; i < marks.length; i += 1) {
+      const g = gaps(rows, marks, i, 1);
+      // 2px of the row's own padding and the mark's 4px, above and below.
+      expect(g.above).toBe(6);
+      expect(g.below).toBe(6);
+      expect(g.height).toBe(8);
     }
   });
 
-  it("reads the same gap from a circle to the mark beneath it however the row wraps", () => {
+  it("reads one gap either side of the mark, however the row above it wraps", () => {
     const { container } = inPalette();
     const rows = rowElements(container);
     const marks = markElements(container);
     expect(marks.length).toBe(rows.length - 1);
-    // The reading the fourth proof round measured at 6 and then 15: the gap
-    // between the mark and the circle of the row BELOW it, where that row's
-    // label takes one line, two lines and three.
-    const gapsBelow = [1, 2, 3].map((lines) => {
-      const below = rowBox(rows[1]!, lines);
-      return markBox(marks[0]!).marginBottom + below.circleCentre - CIRCLE_PX / 2;
-    });
-    expect(new Set(gapsBelow).size).toBe(1);
-    expect(gapsBelow[0]).toBe(6);
-    // And the same gap above the mark, from the circle of the row above it.
-    const gapsAbove = [1, 2, 3].map((lines) => {
-      const above = rowBox(rows[0]!, lines);
-      return above.py + CIRCLE_PX / 2 - CIRCLE_PX / 2 + markBox(marks[0]!).marginTop;
-    });
-    expect(new Set(gapsAbove).size).toBe(1);
-    expect(gapsAbove[0]).toBe(6);
+    // The reading the fourth proof round measured at 6 and then 15, and the
+    // fifth at 45 and 7: the two gaps around the mark, where the row above it
+    // takes one line, two lines and three. The gap grows with the row's own
+    // lines — that is where a wrapped row's extra height belongs — and the mark
+    // stays in the middle of it, so the two are always the same number.
+    for (const lines of [1, 2, 3]) {
+      const g = gaps(rows, marks, 0, lines);
+      expect(g.above, `a ${lines}-line row: ${g.above} above, ${g.below} below`).toBe(g.below);
+    }
+    // And a one-line pair is still drawn exactly where the drawing draws it.
+    expect(gaps(rows, marks, 0, 1).above).toBe(6);
   });
 });

@@ -34,6 +34,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
+import { cn } from "@/lib/utils";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -128,6 +129,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_RAIL_PAIR_CLASS,
 } from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
@@ -1325,7 +1327,12 @@ function StepperColumn({
                   completed={isCompleted}
                   loading={isLoading}
                   disabled={devStepperMode ? false : s.index > activeStep}
-                  className="items-start !flex-none"
+                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
+                  // containing block the mark beneath this row is centred in, and
+                  // the 16px slot that mark no longer contributes in flow. A row
+                  // with no mark under it does not take it, so the rail still ends
+                  // on its last row.
+                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
                 >
                   <div
                     className="flex items-center gap-1"
@@ -1393,7 +1400,12 @@ function StepperColumn({
                   step={displayStep}
                   completed={entry.status === "completed" || entry.status === "resolved"}
                   data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
-                  className="items-start !flex-none"
+                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
+                  // containing block the mark beneath this row is centred in, and
+                  // the 16px slot that mark no longer contributes in flow. A row
+                  // with no mark under it does not take it, so the rail still ends
+                  // on its last row.
+                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
                 >
                   <RailExtraEntry
                     entry={entry}
