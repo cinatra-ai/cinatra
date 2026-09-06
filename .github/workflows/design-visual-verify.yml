@@ -114,7 +114,7 @@ jobs:
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
     # Post-cutover the build compiles the app + 79 cloned extensions, so the
     # prod build + standalone boot + suite needs more than the old 15 min.
-    timeout-minutes: 45
+    timeout-minutes: 70
 
     # The standalone PRODUCTION server runs instrumentation.node.ts register()
     # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
@@ -382,7 +382,7 @@ jobs:
           # DB but there are dozens of them; first serve can exceed the old
           # 2-minute window. 8 minutes covers the observed fail-open boot.
           for i in $(seq 1 240); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures" --max-time 5 2>/dev/null || echo 000)
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures/conformance" --max-time 5 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "ready after ${i} polls"; exit 0; fi
             sleep 2
           done
@@ -399,7 +399,7 @@ jobs:
         # added conformance project on the shared boot.
         env:
           E2E_REUSE_SERVER: "1"
-        run: timeout --kill-after=60 1200 pnpm test:e2e:design
+        run: timeout --kill-after=60 2400 pnpm test:e2e:design
 
       - name: Dump standalone server log on failure
         # Next.js omits server-component error messages from the CLIENT response
