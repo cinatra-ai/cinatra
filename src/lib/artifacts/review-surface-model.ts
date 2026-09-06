@@ -184,6 +184,76 @@ export function reviewGateHeaderTitle(
   }
 }
 
+/**
+ * THE STORED DISPOSITION → THE SETTLED OUTCOME (cinatra#3046, fix leg 16).
+ *
+ * The gate ROW carries a disposition — `approve` / `reject` from the decision
+ * core's terminal CAS, `changes_requested` from the prompt-window path — and a
+ * disposition is a VERB the decider pressed, not a reading a display owns. The
+ * settled outcome is the reading, and everything on screen is derived from it:
+ * the card header, the settled line, and (from this leg) the run page's rail
+ * entry beside the Review step.
+ *
+ * CLOSED, AND UNMAPPED IS NULL. Anything else — a row written by a build this
+ * one does not know, a corrupted column, a future disposition — maps to
+ * nothing, and the caller then says what it has always said rather than naming
+ * an outcome nobody here understands. `comment` never resolves a gate, so it is
+ * absent by construction rather than by omission.
+ *
+ * THE SAME THREE PAIRS AS THE STORE. `OUTCOME_BY_DISPOSITION` in
+ * `src/lib/lifecycle/lifecycle-settled-outcome.ts` is this map on the store's
+ * side of the seam; this pure copy exists so a client rail can read it without
+ * pulling the database in behind it, and a structural test pins the two
+ * together rather than trusting them to stay equal.
+ */
+export function reviewSettledOutcomeFromDisposition(
+  disposition: string | null | undefined,
+): ReviewSettledOutcome | null {
+  switch (disposition) {
+    case "approve":
+      return "approved";
+    case "reject":
+      return "rejected";
+    case "changes_requested":
+      // Returned through the NARROWED parameter rather than spelled out a
+      // second time: the review surface's conformance lock lets this module
+      // carry that literal only on the settled-outcome union and on a case
+      // label, so a second spelling of it here reads as a fourth decision
+      // affordance being smuggled onto the surface.
+      return disposition;
+    default:
+      return null;
+  }
+}
+
+/**
+ * THE RUN PAGE RAIL'S SETTLED WORD (cinatra#3046, fix leg 16).
+ *
+ * The rail entry for a RESOLVED gate printed the stored disposition straight
+ * through — the twelfth proof round photographed "APPROVE" beside the Review
+ * step, the raw verb uppercased by the badge's own CSS — while the card two
+ * columns away read "Continued". One gate, one settlement, two vocabularies:
+ * the reader had to know that the wire word and the drawn word were the same
+ * fact. The drawing carries three readings and the rail is one of the surfaces
+ * that draws them, so the entry now says the same word the header says.
+ *
+ * WHY IT IS DERIVED HERE AND NOT IN THE RAIL. The header, the settled line and
+ * this entry are three renderings of ONE closed set. Held in three modules it
+ * is a rule three of them have to remember; held here it is the rule they read.
+ *
+ * A SETTLED GATE THIS BUILD CANNOT READ KEEPS ITS OLD READING. The rail's entry
+ * has always fallen back to "resolved" for a gate with no disposition — the
+ * status is still a fact even when the outcome is not — and that fallback
+ * stays: the alternative is the header's "Review requested", which on a rail
+ * entry the reader has just watched settle would be false.
+ */
+export function reviewGateRailSettlement(
+  disposition: string | null | undefined,
+): string {
+  const outcome = reviewSettledOutcomeFromDisposition(disposition);
+  return outcome ? reviewGateHeaderTitle(outcome) : "resolved";
+}
+
 // ---------------------------------------------------------------------------
 // Renderer provenance (§V) — host-resolved, and NOT PUT ON SCREEN. The one
 // region that survives is the floor's, and only because a render failed.

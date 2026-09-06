@@ -19,10 +19,15 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import {
   relativeInstant,
   reviewGateHeaderTitle,
+  reviewGateRailSettlement,
   reviewSettledCopy,
+  reviewSettledOutcomeFromDisposition,
   reviewTargetRowFacts,
 } from "../review-surface-model";
 
@@ -145,5 +150,88 @@ describe("reviewGateHeaderTitle \u2014 the settled reading, in the drawing's own
         `${reviewGateHeaderTitle(outcome)} by Dana Okonkwo`,
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The RUN PAGE RAIL's settled word (cinatra#3046, fix leg 16) — the twelfth
+// proof round photographed "APPROVE" beside a resolved Review step while the
+// card on the same screen read "Continued".
+// ---------------------------------------------------------------------------
+
+describe("reviewSettledOutcomeFromDisposition — the stored verb is not a reading", () => {
+  it.each([
+    ["approve", "approved"],
+    ["reject", "rejected"],
+    ["changes_requested", "changes_requested"],
+  ] as const)("a gate resolved with %s carries the %s outcome", (disposition, outcome) => {
+    expect(reviewSettledOutcomeFromDisposition(disposition)).toBe(outcome);
+  });
+
+  it("maps nothing it does not know, rather than guessing", () => {
+    // `comment` never resolves a gate; the rest are a future build's value, a
+    // corrupted column, and no value at all.
+    for (const unknown of ["comment", "approved", "APPROVE", "", null, undefined]) {
+      expect(reviewSettledOutcomeFromDisposition(unknown)).toBeNull();
+    }
+  });
+
+  it("is the SAME three pairs the store maps on its own side of the seam", () => {
+    // The store's copy (`OUTCOME_BY_DISPOSITION`) is the one the wire outcome is
+    // written from; this pure copy exists only so a client rail can read it
+    // without pulling the database in behind it. A pair added on one side and
+    // not the other fails HERE, not on a screen.
+    const storeSource = readFileSync(
+      join(process.cwd(), "src/lib/lifecycle/lifecycle-settled-outcome.ts"),
+      "utf8",
+    );
+    const literal = storeSource.match(
+      /OUTCOME_BY_DISPOSITION[^=]*=\s*\{([\s\S]*?)\}/,
+    );
+    expect(literal).not.toBeNull();
+    const pairs = [...literal![1].matchAll(/^\s*([A-Za-z_]+)\s*:\s*"([a-z_]+)"/gm)].map(
+      ([, disposition, outcome]) => [disposition, outcome] as const,
+    );
+    expect(pairs).toHaveLength(3);
+    for (const [disposition, outcome] of pairs) {
+      expect(reviewSettledOutcomeFromDisposition(disposition)).toBe(outcome);
+    }
+  });
+});
+
+describe("reviewGateRailSettlement — the rail entry says the drawing's word", () => {
+  it.each([
+    ["approve", "Continued"],
+    ["reject", "Changes requested"],
+    ["changes_requested", "Changes requested"],
+  ] as const)("a gate resolved with %s reads %s on the rail", (disposition, word) => {
+    expect(reviewGateRailSettlement(disposition)).toBe(word);
+  });
+
+  it("never puts the decider's raw verb on the rail", () => {
+    for (const disposition of ["approve", "reject", "changes_requested"] as const) {
+      const word = reviewGateRailSettlement(disposition);
+      expect(word).not.toBe(disposition);
+      expect(word.toLowerCase()).not.toBe(disposition);
+    }
+  });
+
+  it("says the same word as the header for the same gate", () => {
+    // One settlement, one vocabulary: the rail entry and the card header are two
+    // renderings of one closed set, and they may not drift apart again.
+    for (const disposition of ["approve", "reject", "changes_requested"] as const) {
+      const outcome = reviewSettledOutcomeFromDisposition(disposition)!;
+      expect(reviewGateRailSettlement(disposition)).toBe(reviewGateHeaderTitle(outcome));
+    }
+  });
+
+  it("keeps the entry's old fallback for a settled gate it cannot read", () => {
+    // The rail row is drawn because the gate IS resolved; the status is still a
+    // fact when the outcome is not, and the header's "Review requested" would be
+    // false on a row the reader has just watched settle.
+    expect(reviewGateRailSettlement(null)).toBe("resolved");
+    expect(reviewGateRailSettlement(undefined)).toBe("resolved");
+    expect(reviewGateRailSettlement("comment")).toBe("resolved");
+    expect(reviewGateRailSettlement(null)).not.toBe("Review requested");
   });
 });
