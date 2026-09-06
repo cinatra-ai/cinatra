@@ -60,7 +60,7 @@ concurrency:
 jobs:
   changed-paths:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 3
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
@@ -171,7 +171,7 @@ jobs:
   contract-schema-lockstep:
     if: github.event_name == 'pull_request' && needs.changed-paths.outputs.contract_schema == 'true'
     needs: changed-paths
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +204,7 @@ jobs:
   uat-gate:
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     needs: changed-paths
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 40
     # Conditional service containers (the dashboard-live-verify idiom): an empty
     # `image` string means the service is NOT started. `services:` containers
@@ -295,14 +295,14 @@ jobs:
         if: needs.changed-paths.outputs.run_uat != 'true'
         run: echo "No WP/Drupal contract paths touched, or draft/override-labeled PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
       - name: Reclaim runner disk (real-run only — full UAT stack + browsers exhaust ubuntu-latest)
-        if: needs.changed-paths.outputs.run_uat == 'true'
+        if: ${{ needs.changed-paths.outputs.run_uat == 'true' && runner.environment == 'github-hosted' }}
         # See the nightly job's identical step: run 28865808274 died on
         # "No space left on device" (2026-07-07). Real-run path only.
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
       - name: Enlarge swap + record the memory baseline (real-run only)
-        if: needs.changed-paths.outputs.run_uat == 'true'
+        if: ${{ needs.changed-paths.outputs.run_uat == 'true' && runner.environment == 'github-hosted' }}
         # DISK was never the constraint on the silent-stall runs (>100 GB free
         # after the reclaim above) — MEMORY was. This job co-hosts the docker
         # WordPress + Drupal + nango + wayflow stack, the Postgres/Redis service
@@ -517,7 +517,7 @@ jobs:
     # schedule = the 07:00Z nightly; workflow_dispatch = on-demand proof of the
     # full-suite path (cinatra#173). The full suite runs regardless of paths.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 50
     services:
       postgres:
@@ -580,6 +580,7 @@ jobs:
       OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
       - name: Reclaim runner disk (full UAT stack + browsers exhaust ubuntu-latest)
+        if: ${{ runner.environment == 'github-hosted' }}
         # The 2026-07-07 on-demand proof (run 28865808274) died with "No space
         # left on device" at the end of the suite: WP+Drupal+nango+app images,
         # pnpm store, Next build cache and Playwright browsers together overflow
@@ -589,6 +590,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
       - name: Enlarge swap + record the memory baseline
+        if: ${{ runner.environment == 'github-hosted' }}
         # Identical to the uat-gate job's step — see the rationale there: the
         # silent mid-suite stalls were a MEMORY cliff, not a disk one, and the
         # nightly runs the same full stack on the same runner class.
@@ -755,7 +757,7 @@ jobs:
   mask-verify:
     needs: [uat-gate, nightly]
     if: ${{ always() && (contains(fromJSON('["success", "failure"]'), needs.uat-gate.result) || contains(fromJSON('["success", "failure"]'), needs.nightly.result)) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read

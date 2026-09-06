@@ -74,7 +74,7 @@ jobs:
   bringup:
     name: Bring-up (resolve pins, no boot)
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'bringup' || inputs.mode == 'both' }}
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,7 +106,7 @@ jobs:
   preflight:
     name: Preflight (is the pinned fixture built?)
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 3
     outputs:
       fixture_ready: ${{ steps.check.outputs.fixture_ready }}
@@ -130,7 +130,7 @@ jobs:
     name: Live capture (boot pinned fixture)
     needs: [preflight]
     if: ${{ needs.preflight.outputs.fixture_ready == 'true' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'capture' || inputs.mode == 'both') }}
-    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

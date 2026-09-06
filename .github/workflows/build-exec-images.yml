@@ -127,7 +127,7 @@ jobs:
   # ---------------------------------------------------------------------------
   changes:
     name: Detect which exec-plane images this event touches
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -176,18 +176,49 @@ jobs:
   # when `changes` saw docker/sandbox or this workflow move): builds the L0
   # image single-arch (amd64, `load:true` — native, no QEMU) and functionally
   # smoke-tests it. On a v* tag it also gates the release publish below (via
-  # `needs`) and warms the gha cache the publish re-exports.
+  # `needs`) and warms the build cache the publish re-exports.
   # ---------------------------------------------------------------------------
   build-and-smoke:
     name: Build + smoke-test the L0 sandbox image
     needs: changes
     if: ${{ needs.changes.outputs.l0 == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
+      # behind `type=gha` is only served to GitHub-hosted runners: on the
+      # self-hosted class this job routes to, buildx died inside the build at
+      # "importing cache manifest from gha" with an HTML error page where a
+      # cache manifest belongs, and the image build failed outright. So on a
+      # self-hosted runner the build caches to a directory the runner user owns
+      # under its OWN home, which persists between jobs on the same machine;
+      # GitHub-hosted runs keep `type=gha` byte-for-byte (the two-armed
+      # cache-from/cache-to expressions on the build step below).
+      # The directory is named for the gha scope it replaces (`exec-l0`), so the
+      # two backends stay legible as the same cache.
+      # A local cache is PER MACHINE: a job landing on a different self-hosted
+      # runner than the one that populated it finds an empty directory, warns,
+      # and rebuilds — slower on a cold machine, never wrong.
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/buildx/exec-l0"
+          # ONE cleanup line, self-hosted only, and BEFORE the build rather than
+          # after: buildx writes this cache with mode=max, so it grows without
+          # bound across jobs on this machine. Past 10 GiB, drop the directory
+          # and let this build repopulate it — one cold build costs far less
+          # than a full runner disk, and deleting AFTER the build would throw
+          # away exactly the cache the downstream re-export jobs read.
+          size_mb="$(du -sm "$dir" 2>/dev/null | cut -f1 || true)"
+          if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
       # Single-arch amd64, loaded into the local daemon for the smoke test. The
       # cache scope is pinned to `exec-l0` so this never collides with the app
@@ -201,8 +232,8 @@ jobs:
           context: docker/sandbox
           load: true
           tags: cinatra-sandbox-l0:ci
-          cache-from: type=gha,scope=exec-l0
-          cache-to: type=gha,mode=max,scope=exec-l0
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=exec-l0' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max,scope=exec-l0' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Functional proof, not just "it built": the L0 contract is a fixed
       # unprivileged runtime identity (uid/gid 10001), a writable /workspace
@@ -250,7 +281,7 @@ jobs:
     # contract check. On non-tag events the `if:` below is false anyway.
     needs: build-and-smoke
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:
@@ -292,6 +323,24 @@ jobs:
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/exec-l0"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -332,7 +381,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # amd64 re-exports from the smoke job's warmed cache; arm64 builds fresh.
-          cache-from: type=gha,scope=exec-l0
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=exec-l0' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Record the immutable digest so the deploy can pin it (AC: digests
       # emitted/recorded). The deploy resolves the same digest independently via
@@ -364,7 +413,7 @@ jobs:
   # play: builds docker/exec-worker/Dockerfile single-arch (amd64, `load:true` —
   # native, no QEMU) from the REPO ROOT context and functionally smoke-tests it.
   # On a v* tag it also gates the release publish below (via `needs`) and warms
-  # the gha cache that publish re-exports.
+  # the build cache that publish re-exports.
   #
   # Before this job existed the worker image was built by NOTHING in CI — only
   # by the L5 service-boundary battery, locally, at test time — so a change that
@@ -380,13 +429,44 @@ jobs:
     # pinned to linux/amd64, and a runner variable that could later name an arm64
     # label would either emulate the whole workspace install or smoke-test an
     # architecture nobody publishes. Native build, native smoke, no drift.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Generous: the build installs the whole pnpm workspace and runs esbuild.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
+      # behind `type=gha` is only served to GitHub-hosted runners: on the
+      # self-hosted class this job routes to, buildx died inside the build at
+      # "importing cache manifest from gha" with an HTML error page where a
+      # cache manifest belongs, and the image build failed outright. So on a
+      # self-hosted runner the build caches to a directory the runner user owns
+      # under its OWN home, which persists between jobs on the same machine;
+      # GitHub-hosted runs keep `type=gha` byte-for-byte (the two-armed
+      # cache-from/cache-to expressions on the build step below).
+      # The directory is named for the gha scope it replaces
+      # (`exec-worker`), so the two backends stay legible as the same cache.
+      # A local cache is PER MACHINE: a job landing on a different self-hosted
+      # runner than the one that populated it finds an empty directory, warns,
+      # and rebuilds — slower on a cold machine, never wrong.
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/buildx/exec-worker"
+          # ONE cleanup line, self-hosted only, and BEFORE the build rather than
+          # after: buildx writes this cache with mode=max, so it grows without
+          # bound across jobs on this machine. Past 10 GiB, drop the directory
+          # and let this build repopulate it — one cold build costs far less
+          # than a full runner disk, and deleting AFTER the build would throw
+          # away exactly the cache the downstream re-export jobs read.
+          size_mb="$(du -sm "$dir" 2>/dev/null | cut -f1 || true)"
+          if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
       # Context = the REPO ROOT (the Dockerfile COPYs package manifests,
       # packages/, patches/, scripts/ and tsconfig.json), Dockerfile named
@@ -407,8 +487,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: cinatra-exec-worker:ci
-          cache-from: type=gha,scope=exec-worker
-          cache-to: type=gha,mode=max,scope=exec-worker
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=exec-worker' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max,scope=exec-worker' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Functional proof, not just "it built". The worker image's contract has
       # two halves and this asserts BOTH: what it MUST carry (docker CLI, the
@@ -532,7 +612,7 @@ jobs:
   # already multi-arch for hosts that can use it.)
   #
   # KNOWN LIMITATION, stated rather than hidden: this job RE-SOLVES the build
-  # from the gha cache instead of promoting the exact artifact the smoke job
+  # from the build cache instead of promoting the exact artifact the smoke job
   # proved. Normally that is a pure layer re-export of the same commit, but a
   # cache eviction across the approval pause would re-resolve the mutable
   # `node:24-alpine` base and re-run `apk add docker-cli`, so "published" and
@@ -551,7 +631,7 @@ jobs:
     needs: build-and-smoke-worker
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
     # Same default (amd64) runner as the build+smoke job above — see its note.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:
@@ -587,6 +667,24 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/exec-worker"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -614,8 +712,11 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,format=long,prefix=
 
-      # Pure cache re-export — the smoke job populated type=gha,mode=max for
-      # this scope on the same commit, so no layer is rebuilt.
+      # Pure cache re-export — the smoke job populated the cache for this scope
+      # on the same commit (type=gha on a GitHub-hosted runner, the
+      # runner-local directory on a self-hosted one), so no layer is rebuilt —
+      # unless a self-hosted re-export lands on a different machine than the
+      # smoke job, in which case it rebuilds instead.
       - name: Build + push worker image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -628,7 +729,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=exec-worker
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=exec-worker' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Record the immutable digest so the deploy can pin it (AC: digests
       # emitted/recorded). Both exec-plane services that run this image —

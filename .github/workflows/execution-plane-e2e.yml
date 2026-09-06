@@ -123,7 +123,7 @@ jobs:
   # -------------------------------------------------------------------------
   discover:
     name: Discover batteries
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
@@ -154,7 +154,7 @@ jobs:
     # tolerated a zero-battery selection would skip this job silently, and a
     # skipped job is exactly the shape that reads as "nothing to do" rather than
     # "nothing was proven". (Codex round 1, MUST-FIX.)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -278,7 +278,7 @@ jobs:
     name: Execution-plane battery tier
     needs: [discover, batteries]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       # `count == '0'` is rejected here as well as in discovery. Two independent

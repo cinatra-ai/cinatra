@@ -904,11 +904,54 @@ export function runKeyIsStep(lines, runIdx, keyIndent) {
   return false;
 }
 
+// The labels a variable-driven `runs-on` expression FALLS BACK TO, or null when
+// it carries no readable default. CI runner routing is set by a repository
+// variable — `runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}`
+// — so the label CI finally resolves is not in the file. What IS in the file is
+// the literal used whenever that variable is UNSET, written right there in the
+// expression as a JSON label string ('"ubuntu-latest"') or a JSON label array
+// ('["self-hosted","linux","x64","cinatra-ci"]').
+//
+// THE RESIDUAL, STATED PLAINLY: that default is the repository's declared
+// routing floor, NOT a proof of what a SET variable resolves to. A
+// `CI_RUNNER_*` pointed at a non-Linux label would run the job under a shell
+// this walk does not model, and no text parser can read repository variables.
+// The surface is therefore held to exactly the documented routing contract and
+// no wider — only `vars.CI_RUNNER_<CLASS>`, only a JSON label string or a
+// non-empty all-string label array — so nothing outside that contract is ever
+// read as a runner. Every other expression stays unreadable and is refused:
+// `${{ inputs.runner }}`, a `fromJSON(vars.X)` with no default, a non-routing
+// variable name, malformed or non-label JSON, and an expression carrying a
+// second expansion beside it all return null.
+// Does ONE runner label name Linux? Read label by label, never as one joined
+// string: a label counts only when it IS `linux`/`ubuntu` or is a variant
+// spelled off one of them (`ubuntu-latest`, `ubuntu-24.04`, `linux-arm64`). A
+// vendor label that merely CONTAINS the word — `windows-linux-tools` — proves
+// nothing about the shell, so it is refused rather than credited.
+export function labelNamesLinux(label) {
+  return /^(?:ubuntu|linux)(?:[-_.]|$)/i.test(String(label).trim());
+}
+
+export function runsOnExpressionDefaultLabels(value) {
+  const m = value.match(/^\$\{\{\s*fromJSON\(\s*vars\.(CI_RUNNER_[A-Z0-9_]+)\s*\|\|\s*'([^']*)'\s*\)\s*\}\}$/);
+  if (!m) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(m[2]);
+  } catch {
+    return null; // not a literal this parser can read — refuse, never guess
+  }
+  if (typeof parsed === "string") return [parsed];
+  if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((l) => typeof l === "string")) return parsed;
+  return null; // `[]`, a mixed-type array, a number, an object — none name a runner
+}
+
 // Does the job holding the `run:` at `runIdx` run on a LINUX runner? Reads the
-// job's `runs-on` (a scalar, a list, or a `${{ vars.X || 'ubuntu-latest' }}`
-// expression). Only a value that clearly names ubuntu/linux counts; an
-// unreadable or absent one is refused, because the runner decides the default
-// shell and with it every failure rule this walk applies.
+// job's `runs-on` (a scalar, a list, or a variable-driven
+// `${{ fromJSON(vars.X || '<default>') }}` expression, classified by its default
+// literal). Only a value that clearly names ubuntu/linux counts; an unreadable
+// or absent one is refused, because the runner decides the default shell and
+// with it every failure rule this walk applies.
 export function jobRunsOnLinux(lines, runIdx) {
   let jobStart = -1;
   for (let k = runIdx; k >= 0; k--) {
@@ -939,8 +982,16 @@ export function jobRunsOnLinux(lines, runIdx) {
       }
       value = rest.join(" ");
     }
-    // `${{ vars.RUNNER || 'ubuntu-latest' }}` can resolve to anything, so an
-    // expansion is not a demonstrable Linux runner.
+    // A variable-driven routing expression carries the labels CI falls back to;
+    // classify THOSE by the same rule a plain scalar or list gets, so the three
+    // spellings of one runner cannot disagree about the shell. What a SET
+    // routing variable resolves to is outside what this file can show — see the
+    // residual on runsOnExpressionDefaultLabels.
+    const defaults = runsOnExpressionDefaultLabels(value);
+    if (defaults) return defaults.some(labelNamesLinux);
+    // Any OTHER `${{ … }}` — `${{ vars.RUNNER || 'ubuntu-latest' }}`,
+    // `${{ inputs.runner }}` — can resolve to anything, so an expansion with no
+    // readable default is not a demonstrable Linux runner.
     if (hasUnquotedExpansion(value)) return false;
     return /ubuntu|linux/i.test(value);
   }
