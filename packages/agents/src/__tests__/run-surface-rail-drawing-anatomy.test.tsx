@@ -211,14 +211,16 @@ describe("a separator stands between adjacent entries (item 2)", () => {
     expect(sep.className).toContain("h-2");
     expect(sep.className).toContain("rounded-[1px]");
     expect(sep.className).toContain("bg-line");
-    // The 4px above and below is the drawing's rule about the GAP: the mark is
-    // centred in the span from one circle's bottom to the next circle's top,
-    // which on a one-line pair composes exactly those two numbers and which
-    // holds on a wrapped row too (cinatra#3225 items 2 and 3, fix leg 9).
-    expect(sep.className).toContain("!my-auto");
-    expect(sep.className).toContain("top-[26px]");
-    expect(sep.className).toContain("-bottom-0.5");
-    expect(sep.className).toContain("left-[11px]");
+    // The 4px above and below is measured against the ROW BOXES either side, on
+    // a mark that is a sibling in normal flow — the drawing's own
+    // "margin: 4px 0 4px 11px" (cinatra#3225 items 2 and 3, fix leg 10). Leg 9
+    // stated the same gap as a rule about the span between two circles and took
+    // the mark out of the flow to hold it; on a wrapped row that put the mark
+    // inside the row's own box, which the sixth proof round measured.
+    expect(sep.className).toContain("!my-1");
+    expect(sep.className).toContain("!ml-[11px]");
+    expect(sep.className).not.toContain("absolute");
+    expect(sep.className).not.toContain("!my-auto");
     // It is a mark, not a row: nothing to read out and nothing to press.
     expect(sep.getAttribute("aria-hidden")).toBe("true");
     expect(sep.textContent).toBe("");
@@ -228,14 +230,13 @@ describe("a separator stands between adjacent entries (item 2)", () => {
     const { container } = renderRail(<div data-testid="page-rail">steps</div>);
     const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
     const pageRail = container.querySelector<HTMLElement>('[data-testid="page-rail"]')!;
-    // The mark at the join stands inside the pair box of the row above it (fix
-    // leg 9), which is the element immediately before the page's own rail.
+    // The mark at the join is a SIBLING of the rows either side of it (fix leg
+    // 10), so it is the column's own child immediately before the page's rail.
     const before = Array.from(column.children)[
       Array.from(column.children).indexOf(pageRail) - 1
     ]!;
 
-    expect(before.querySelector(SEP_SEL)).not.toBeNull();
-    expect(before.querySelector(SEP_SEL)!.nextElementSibling).toBeNull();
+    expect(before.matches(SEP_SEL)).toBe(true);
   });
 
   it("draws no separator for a rail of one entry", () => {

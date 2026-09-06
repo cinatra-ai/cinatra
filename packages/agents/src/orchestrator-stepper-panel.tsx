@@ -34,7 +34,6 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
-import { cn } from "@/lib/utils";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -129,7 +128,6 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
-  RUN_RAIL_PAIR_CLASS,
 } from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
@@ -1327,12 +1325,16 @@ function StepperColumn({
                   completed={isCompleted}
                   loading={isLoading}
                   disabled={devStepperMode ? false : s.index > activeStep}
-                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
-                  // containing block the mark beneath this row is centred in, and
-                  // the 16px slot that mark no longer contributes in flow. A row
-                  // with no mark under it does not take it, so the rail still ends
-                  // on its last row.
-                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
+                  className="items-start !flex-none"
                 >
                   <div
                     className="flex items-center gap-1"
@@ -1400,12 +1402,16 @@ function StepperColumn({
                   step={displayStep}
                   completed={entry.status === "completed" || entry.status === "resolved"}
                   data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
-                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
-                  // containing block the mark beneath this row is centred in, and
-                  // the 16px slot that mark no longer contributes in flow. A row
-                  // with no mark under it does not take it, so the rail still ends
-                  // on its last row.
-                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
+                  className="items-start !flex-none"
                 >
                   <RailExtraEntry
                     entry={entry}

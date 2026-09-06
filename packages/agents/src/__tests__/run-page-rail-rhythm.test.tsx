@@ -89,22 +89,21 @@ function rowBox(row: HTMLElement): Box {
   const py = resolve(c, /^py-(\d+(?:\.\d+)?)$/, px) ?? 0;
   const border = tokens(c).includes("border-0") ? 0 : tokens(c).includes("border") ? 1 : 0;
   const height = fixed !== null && !auto ? fixed : CIRCLE_PX + 2 * py + 2 * border;
-  // `items-center` centres the circle in a fixed box; a content box puts it
-  // after the border and the padding.
+  // The drawing centres the circle in the row's OWN box (fix leg 10). On a
+  // one-line row — the only kind jsdom can compose, since it lays out no text —
+  // that is the circle after the row's border and padding either way.
   const circleCentre = fixed !== null && !auto ? height / 2 : border + py + CIRCLE_PX / 2;
   return { height, marginTop: 0, marginBottom: 0, circleCentre };
 }
 
 /**
- * WHERE A MARK LANDS in the box it shares with the row above it, and how tall
- * that box is (cinatra#3225 items 2 and 3, fix leg 9).
+ * WHERE A MARK LANDS between the row above it and the row below it, and how
+ * tall the two together stand (cinatra#3225 items 2 and 3, fix leg 10).
  *
- * The drawing's "margin: 4px 0" is one half of a rule about the GAP: the mark
- * stands in the MIDDLE of the span from one circle's bottom to the next
- * circle's top. On a one-line pair that composes the drawing's own two numbers
- * exactly; stated that way it also survives a row whose label wraps, where the
- * gap grows with the row's own lines and the mark stays in the middle of it.
- * Read here whichever way the rail composes it.
+ * The drawing's "margin: 4px 0" is stated against the ROW BOXES either side, on
+ * a mark that is a sibling in normal flow. Read here whichever way the rail
+ * composes it, so that a rail which went back out of the flow is measured as it
+ * really stands rather than as this file hopes.
  */
 function markPlacement(mark: HTMLElement, above: Box) {
   const c = mark.className;
@@ -241,16 +240,19 @@ describe("the mark on the run page's own panel rail carries the drawing's geomet
       expect(resolve(c, /^w-(\d+(?:\.\d+)?)$/, px)).toBe(2);
       expect(resolve(c, /^h-(\d+(?:\.\d+)?)$/, px)).toBe(8);
       expect(tokens(c)).toContain("rounded-[1px]");
-      // The 4px above and the 4px below, stated as the drawing's rule about the
-      // GAP so that it holds on a wrapped row too (fix leg 9): the mark is
-      // centred in the span between the two circles, and that span is the
-      // drawing's 6px, its 8px mark and its 6px on a one-line pair. Item 2
-      // below measures those numbers; here it is the declaration.
-      expect(tokens(c).some((t) => t === "!my-auto")).toBe(true);
-      expect(resolve(c, /^top-(\d+(?:\.\d+)?|\[\d+px\])$/, px)).toBe(26);
-      expect(resolve(c, /^bottom-(\d+(?:\.\d+)?|\[\d+px\])$/, px)).toBe(-2);
+      // The 4px above and the 4px below, against the row boxes either side —
+      // the drawing's own "margin: 4px 0 4px 11px" on a SIBLING in normal flow
+      // (fix leg 10). Leg 9 stated the same gap as a rule about the span
+      // between two circles and took the mark out of the flow to hold it; on a
+      // wrapped row that put the mark inside the row's own box, which the sixth
+      // proof round measured. Item 2 below measures the numbers; here it is the
+      // declaration.
+      expect(resolve(c, /^my-(\d+(?:\.\d+)?)$/, px)).toBe(4);
+      expect(resolve(c, /^mr-(\d+(?:\.\d+)?)$/, px)).toBe(0);
+      expect(tokens(c).some((t) => t.replace(/^!/, "") === "absolute")).toBe(false);
+      expect(tokens(c).some((t) => t.replace(/^!/, "") === "my-auto")).toBe(false);
       expect(
-        tokens(c).some((t) => t === "left-[11px]" || t === "ml-[11px]" || t === "ms-[11px]"),
+        tokens(c).some((t) => t === "!ml-[11px]" || t === "ml-[11px]" || t === "ms-[11px]"),
       ).toBe(true);
       // The line token, and no other ink: the primitive's `bg-muted` and the
       // old `bg-border` are both other inks.

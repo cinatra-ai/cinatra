@@ -69,18 +69,26 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * keeps its focus indicator: the base's `focus-visible:ring-3` ring is what
  * draws focus here, and a border transparent at rest never drew it.
  *
- * AND THE ROW IS ALIGNED TO ITS FIRST TEXT LINE (cinatra#3225 item 3, fix leg
- * 8). A rail label WRAPS inside the 208px column (cinatra#3226), and the shared
- * `Button` centres its children over the whole box: on a wrapped row the circle
- * therefore drifted DOWN, off the line it names, and the marks either side of it
- * stopped reading against that line — the fourth proof round measured 6px above
- * the mark and 15px below it, then 15 and 6, where the drawing gives one gap.
- * The circle belongs on the FIRST line of the label it stands for, which is the
- * alignment the lifecycle row already stated for itself; it is the ROW's rule,
- * so it is stated once here and every row of every rail reads it.
+ * AND THE CIRCLE IS CENTRED IN THE ROW'S OWN BOX (cinatra#3225 item 3, fix leg
+ * 10). The drawing states the row's cross-axis alignment itself —
+ * ".rail .step { display: flex; align-items: center; gap: 8px; padding: 2px 0 }"
+ * — so on a row whose label wraps inside the 208px column (cinatra#3226) the
+ * circle sits at the middle of the WHOLE row box. The drawing gives the rail's
+ * type its leading in the same sentence — "font-size: 14px; line-height: 1.15" —
+ * so a line box is 16.1px and a three-line row is 3 x 16.1 of text over the
+ * row's own 2px either side, 52.3px, with its circle's centre at that box's
+ * centre.
+ *
+ * TWO EARLIER READINGS ARE WITHDRAWN HERE. Leg 8 pinned the circle to the
+ * label's FIRST line (`items-start` plus a 2px nudge on the label); leg 9 then
+ * took the mark out of the flow to keep its gaps even under that reading. The
+ * sixth proof round measured what the pair composes on a real run: a circle
+ * centre at 286 in a row box running 272..354 — 27px above the box's own
+ * centre — and the mark standing INSIDE that row's box with 25px above it and
+ * 25px below. The drawing's own sentence needs neither device.
  */
 export const RUN_PAGE_RAIL_ROW_CLASS =
-  "h-auto w-full min-w-0 items-start gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
+  "h-auto w-full min-w-0 items-center gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
 
 /**
  * THE LABEL FITS THE RAIL COLUMN (cinatra#3226, the fourth proof round's
@@ -99,16 +107,27 @@ export const RUN_PAGE_RAIL_ROW_CLASS =
  * label back to the column instead of growing past it; `break-words` catches a
  * single long token that no wrap point can break.
  *
- * AND ITS FIRST LINE SITS ON THE CIRCLE (cinatra#3225 item 3, fix leg 8). Once
- * the row aligns to its first text line, the label's own line box is what the
- * circle is read against: `leading-5` makes that box 20px — the SAME box the
- * run-surface rail's rows compose, which is one rail with one rhythm rather
- * than two — and `mt-0.5` centres it in the 24px circle, so a single-line row
- * is drawn exactly where it always was and a wrapped one keeps its first line
- * on the circle instead of pushing the circle down the block.
+ * AND IT STATES THE DRAWING'S OWN LINE BOX (cinatra#3225 item 3, fix leg 10).
+ * The leading is the drawing's, not a choice made here: ".rail .step" carries
+ * "font-size: 14px; line-height: 1.15", so `leading-[1.15]` is that sentence
+ * rather than a rounding of it, and each line box measures 16.1px. It is the
+ * SAME box the run-surface rail's rows compose, which is one rail with one
+ * rhythm rather than two: a one-line row is the 24px circle over the row's own
+ * 2px either side, 28px, and a three-line row is 3 x 16.1 over that same
+ * padding, 52.3px. THE ROW GROWS BY ITS OWN LINE BOXES AND BY NOTHING ELSE,
+ * which is the half of the drawing's rhythm the label owns; the row class above
+ * owns the other half and centres the circle in whatever box those lines make.
+ *
+ * `leading-5` IS WITHDRAWN WITH THE READING IT SERVED. It made every line box
+ * 20px — a number the drawing states nowhere — which grew a three-line row to
+ * 64px and the pitch beside it to 62px, where the drawing composes 52.3 and 56.
+ *
+ * The `mt-0.5` leg 8 used to nudge the first line onto the circle is GONE too:
+ * it put an extra pixel into every row's height and it only ever existed to
+ * serve the first-line reading that leg withdraws.
  */
 export const RUN_PAGE_RAIL_TITLE_CLASS =
-  "mt-0.5 min-w-0 leading-5 break-words whitespace-normal text-start";
+  "min-w-0 leading-[1.15] break-words whitespace-normal text-start";
 
 /**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
@@ -125,44 +144,38 @@ export const RUN_PAGE_RAIL_TITLE_CLASS =
  * composed the drawing's 44.0px. Two compositions of one rail are two rhythms;
  * the mark is declared ONCE, HERE, and both rails read it.
  *
- * AND IT STANDS IN THE MIDDLE OF THE GAP IT FILLS, ON A WRAPPED ROW TOO
- * (cinatra#3225 items 2 and 3, fix leg 9). A rail label wraps inside the 208px
- * column (cinatra#3226) and the row aligns to its FIRST text line, so the wrapped
- * lines hang BELOW the circle they belong to. Drawn in flow, the mark inherited
- * that overhang: the fifth proof round measured 45px of gap above the mark and
- * 7px below it on a three-line row, against 7px and 7px on every one-line pair —
- * one rail read at two rhythms, and the row's extra height read as a doubled
- * margin rather than as its own lines.
+ * AND IT IS A SIBLING IN NORMAL FLOW, WITH THE DRAWING'S OWN MARGINS
+ * (cinatra#3225 items 2 and 3, fix leg 10). The drawing composes the rail from
+ * siblings — a row box, the mark, the next row box — and its margins are stated
+ * against those boxes: "margin: 4px 0 4px 11px" is 4px under the row above and
+ * 4px over the row below, whatever height either of them has. Nothing in it
+ * reserves a slot for the mark, and nothing takes the mark out of the flow.
  *
- * The drawing composes the mark exactly HALFWAY between the two circles it
- * stands between: `.rail .step { padding: 2px 0 }` under a 24px circle and
- * `.rail .sep { margin: 4px 0 }` put 6px above the mark and 6px below it, which
- * is the drawing's own rule stated as a rule about the GAP rather than about
- * the flow. Stated that way it holds however the row above wraps — the gap
- * grows with the row's lines and the mark stays in the middle of it — so the
- * mark is taken OUT of the flow and centred in the box that holds a row and the
- * mark beneath it (`RUN_RAIL_PAIR_CLASS`):
+ * Leg 9 read the 4px, the 8px mark and the 4px as a 16px SLOT that the row above
+ * reserved (`pb-4`), and centred an absolutely-positioned mark inside it. The
+ * sixth proof round measured what that composes once a row wraps: the mark at
+ * y 323..331 with 25px of margin above and below it, INSIDE the row box that
+ * runs 272..354, and pitches of 44 then 82 down one rail. A slot the drawing
+ * does not draw cannot be the rule, so the mark is back in the flow:
  *
- *   `top-[26px]`     the circle's bottom edge inside the row — the row's own
- *                    2px of top padding under the 24px circle.
- *   `-bottom-0.5`    2px past the pair box, which is the next row's own 2px of
- *                    top padding: the box the mark is centred in is exactly the
- *                    span from one circle's bottom to the next circle's top.
- *   `!my-auto`       the centring itself. `!` because the vendored
- *                    `StepperSeparator` emits its own `m-0.5`.
- *   `!mx-0`          and the same `m-0.5` would otherwise push the mark 2px off
- *                    the circles' line; `left-[11px]` is the drawing's indent,
- *                    the centre of the 24px circle the entries carry.
+ *   `!my-1`         the 4px above and the 4px below, measured against the row
+ *                   boxes either side. `!` because the vendored
+ *                   `StepperSeparator` emits its own `m-0.5`.
+ *   `!ml-[11px]`    the drawing's indent, the centre of the 24px circle the
+ *                   entries carry, so the marks and the circles read as one
+ *                   line down the rail; `!mr-0` clears the same `m-0.5` on the
+ *                   other side.
+ *   `!h-2`          the vendored `StepperSeparator` sets its vertical height
+ *                   through a variant-scoped token emitted AFTER the plain
+ *                   utilities, so the drawing's 8px has to win by importance
+ *                   there; on the run-surface frame's plain mark the importance
+ *                   is inert.
  *
- * A ONE-LINE PAIR THEREFORE COMPOSES THE DRAWING'S OWN NUMBERS UNCHANGED —
- * 6px, the 8px mark, 6px, a 44px pitch — and a three-line pair composes 25px,
- * the mark, 25px, its extra height being its two extra 20px line boxes and
- * nothing else.
- *
- * `!h-2`: the vendored `StepperSeparator` sets its vertical height through a
- * variant-scoped token emitted AFTER the plain utilities, so the drawing's 8px
- * has to win by importance there; on the run-surface frame's plain mark the
- * importance is inert.
+ * ONE RHYTHM FALLS OUT OF THE TWO RULES rather than being asserted on top of
+ * them: with the circle centred in its own row box, the pitch between two
+ * adjacent circles is half of each box plus the mark's own 16px — 44 for a pair
+ * of one-line rows, 56.2 for a one-line row beside a three-line one — and the gap
+ * from a row box to the mark is 4px at every pair, whatever the rows weigh.
  *
  * WHY HERE AND NOT IN A LEAF OF ITS OWN. The declaration first landed in a
  * zero-import leaf beside this file. A leaf is still a MODULE: it entered the
@@ -176,20 +189,7 @@ export const RUN_PAGE_RAIL_TITLE_CLASS =
  * drawing's `.rail .step { padding: 2px 0 }` over the circle is 28px.
  */
 export const RUN_RAIL_MARK_CLASS =
-  "absolute left-[11px] top-[26px] -bottom-0.5 !mx-0 !my-auto !h-2 w-0.5 rounded-[1px] bg-line";
-
-/**
- * THE BOX A ROW AND THE MARK BENEATH IT SHARE (cinatra#3225 items 2 and 3, fix
- * leg 9) — the mark's containing block, and the rail's whole gap.
- *
- * `relative` is what makes the mark's offsets read against THIS pair rather
- * than against whatever ancestor happens to be positioned. `pb-4` is the mark's
- * own 16px slot — the drawing's 4px, its 8px mark and its 4px — reserved by the
- * pair instead of contributed by the mark, because a mark taken out of the flow
- * reserves nothing. A row with no mark beneath it (the last entry of a rail)
- * does NOT take this class, and the rail ends on the row exactly as before.
- */
-export const RUN_RAIL_PAIR_CLASS = "relative pb-4";
+  "!my-1 !mr-0 !ml-[11px] !h-2 w-0.5 rounded-[1px] bg-line";
 
 /** The run page's own panel rails read the same mark under the rail's name. */
 export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
@@ -296,14 +296,14 @@ export function RailExtraEntry({
     // StepperTitle accepts only {children, className} and drops every other
     // prop, so a data-* attribute placed there never reaches the DOM.
     <div
-      // EVERY entry's indicator aligns to the FIRST line rather than the block
-      // centre (cinatra#3225 item 3, fix leg 8). It was the lifecycle row's own
-      // rule, because a lifecycle reason was the first label anyone had seen
-      // wrap; a work step's name wraps in the same column (cinatra#3226) and
-      // drifted its circle down the block exactly the same way.
+      // EVERY entry's indicator is centred in the row's OWN box (cinatra#3225
+      // item 3, fix leg 10) — the drawing's ".rail .step { align-items: center }",
+      // stated once on the shared row class above and read here as everywhere
+      // else. Leg 8 pinned it to the label's first line instead, which the sixth
+      // proof round measured 27px off the row's own centre.
       // The row spans the rail column and may SHRINK inside it, which is what
       // lets a long label wrap instead of running past the column (cinatra#3226).
-      className="flex w-full min-w-0 items-start gap-1"
+      className="flex w-full min-w-0 items-center gap-1"
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
       data-rail-gated-step={isGate ? "true" : undefined}
@@ -329,7 +329,7 @@ export function RailExtraEntry({
           // gate row that stated its own box is how the rail came to compose
           // two rhythms in the first place.
           className={cn(
-            "flex items-start rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-gate-link={entry.gate.reviewTaskId}
@@ -343,7 +343,7 @@ export function RailExtraEntry({
         <Link
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className={cn(
-            "flex items-start rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-verification-link={entry.verification.reviewTaskId}
@@ -365,12 +365,12 @@ export function RailExtraEntry({
         <StepperTrigger
           className={cn(
             // The row's own box AND its alignment are the shared row class's
-            // (`h-auto`, content sized, `items-start`, cinatra#3225) — no
+            // (`h-auto`, content sized, `items-center`, cinatra#3225) — no
             // `min-h-8` floor, which held this row at the 32px the drawing does
-            // not draw, and no second copy of the first-line rule here: once the
-            // row is allowed to grow, the Button's own `items-center` would
-            // centre the indicator against the whole wrapped block, on THIS row
-            // as on every other one.
+            // not draw, and no second copy of any alignment rule here: the
+            // drawing centres the circle in the row's own box and this row is
+            // sized by its content, so a wrapped reason grows the box and takes
+            // the circle to its new middle with it.
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           tabIndex={-1}

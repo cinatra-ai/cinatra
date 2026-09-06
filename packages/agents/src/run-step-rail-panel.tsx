@@ -20,7 +20,6 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
-  RUN_RAIL_PAIR_CLASS,
   RUN_PAGE_RAIL_TITLE_CLASS,
 } from "./run-step-rail-extra-entry";
 
@@ -132,12 +131,16 @@ export function RunStepRailPanel({
                   step={displayStep}
                   completed={isCompleted}
                   data-rail-skipped={isSkipped ? "true" : undefined}
-                  // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
-                  // containing block the mark beneath this row is centred in, and
-                  // the 16px slot that mark no longer contributes in flow. A row
-                  // with no mark under it does not take it, so the rail still ends
-                  // on its last row.
-                  className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
+                  className="items-start !flex-none"
                 >
                   <RailExtraEntry
                     entry={entry}
@@ -174,22 +177,26 @@ export function RunStepRailPanel({
                 completed={isCompleted}
                 disabled={entry.status === "upcoming" && !isActive}
                 data-rail-skipped={isSkipped ? "true" : undefined}
-                // THE PAIR BOX (cinatra#3225 items 2 and 3, fix leg 9) — the
-                // containing block the mark beneath this row is centred in, and
-                // the 16px slot that mark no longer contributes in flow. A row
-                // with no mark under it does not take it, so the rail still ends
-                // on its last row.
-                className={cn("items-start !flex-none", !isLast && RUN_RAIL_PAIR_CLASS)}
+                // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                // and 3, fix leg 10). The mark stands between two rows as a
+                // sibling in normal flow, carrying the drawing's own 4px above
+                // and 4px below; leg 9's pair box reserved a 16px slot the
+                // drawing does not draw, and on a wrapped row the mark landed
+                // inside the row's own box. `items-start` is the COLUMN's
+                // cross axis — the row and the mark line up on the left — and
+                // is not the row's own `align-items`, which the shared row
+                // class states as the drawing does.
+                className="items-start !flex-none"
               >
                 {/* The rail ANCHORS live on this wrapper, not on StepperTitle:
                     the reui StepperTitle accepts only {children, className} and
                     drops every other prop, so a data-* attribute placed there
                     never reaches the DOM. */}
                 <div
-                  // The indicator sits on the label's FIRST line, never centred
-                  // over a wrapped block (cinatra#3225 item 3, fix leg 8) — the
-                  // rule the shared row class states for every rail row.
-                  className="flex w-full min-w-0 items-start gap-1"
+                  // The indicator is centred in the row's own box, on a wrapped
+                  // row as on a one-line one (cinatra#3225 item 3, fix leg 10) —
+                  // the rule the shared row class states for every rail row.
+                  className="flex w-full min-w-0 items-center gap-1"
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                 >
