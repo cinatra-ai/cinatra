@@ -912,6 +912,35 @@ export const RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE =
   "It is still recurring, so the rows below still take a change — " +
   "it applies to the runs still to come.";
 
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A SCHEDULE THAT WAS STOPPED
+ * (cinatra#3174 fix leg 8, criterion 4).
+ *
+ * Section VI gives Cancel schedule its own reading and its own words. The
+ * control "appears only where the schedule is recurring, and it stops the
+ * recurring schedule and then leaves the rows no longer editable", and the
+ * section writes the reading it leaves behind as:
+ *
+ *   "Pressing it stops the recurring schedule, and the rows are not editable
+ *    after that."
+ *
+ * WHY IT CANNOT SHARE THE FIRED-RECURRING SENTENCE. The fourth graded round
+ * pressed Cancel schedule, confirmed it, and measured the card go read-only and
+ * floorless exactly as the section draws it — over a turn that still said "It is
+ * still recurring, so the rows below still take a change". A schedule that was
+ * just stopped has no runs still to come and its rows take nothing, so that
+ * sentence is the same untruth the two fired sentences exist to answer, said
+ * one reading later.
+ *
+ * THE FIRING DOES NOT DECIDE IT. `firedOnce` stays true after the stop — it is
+ * history and history does not un-happen — so the stopped reading is elected
+ * off the schedule's own durable `stopped`, which is also what the card's rows
+ * already freeze on. A stopped schedule that never fired reads the same way for
+ * the same reason: what the sentence says is that the rows are not editable.
+ */
+export const RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE =
+  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+
 /** Regex-escape a literal. */
 function escapeLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

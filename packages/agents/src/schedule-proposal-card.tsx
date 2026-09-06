@@ -433,6 +433,27 @@ export function scheduleReadingOf(
 }
 
 /**
+ * THE STOPPED RECURRING SCHEDULE, as the turn has to be able to name it
+ * (cinatra#3174 fix leg 8, criterion 4).
+ *
+ * NOT ONE OF THE FIVE READINGS, on purpose. §VI's five readings are what the
+ * CARD draws, and a stopped card draws the fired-recurring reading's rows with
+ * the floor withdrawn — `scheduleReadingOf` is left exactly as it is, so the
+ * card's own attribute, its rows and the conformance surfaces do not move. What
+ * is new is one question the TURN asks and the card could not answer: has this
+ * schedule been stopped. `canCancel` cannot answer it — it goes false the moment
+ * the schedule is stopped and is false over a one-off as well — and `firedOnce`
+ * stays true across the stop, which is how the still-recurring sentence
+ * survived the press.
+ *
+ * RECURRING, because that is where the drawing puts the act: "Cancel schedule
+ * appears only where the schedule is recurring."
+ */
+export function stoppedRecurringSchedule(body: TriggerScheduleProposalViewBody): boolean {
+  return body.phase === "settled" && body.stopped === true && body.triggerType === "recurring";
+}
+
+/**
  * §VI's card, on whichever host declared itself.
  *
  * Renders `null` for BOTH absences, and they are separate branches on purpose:
@@ -513,14 +534,26 @@ export function ScheduleProposalCard({
   // report had only two values and this reading fell into the same bucket as a
   // schedule that has never run. The election is the same one call; only the
   // report it feeds got a third answer.
+  //
+  // AND THE STOP IS READ BEFORE THE FIRING (cinatra#3174 fix leg 8, criterion
+  // 4). Cancel schedule "stops the recurring schedule and then leaves the rows
+  // no longer editable", and §VI gives that reading its own sentence. The
+  // firing STAYS true across the stop — history does not un-happen, and it is
+  // the same `firedOnce` the card keeps drawing its own reading from — so a
+  // stopped schedule went on reporting `fired-recurring` and the turn went on
+  // saying "the rows below still take a change" over rows that take nothing.
+  // The signal is the body's own `stopped`, which is exactly what the rows
+  // freeze on below, so the sentence and the rows cannot come to two answers.
   useReportScheduleReading(
     body === null
       ? "other"
-      : scheduleReadingOf(body, firedOnce) === "fired-one-off"
-        ? "spent-one-off"
-        : scheduleReadingOf(body, firedOnce) === "fired-recurring"
-          ? "fired-recurring"
-          : "other",
+      : stoppedRecurringSchedule(body)
+        ? "stopped-recurring"
+        : scheduleReadingOf(body, firedOnce) === "fired-one-off"
+          ? "spent-one-off"
+          : scheduleReadingOf(body, firedOnce) === "fired-recurring"
+            ? "fired-recurring"
+            : "other",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);

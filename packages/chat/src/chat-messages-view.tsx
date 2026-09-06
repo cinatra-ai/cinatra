@@ -97,6 +97,7 @@ import {
   runIsWaitingForItsSchedule,
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
+  RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 import { useConversationCredential } from "./conversation-credential";
 import { runSeedRequest } from "./run-seed-request";
@@ -953,8 +954,18 @@ function carriedMomentView(view: Record<string, unknown>): boolean {
  * standing sentence rather than a clause after a dispatch head. Every other
  * reading draws no line of its own: a schedule that has never run says nothing
  * extra above its rows, and a graded round measured that as correct.
+ *
+ * AND THE STOP IS A READING TOO (fix leg 8). Section VI's Cancel schedule
+ * "stops the recurring schedule and then leaves the rows no longer editable",
+ * and the fourth graded round measured the fired-recurring sentence standing
+ * over a card that had just been stopped — the firing that elects that sentence
+ * stays true across the press, so nothing in the turn moved. The stopped
+ * reading takes the section's own words: see
+ * `RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE`. It is asked FIRST, because a
+ * stopped schedule is a fired one until the stop is consulted.
  */
 function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
+  if (reading === "stopped-recurring") return RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE;
   if (reading === "fired-recurring") return RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE;
   if (reading === "spent-one-off") return RUN_START_SCHEDULE_FIRED_SENTENCE;
   return null;

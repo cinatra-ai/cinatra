@@ -1025,8 +1025,20 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
  * answer a schedule that has never run gives, so the turn drew the never-fired
  * sentence over a schedule that had fired. The readings the turn has a sentence
  * for are named; everything else is still `other`.
+ *
+ * AND A FOURTH (cinatra#3174 fix leg 8, criterion 4). Section VI's Cancel
+ * schedule "stops the recurring schedule and then leaves the rows no longer
+ * editable", and that reading gets its own sentence too — see
+ * `RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE`. With three values a stopped
+ * schedule was still reported as `fired-recurring`, because the firing that
+ * elects that reading stays true after the stop, so the turn kept the
+ * still-recurring claim standing over a card that had just gone read-only.
  */
-export type ScheduleCardReading = "spent-one-off" | "fired-recurring" | "other";
+export type ScheduleCardReading =
+  | "spent-one-off"
+  | "fired-recurring"
+  | "stopped-recurring"
+  | "other";
 
 const ScheduleReadingSinkContext = createContext<
   ((reading: ScheduleCardReading) => void) | null
