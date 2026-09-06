@@ -131,7 +131,7 @@ export default async function RootLayout({
       // CINATRA_E2E_SETUP_BYPASS-driven "complete" gate — otherwise the gate
       // falls back to its default and the app renders the first-run setup
       // wizard instead of the requested route (this is exactly what broke the
-      // prod-standalone /design-fixtures pixel-diff: no DB → both reads threw →
+      // prod-standalone design-conformance harness: no DB → both reads threw →
       // Promise.all rejected → setup wizard rendered). Mirrors the existing
       // isSingleOrgMode().catch(); the post-Promise.all session reads are already
       // individually .catch-guarded below.

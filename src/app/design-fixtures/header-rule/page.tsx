@@ -39,8 +39,8 @@ export const metadata: Metadata = {
  * neither degrades to grey / a single line / an invisible rule. A wrong rule
  * fails CI here, mechanically, before it can reach a review.
  *
- * Kept OFF the pixel-diffed /design-fixtures index (same convention as the
- * conformance route) so the committed pixel baselines stay untouched; coverage
+ * Kept OFF the now-retired /design-fixtures catalog (same convention as the
+ * conformance route) which cinatra#3189 removed; coverage
  * here is computed-style assertion, not snapshot.
  */
 export default function HeaderRuleFixturePage() {

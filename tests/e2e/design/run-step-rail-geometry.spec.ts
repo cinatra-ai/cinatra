@@ -16,7 +16,7 @@
  * component test cannot compute any of it (jsdom has no layout engine and
  * reports every box as 0×0). Assertion-based on purpose — no pixel baselines
  * here, so the spec stays platform-portable (the pixel baselines remain owned
- * by design-fixtures.spec.ts).
+ * by the design harness).
  *
  * Six claims, at a desktop AND a narrow viewport. Every one was checked against
  * pre-fix markup (the same rail with the row's `h-8 items-center` restored), so
@@ -38,17 +38,22 @@
  *   3. PUSH-DOWN — a row carrying a genuinely wrapped (≥2 line) reason is
  *      taller than an ordinary single-line row, i.e. the rail GREW rather
  *      than clamping the text away. Pre-fix every row measured 32px.
- *   4. UNCHANGED — a reason-free row's TRIGGER box still measures exactly the
- *      2rem it always had (the `min-h-8` floor), on the mixed rail, the
- *      single-line lifecycle rail and the lifecycle-free control rail.
+ *   4. THE DRAWN STEP BOX — a reason-free row's TRIGGER box measures exactly
+ *      the 28px the rail is drawn at (".rail .step { padding: 2px 0 }" over the
+ *      24px circle), on the mixed rail, the single-line lifecycle rail and the
+ *      lifecycle-free control rail. This claim used to read 2rem, because the
+ *      shared Button's fixed `h-8` outranked the rail's own padding and pinned
+ *      every step row 4px over the drawing; the Button now draws a padding box
+ *      and no height, so the rail measures what it states. See
+ *      `STEP_ROW_HEIGHT` for the full reading.
  *      Read the scope precisely: it is the trigger box (`ROW_BOX`) that is
- *      2rem, not the enclosing StepperItem — an item that still has a
- *      following separator measures 44px (32 + the `!h-2` separator + its
- *      margins), and only the LAST item of a rail measures 32px. And a
- *      lifecycle row is never 2rem even when its reason does not wrap: the
- *      reason is a block beneath the label, so that row is honestly two lines
- *      (measured 38px). "Exactly 32px" is a claim about reason-free TRIGGER
- *      boxes and nothing wider.
+ *      28px, not the enclosing StepperItem — an item that still has a
+ *      following separator measures 40px (28 + the `!h-2` separator + its
+ *      margins), and only the LAST item of a rail measures 28px. And a
+ *      lifecycle row is never a bare step box even when its reason does not
+ *      wrap: the reason is a block beneath the label, so that row is honestly
+ *      two lines (measured 38px). "Exactly 28px" is a claim about reason-free
+ *      TRIGGER boxes and nothing wider.
  *   5. FIRST-LINE ALIGNMENT — a lifecycle row's indicator centres on the FIRST
  *      LINE of its title, for a wrapped reason AND for a SHORT one that does
  *      not wrap. The fix applies `items-start` to EVERY lifecycle trigger, so
@@ -81,8 +86,38 @@ const REASON = "[data-rail-lifecycle-reason]";
 const LIFECYCLE_ROW = '[data-rail-kind="lifecycleDecision"]';
 const STEP_ROW = '[data-rail-kind="step"]';
 
-/** The 2rem (`h-8`) row box every ordinary single-line rail row has always had. */
-const SINGLE_LINE_ROW_HEIGHT = 32;
+/**
+ * THE ORDINARY STEP ROW'S BOX, as the ratified drawing states it:
+ *
+ *   ".rail .step { ... padding: 2px 0; ... }"
+ *
+ * over the 24px indicator circle is a 28px entry and nothing else.
+ *
+ * This constant used to read 32 and called itself "the 2rem (`h-8`) row box
+ * every ordinary single-line rail row has always had". That 2rem was never the
+ * drawing's number: it was the shared Button's fixed `h-8`, which outranked the
+ * rail's own `py-0.5` and pinned every step row 4px taller than the drawn step.
+ * The rail already states the drawn box itself — `RUN_PAGE_RAIL_ROW_CLASS` is
+ * `gap-2 border-0 px-0 py-0.5`, and its own note reads "a 28px entry and
+ * nothing else" — so the 2rem was the Button overriding the rail, not the rail
+ * asking for it.
+ *
+ * This PR removes that fixed height from the Button (the components drawing
+ * states a 7px 14px padding box, not a height), and the step row falls to the
+ * 28px its own drawing rule always asked for. So the claim below is NOT
+ * relaxed, it is RE-ANCHORED: it moves off a height the Button happened to
+ * impose and onto the height the rail is drawn at, and it is now the assertion
+ * that catches a height floor creeping back into the shared primitive.
+ */
+const STEP_ROW_HEIGHT = 28;
+
+/**
+ * The 2rem floor a LIFECYCLE row still keeps, and the bound a wrapped row must
+ * grow past. It is no longer the Button's: `RailExtraEntry` states `h-auto
+ * min-h-8` on its own trigger, so the floor survives the Button losing `h-8`.
+ * Both claims that used this number keep it unchanged.
+ */
+const LIFECYCLE_ROW_FLOOR = 32;
 
 /** Sub-pixel slack: fractional layout values must not be read as an overlap. */
 const EPSILON = 0.5;
@@ -241,7 +276,7 @@ for (const viewport of VIEWPORTS) {
       expect(
         lifecycleRowBox.height,
         "a wrapped reason must make its row grow past the old fixed row height"
-      ).toBeGreaterThan(SINGLE_LINE_ROW_HEIGHT);
+      ).toBeGreaterThan(LIFECYCLE_ROW_FLOOR);
     });
 
     test("a lifecycle indicator centres on the first line, wrapped reason or not", async ({
@@ -304,7 +339,7 @@ for (const viewport of VIEWPORTS) {
       expect(
         shortRowBox.height,
         "a single-line lifecycle row must keep the 2rem min-h-8 floor"
-      ).toBeGreaterThanOrEqual(SINGLE_LINE_ROW_HEIGHT - EPSILON);
+      ).toBeGreaterThanOrEqual(LIFECYCLE_ROW_FLOOR - EPSILON);
       // ...and it must stay strictly shorter than a row whose reason wraps,
       // i.e. the row grew by ITS OWN content and not by a shared constant.
       expect(
@@ -313,7 +348,7 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThan(wrappedRowBox.height);
     });
 
-    test("rows without a reason keep the row box they always had", async ({ page }) => {
+    test("rows without a reason draw the drawing's own step box", async ({ page }) => {
       for (const rail of [WRAPPED_RAIL, SINGLE_LINE_RAIL, PLAIN_RAIL]) {
         const stepRows = page.locator(`${rail} ${STEP_ROW} ${ROW_BOX}`);
         const count = await stepRows.count();
@@ -323,8 +358,8 @@ for (const viewport of VIEWPORTS) {
           const box = await boxOf(stepRows.nth(i));
           expect(
             box.height,
-            `${rail} step row ${i} must keep the 2rem single-line row box`
-          ).toBeCloseTo(SINGLE_LINE_ROW_HEIGHT, 0);
+            `${rail} step row ${i} must draw the drawing's 28px step box`
+          ).toBeCloseTo(STEP_ROW_HEIGHT, 0);
         }
       }
     });

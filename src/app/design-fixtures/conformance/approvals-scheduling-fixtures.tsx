@@ -30,7 +30,7 @@
 // on the sibling fixtures); the outcome is additionally reflected by a real
 // StatusPill so the assertion is tied to a real component.
 //
-// Assertion-driven, DB-free, off the pixel-diffed /design-fixtures index — it
+// Assertion-driven, DB-free, off the now-retired /design-fixtures catalog — it
 // adds no screenshot baselines (same convention as the other conformance
 // fixtures). Driven by tests/e2e/design/conformance/contract.ts.
 // ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@
 //   • run-step-rail-plain — the same rail with NO lifecycle rows: the control
 //     that pins "rows without reasons are unchanged".
 //
-// Kept OFF the pixel-diffed /design-fixtures index page so the committed
+// Kept OFF the now-retired /design-fixtures catalog page so the committed
 // baselines there stay untouched; the coverage for this route is assertion-based.
 // ---------------------------------------------------------------------------
 

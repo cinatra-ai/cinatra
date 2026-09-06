@@ -101,6 +101,10 @@ describe("the control fill keeps its pre-#3107 value while the boundary rises", 
 });
 
 describe("no control ground is still tinted from the boundary token", () => {
+  /**
+   * Primitives that draw a TINTED control ground, and so must draw that tint
+   * from the fill token rather than from the boundary token.
+   */
   const FILL_CALLERS = [
     "src/components/ui/input.tsx",
     "src/components/ui/textarea.tsx",
@@ -110,18 +114,44 @@ describe("no control ground is still tinted from the boundary token", () => {
     "src/components/ui/radio-group.tsx",
     "src/components/ui/switch.tsx",
     "src/components/ui/input-otp.tsx",
-    "src/components/ui/button.tsx",
     "src/components/ui/command.tsx",
     "packages/sdk-ui/src/ui/input.tsx",
     "packages/sdk-ui/src/ui/checkbox.tsx",
+  ];
+
+  /**
+   * Control chrome that draws NO tinted ground at all (cinatra#3192, fix leg
+   * 2). The Button used to tint its outline variant from the control fill
+   * (`dark:bg-input-fill/30`, `/50`); the components drawing states that
+   * variant's ground outright — ".btn.outline { background: var(--surface); }"
+   * — so there is no tint left on it to draw from the wrong token.
+   *
+   * The BOUNDARY-TOKEN prohibition is the invariant this block exists to pin,
+   * and it still binds these files exactly as it binds the ones above. What
+   * does not apply to them is the positive check that a tint is PRESENT: a
+   * primitive that draws no tint has none to get right, and requiring one back
+   * would require the Button to contradict the drawing.
+   */
+  const NO_TINT_CONTROLS = [
+    "src/components/ui/button.tsx",
     "packages/sdk-ui/src/ui/button.tsx",
   ];
 
+  for (const file of [...FILL_CALLERS, ...NO_TINT_CONTROLS]) {
+    it(`${file} never tints a control ground from the boundary token`, () => {
+      expect(read(file)).not.toMatch(/\bbg-input\//);
+    });
+  }
+
   for (const file of FILL_CALLERS) {
-    it(`${file} tints from --input-fill, never from the boundary token`, () => {
-      const source = read(file);
-      expect(source).not.toMatch(/\bbg-input\//);
-      expect(source).toMatch(/\bbg-input-fill\//);
+    it(`${file} tints from --input-fill`, () => {
+      expect(read(file)).toMatch(/\bbg-input-fill\//);
+    });
+  }
+
+  for (const file of NO_TINT_CONTROLS) {
+    it(`${file} draws no tinted control ground at all`, () => {
+      expect(read(file)).not.toMatch(/\bbg-input-fill\//);
     });
   }
 });

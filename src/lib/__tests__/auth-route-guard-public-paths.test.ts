@@ -1559,9 +1559,18 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
   // NODE_ENV is "test" here (non-production), the same branch the dev server
   // takes; the production-standalone CI harness takes the
   // CINATRA_E2E_SETUP_BYPASS branch of the same helper.
-  it("/design-fixtures stays public in non-production (pixel-diff harness)", async () => {
+
+  // cinatra#3189 — the /design-fixtures INDEX is gone. It rendered the
+  // primitives catalog, a second copy of the design system whose pixel
+  // baselines were read as conformance proof; every rule it carried now lives
+  // in the ratified drawings and the page was removed. The route must fall
+  // back to the ordinary guard: no allowlist entry outlives the page it
+  // opened, or the namespace root stays reachable to anyone forever for
+  // nothing.
+  it("the retired /design-fixtures index is NOT public (the catalog page is gone)", async () => {
     const res = await guardAppRoute(fakeRequest("/design-fixtures"));
-    expect(isNext(res)).toBe(true);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
   });
 
   it("/design-fixtures/marketplace-detail-modal is public in non-production (§V modal harness, cinatra#989/#739)", async () => {

@@ -26,6 +26,14 @@
   --muted: #5a6477;
   /* Accent is canonical desaturated indigo. */
   --accent: #364e81;
+  /* Indigo in its TEXT / STROKE role (cinatra#3192, fix leg 2). Rule 2 gives
+     one indigo to filled primary buttons, focus rings and links alike. A FILL
+     carries its own label, so it reads at any lightness; a link's label and a
+     focus ring are drawn ON the page ground and have to clear it. On the cream
+     palette that is the same #364E81 the fill uses, so this token changes
+     nothing here; the dark ramp declares the light end of the one hue, exactly
+     as `--mustard-ink` already does for the brand colour. */
+  --accent-ink: var(--accent);
   --accent-soft: #e6ede7;
   /* Hairlines are navy at low alpha, never grey. */
   --line: rgba(21, 33, 58, 0.14);
@@ -138,6 +146,15 @@
      primitive that uses `border-input`
      (Input / Textarea / Select trigger / InputGroup). */
   --line-control: var(--line-strong);
+  /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
+     resolved PER PALETTE (cinatra#3192, fix leg 2). Rule 6 of the road — "All
+     hairlines use navy at low alpha ... Never use a neutral grey on a divider"
+     — is a rule about the navy family, not about one literal, and the light
+     palette's full navy is invisible on a dark ground. In light this IS
+     `--line-strong`; the dark palette declares its own navy-family value.
+     Kept apart from `--line-control` so the control-boundary contrast floor
+     that token is pinned to (control-border-contrast.test.ts) is untouched. */
+  --line-strong-control: var(--line-strong);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -145,7 +162,7 @@
      pinned to the value `--input` carried before the boundary was raised.
      Consumed via `bg-input-fill` through the theme layer. */
   --input-fill: var(--line-strong);
-  --ring: var(--accent);
+  --ring: var(--accent-ink);
   --radius: 0.625rem;
 
   /* shadcn/ui accent-foreground + chart tokens.
@@ -179,6 +196,14 @@
   --muted: #5a6477;
   /* Accent is canonical desaturated indigo. */
   --accent: #364e81;
+  /* Indigo in its TEXT / STROKE role (cinatra#3192, fix leg 2). Rule 2 gives
+     one indigo to filled primary buttons, focus rings and links alike. A FILL
+     carries its own label, so it reads at any lightness; a link's label and a
+     focus ring are drawn ON the page ground and have to clear it. On the cream
+     palette that is the same #364E81 the fill uses, so this token changes
+     nothing here; the dark ramp declares the light end of the one hue, exactly
+     as `--mustard-ink` already does for the brand colour. */
+  --accent-ink: var(--accent);
   --accent-soft: #e6ede7;
   --logo-color: #7a2e3a;
   /* Hairlines are navy at low alpha; line-strong is full navy. */
@@ -232,6 +257,15 @@
      primitive that uses `border-input`
      (Input / Textarea / Select trigger / InputGroup). */
   --line-control: var(--line-strong);
+  /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
+     resolved PER PALETTE (cinatra#3192, fix leg 2). Rule 6 of the road — "All
+     hairlines use navy at low alpha ... Never use a neutral grey on a divider"
+     — is a rule about the navy family, not about one literal, and the light
+     palette's full navy is invisible on a dark ground. In light this IS
+     `--line-strong`; the dark palette declares its own navy-family value.
+     Kept apart from `--line-control` so the control-boundary contrast floor
+     that token is pinned to (control-border-contrast.test.ts) is untouched. */
+  --line-strong-control: var(--line-strong);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -239,7 +273,7 @@
      pinned to the value `--input` carried before the boundary was raised.
      Consumed via `bg-input-fill` through the theme layer. */
   --input-fill: var(--line-strong);
-  --ring: var(--accent);
+  --ring: var(--accent-ink);
   --radius: 0.5rem;
 
   /* Sidebar */
@@ -444,7 +478,22 @@
   --toolbar-l2: color-mix(in oklab, var(--toolbar) 72%, var(--background));
   --toolbar-l3: color-mix(in oklab, var(--toolbar) 45%, var(--background));
   --muted: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.929 0.013 255.508);
+  /* Rule 2 of the road — "Filled primary buttons, focus rings, links, and the
+     'running' status pill use indigo #364E81" — names ONE indigo for the whole
+     system, and the dark ramp does not get a second one (cinatra#3192, fix leg
+     2). This was the stock shadcn near-white slate, so on the dark palette the
+     primary button drew a slate fill with a navy label and the focus ring drew
+     near-white: an action colour the drawing never puts anywhere. `--primary`
+     and `--ring` both resolve through this token, so the fill, the edge and the
+     ring move together. */
+  --accent: #364e81;
+  /* The dark ramp's indigo INK (see :root). #364E81 is a fill colour: against
+     this palette's near-black ground it measures about 2.2:1, so a link label
+     drawn in it is unreadable and a focus ring drawn in it is barely there.
+     Same hue, light end — the inversion `--mustard-ink` below already makes for
+     the brand colour, and the same one rule 6's hairlines make. `--ring`
+     resolves through this, so the ring the keyboard follows stays findable. */
+  --accent-ink: oklch(0.78 0.09 268);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
   /* Control chrome (cinatra#3107). The light palette's full navy IS invisible
@@ -458,6 +507,14 @@
      1.23 / 1.27 / 1.32 to 1 — no boundary at all. Pinned by
      src/app/__tests__/control-border-contrast.test.ts. */
   --line-control: oklch(1 0 0 / 40%);
+  /* The dark ramp's own `--line-strong-control` (cinatra#3192, fix leg 2). The
+     outline button drew `oklch(1 0 0 / 40%)` here — a NEUTRAL white, which
+     rule 6 forbids on a hairline. This keeps the navy hue the dark ramp is
+     built on (the same 264 the page ground carries) and lifts its lightness so
+     the stroke is findable on a dark surface, which is the inverse-lightness
+     reading of "navy at low alpha" that a dark ground forces. Composited over
+     `--surface` it measures above the 3:1 non-text floor. */
+  --line-strong-control: oklch(0.78 0.06 264 / 55%);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -491,7 +548,7 @@
   --secondary: var(--surface-muted);
   --muted-foreground: var(--muted);
   --border: var(--line);
-  --ring: var(--accent);
+  --ring: var(--accent-ink);
 
   /* Sidebar dark mode — must override :root values which are light (#eceeea) */
   --sidebar: oklch(0.16 0.04 264);
@@ -501,7 +558,11 @@
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
   --sidebar-primary: oklch(0.929 0.013 255.508);
   --sidebar-primary-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-ring: oklch(0.929 0.013 255.508);
+  /* The sidebar carries its OWN ring token, so repointing `--ring` alone left
+     every sidebar control focusing near-white — the very reading rule 6's
+     "focus rings on indigo" forbids (cinatra#3192, fix leg 2). The light
+     palettes already resolve this token through the accent; dark now does too. */
+  --sidebar-ring: var(--accent-ink);
 
   /* shadcn/ui dark overrides */
   --r-card: 1rem;
@@ -509,7 +570,12 @@
   --r-control: 0.625rem;
   --r-chip: 0.5rem;
   --radius: 0.625rem;
-  --primary-foreground: oklch(0.208 0.042 265.755);
+  /* `.btn.primary { color: var(--surface-strong); }` — the drawing pairs the
+     indigo fill with the palette's BRIGHTEST surface. On the dark ramp
+     `--surface-strong` is itself a dark ground, so the brightest ink the
+     palette owns is `--foreground`; the former value was the near-navy that
+     paired with the slate fill above and would be unreadable on indigo. */
+  --primary-foreground: var(--foreground);
   --secondary-foreground: var(--foreground);
   --accent-foreground: var(--foreground);
   --destructive: var(--cinatra-red);
@@ -548,6 +614,8 @@
   --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-line-strong-control: var(--line-strong-control);
+  --color-accent-ink: var(--accent-ink);
   --color-accent-soft: var(--accent-soft);
   /* Fabric stripe utility tokens. */
   --color-stripe-mid: var(--stripe-mid);

@@ -589,9 +589,12 @@ describe("the dark palette is closed, so it cannot reopen one alias at a time", 
     expect(tokenAt(root, "--card-foreground")).toBe("oklch(0.984 0.003 247.858)");
     expect(tokenAt(root, "--popover")).toBe("oklch(0.21 0.04 259)");
     expect(tokenAt(root, "--popover-foreground")).toBe("oklch(0.984 0.003 247.858)");
-    expect(tokenAt(root, "--primary")).toBe("oklch(0.929 0.013 255.508)");
+    // cinatra#3192 fix leg 2: `--primary` resolves through `--accent`, which
+    // the dark ramp now draws as the one indigo rule 2 names rather than the
+    // stock shadcn slate; `--ring` resolves through its ink end.
+    expect(tokenAt(root, "--primary")).toBe("#364e81");
     expect(tokenAt(root, "--secondary")).toBe("oklch(0.279 0.041 260.031)");
     expect(tokenAt(root, "--muted-foreground")).toBe("oklch(0.704 0.04 256.788)");
-    expect(tokenAt(root, "--ring")).toBe("oklch(0.929 0.013 255.508)");
+    expect(tokenAt(root, "--ring")).toBe("oklch(0.78 0.09 268)");
   });
 });
