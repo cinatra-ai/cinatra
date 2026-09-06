@@ -445,10 +445,38 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // ('[data-action="confirm-run-recommendation"]' and its skip twin) is not
     // emitted on any host any more, so naming it here would make this gate assert
     // a requirement the ratified drawing retired.
+    //
+    // AND THE DRAWING GAVE THE CARD ONE CONTROL (cinatra#3138, executing the
+    // decision recorded in cinatra#3062). Section V now reads: "The row and its
+    // Continue are the whole card. There is no heading plate above the row, and a
+    // pill carries nothing to press — no Confirm, no Adjust, no Skip. The reader
+    // sets the boxes and presses Continue beneath the list … and the whole row is
+    // answered at once, every box together." So the CHECKBOX ANATOMY joins this
+    // closed set — and what that buys is stated at the granularity this rule
+    // actually has, rather than broadly. R7 reads the owner's COMBINED live
+    // source and the named rendered proof, so what is required from here on is
+    // that this owner keeps EMITTING a per-skill checkbox and the one Continue
+    // from code that runs, and that its proof test reads both back off real DOM;
+    // an owner that stops drawing the checkbox row, or a proof that stops reading
+    // it, fails. It is NOT a per-host assertion: R7 has no host dimension, so
+    // while the owner still draws the per-pill branch for two hosts this list
+    // cannot say which host got which reading. That binding lands with the
+    // conversation-and-widget redraw, in the same change that leaves the
+    // checklist as the only branch and takes the trio out of this list.
+    //
+    // AND THE THREE PER-CHIP ANCHORS STAY, deliberately rather than by omission.
+    // R7 fails an anchor that is never emitted AND, differently, one emitted only
+    // from a branch that can never run — so the trio can only leave this list in
+    // the same change that takes the per-pill branch out of the owner, which is
+    // the conversation-and-widget redraw of this same row. Striking them first
+    // would drop a requirement while the thing it pins is still drawn on two of
+    // the four hosts: a weaker gate, not a corrected one.
     anchors: [
       '[data-lifecycle-card="recommendation_hold"]',
       "[data-run-recommendation-chip-row]",
       '[data-conformance-id="run-chip-row"]',
+      "[data-skills-step-checkbox]",
+      "[data-skills-step-continue]",
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
@@ -1214,6 +1242,44 @@ export const RETIRED_PARALLELS = Object.freeze([
       "packages/agents/src/run-recommendation-chip-row.tsx",
     ],
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
+  },
+  {
+    id: "second-per-skill-control-emitter",
+    // THE THREE PER-PILL CONTROLS, retired by the drawing (cinatra#3138,
+    // executing the decision recorded in cinatra#3062). Section V of the
+    // lifecycle-cards drawing: "The row and its Continue are the whole card.
+    // There is no heading plate above the row, and a pill carries nothing to
+    // press — no Confirm, no Adjust, no Skip. The reader sets the boxes and
+    // presses Continue beneath the list … and the whole row is answered at once,
+    // every box together." And, for the empty answer the old Skip carried:
+    // "There is nothing to skip and nothing that means skip: clearing every box
+    // and pressing Continue is an ordinary answer to the same question."
+    //
+    // WHAT IT FORBIDS TODAY, and it is a real requirement rather than a
+    // placeholder: a SECOND emitter. Any module other than the owner drawing a
+    // per-skill control is the retired reading coming back somewhere new, and it
+    // fails from the day this entry lands — before the redraw, which is exactly
+    // when a retirement is easiest to undo by copying the old row into a new
+    // surface.
+    //
+    // THE ALLOWLIST IS THE PENDING HALF, NAMED RATHER THAN HIDDEN. The owner
+    // still draws the trio for the two hosts the conversation-and-widget redraw
+    // has not reached, so allowlisting it states the truth about this tree
+    // instead of inventing an exemption to get green. That redraw empties this
+    // allowlist in the same change that deletes the branch — and then this entry
+    // bans the control everywhere, the owner included, with no edit to the rule.
+    // Striking the trio from the anchor sets first would have dropped a
+    // requirement while the thing it pins is still drawn: a weaker gate, not a
+    // corrected one.
+    //
+    // SCOPED TO THE JSX ATTRIBUTE FORM, deliberately. A bracketed
+    // `[data-skill-action="confirm"]` is a SELECTOR — a contract module pinning
+    // what the card must carry while it still carries it — and asserting a
+    // drawing is not a second drawing of it. The lookbehind reads that
+    // difference; an emitted attribute has no `[` in front of it.
+    re: /(?<!\[)data-skill-action\s*=/g,
+    allow: ["packages/agents/src/run-recommendation-chip-row.tsx"],
+    fix: "The skills row draws a checkbox in front of each skill and one Continue beneath the list; no pill carries a control of its own.",
   },
   {
     id: "page-direct-verification-composition",
