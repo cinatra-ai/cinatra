@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const SEEDED_THREAD = {
   threadId: "thread-a2-1890",
@@ -35,7 +36,7 @@ vi.mock("@/lib/database", () => ({
 const TEST_SCHEMA = "cinatra_test_classifier_signals_1890";
 const FIXTURE_OBJECT_TYPE = "@cinatra-ai/test-fixture-artifact:doc";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const ORG = "org-a2-1890";
 const ACTOR = "user-a2-1890";
 
