@@ -249,23 +249,35 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
 //   3. id-like segments: an obvious short-id placeholder — NEVER title-cased
 //      hex;
 //   4. `humanizePathSegment` for genuinely wordy segments.
-// THE AGENT INSTANCE'S SUB-ROUTE LABELS (cinatra#3004).
+// THE AGENT INSTANCE'S STEP SUB-ROUTES (cinatra#3004; corrected by cinatra#3223).
 //
 // A sub-route crumb is normally the path segment made readable, and that is
-// right wherever the path word is the reader's word. It is not here: the run's
-// schedule surface answers at `/…/<run>/trigger`, and what it shows — since the
-// "Trigger configuration" summary was retired — is the schedule form itself,
-// under a tab that says Schedule. So the crumb says Schedule too.
+// right wherever the path word is the reader's word. It is not right where the
+// path segment is a STEP OF THE RUN rather than a level of the hierarchy: the
+// run's schedule step answers at the run's `/trigger` sub-route, and a step
+// is a reading inside the run's own route, not a route of its own.
+//
+// The ratified drawing, components reference, the Breadcrumb section: "A
+// breadcrumb always reflects the navigation hierarchy — the route the page sits
+// on, not the thing the page happens to be about", and "'Agents › Agent run ›
+// Review' is not a possible breadcrumb — the review is read on its run's own
+// route, under that run's trail", closing on "a hierarchy the routes do not
+// have". This map used to give the schedule step the word "Schedule" at the
+// sub-route position, which drew that third crumb; the drawing's conclusion is
+// that such a thing is not a crumb at all, so the segment is ELIDED and the
+// trail the schedule step composes is byte-identical to the trail every other
+// step of the same run composes.
 //
 // THE PATH IS deliberately UNCHANGED. A bookmark still opens the same surface;
-// only the word a reader sees moves, which is why this is a label map here
-// rather than a redirect.
+// only the trail the reader sees stops naming a level the routes do not have.
+// (That the schedule step has a route of its own at all is a separate
+// departure, tracked under epic #3248 — this is the trail's half of it.)
 //
 // It is read at the SUB-ROUTE position and nowhere else, so an instance whose
-// own id happens to be one of these words keeps its own name.
-const AGENT_INSTANCE_SUBROUTE_LABELS: Readonly<Record<string, string>> = {
-  trigger: "Schedule",
-};
+// own id happens to be one of these words keeps its own name, and every OTHER
+// sub-route under an instance — a genuine page of its own — is named exactly as
+// it was.
+const AGENT_INSTANCE_STEP_SUBROUTES: ReadonlySet<string> = new Set(["trigger"]);
 
 /**
  * POSITION APPENDS (cinatra#3068 fix leg 2): a contribution with `appendAfter`
@@ -370,13 +382,16 @@ export function buildBreadcrumbTrail(
     const agentCrumbPaths = ["/agents", instancePath];
     if (segments.length >= 5) {
       const subRoute = safelyDecodePathSegment(segments[4]);
-      crumbs.push({
-        label:
-          AGENT_INSTANCE_SUBROUTE_LABELS[subRoute] ??
-          humanizePathSegment(segments[4]),
-        href: pathname,
-      });
-      agentCrumbPaths.push(pathname);
+      // A STEP OF THE RUN CONTRIBUTES NO CRUMB (cinatra#3223). Every other
+      // sub-route under an instance is a page of its own and is named as it
+      // always was.
+      if (!AGENT_INSTANCE_STEP_SUBROUTES.has(subRoute)) {
+        crumbs.push({
+          label: humanizePathSegment(segments[4]),
+          href: pathname,
+        });
+        agentCrumbPaths.push(pathname);
+      }
     }
     // AND THE STEP THE RUN DETAIL IS SHOWING, where the page named one. The
     // run's first step answers on the run's own path and has no segment above

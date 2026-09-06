@@ -280,6 +280,24 @@ describe("a DECIDED gate composes the one card on the review page (cinatra#2904)
   });
 });
 
+describe("the run-step rail beside the review reads the run's own record (cinatra#3226)", () => {
+  it("hands the run's stepResults to buildRunStepperSteps, exactly as the run page does", async () => {
+    // `run-stepper-steps.ts` is ONE projection for both surfaces so the step
+    // list is identical on the run page and here. The run page names a step
+    // whose declaration names nothing by the run's record of it; this route
+    // must hand the same record over, or the same step reads blank here.
+    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+    const stepResults = [{ output_data: { title: "Fetched Q3 cohort" } }];
+    mocks.readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tmpl-1", stepResults } as never);
+    const steps = [{ stepNumber: 1, xRenderer: "r" }];
+    mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", approvalPolicy: { steps } } as never);
+
+    await renderPage();
+
+    expect(mocks.buildRunStepperSteps).toHaveBeenCalledWith(steps, { stepResults });
+  });
+});
+
 describe("what the settled composition must NOT swallow (cinatra#2904 AC 3–5)", () => {
   it("an UNAVAILABLE gate keeps the generic blocked panel and produces no card DOM", async () => {
     // The loader answers `blocked` for a gate that never existed or cannot be

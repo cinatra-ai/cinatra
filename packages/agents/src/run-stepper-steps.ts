@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { stepRecordWorkName } from "./step-work-name";
 import type { StepperStep } from "./orchestrator-stepper-panel";
 
 /** The subset of an `approvalPolicy.steps[]` entry this projection reads. */
@@ -42,7 +43,14 @@ export type ProjectedStepperStep = StepperStep & { _policyDescription: string | 
  */
 export function buildRunStepperSteps(
   policySteps: readonly RunStepperPolicyStep[],
+  options: {
+    /** The run's own record of each step, aligned by position to the policy
+     *  steps as the rail aligns them (`run-step-rail.ts`), for the ladder's
+     *  third rung. */
+    stepResults?: readonly unknown[] | null;
+  } = {},
 ): ProjectedStepperStep[] {
+  const stepResults = options.stepResults ?? [];
   return policySteps
     .filter((s) => stepFiresRendererGate(s as { xRenderer?: string; firesRendererGate?: boolean }))
     .map((s, i) => ({
@@ -50,7 +58,14 @@ export function buildRunStepperSteps(
       stepNumber: s.stepNumber,
       xRenderer: s.xRenderer,
       childAgentPackageName: s.childAgent?.packageName,
-      label: s.name ?? s.description ?? `Step ${s.stepNumber}`,
+      // NAMED BY ITS WORK, NEVER BY AN ORDINAL (cinatra#3226). The ratified
+      // drawing's rail names every entry by the work done. The ladder: the
+      // declaration's own name, its description, then the name of the work the
+      // step produced as the run's record of it carries that name. This rung
+      // used to compose `Step N`. Where nothing resolves the step KEEPS its
+      // rung — the ladder's positions are what the live resolver and the replay
+      // map key on — and is titled by nothing rather than by a number.
+      label: s.name ?? s.description ?? stepRecordWorkName(stepResults[i]) ?? "",
       _policyDescription: s.description ?? null,
     }));
 }

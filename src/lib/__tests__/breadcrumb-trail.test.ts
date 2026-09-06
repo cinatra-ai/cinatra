@@ -656,24 +656,28 @@ describe("buildBreadcrumbTrail — the connector trail names its levels (cinatra
 });
 
 // ---------------------------------------------------------------------------
-// READING 3 of cinatra#3004's live-proof round — THE SUB-ROUTE IS NAMED FOR
-// WHAT IT SHOWS.
+// READING 3 of cinatra#3004's live-proof round, CORRECTED BY cinatra#3223 —
+// THE SUB-ROUTE A STEP ANSWERS AT IS NOT A LEVEL OF THE TRAIL.
 //
-// The run's schedule surface lives at `/agents/<vendor>/<pkg>/<run>/trigger`,
-// and the crumb was the path segment title-cased: "Trigger". The surface is the
-// schedule form, the tab above it says Schedule, and "trigger" is not a word
-// this surface uses any more. The ROUTE keeps its path — a bookmark still opens
-// the same page — so the label is the only thing that moves.
+// The run's schedule surface lives at `/agents/<vendor>/<pkg>/<run>/trigger`.
+// cinatra#3004 renamed the crumb that segment drew from "Trigger" to
+// "Schedule", which was the right word for the surface; the graded reading of
+// cinatra#3223 asked the prior question and answered it differently. The
+// ratified drawing's Breadcrumb section: the trail is "the route the page sits
+// on, not the thing the page happens to be about", and "'Agents > Agent run >
+// Review' is not a possible breadcrumb". The schedule is a STEP of the run, a
+// reading inside the run's own route, so it draws no crumb at all and the trail
+// on this path is the run's own trail. The ROUTE keeps its path — a bookmark
+// still opens the same page.
 // ---------------------------------------------------------------------------
-describe("buildBreadcrumbTrail — the agent instance's sub-route labels (cinatra#3004)", () => {
-  it("names the schedule surface Schedule, on a path that is unchanged", () => {
+describe("buildBreadcrumbTrail — a step's sub-route draws no crumb (cinatra#3004, corrected by cinatra#3223)", () => {
+  it("composes the run's own trail on the schedule path, on a path that is unchanged", () => {
     const crumbs = buildBreadcrumbTrail("/agents/vendor/pkg/run-1/trigger", {
       contributions: [{ prefix: "/agents/vendor/pkg/run-1", label: "Sales Bot" }],
     });
     expect(crumbs).toEqual([
       { label: "Agents", href: "/agents" },
       { label: "Sales Bot", href: "/agents/vendor/pkg/run-1" },
-      { label: "Schedule", href: "/agents/vendor/pkg/run-1/trigger" },
     ]);
   });
 
@@ -686,8 +690,8 @@ describe("buildBreadcrumbTrail — the agent instance's sub-route labels (cinatr
     ).toEqual(["Agents", "Run 1", "Setup"]);
   });
 
-  it("renames the sub-route crumb only — a run whose own id is `trigger` is not a schedule", () => {
-    // The map is read at the SUB-ROUTE position (segment 5) and nowhere else,
+  it("elides the sub-route crumb only — a run whose own id is `trigger` keeps its name", () => {
+    // The set is read at the SUB-ROUTE position (segment 5) and nowhere else,
     // so the instance segment keeps whatever names it.
     expect(
       buildBreadcrumbTrail("/agents/vendor/pkg/trigger").map((c) => c.label),
