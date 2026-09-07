@@ -203,6 +203,23 @@ export type RunSurfaceRailStep = {
    * neither of them carries. Defaults to unstated, which is not "no".
    */
   selectable?: boolean;
+  /**
+   * DOES THIS STEP'S ROW STAND AFTER THE PAGE'S OWN RAIL ROWS? (cinatra#3029,
+   * fix leg 2.)
+   *
+   * The rail column draws the steps that HEAD it, and then the page's own rows
+   * beneath them. The ratified drawing's artifact review, section I.2, ends the
+   * rail the other way round for one step: "The rail's last entry is the run's
+   * own record." The run's record is the run's LAST step, so its row cannot sit
+   * above the work steps it comes after — the first proof round photographed
+   * exactly that, with the page's trailing Review row drawn BENEATH the run's
+   * record and the rail reading as two.
+   *
+   * A step marked here keeps its place in `steps` — the selection resolves off
+   * that list and nothing about opening it changes — and only its ROW moves, to
+   * the end of the one rail column.
+   */
+  tail?: boolean;
 };
 
 /**

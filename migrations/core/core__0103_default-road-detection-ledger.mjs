@@ -33,11 +33,21 @@
 //
 // No backfill: every existing row reads NULL on all four columns, which is
 // exactly right — those rows were written by paths that do not run the ladder.
-// The schema-migration gate classifies this NON-destructive.
 //
-// SEQ 0102 — strictly greater than the max shipped seq on the default branch
-// (core__0101). If another branch lands the next seq first, renumbering onto the
-// next free number is the rename the convention expects.
+// DECLARED DESTRUCTIVE, AND MEASURED RATHER THAN ASSERTED. An earlier draft of
+// this header claimed the core-store schema migration gate classifies the change
+// NON-destructive. Run at this branch's head the gate says otherwise: the four
+// columns are additive, but WIDENING THE PATH CHECK REWRITES A CONSTRAINT on a
+// deployed table, which is the gate's own add-constraint rule, and it asks for a
+// fragment carrying "destructive": true. The fragment now carries it. Nothing
+// about the change moved — no row is touched and every existing row satisfies the
+// widened predicate — only the claim about how it is classified.
+//
+// SEQ 0103. This fragment was authored at 0102, strictly greater than the max
+// shipped seq at the time (core__0101); the launch-scope anchor claimed 0102 on
+// the default branch while this branch was open, so the pair is renumbered onto
+// the next free number, which is the rename the convention expects
+// (migrations/README.md).
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
 export const defaultRoadLedgerDdlSql = `

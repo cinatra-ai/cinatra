@@ -448,6 +448,11 @@ export function RunSurfaceRail({
     setSelected(resolveRunSurfaceSelection(steps, detail, initialSelection));
   }
   const open = steps.find((step) => step.key === selected) ?? null;
+  // The rows that HEAD the rail, and the one that CLOSES it — see
+  // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
+  // the ROWS moves nothing about what can be opened.
+  const headSteps = steps.filter((step) => !step.tail);
+  const tailSteps = steps.filter((step) => step.tail);
 
   // THE ONE PLACE A SELECTION CHANGES, so it is the one place that can refuse
   // one (cinatra#2970). A row drawn by any module reaches this; a key naming a
@@ -483,8 +488,11 @@ export function RunSurfaceRail({
             carries a mark too whenever they follow; they carry their own marks
             inside (`RunStepRailPanel`), which is why only the join is drawn
             here. */}
-        {steps.map((step, index) => {
-          const markBelow = index < steps.length - 1 || runSurfaceNodeExists(rail);
+        {headSteps.map((step, index) => {
+          const markBelow =
+            index < headSteps.length - 1 ||
+            runSurfaceNodeExists(rail) ||
+            tailSteps.length > 0;
           return (
             <Fragment key={step.key}>
               {step.row}
@@ -493,6 +501,21 @@ export function RunSurfaceRail({
           );
         })}
         {rail}
+        {/* AND THE RUN'S OWN RECORD CLOSES THE RAIL (cinatra#3029, fix leg 2).
+            "The rail's last entry is the run's own record" — so a step the page
+            marked `tail` is drawn after the page's own rows rather than above
+            them. The mark above it is drawn HERE because the page's rows carry
+            their own marks only BETWEEN themselves (`RunStepRailPanel` draws
+            none under its last row), so the join is this column's to draw, on
+            either side. */}
+        {tailSteps.map((step, index) => (
+          <Fragment key={step.key}>
+            {index > 0 || headSteps.length > 0 || runSurfaceNodeExists(rail) ? (
+              <RunSurfaceRailSeparator />
+            ) : null}
+            {step.row}
+          </Fragment>
+        ))}
       </div>
 
       {/* THE RIGHT COLUMN — the run detail, showing the selected step. */}
