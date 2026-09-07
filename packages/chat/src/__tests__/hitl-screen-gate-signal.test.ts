@@ -62,7 +62,15 @@ describe("the conversation slot's gate signal", () => {
   it("hands the signal to the card and forwards the callback it intercepted", () => {
     // The slot is a LISTENER, never a consumer: whatever the chat page passed
     // still gets its call, or the composer stops being able to drive the gate.
-    expect(source).toContain("<AgentHitlScreenCard runId={runId} wireRef={gateSignal} />");
+    // THE CARRIER IS PART OF THE SAME ELEMENT NOW (cinatra#3193). The card is
+    // drawn in one of two containers, and the flip between them unmounts one
+    // instance and mounts another — so the box that carries the answer and the
+    // person's half-typed reply across that move is pinned here beside the
+    // signal, for the same reason the signal is: both are how this slot keeps a
+    // screen answerable while the run moves underneath it.
+    expect(source).toContain(
+      "<AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />",
+    );
     expect(source).toContain("onActiveGateChange?.(changedRunId, gate, instanceId);");
     expect(source).toContain("onActiveGateChange={onGateChange}");
   });

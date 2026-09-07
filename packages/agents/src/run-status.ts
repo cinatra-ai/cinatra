@@ -624,6 +624,52 @@ export function runIsWaitingForItsSchedule(reading: {
 }
 
 /**
+ * THE STATUSES ONLY EXECUTION CAN REACH.
+ *
+ * A run is in one of these because a worker took it and ran it — there is no
+ * road into `running`, `waiting_trigger` or `completed` that does not go
+ * through the dispatch itself. `pending_approval` is deliberately NOT here: the
+ * setup-interrupt loop reaches it straight from `queued`, before any step has
+ * run. `failed` and `stopped` are not here either, and cannot be: both are
+ * reachable from every live state, including the ones a run holds before it has
+ * ever started.
+ */
+export const EXECUTED_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "running",
+  "waiting_trigger",
+  "completed",
+]);
+
+/**
+ * DID THIS RUN ACTUALLY RUN (cinatra#3174 fix leg 1)?
+ *
+ * The question a spent one-off schedule turns on. Section VI gives the fired
+ * reading its words — "It ran at the time you set" — and the first graded proof
+ * round drew them over a run that never ran: its gate had been opened, the task
+ * failed, and the run row carried no start stamp at all. The gate stamp answers
+ * "the schedule was released", which is a different question, and the
+ * transition table's own `armed->failed` edge ("defensive — failure during
+ * arming/release") is the road that separates the two.
+ *
+ * TWO READINGS OF ONE RECORD, and the run's own row carries both. `startedAt`
+ * is stamped when the run is dispatched into execution and stays stamped
+ * whatever the run became afterwards, so a run that started and then failed HAS
+ * run. Where the stamp is absent the status still answers for the statuses only
+ * execution can reach, which keeps a producer that has not stamped it from
+ * reading as a run that never happened.
+ *
+ * PURE, and in this leaf, so the resolver that elects the card's reading and
+ * the sentence the turn says over it cannot come to two different answers.
+ */
+export function runHasActuallyRun(
+  run: { status?: string | null; startedAt?: Date | string | null } | null | undefined,
+): boolean {
+  if (!run) return false;
+  if (run.startedAt !== null && run.startedAt !== undefined) return true;
+  return typeof run.status === "string" && EXECUTED_RUN_STATUSES.has(run.status);
+}
+
+/**
  * The clause for a start whose run was enqueued and has not been picked up.
  *
  * `queued` is pre-dispatch: the job is on the queue and no worker has taken it
@@ -763,11 +809,38 @@ export function describeStartedRun(input: {
   // schedule has not started and is not queued, so neither word is said and
   // the status token — the one that read `queued` over a card still asking
   // "When should this run?" — is not printed at all.
+  //
+  // NARROWED TO THE READING THE DRAWING DRAWS, NOT TO A STATUS (cinatra#3174,
+  // criterion 3, as this branch reconciles with cinatra#3044). #3174 first
+  // keyed the plain-prose line on `armed` and `pending_trigger` alone, which is
+  // one status too wide: the immediate-trigger release road leaves a run
+  // `pending_trigger` with no lifecycle moment at all, there is no card beneath
+  // THAT turn, and its line is the only place a reader can pick the run up
+  // from. The reading the drawing draws is the one `runIsWaitingForItsSchedule`
+  // names, and it is this branch — already, on `main` — that the status token
+  // is not printed in.
+  //
+  // AND THE DISPATCH HEAD GOES WITH IT (cinatra#3174 fix leg 1). The first
+  // graded proof round measured what was left: the status token was gone and
+  // the line still drew "Dispatched" over two monospace code chips — the
+  // package and the run id — above a card the drawing draws with plain prose
+  // over it. Section VI's own examples speak in words and carry no chip and no
+  // token in any of their five pictures, and its rule for the turn is that the
+  // card "is the only thing drawn". So this reading is the clause, whole, and
+  // nothing else.
+  //
+  // Section V's recommendation card still draws the head verbatim, chips and
+  // status token included, and every other status here keeps it: this is a
+  // narrowing to the one reading section VI draws.
+  //
+  // THE CHAIN THAT KEPT THE RUN ID IS KEPT ANOTHER WAY. The two corrections
+  // this module mints are a chain — a turn corrected to the wait is corrected
+  // again to the fired reading when the one-off fires — and the second pass
+  // used to find the first pass's sentence through the run id in it. It now
+  // finds the STANDING clause instead, and refuses where a turn carries more
+  // than one of them; see `correctRunStartSentenceForFiredSchedule`.
   if (runIsWaitingForItsSchedule({ status: input.status, moment: input.moment ?? null })) {
-    return (
-      `Dispatched \`${input.packageName}\` (runId: \`${input.runId}\`). ` +
-      RUN_START_SCHEDULE_WAIT_CLAUSE
-    );
+    return RUN_START_SCHEDULE_WAIT_CLAUSE;
   }
   // The status decides, and every status the vocabulary knows has its own
   // sentence — no status falls through to another status's claim. `status` is
@@ -811,6 +884,62 @@ export function describeStartedRun(input: {
 export const RUN_START_SCHEDULE_FIRED_SENTENCE =
   "It ran at the time you set. A one-time schedule is spent once it fires, " +
   "so the rows below are the record of it and cannot be changed.";
+
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A FIRED RECURRING SCHEDULE
+ * (cinatra#3174 fix leg 3, criterion 4).
+ *
+ * Section VI's fifth reading is not the fourth one. Its own example draws the
+ * assistant's whole line above the still-editable rows:
+ *
+ *   "It is still recurring, so the rows below still take a change — it applies
+ *    to the runs still to come."
+ *
+ * and its note-line says why the two readings cannot share a sentence: "A
+ * recurring schedule is never spent by firing: its past runs are history and
+ * its runs still to come stay changeable, so it keeps editable rows over Save
+ * changes, and gains Cancel schedule beside them."
+ *
+ * THE SECOND GRADED ROUND MEASURED THE NEVER-FIRED SENTENCE HERE. A recurring
+ * schedule that had genuinely fired drew the wait clause, which says the run
+ * has not started — of a schedule that had already run once and will run again.
+ *
+ * IT REPLACES THE PLATFORM'S SENTENCE WHOLE, for the same reason the spent
+ * one-off's does: the drawing writes it as one standing sentence with no
+ * dispatch head, and the subject is the schedule rather than the run.
+ */
+export const RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE =
+  "It is still recurring, so the rows below still take a change — " +
+  "it applies to the runs still to come.";
+
+/**
+ * THE LINE THE RATIFIED DRAWING PUTS OVER A SCHEDULE THAT WAS STOPPED
+ * (cinatra#3174 fix leg 8, criterion 4).
+ *
+ * Section VI gives Cancel schedule its own reading and its own words. The
+ * control "appears only where the schedule is recurring, and it stops the
+ * recurring schedule and then leaves the rows no longer editable", and the
+ * section writes the reading it leaves behind as:
+ *
+ *   "Pressing it stops the recurring schedule, and the rows are not editable
+ *    after that."
+ *
+ * WHY IT CANNOT SHARE THE FIRED-RECURRING SENTENCE. The fourth graded round
+ * pressed Cancel schedule, confirmed it, and measured the card go read-only and
+ * floorless exactly as the section draws it — over a turn that still said "It is
+ * still recurring, so the rows below still take a change". A schedule that was
+ * just stopped has no runs still to come and its rows take nothing, so that
+ * sentence is the same untruth the two fired sentences exist to answer, said
+ * one reading later.
+ *
+ * THE FIRING DOES NOT DECIDE IT. `firedOnce` stays true after the stop — it is
+ * history and history does not un-happen — so the stopped reading is elected
+ * off the schedule's own durable `stopped`, which is also what the card's rows
+ * already freeze on. A stopped schedule that never fired reads the same way for
+ * the same reason: what the sentence says is that the rows are not editable.
+ */
+export const RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE =
+  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
 
 /** Regex-escape a literal. */
 function escapeLiteral(value: string): string {
@@ -951,7 +1080,10 @@ export function correctRunStartSentenceForScheduleWait(input: {
  *
  * IDEMPOTENT AND NARROW, on exactly the same terms as the wait correction: the
  * replacement carries no dispatch head, so a corrected line no longer matches
- * the platform's own pattern and a second pass changes nothing at all.
+ * the platform's own pattern and a second pass changes nothing at all. The
+ * headless fallback is narrow for a second reason as well — it refuses unless
+ * the caller can name this run as the turn's only schedule run; see
+ * `thisRunIsTheOnlyScheduleRun`.
  *
  * THE TWO CORRECTIONS CANNOT BOTH APPLY TO ONE RUN. A run is either standing at
  * its schedule or past it, and the container that reports these two answers
@@ -961,10 +1093,167 @@ export function correctRunStartSentenceForScheduleWait(input: {
 export function correctRunStartSentenceForFiredSchedule(input: {
   text: string;
   runId: string;
+  /**
+   * EVERY SCHEDULE RUN THIS TURN IS DRAWING A CARD FOR, this one included.
+   *
+   * The headless fallback below has no run id to key on, so its narrowness has
+   * to come from the caller: it may only rewrite a standing clause where this
+   * run is the ONLY schedule run in the turn, because a turn with a second one
+   * may be holding that second run's line. Omitted reads as unknown, and an
+   * unknown turn refuses — a correction that cannot prove whose line it is
+   * rewriting does not rewrite one.
+   */
+  scheduleRunIds?: readonly string[];
+  /**
+   * WHICH OF THEM HAVE FIRED, this one included (converge round).
+   *
+   * The refusal above is the right answer while another run in the turn is
+   * still waiting — its line must go on saying so. It is the WRONG answer once
+   * every schedule run in the turn has fired: each standing clause then belongs
+   * to a run that has fired, the drawing gives all of them the same sentence,
+   * and refusing would leave a turn saying "the run has not started" about runs
+   * that all have — permanently, because a corrected line carries no run id for
+   * the keyed road to find later. Omitted reads as unknown, which refuses.
+   */
+  firedScheduleRunIds?: readonly string[];
 }): string {
-  return rewritePlatformStartSentence({
+  return correctRunStartSentenceForFiredReading(input, RUN_START_SCHEDULE_FIRED_SENTENCE);
+}
+
+/**
+ * THE SAME CORRECTION, OVER A RECURRING SCHEDULE THAT HAS FIRED (cinatra#3174
+ * fix leg 3, criterion 4).
+ *
+ * Section VI gives this reading its own sentence — see
+ * `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` — and the second graded proof
+ * round measured the never-fired wait clause over it. The narrowness is
+ * IDENTICAL to the spent one-off's, and deliberately shares its implementation:
+ * the keyed road rewrites only the platform's own sentence for the run named in
+ * it, and the headless road refuses unless the caller can prove whose standing
+ * clause it is rewriting.
+ *
+ * THE TWO FIRED READINGS CANNOT COLLIDE ON THE HEADLESS ROAD. A caller passes
+ * `firedScheduleRunIds` for the reading it is correcting, so the "every run has
+ * fired" lift is only taken where every schedule run in the turn is in THAT
+ * reading; a turn holding one spent one-off and one fired recurring schedule
+ * lifts neither, and each keyed sentence is still corrected by run id.
+ */
+export function correctRunStartSentenceForFiredRecurringSchedule(input: {
+  text: string;
+  runId: string;
+  scheduleRunIds?: readonly string[];
+  firedScheduleRunIds?: readonly string[];
+}): string {
+  return correctRunStartSentenceForFiredReading(
+    input,
+    RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
+  );
+}
+
+/** The body both fired corrections share; only the drawing's sentence differs. */
+function correctRunStartSentenceForFiredReading(
+  input: {
+    text: string;
+    runId: string;
+    scheduleRunIds?: readonly string[];
+    firedScheduleRunIds?: readonly string[];
+  },
+  sentence: string,
+): string {
+  const keyed = rewritePlatformStartSentence({
     text: input.text,
     runId: input.runId,
-    replace: () => RUN_START_SCHEDULE_FIRED_SENTENCE,
+    replace: () => sentence,
   });
+  if (keyed !== input.text) return keyed;
+  const onlyThisRun = thisRunIsTheOnlyScheduleRun(input.runId, input.scheduleRunIds);
+  const everyRunFired = everyScheduleRunHasFired(
+    input.scheduleRunIds,
+    input.firedScheduleRunIds,
+  );
+  if (!onlyThisRun && !everyRunFired) return input.text;
+  return rewriteStandingWaitClause(keyed, sentence, everyRunFired && !onlyThisRun);
+}
+
+/**
+ * IS EVERY SCHEDULE RUN IN THIS TURN PAST ITS SCHEDULE (converge round)?
+ *
+ * The second road to an unambiguous rewrite, and it does not need to tell the
+ * clauses apart: where every schedule run the turn draws has fired, every
+ * standing clause in it belongs to a fired run, and §VI gives them all one
+ * sentence — so rewriting all of them says nothing about any run that is not
+ * true of it. Unknown on either side refuses, and an empty turn is not a turn
+ * whose runs have all fired.
+ */
+function everyScheduleRunHasFired(
+  scheduleRunIds: readonly string[] | undefined,
+  firedScheduleRunIds: readonly string[] | undefined,
+): boolean {
+  if (scheduleRunIds === undefined || firedScheduleRunIds === undefined) return false;
+  if (scheduleRunIds.length === 0) return false;
+  return scheduleRunIds.every((id) => firedScheduleRunIds.includes(id));
+}
+
+/**
+ * IS THE STANDING CLAUSE PROVABLY THIS RUN'S (cinatra#3174 fix leg 1, converge)?
+ *
+ * A standing wait clause names no run, so a turn drawing TWO schedule runs can
+ * hold either one's line — and the caller applies this correction for every
+ * fired run against every text part it draws, so the run whose sentence is not
+ * in this part would otherwise reach into the part that holds the OTHER run's
+ * line and tell the reader that a run still waiting has already run. That is
+ * the same false reading fix leg 1 exists to remove.
+ *
+ * So the fallback is bought with the caller's own knowledge: it applies only
+ * where this run is the single schedule run the turn is drawing. Unknown
+ * refuses. The cost of refusing is a line that still says the run is waiting —
+ * visibly stale, and correctable by the keyed road on the next mint; the cost
+ * of guessing is a sentence about the wrong run.
+ */
+function thisRunIsTheOnlyScheduleRun(
+  runId: string,
+  scheduleRunIds: readonly string[] | undefined,
+): boolean {
+  if (scheduleRunIds === undefined) return false;
+  return scheduleRunIds.every((id) => id === runId);
+}
+
+/**
+ * THE SECOND HALF OF THE CHAIN, OVER A LINE THAT NO LONGER NAMES ITS RUN
+ * (cinatra#3174 fix leg 1).
+ *
+ * The wait reading is now the clause alone — section VI draws no chip and no
+ * token over this card — so a turn already corrected to it carries nothing to
+ * key on. This finds that standing clause and replaces it with the drawing's
+ * own sentence for the reading that follows it.
+ *
+ * IT REFUSES RATHER THAN GUESSES. Narrowness is what the run id used to buy,
+ * and it is bought here by ambiguity instead: a turn carrying TWO standing wait
+ * clauses has two runs waiting and this function cannot tell which one fired,
+ * so it changes nothing at all. A turn with one is unambiguous, and the caller
+ * only asks about a run whose card it is drawing.
+ *
+ * `all` LIFTS THAT REFUSAL, and only its caller may lift it: it is set where
+ * every schedule run in the turn has fired, which is the one arrangement in
+ * which telling the clauses apart does not matter — each of them belongs to a
+ * run that has fired and the drawing gives every one of them this sentence.
+ *
+ * AND ONLY WHERE THE CLAUSE OWNS ITS LINE, the same rule the keyed rewrite
+ * takes for a clause-less head: the same characters inside prose are a
+ * quotation of the line, not the line, and rewriting a quotation would make
+ * this a second author of the turn.
+ */
+function rewriteStandingWaitClause(
+  text: string,
+  sentence: string,
+  all: boolean = false,
+): string {
+  const clause = escapeLiteral(RUN_START_SCHEDULE_WAIT_CLAUSE);
+  const standing = new RegExp("(?:^|\\n)[ \\t]*" + clause + "[ \\t]*(?=\\n|$)", "g");
+  const hits = text.match(standing);
+  if (hits === null) return text;
+  if (!all && hits.length !== 1) return text;
+  return text.replace(standing, (match) =>
+    match.replace(RUN_START_SCHEDULE_WAIT_CLAUSE, sentence),
+  );
 }

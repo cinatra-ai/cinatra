@@ -124,6 +124,26 @@ const BODIES = {
   recurringStopped: settled({ canSave: false, canCancel: false, stopped: true }),
 } as const;
 
+// THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3174 fix leg 1).
+// A one-off's gate stamp is no longer read as its firing on its own: the run
+// the gate opened over has to have actually run, which only the server can say,
+// so the resolver's answer carries the reading. These fixtures have always used
+// `released: true` on a NON-recurring settled body to mean "this schedule
+// fired", so the mock states that reading exactly where the fixture means it.
+function firedAside(body: unknown): { firedOnce?: true } {
+  const b = body as {
+    phase?: string;
+    released?: boolean;
+    triggerType?: string;
+  } | null;
+  return b !== null &&
+    b.phase === "settled" &&
+    b.released === true &&
+    b.triggerType !== "recurring"
+    ? { firedOnce: true }
+    : {};
+}
+
 const WIDGET_AUTH = {
   headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_user" }),
   credentials: "omit" as const,
@@ -144,7 +164,7 @@ function mount(
       JSON.stringify(
         isDecision
           ? { outcome: { kind: "cancelled" } }
-          : { kind: "trigger_schedule_proposal", state, body },
+          : { kind: "trigger_schedule_proposal", state, body, ...firedAside(body) },
       ),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
@@ -213,10 +233,25 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
   it("the rows of a fired one-off are read-only, showing the schedule that fired", async () => {
     const { container } = mount(BODIES.oneOffFired, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
-    expect(disabled(container.querySelector('[data-field="schedule-run-at"]'))).toBe(true);
-    expect(
-      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
-    ).toBe("2020-03-04T09:00");
+    // THE ROWS GO READ-ONLY, NOT DEAD (cinatra#3174 fix leg 1). §VI: "the rows
+    // go read-only — the values still legible, the pickers gone". A disabled
+    // picker is still a picker, and the first graded proof round photographed
+    // exactly that. The value stands where the field stood.
+    expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
+    expect(container.querySelectorAll("input")).toHaveLength(0);
+    // The MOMENT, in the reader's own locale — the same reading the picker drew
+    // a moment earlier, never the wire's naive wall clock (cinatra#3174 fix leg
+    // 1). Asserted on the parts, because the locale is the reader's.
+    const readAt = rows(container)?.textContent ?? "";
+    expect(readAt).toContain(
+      // The whole wall clock, in the reader's locale — see the note in
+      // schedule-card-readings-per-drawing-3193-fix1: the year and the hour
+      // alone would pass a formatter that moved the day (converge round).
+      new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    );
   });
 });
 
@@ -234,7 +269,15 @@ describe("point 2 — a fired recurring schedule stays editable", () => {
     expect(disabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
   });
 
-  it("…and in the conversation too, where Save changes is the card's whole floor", async () => {
+  // SUPERSEDED BY THE RATIFIED DRAWING (cinatra#3174 fix leg 3). This test used
+  // to pin the plan's own split — Cancel schedule on the page, Save changes in
+  // the conversation. Section VI draws the fired-recurring card IN A CHAT
+  // THREAD with both controls on its floor, and says so in words: "Wherever a
+  // schedule is read — this card, the run's schedule step …, the widget — it is
+  // drawn as this form in one of the five readings above… Cancel schedule
+  // appears only where the schedule is recurring." The second graded proof
+  // round failed this floor for the missing control. The drawing wins.
+  it("…and in the conversation too, with BOTH controls on the floor", async () => {
     for (const host of ["chat_thread", "site_widget"] as const) {
       const view = mount(BODIES.recurringFired, host);
       await waitFor(() => expect(rows(view.container)).not.toBeNull());
@@ -242,8 +285,8 @@ describe("point 2 — a fired recurring schedule stays editable", () => {
       expect(disabled(view.container.querySelector('[data-field="recurring-timezone"]')), host).toBe(
         false,
       );
-      // Cancel schedule belongs to the page step, not to the conversation.
-      expect(cancel(view.container), host).toBeNull();
+      expect(cancel(view.container), host).not.toBeNull();
+      expect(cancel(view.container)?.textContent, host).toContain("Cancel schedule");
       view.unmount();
       cleanup();
     }
@@ -343,8 +386,11 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     expect(floor(container)).toBeNull();
     expect(save(container)).toBeNull();
     expect(cancel(container)).toBeNull();
-    // The schedule is still DRAWN — stopping it is not deleting it.
-    expect(disabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
+    // The schedule is still DRAWN — stopping it is not deleting it — and it is
+    // drawn as the record it now is (cinatra#3174 fix leg 1): the values stand
+    // where the pickers were.
+    expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(rows(container)?.textContent).toContain("Europe/Berlin");
   });
 });
 

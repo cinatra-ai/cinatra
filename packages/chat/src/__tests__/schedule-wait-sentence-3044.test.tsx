@@ -251,8 +251,13 @@ describe.each(["chat", "widget"] as const)(
       expect(container.textContent).not.toContain(RUN_START_STARTED_CLAUSE);
       expect(container.textContent).not.toContain("status: `queued`");
       expect(container.textContent).not.toContain("queued");
-      // The line still names the run it stands beside.
-      expect(container.textContent).toContain(RUN_ID);
+      // AND IT NAMES NOTHING ELSE (cinatra#3174 fix leg 1). This pin used to
+      // require the run id in the drawn line. The ratified drawing's section VI
+      // speaks over this card in plain prose in every one of its five pictures
+      // — no package chip, no run token — and the first graded proof round
+      // photographed the two code chips this leg removes.
+      expect(container.textContent).not.toContain(RUN_ID);
+      expect(container.textContent).not.toContain("Dispatched");
       // And the model's own prose is untouched.
       expect(container.textContent).toContain(PROSE);
     }, 30_000);

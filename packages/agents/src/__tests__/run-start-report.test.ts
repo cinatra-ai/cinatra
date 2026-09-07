@@ -35,6 +35,7 @@ import {
   RUN_START_NOT_STARTED_CLAUSE,
   RUN_START_PARKED_CLAUSE,
   RUN_START_QUEUED_CLAUSE,
+  RUN_START_SCHEDULE_WAIT_CLAUSE,
   RUN_START_STARTED_CLAUSE,
   RUN_START_STOPPED_CLAUSE,
   RUN_START_TRIGGER_NOT_SET_CLAUSE,
@@ -132,7 +133,22 @@ describe("the dispatch line says what is TRUE at the moment it is composed", () 
     for (const status of ["queued", "pending_trigger", "pending_approval", "pending_input", "armed"]) {
       const report = describeStartedRun({ ...STARTED, status });
       expect(report).not.toContain(RUN_START_STARTED_CLAUSE);
-      expect(report).toContain(`status: \`${status}\``);
+    }
+    // THE STATUS TOKEN, OVER ALL FIVE READINGS. cinatra#3174 drops this token
+    // for the schedule-wait reading, and that narrowing is keyed on the
+    // schedule MOMENT rather than on a status — so every one of these five,
+    // reached the ordinary way with no moment named, still prints its token and
+    // is still this loop's subject. None of #3147's coverage is given up to buy
+    // the plain-prose line; the reading that drops the token is a run standing
+    // AT its schedule moment, and it is pinned in its own section below.
+    for (const status of [
+      "queued",
+      "pending_trigger",
+      "pending_approval",
+      "pending_input",
+      "armed",
+    ]) {
+      expect(describeStartedRun({ ...STARTED, status })).toContain(`status: \`${status}\``);
     }
   });
 
@@ -335,5 +351,95 @@ describe("what a start that threw answers with", () => {
     // the agent back would confirm which names resolve to a template.
     const answered = startFailureAnswer(scopeDenial(), "@cinatra-ai/lint-policy-agent");
     expect(answered.error).not.toContain("@cinatra-ai/lint-policy-agent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SCHEDULE-WAIT DISPATCH LINE IS PLAIN PROSE (cinatra#3174, criterion 3).
+// ---------------------------------------------------------------------------
+// The drawing's own example turns for this card carry plain assistant prose —
+// "The card is the scheduling step, in the turn — and it is the only thing
+// drawn" — and not one of them prints a machine token beside the sentence. For
+// that reading the line drops the `status:` token. The run id stays, and the
+// paragraph WHERE THE CRITERION STOPS below is why — the sentence has to stay
+// findable by the correction that re-mints it.
+//
+// WHICH READING, EXACTLY. Not a status: the reading `runIsWaitingForItsSchedule`
+// names — a run standing AT its schedule moment. The immediate-trigger release
+// road leaves a run `pending_trigger` with no lifecycle moment at all, there is
+// no card beneath that turn, and its line is the only place a reader can pick
+// the run up from; #3044 pins that it keeps its parenthetical, and this
+// narrowing is what lets both readings be true at once.
+//
+// AND IT IS THE LINE A READER MEETS. The dispatch itself does not know the
+// moment — the schedule opens after the sentence is composed — so this is the
+// sentence the conversation's own correction re-mints through this same
+// function once the run states its moment.
+//
+// WHERE THE CRITERION STOPS, AND WHY. The run id STAYS in this line. The two
+// corrections this module mints are a chain — a turn corrected to the wait is
+// corrected again to the fired reading when the one-off fires — and the second
+// pass finds the first pass's sentence by the run id in it, which is also what
+// keeps a correction narrow to one run in a turn carrying several. A line with
+// no id cannot be found again, and a fired one-off's turn would then say it is
+// still waiting for its schedule for ever. The status token — the half the
+// graded pictures actually caught, reading `queued` over a card still asking
+// "When should this run?" — is gone, and that is the half this criterion buys.
+//
+// Every OTHER reading keeps the parenthetical it has always had. This is a
+// narrowing to the reading the drawing draws, not a rewrite of the line.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3174 — the schedule-wait line drops the status token", () => {
+  const SCHEDULE_WAIT = ["armed", "pending_trigger"] as const;
+
+  it("prints no status token for the reading the drawing draws", () => {
+    for (const status of SCHEDULE_WAIT) {
+      const report = describeStartedRun({ ...STARTED, status, moment: "schedule" });
+      expect(report).not.toMatch(/status:/);
+      expect(report).not.toContain(status);
+    }
+  });
+
+  it("pins the sentence whole, so the shape cannot drift back", () => {
+    // THE DISPATCH HEAD WENT WITH THE TOKEN (cinatra#3174 fix leg 1). This pin
+    // used to keep the head — package chip, run token — on the theory that only
+    // the status word contradicted the card. The first graded proof round
+    // photographed the rest: two monospace code chips over a card section VI
+    // draws with plain prose above it, in every one of its five pictures.
+    for (const status of SCHEDULE_WAIT) {
+      const line = describeStartedRun({ ...STARTED, status, moment: "schedule" });
+      expect(line).toBe(RUN_START_SCHEDULE_WAIT_CLAUSE);
+      expect(line).not.toContain("`");
+      expect(line).not.toContain("runId");
+      expect(line).not.toContain("Dispatched");
+    }
+  });
+
+  it("leaves a `pending_trigger` reached for another reason exactly as it was", () => {
+    // #3044's own pin, restated from this side: no schedule moment, no card
+    // beneath the turn, so the machine tokens stay.
+    const report = describeStartedRun({ ...STARTED, status: "pending_trigger" });
+    expect(report).toContain(`runId: \`${STARTED.runId}\``);
+    expect(report).toContain("status: `pending_trigger`");
+    expect(report).toContain(RUN_START_TRIGGER_NOT_SET_CLAUSE);
+  });
+
+  it("leaves every other status's line exactly as it was", () => {
+    for (const status of [
+      "queued",
+      "pending_input",
+      "pending_approval",
+      "running",
+      "waiting_trigger",
+      "completed",
+      "failed",
+      "stopped",
+      "a_status_nobody_has_written_yet",
+    ]) {
+      const report = describeStartedRun({ ...STARTED, status });
+      expect(report).toContain(`runId: \`${STARTED.runId}\``);
+      expect(report).toContain(`status: \`${status}\``);
+    }
   });
 });
