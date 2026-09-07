@@ -34,7 +34,7 @@ import type {
  * in common.
  *
  * The label itself is NOT written here: the mount derives it with the shipped
- * `reviewTypeLabel`, which is the same function the review surface model uses
+ * `artifactKindLabelFor`, which is the same function the review surface model uses
  * to compose a real gate's header, and {@link LIFECYCLE_REVIEW_TARGET_TYPE_LABEL}
  * below is the expectation the driver reconciles that derivation against.
  */
@@ -46,7 +46,7 @@ export const LIFECYCLE_REVIEW_TARGET_FIXTURE = {
 } as const;
 
 /**
- * What `reviewTypeLabel(LIFECYCLE_REVIEW_TARGET_FIXTURE.objectType)` produces.
+ * What `artifactKindLabelFor(LIFECYCLE_REVIEW_TARGET_FIXTURE.objectType)` produces.
  *
  * It is stated once, here, as the EXPECTATION rather than as the value the
  * mount draws: the mount calls the shipped function, so a change to how the

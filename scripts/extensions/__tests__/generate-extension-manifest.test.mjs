@@ -20,6 +20,8 @@ import {
   webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   assertArtifactRendererPackaging,
+  artifactKindLabelEntries,
+  emitArtifactKindLabels,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { GENERATED_MANIFEST_FILES } from "../generated-manifest-files.mjs";
@@ -41,6 +43,10 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       // Agent UI bindings + role bindings (cinatra#151 Stage 5).
       "src/lib/generated/agent-bindings.ts",
+      // Declared artifact-kind labels (cinatra#2926 / #3023): the import-free
+      // map from a kind:"artifact" package to the label the PACK declares for
+      // its own kind (cinatra.displayName).
+      "src/lib/generated/artifact-kind-labels.ts",
       // Artifact-renderer dispatch spine (cinatra#1629, epic #1620 S2): the
       // literal-import BUILD table of extension-shipped cinatra.artifact.ui
       // renderer modules. Inert until an artifact declares `ui` (S3+/M1).
@@ -1563,5 +1569,49 @@ describe("the packaging rule: a display is published by its own package, never b
         hasDependencyEdge: false,
       }),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DECLARED artifact-kind label (cinatra#2926 / #3023 — the core/extension
+// border). What the generator CARRIES is the pack's own `cinatra.displayName`;
+// it derives nothing and holds no roster. This pins the filtering, the keying,
+// the trimming and the byte-stable ordering on RECORDS the suite controls,
+// rather than on the shipped fleet's package names.
+// ---------------------------------------------------------------------------
+describe("artifactKindLabelEntries — carried, never derived", () => {
+  const records = [
+    { packageName: "@x/zip-artifact", kind: "artifact", displayName: "  Archive  " },
+    { packageName: "@x/a-artifact", kind: "artifact", displayName: "Alpha" },
+    // NOT an artifact pack: a declared display name on another kind is carried
+    // by that kind's own road, never into the artifact kind-label map.
+    { packageName: "@x/some-artifact", kind: "connector", displayName: "Looks Artifactish" },
+    { packageName: "@x/agent-thing", kind: "agent", displayName: "An Agent" },
+    // An artifact pack that has NOT spoken: absent, so the host floors it.
+    { packageName: "@x/silent-artifact", kind: "artifact" },
+    { packageName: "@x/blank-artifact", kind: "artifact", displayName: "   " },
+    { packageName: "@x/wrong-artifact", kind: "artifact", displayName: 7 },
+  ];
+
+  it("carries only kind:artifact records that declare a label, trimmed and keyed by package", () => {
+    expect(artifactKindLabelEntries(records)).toEqual([
+      { packageName: "@x/a-artifact", label: "Alpha" },
+      { packageName: "@x/zip-artifact", label: "Archive" },
+    ]);
+  });
+
+  it("emits byte-identically whatever order the records arrive in", () => {
+    const shuffled = [...records].reverse();
+    expect(emitArtifactKindLabels(shuffled)).toBe(emitArtifactKindLabels(records));
+    const emitted = emitArtifactKindLabels(records);
+    expect(emitted).toContain('"@x/zip-artifact": "Archive",');
+    expect(emitted).not.toContain("@x/some-artifact");
+    expect(emitted).not.toContain("@x/silent-artifact");
+  });
+
+  it("emits a well-formed EMPTY map when no pack has declared a label", () => {
+    expect(emitArtifactKindLabels([])).toContain(
+      "export const GENERATED_ARTIFACT_KIND_LABELS: Readonly<Record<string, string>> = {\n};",
+    );
   });
 });

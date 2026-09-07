@@ -197,22 +197,10 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 // so the header exposes NO edit control and NO revision picker.
 // ---------------------------------------------------------------------------
 
-/** Prettify an artifact object-type id into a short type label for the header
- * type tag (§II) — `@cinatra-ai/email:draft` → "Email". Local (not imported
- * from the library client surface) so the review route grows no client-graph
- * coupling. */
-export function reviewTypeLabel(objectType: string): string {
-  const afterScope = objectType.includes("/")
-    ? objectType.slice(objectType.indexOf("/") + 1)
-    : objectType;
-  const base = (afterScope.split(":")[0] ?? afterScope).trim();
-  const pretty = base
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-  return pretty || objectType;
-}
+// The header's type tag (§II) reads the pack's DECLARED kind label through the
+// one host function (`@/lib/artifacts/artifact-kind-label`, import-free data so
+// the review route still grows no client-graph coupling). The former local
+// derivation is deleted — it was the third copy of the same string surgery.
 
 /**
  * The read-only row facts the header's meta line carries (§IV) — the ones the
