@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
 import {
   linkifyErrorText,
@@ -28,14 +27,10 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
+import { StatusPill } from "@/components/ui/status-pill";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
-import {
-  AlertCircle,
-  ArrowRight,
-  CalendarClock,
-  Clock,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
@@ -77,7 +72,7 @@ import {
   mapInterruptToHitlContext,
   resolveStreamFirst,
   runStatusBadgeLabel,
-  statusBadgeVariant,
+  runStatusPillStatus,
   type HitlGateContext as HitlContext,
   type RunWaitInterruptDescriptor,
 } from "./run-surface-status";
@@ -345,21 +340,11 @@ type RunPollResponse = {
 };
 
 
-// statusBadgeVariant is shared with the orchestrator stepper — see
-// ./run-surface-status.
-
-// Render an inline lucide icon next to the status word for trigger-related
-// and failure states. Icons are aria-hidden; the badge retains its visible
-// text label for accessibility.
-function statusIcon(status: string): ReactNode {
-  if (status === "pending_trigger")
-    return <Clock aria-hidden="true" size={12} />;
-  if (status === "armed")
-    return <CalendarClock aria-hidden="true" size={12} />;
-  if (status === "failed")
-    return <AlertCircle aria-hidden="true" size={12} />;
-  return null;
-}
+// runStatusPillStatus and runStatusBadgeLabel are shared with the orchestrator
+// stepper — see ./run-surface-status. The per-status lucide glyph this header
+// used to draw beside the status word left with the badge (cinatra#3002, fix
+// leg 3): the ratified drawing's run-detail pill carries a dot, not an icon,
+// and the pill's own family supplies it.
 
 function buildLabelAndContent(body: AgentRunMessageBody): {
   label: string;
@@ -389,20 +374,63 @@ function buildLabelAndContent(body: AgentRunMessageBody): {
   }
 }
 
+/**
+ * One row of the run transcript — and, for the run's `final` message, THE row
+ * the completion card's sentence points at (cinatra#3002, fix leg 3).
+ *
+ * Every row used to be drawn the same way: a small muted label over a mono
+ * `<pre>` with `break-all`. For a tool call or a tool result that is right —
+ * those carry JSON, and the design system sets code in mono. For the run's
+ * `final` message it is not: that row carries the run's ANSWER, prose the third
+ * proof round measured at 2773 characters, and the design system reserves mono
+ * for metadata, tokens, labels and code (specs/app-components.html) while
+ * `break-all` snaps a word mid-character.
+ *
+ * So the `final` row is drawn as an answer, in the row form the ratified
+ * drawing gives the run's own work — `border: 1px solid var(--line);
+ * border-radius: 8px; background: var(--surface-strong)` with a sans title
+ * (specs/app-artifact-review.html, the run's last step). Its label keeps the
+ * words it had, "Final response", because that is what the card's sentence
+ * sends the reader to find. Every other row is byte-identical to what it was.
+ */
 function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
   const { label, content } = buildLabelAndContent(message.body);
   const isTool =
     message.messageType === "tool_call" || message.messageType === "tool_result";
+  const isFinal = message.messageType === "final";
   const containerClass = isTool
     ? "rounded-control border border-line bg-surface-muted px-4 py-3"
-    : "rounded-control border border-line bg-surface px-4 py-3";
+    : isFinal
+      ? "rounded-card border border-line bg-surface-strong px-4 py-3"
+      : "rounded-control border border-line bg-surface px-4 py-3";
 
   return (
-    <div className={containerClass}>
-      <div className="text-xs font-medium text-muted-foreground mb-1">{label}</div>
-      <pre className="text-xs text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto font-mono">
-        {content}
-      </pre>
+    <div className={containerClass} data-run-transcript-row={message.messageType}>
+      <div
+        data-run-transcript-label=""
+        className={
+          isFinal
+            ? "text-sm font-semibold text-foreground mb-1.5"
+            : "text-xs font-medium text-muted-foreground mb-1"
+        }
+      >
+        {label}
+      </div>
+      {isFinal ? (
+        <p
+          data-run-transcript-body=""
+          className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto"
+        >
+          {content}
+        </p>
+      ) : (
+        <pre
+          data-run-transcript-body=""
+          className="text-xs text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto font-mono"
+        >
+          {content}
+        </pre>
+      )}
     </div>
   );
 }
@@ -1515,12 +1543,57 @@ export function AgenticRunPanel({
   // output linked to its artifact page, or a plain statement that the run
   // produced none.
   //
-  // What stays surface-bound is "Start new run": it navigates out of the
-  // conversation, so the chat mount withholds the template slug the button
-  // needs and the card leaves it out (its documented behaviour for callers
-  // without a slug). The rest of the card is identical on both surfaces.
+  // AND "START NEW RUN" IS NOT SURFACE-BOUND EITHER (cinatra#3002, fix leg 4).
+  // This panel used to zero the slug on the chat mount on the reasoning that
+  // the button navigates out of the conversation, and the fourth proof round
+  // read the control missing there on all four of its frames. The ratified
+  // drawing does not leave that to a host: "A host supplies the frame and the
+  // measure a card is laid out at; it never drops a region, a state or an
+  // affordance the card's own section draws, and never adds one" — and the
+  // card's own section draws "Run complete", the sentence, and "Start new run"
+  // (the completion-card example, after a one-off schedule fires). So the slug
+  // rides on both surfaces, and the card is now identical on both. A caller
+  // that genuinely has no slug still passes none, and the card still leaves the
+  // button out rather than mount one that routes nowhere.
   const showCompletionCard = status === "completed";
-  const completionAgentId = surface === "chat" ? undefined : agentId;
+  const completionAgentId = agentId;
+
+  // ONE PLACE FOR A FINISHED RUN'S OUTPUT (cinatra#3002, fix leg 3).
+  //
+  // The ratified drawing's completed reading is the header pill and ONE card:
+  // "Run complete", the sentence, and "Start new run"
+  // (specs/app-artifact-review.html, example `run-schedule-step-fired`). The
+  // card's own sentence then names exactly one place the output lives — "Its
+  // output is in the run transcript below." The third proof round read a raw
+  // "Agent output" dump sitting ABOVE that card in every frame: a second panel
+  // the drawing does not give, carrying the same text the sentence had just
+  // pointed somewhere else. That is the "undrawn second panel" it recorded.
+  //
+  // So the raw stream panels are a LIVE-RUN reading. They stand down once the
+  // run is over AND the transcript below is actually carrying rows — and only
+  // then: an external run that finished with nothing but its stream has no
+  // transcript to be pointed at, and hiding its one panel would delete the
+  // output instead of drawing it once. That is the same rule the card's own
+  // sentence already follows, so the two can never disagree about where a
+  // finished run's output is.
+  // WHICH ROWS COUNT (convergence round, 2026-09-04). The test is not "the
+  // transcript has rows" but "the transcript carries the run's own produced
+  // output". A run window accepts turns from the reader (cinatra#2933), so a
+  // completed external run whose answer lives only in the accumulated stream
+  // can hold a transcript made of nothing but the reader's own text row with
+  // role "user" — and keying the stand-down on messages.length alone would
+  // hide that run's only copy of its answer behind a transcript that never
+  // carried it. The rows that DO carry produced output are the run's final
+  // message and any non-user text row; a tool call or a tool result is the
+  // run's working, not its answer.
+  const transcriptCarriesTheRunsOutput = messages.some(
+    (m) =>
+      m.body.messageType === "final" ||
+      (m.body.messageType === "text" && m.body.role !== "user"),
+  );
+  const showRawOutputPanels = !(
+    status === "completed" && transcriptCarriesTheRunsOutput
+  );
 
   // The sticky field-assist panel is the SAME mount on every reading of this
   // card, so it is built once here and rendered by whichever return runs. Its
@@ -1754,15 +1827,35 @@ export function AgenticRunPanel({
           beside this column names that step and the form below is its screen,
           so a progress heading over a run that has produced no progress is the
           one reading this surface must not make. Every other host keeps it. */}
-      {inputStepInRail || railDrawsTheFrame ? null : (
+      {inputStepInRail ? null : (
       <div className="flex items-center justify-between">
+        {/* THE HEADING RETIRES, THE STATUS DOES NOT (cinatra#3002, convergence
+            round). cinatra#3068 retires the PLATE'S HEADING where the rail
+            frames the detail — and the run page frames it for every run with a
+            recommendation step, an input step or a schedule step
+            (railFramesTheRunDetail, instance-screens.tsx), which is the
+            drawing's own completed reading. Retiring the pill with the heading
+            left the run's status drawn NOWHERE on that page: the rail supplies
+            no replacement, and instance-screens draws no pill of its own. So
+            the heading goes and the pill stays. */}
+        {railDrawsTheFrame ? null : (
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
-        <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">
-          {statusIcon(status)}
-          {/* A setup-field INPUT pause must not read as "pending approval" —
-              the discriminator is the interrupt itself, never the status. */}
-          <span>{runStatusBadgeLabel(status, statedWaitDescriptor)}</span>
-        </Badge>
+        )}
+        {/* THE STATUS PILL THE DRAWING DRAWS (cinatra#3002, fix leg 3).
+            This header used to carry the generic badge, whose variants are not
+            the design system's status-pill family at all — the third proof
+            round read it as "the wrong colour family with no dot" on every
+            frame, in both palettes. The ratified drawing draws it as
+            `<span class="pill approved"><span class="dot"></span>completed</span>`
+            (specs/app-artifact-review.html, example `run-schedule-step-fired`),
+            and `<StatusPill glyph="dot" />` IS that form: the tinted ground,
+            the same-colour text, the higher-alpha border and the 7px dot. The
+            LABEL is unchanged — a setup-field INPUT pause must not read as
+            "pending approval", and the discriminator stays the interrupt
+            itself, never the status. */}
+        <StatusPill status={runStatusPillStatus(status)} glyph="dot">
+          {runStatusBadgeLabel(status, statedWaitDescriptor)}
+        </StatusPill>
       </div>
       )}
 
@@ -2188,7 +2281,12 @@ export function AgenticRunPanel({
               creates a fresh run with blank inputs (StartNewRunButton — orphaned
               since it was first exported, cinatra#2412 archaeology). Start new
               run needs the template slug, so it's omitted where the caller
-              doesn't have one (e.g. chat surfaces) rather than mounted broken. */}
+              doesn't have one rather than mounted broken — and "a caller
+              without one" no longer means "a conversation": the chat mount
+              passes the run's own slug since cinatra#3002 fix leg 4, so a
+              failed run recovers the same way on both surfaces (convergence
+              finding, 2026-09-05: this comment named chat as the slugless
+              example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
@@ -2231,7 +2329,7 @@ export function AgenticRunPanel({
           TEXT_MESSAGE_CONTENT deltas accumulated in streamedText. When non-empty,
           render inline. React's default JSX escaping sanitises the text node —
           no dangerouslySetInnerHTML. Internal LangGraph runs never populate this field. */}
-      {streamedText && (
+      {streamedText && showRawOutputPanels && (
         <div className="soft-panel rounded-panel p-4 flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-foreground">Agent output</h3>
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all font-mono">
@@ -2244,7 +2342,7 @@ export function AgenticRunPanel({
           Payload rendered via React JSX text-node escaping only — no raw-HTML
           injection prop is used. Block is conditional on non-empty frames so
           internal-LangGraph runs (which never emit DATA_PART) never see it. */}
-      {dataPartFrames.length > 0 && (
+      {dataPartFrames.length > 0 && showRawOutputPanels && (
         <div className="soft-panel rounded-panel p-4 flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-foreground">Structured output</h3>
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all font-mono">
@@ -2264,6 +2362,12 @@ export function AgenticRunPanel({
           runId={runId}
           agentId={completionAgentId}
           outputHint="transcript"
+          // The panel already decided this synchronously, from its own
+          // `messages`, to stand the raw stream panels down. Handing the card
+          // the SAME fact is what keeps the two from disagreeing about where a
+          // finished run's output is during the paint before the card's own
+          // read lands (cinatra#3002, fix leg 4).
+          transcriptCarriesOutput={transcriptCarriesTheRunsOutput}
         />
       )}
 

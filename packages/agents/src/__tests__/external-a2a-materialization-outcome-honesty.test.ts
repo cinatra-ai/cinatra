@@ -84,6 +84,7 @@ const storeMock = vi.hoisted(() => ({
   })),
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
+  updateAgentRunStreamedText: vi.fn(async () => undefined),
   setAgentRunTokenHash: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
@@ -606,6 +607,24 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     expect(meta).toBeUndefined();
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
     expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+
+  it("persists the peer's streamed text, so the run page still has it after a reload (cinatra#3002)", async () => {
+    // The worker's external branch mirrors the dispatch in `a2a-actions.ts`, and
+    // that mirror dropped this hook: the peer's answer reached a live reader as
+    // AG-UI frames and nothing durable was written, so the run page was blank on
+    // reload — the defect cinatra#3002 closes, on a second path.
+    await runAgentBuilderExecutionJob({ runId: "run-ext-1" }, "job-ext-1");
+
+    const persist = proxyState.lastOptions?.persistStreamedText as
+      | ((text: string) => unknown)
+      | undefined;
+    expect(typeof persist).toBe("function");
+    await persist!("the peer's answer");
+    expect(storeMock.updateAgentRunStreamedText).toHaveBeenCalledWith(
+      "run-ext-1",
+      "the peer's answer",
+    );
   });
 
   it("takes the proxy's clean-completion hook, so the proxy does not announce success first", async () => {

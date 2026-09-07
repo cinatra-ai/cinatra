@@ -12,9 +12,12 @@ import {
   findSavedConnectionForAgentUrl,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
+  updateAgentRunStreamedText,
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
+// cinatra#3002 — the run's transcript receipt (the writer this path skipped).
+import { recordRunFinalResponseMessage } from "./run-final-response-receipt";
 import {
   onAgentHitl,
   onRunStoppedAtReviewGate,
@@ -1182,6 +1185,134 @@ function buildReviewRunBasePath(agentPackageName: string, instanceId: string): s
   return `/agents/${agentPackageName}/${instanceId}`;
 }
 
+/**
+ * THE TEXT THE RUN'S RECEIPT IS WRITTEN FROM (cinatra#3002, fix leg 1).
+ *
+ * The terminal handler's `finalText` reads the LAST agent message only, and
+ * everything it feeds keeps that exact meaning: the parsed terminal output, the
+ * unbound-output derivation capture, and the AG-UI text frames are all about
+ * the run's last word.
+ *
+ * The RECEIPT asks a different question — what text did this run produce that a
+ * reader can be pointed at? — and the first proof round measured the difference
+ * on a real completed run: an artifact-producing run's declared outputs travel
+ * as DataParts, so its last agent message carries no text at all, `finalText`
+ * came out empty, and the run finished with ZERO transcript rows. That is the
+ * blank page under a completion card this issue closes, surviving on the path
+ * the graded run took. So the receipt reads back through the run's own history
+ * for the last agent message that CARRIES text.
+ *
+ * A run with no text anywhere still writes nothing. Its evidence is the
+ * artifacts it wrote, not a transcript, and inventing a row for it would be the
+ * same lie pointed the other way.
+ */
+function lastAgentResponseText(
+  history: ReadonlyArray<HistoryMessage> | undefined,
+): string {
+  if (!history) return "";
+  // THE SEARCH IS BOUNDED TO THE RUN'S LAST TURN. Reading back through the WHOLE
+  // history would answer a different question again: a run that asked the user
+  // something mid-flight and then finished on a data-only message would have the
+  // QUESTION written as its answer, and an artifact-only run whose earlier turn
+  // happened to carry text would get an invented receipt after all — the guard
+  // below defeated by the scan above it. So the scan starts after the last user
+  // message: everything from there on is the run's reply to what it was last
+  // asked, and nothing before it can be mistaken for that reply.
+  let turnStart = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === "user") {
+      turnStart = i + 1;
+      break;
+    }
+  }
+  for (let i = history.length - 1; i >= turnStart; i -= 1) {
+    const message = history[i];
+    if (!message) continue;
+    // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
+    if (message.role !== "agent" && message.role !== "assistant") continue;
+    // Parts arrive from a peer runtime and are typed `unknown` at this boundary
+    // on purpose (see the handler's own note). Narrow at access time — a
+    // malformed earlier message newly reachable by this scan must not throw and
+    // take the run's terminal handling down with it.
+    const parts: unknown = message.parts;
+    if (!Array.isArray(parts)) continue;
+    const text = parts
+      .filter(
+        (p): p is { kind: string; text: string } =>
+          typeof p === "object" &&
+          p !== null &&
+          (p as { kind?: unknown }).kind === "text" &&
+          typeof (p as { text?: unknown }).text === "string",
+      )
+      .map((p) => p.text)
+      .join("");
+    if (text.length > 0) return text;
+  }
+  return "";
+}
+
+/**
+ * THE RUN'S OWN DECLARED OUTPUT, AS TEXT (cinatra#3002, fix leg 2).
+ *
+ * The second proof round measured a run that neither of the two sources above
+ * can read. `Agent Code Reviewer` executed on the agent runtime, completed, and
+ * answered in words — and it finished with ZERO rows in `agent_run_messages`,
+ * because its answer never travelled as a TextPart at all. It is a compiled
+ * flow whose EndNode declares one output, `findings`, and the runtime hands
+ * that value over as the sentinel DataPart this module already extracts into
+ * `endNodeOutputs` (and persists as the step result's `output_data`). So
+ * `finalText` was empty, the bounded backward scan of the final turn found no
+ * text-carrying message either, and the receipt correctly — by its own two
+ * rules — wrote nothing. The blank page under the completion card survived on
+ * exactly the path the graded run took, one channel further out.
+ *
+ * This is that third source, and it is the run's OWN DECLARATION rather than a
+ * heuristic: whatever the flow's EndNode declares as its output is what the run
+ * says it produced.
+ *
+ * IT READS AN UNAMBIGUOUS DECLARATION ONLY, and the narrowness is the point
+ * (convergence finding). A flow that declares SEVERAL things it produced has
+ * not produced one body of prose, and picking a string out of that set names
+ * the wrong thing as the run's answer. `@cinatra-ai/web-research-agent` is the
+ * standing counter-example: its EndNode declares `enrichedRows` (array),
+ * `failures` (array), `webChecks` (array) and `extractionNotes` (string). The
+ * rows are the run's work and the notes are a diagnostic aside — receipting the
+ * notes would put the aside in the transcript and then let the completion card
+ * say "its output is in the run transcript below" over it, which is a NEW false
+ * claim of exactly the class this issue exists to remove. Same for the media
+ * shape `{ transcript, kind }`: `kind` is a label, not the run's words.
+ *
+ * So the run's declaration speaks for the run only when, after dropping the
+ * outputs it left empty, exactly ONE declared output carries anything at all
+ * and that one is a string. Then it is the whole of what the run produced, and
+ * it becomes the transcript row. Every other declaration — several outputs
+ * carrying values, or a lone output that is structured data rather than words —
+ * writes no receipt and keeps the honest step-results reading, the same guard
+ * fix leg 1 wrote, unweakened.
+ *
+ * The value is returned with surrounding whitespace trimmed and nothing else
+ * changed: no label is invented around it.
+ */
+function isEmptyDeclaredValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+export function declaredOutputsResponseText(
+  endNodeOutputs: Record<string, unknown> | null,
+): string {
+  if (!endNodeOutputs) return "";
+  const carried = Object.entries(endNodeOutputs).filter(
+    ([, value]) => !isEmptyDeclaredValue(value),
+  );
+  if (carried.length !== 1) return "";
+  const [, only] = carried[0];
+  return typeof only === "string" ? only.trim() : "";
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
@@ -2014,6 +2145,77 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       } as never),
     ).catch(() => undefined);
     return;
+  }
+
+  // cinatra#3002 — THE RECEIPT.
+  //
+  // Everything above records the response somewhere a reader cannot look: the
+  // AG-UI text frames are ephemeral (nothing persists them for this path), and
+  // the `wayflow_response` step result is JSON no screen renders. The run page
+  // renders the run's TRANSCRIPT, and this path never wrote one — so a reader
+  // who arrived after the stream met a completion card naming a transcript that
+  // was never written. Persist the produced text as the run's own final
+  // transcript message, which is exactly the row the app-side writer would have
+  // written and exactly the row the page reads.
+  //
+  // PLACED HERE, past the materialization-honesty gate and immediately before
+  // the terminal-success transition, for two reasons that pull in opposite
+  // directions and meet exactly at this line:
+  //   * AFTER the #2486 gate, because that gate can route this same handling to
+  //     `failed`. A receipt written before it would leave a success-shaped
+  //     transcript row on a run that lands failed — the very class of lie this
+  //     issue closes, pointed the other way.
+  //   * BEFORE the transition, so the instant a reader can see `completed`, the
+  //     text the completion card names already exists.
+  // The re-entry guard above has already returned for a redelivered terminal
+  // state, so no second copy of the run's answer is written.
+  //
+  // FAIL-SOFT: a receipt that cannot be written must never fail a run that
+  // genuinely succeeded. Without it the card reads the absence honestly (see
+  // `resolveRunTerminalOutcome` — step results no longer stand in for a
+  // transcript) instead of pointing at nothing.
+  //
+  // AND IT IS WRITTEN FROM THE RUN'S HISTORY, not from the last message alone
+  // (fix leg 1). `finalText` is the last agent message's text and stays that,
+  // because the terminal output, the derivation capture and the text frames all
+  // mean "the run's last word". A run whose declared outputs travel as
+  // DataParts ends on a message with no text, and reading only that message
+  // left the very run the first proof round graded with zero transcript rows —
+  // the defect above, alive on the path that run took.
+  //
+  // AND THE RUN'S DECLARED OUTPUT IS READ WHEN THERE ARE NO WORDS AT ALL (fix
+  // leg 2). The second proof round measured a completed, text-answering runtime
+  // run with zero transcript rows: its answer travelled only as the EndNode
+  // output the sentinel carries, so neither `finalText` nor the backward scan
+  // could see it. `declaredOutputsResponseText` reads that declaration, and
+  // reads it only when the declaration is UNAMBIGUOUS: exactly one declared
+  // output carries anything, and it is a string. A flow that declares several
+  // things it produced has not produced one body of prose, and lifting a string
+  // out of that set would name the wrong thing as the run's answer and then let
+  // the card claim the transcript holds it (convergence finding).
+  //
+  // ORDER, and why it is this one. `finalText` still wins: the run's last word
+  // is what every other consumer on this path already means by the run's
+  // output, and a run that ends by speaking has said its answer. The DECLARED
+  // output comes next, ahead of the backward scan, because a declaration beats
+  // a heuristic: when a flow states what it produced, that statement is the
+  // run's answer, and the scan exists only to recover words from a run that
+  // declared nothing. A run with no words in any of the three — and a run whose
+  // declaration is ambiguous or structured — still writes no receipt, exactly as
+  // before, and keeps the honest step-results reading.
+  const finalResponseText =
+    finalText.length > 0
+      ? finalText
+      : declaredOutputsResponseText(endNodeOutputs) || lastAgentResponseText(history);
+  if (finalResponseText.length > 0) {
+    try {
+      await recordRunFinalResponseMessage({ runId, text: finalResponseText });
+    } catch (err) {
+      console.warn(
+        `[run-final-response-receipt] run=${runId} could not persist the run's final response as a transcript message:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // Both terminal-success edges are legal:
@@ -3191,6 +3393,14 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await startExternalSseProxyFromStream(resumeStream(), initialStatus, runId, {
         publishAgUiEvent: (event) => publishAgUiEvent(runId, event as never),
+        // cinatra#3002 fix leg 1 — AND THE PEER'S TEXT IS PERSISTED HERE TOO.
+        // This branch mirrors the external dispatch in `a2a-actions.ts`, which
+        // has always passed this hook; the mirror dropped it, so a run dispatched
+        // through the WORKER against an external peer streamed its answer past a
+        // live reader and left the run row's `streamed_text` empty — the same
+        // blank run page this issue closes, on a second path. The proxy calls the
+        // hook exactly once, on clean completion, with the accumulated text.
+        persistStreamedText: (text) => updateAgentRunStreamedText(runId, text),
         onCleanCompletion: ({ outputs, lastRemoteState }) => {
           externalStreamCompletedCleanly = true;
           externalStructuredOutputs = outputs;
