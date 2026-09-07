@@ -92,6 +92,7 @@ describe("the run page's own schedule step lights no tab", () => {
         inputStepIsOpen: false,
         inputStepsInRail: false,
         scheduleStepInFrame: true,
+        gateStepInFrame: false,
       }),
     ).toBe("none");
     expect(
@@ -99,6 +100,7 @@ describe("the run page's own schedule step lights no tab", () => {
         inputStepIsOpen: false,
         inputStepsInRail: false,
         scheduleStepInFrame: false,
+        gateStepInFrame: false,
       }),
     ).toBe("setup");
   });

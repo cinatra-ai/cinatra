@@ -424,11 +424,18 @@ export function RunSurfaceRail({
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
   );
-  // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken inside a gate step calls `router.refresh()`,
-  // which re-renders the server tree WITHOUT remounting this client component —
-  // so a selection kept only from the first paint would leave the reader parked
-  // on the settled gate after deciding it, when "the run detail returns to what
-  // the run page otherwise shows" is the whole point of the settled reading.
+  // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken
+  // inside a gate step calls `router.refresh()`, which re-renders the server tree
+  // WITHOUT remounting this client component — so a selection kept only from the
+  // first paint would leave the reader parked on the gate they had just decided.
+  //
+  // WHAT ANSWERING A GATE DOES (cinatra#3184 item 4). Stated as the behaviour,
+  // not as a citation: no sentence of the ratified drawing settles the timing,
+  // and the wording this comment used to carry read as though one did. Pressing
+  // Continue ADVANCES the run detail off the gate — the server re-computes which
+  // step the detail opens on and this component takes that answer — and the
+  // decided gate KEEPS its row on the rail, still selectable, so a reader may
+  // press it and be shown the settled card again.
   //
   // Adjusted DURING render against the previous prop rather than in an effect:
   // that is React's own shape for state derived from props, and it means the
