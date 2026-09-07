@@ -127,7 +127,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -136,16 +140,22 @@ jobs:
       redis:
         image: redis:8
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      # SUPABASE_DB_URL and REDIS_URL are deliberately NOT here: they name
+      # the RANDOM host ports the runner mapped for this job's service
+      # containers, which a job-level `env:` cannot read. The first step
+      # below exports both to $GITHUB_ENV (cinatra#3267).
       SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
       BETTER_AUTH_SECRET: render-smoke-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxx
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
@@ -159,6 +169,17 @@ jobs:
       # app surfaces, not the wizard — skip the setup gate.
       CINATRA_E2E_SETUP_BYPASS: "true"
     steps:
+      # `job.services.*` is unreadable from a job-level `env:` block, so this
+      # job's SUPABASE_DB_URL and REDIS_URL — which name the RANDOM host
+      # ports the runner mapped — are exported here, before any step reads
+      # one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
@@ -361,7 +382,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -370,16 +395,22 @@ jobs:
       redis:
         image: redis:8
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      # SUPABASE_DB_URL and REDIS_URL are deliberately NOT here: they name
+      # the RANDOM host ports the runner mapped for this job's service
+      # containers, which a job-level `env:` cannot read. The first step
+      # below exports both to $GITHUB_ENV (cinatra#3267).
       SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
       BETTER_AUTH_SECRET: notifications-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxx
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
@@ -390,6 +421,17 @@ jobs:
       A2A_DEV_BYPASS: "true"
       CINATRA_E2E_SETUP_BYPASS: "true"
     steps:
+      # `job.services.*` is unreadable from a job-level `env:` block, so this
+      # job's SUPABASE_DB_URL and REDIS_URL — which name the RANDOM host
+      # ports the runner mapped — are exported here, before any step reads
+      # one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
