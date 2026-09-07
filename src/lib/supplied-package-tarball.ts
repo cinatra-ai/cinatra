@@ -144,10 +144,10 @@ export function buildNpmLayoutTarball(entries: Iterable<readonly [string, Uint8A
 
   const total = chunks.reduce((n, chunk) => n + chunk.length, 0);
   const tar = new Uint8Array(total);
-  let cursor = 0;
+  let offset = 0;
   for (const chunk of chunks) {
-    tar.set(chunk, cursor);
-    cursor += chunk.length;
+    tar.set(chunk, offset);
+    offset += chunk.length;
   }
   // Node writes a zero MTIME into the gzip header, so the envelope is
   // reproducible too — the same tree packs to the same bytes on every host, on

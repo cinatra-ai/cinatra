@@ -66,12 +66,12 @@ describe("buildNpmLayoutTarball", () => {
       await mkdir(dest, { recursive: true });
       await writeFile(file, tarball);
       await tar.x({ file, cwd: dest, strip: 1 });
-      let cursor = dest;
+      let walk = dest;
       for (const segment of deep.split("/").slice(0, -1)) {
-        expect((await readdir(cursor)).length).toBe(1);
-        cursor = path.join(cursor, segment);
+        expect((await readdir(walk)).length).toBe(1);
+        walk = path.join(walk, segment);
       }
-      expect(await readdir(cursor)).toEqual(["file.md"]);
+      expect(await readdir(walk)).toEqual(["file.md"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
