@@ -1732,6 +1732,12 @@ export function AgenticRunPanel({
       : status === "completed" && !widgetHostedPanel
         ? reviewSlot.ref
         : null;
+  // The same fact the other run-detail host derives (cinatra#3149, item 1):
+  // an undecided review on this run's output, right now. See the header below.
+  // An open gate, not one that might arrive — the same narrowing, and for the
+  // same reason, as the other host states at its own derivation.
+  const runDetailOutputGateOpen = status === "completed" && inPlaceReviewRef !== null;
+
   const runIsWorking =
     inPlaceReviewRef === null &&
     !blockedOnInputGate &&
@@ -1853,8 +1859,23 @@ export function AgenticRunPanel({
             LABEL is unchanged — a setup-field INPUT pause must not read as
             "pending approval", and the discriminator stays the interrupt
             itself, never the status. */}
-        <StatusPill status={runStatusPillStatus(status)} glyph="dot">
-          {runStatusBadgeLabel(status, statedWaitDescriptor)}
+        {/* THE SAME RULE ON THE SECOND HOST (cinatra#3149, item 1). This
+            panel returns before this header whenever a review screen is up,
+            so a run that is `completed` with a gate already open does not
+            reach here today. It is passed the fact anyway, because the rule
+            "the header never claims more than the detail beneath it" belongs
+            to the run detail and not to one of its two hosts — the same
+            reason the pill mapping itself is shared. A host that stops
+            early-returning must not silently get the old word back. */}
+        <StatusPill
+          status={runStatusPillStatus(status, runDetailOutputGateOpen)}
+          glyph="dot"
+        >
+          {runStatusBadgeLabel(
+            status,
+            statedWaitDescriptor,
+            runDetailOutputGateOpen,
+          )}
         </StatusPill>
       </div>
       )}

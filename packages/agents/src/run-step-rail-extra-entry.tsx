@@ -258,9 +258,18 @@ export function RailExtraEntry({
   entry,
   reviewHrefBase,
   displayStep,
+  isCurrent = false,
 }: {
   entry: RunStepRailEntry;
   reviewHrefBase: string;
+  /**
+   * True on the ONE row the rail stands the reader at (cinatra#3149, item 3).
+   * The caller elects it, because "one entry is highlighted at a time"
+   * (the ratified drawing, section I.3) is a fact about the whole rail and no
+   * row can read it off itself. Absent -> the row carries no marker, which is
+   * what every caller that has not elected one gets.
+   */
+  isCurrent?: boolean;
   /** Numeral for a plain STEP row (a surplus stepResult past the policy spine —
    *  the only `kind: "step"` entry that ever reaches this component). Gates,
    *  verifications and lifecycle decisions draw an icon instead. */
@@ -339,6 +348,10 @@ export function RailExtraEntry({
       // The row spans the rail column and may SHRINK inside it, which is what
       // lets a long label wrap instead of running past the column (cinatra#3226).
       className="flex w-full min-w-0 items-center gap-1"
+      // The rail's current position (cinatra#3149, item 3) -- a gate row is the
+      // entry a finished run is waiting at, so the marker has to reach the rows
+      // this component draws and not only the panel's own step rows.
+      aria-current={isCurrent ? "step" : undefined}
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
       // The row that opens nothing says so here on BOTH rails, so one reading
