@@ -193,8 +193,30 @@ for (const { name: palette, theme } of PALETTES) {
       // panel snapped open with no animation at all. The class was present the
       // whole time, which is exactly why this reading has to be taken in a
       // browser rather than off the source.
+      //
+      // DETERMINISM (leg 2). This reading, and this one alone in the file,
+      // failed once at `--workers=2`: `animation-name` read "none" on the dark
+      // run, while the same reading passed at one worker and on a targeted
+      // repeat. Nothing about the clause is a race in the product — the rule is
+      // static, and the animation it names is not one this reading has to catch
+      // mid-flight. The race is with the stylesheet: two workers share one
+      // boot, this file opens the page on `domcontentloaded` so a reading is
+      // taken as early as the palette assertion allows, and a read that lands
+      // before the route's CSS has applied sees every animation property at its
+      // INITIAL value — "none" and "0s" — which is exactly the pair that was
+      // reported.
+      //
+      // The repair states the reading as the settled condition it always meant
+      // ("the rule has applied") and lets it settle, rather than serialising
+      // the file. Serialising would hide the race behind slower runs and would
+      // slow every other primitive's reading in the same block with it, and it
+      // would leave the identical exposure on every other single-shot computed
+      // read here. A genuinely unapplied rule still fails, with the same
+      // message, after the budget instead of instantly.
+      await expect
+        .poll(() => style(content, "animation-name"), { timeout: 10_000 })
+        .toContain("accordion-down");
       expect(await style(content, "animation-duration")).toBe("0.2s");
-      expect(await style(content, "animation-name")).toContain("accordion-down");
       expect(await style(content, "animation-timing-function")).toContain("ease");
     });
 
@@ -203,7 +225,12 @@ for (const { name: palette, theme } of PALETTES) {
       const icon = page
         .locator(`${seam("accordion")} [data-slot="accordion-trigger-icon"]`)
         .first();
-      expect(await style(icon, "transition-duration")).toBe("0.2s");
+      // Settled for the same reason as the reading above, which it shares a
+      // stylesheet with: an unapplied rule computes to the initial "0s" here.
+      await expect(icon).toBeVisible();
+      await expect
+        .poll(() => style(icon, "transition-duration"), { timeout: 10_000 })
+        .toBe("0.2s");
       // A linear move would read as a slide rather than the drawing's ease.
       expect(await style(icon, "transition-timing-function")).not.toBe("linear");
     });
@@ -453,6 +480,78 @@ for (const { name: palette, theme } of PALETTES) {
       // The current crumb is the darker of the two: it is the ink, the link the
       // muted slate above it.
       expect(await style(current, "font-weight")).toBe("600");
+    });
+  });
+
+  test.describe("card — the section's rendered values", () => {
+    /**
+     * The band the section states, in px, inclusive at both ends: "10–12px
+     * radius". Read at the DOM seam, on every card the harness route lays out,
+     * in BOTH palettes — which is the whole point of this block. The corner
+     * rides a scale step derived from `--radius`, and the two palettes declare
+     * different bases (0.5rem light, 0.625rem dark), so one palette's reading
+     * says nothing about the other's. The primitive spelled the shared `xl`
+     * step, `calc(var(--radius) + 4px)`: 12px light — inside, at the top — and
+     * 14px dark, outside. Both earlier gradings of this row measured a single
+     * palette, which is why the dark departure survived two of them.
+     */
+    const BAND = { min: 10, max: 12 };
+
+    const cornersOf = (target: Locator) =>
+      target.evaluateAll((nodes) =>
+        nodes.map((el) => {
+          const computed = getComputedStyle(el);
+          return {
+            topLeft: computed.borderTopLeftRadius,
+            topRight: computed.borderTopRightRadius,
+            bottomRight: computed.borderBottomRightRadius,
+            bottomLeft: computed.borderBottomLeftRadius,
+          };
+        }),
+      );
+
+    const outsideBand = (readings: Record<string, string>[], corners: string[]) =>
+      readings.flatMap((reading) =>
+        corners
+          .map((corner) => reading[corner])
+          .filter((value) => {
+            const px = Number.parseFloat(value);
+            return !(px >= BAND.min && px <= BAND.max);
+          }),
+      );
+
+    test('"10–12px radius": every corner of every card on the route sits inside the band', async ({
+      page,
+    }) => {
+      await open(page, theme);
+      const cards = page.locator('[data-slot="card"]');
+      await expect(cards.first()).toBeVisible();
+      const readings = await cornersOf(cards);
+      // A route that laid out no card would pass an empty assertion silently.
+      expect(readings.length).toBeGreaterThan(0);
+      expect(
+        outsideBand(readings, ["topLeft", "topRight", "bottomRight", "bottomLeft"]),
+        `${readings.length} card nodes read in the ${palette} palette`,
+      ).toEqual([]);
+    });
+
+    test('"10–12px radius": the header corners are cut on the same step as the card', async ({
+      page,
+    }) => {
+      // The card clips its children, so a header left on the old step draws a
+      // seam inside the outer corner the moment it paints a ground of its own.
+      // The card, its header, its footer and its image corners move together or
+      // none of them do; the footer and image corners are graded in the
+      // primitive's own checklist, because this route lays out neither.
+      await open(page, theme);
+      const headers = page.locator('[data-slot="card-header"]');
+      await expect(headers.first()).toBeVisible();
+      const readings = await cornersOf(headers);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(
+        outsideBand(readings, ["topLeft", "topRight"]),
+        `${readings.length} card-header nodes read in the ${palette} palette`,
+      ).toEqual([]);
     });
   });
 
