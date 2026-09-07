@@ -20,7 +20,7 @@ import "server-only";
 // store path to the verified tarball, the content hash detects on-disk
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
-import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -1251,12 +1251,16 @@ export async function writeSuppliedSnapshot(contentDigest: string, tarball: Uint
   const root = resolveSuppliedSnapshotRoot();
   await mkdir(root, { recursive: true });
   const target = path.join(root, name);
-  // Written through a temporary file in the SAME directory and renamed, so a
-  // concurrent reader never sees a half-written snapshot under the final name.
+  // Written through a temporary file in the SAME directory and promoted through
+  // the app layer's sanctioned EXDEV-safe move, so a concurrent reader never sees
+  // a half-written snapshot under the final name and no unsanctioned move lands
+  // on the extension store surface (cinatra#874). Staging and target are always
+  // siblings under the one snapshot root, so the promote is intra-filesystem and
+  // the primitive's cross-filesystem copy fallback is unreachable from here.
   const staging = path.join(root, `.${name}.${randomUUID()}.partial`);
   await writeFile(staging, tarball);
   try {
-    await rename(staging, target);
+    await atomicReplaceDir(staging, target);
   } catch (err) {
     await rm(staging, { force: true });
     throw err;
