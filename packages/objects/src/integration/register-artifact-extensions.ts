@@ -320,6 +320,45 @@ export function forgetCrossNamespaceClaimsOf(packageName: string): void {
 }
 
 /**
+ * The type ids `packageName` CLAIMED without owning their namespace, sorted.
+ *
+ * The by-package direction of `crossNamespaceClaimantsOf`, and the parity of
+ * `objectTypeRegistry.getTypesForPackage`: that one answers what a package
+ * REGISTERED, this one what it CLAIMED. A surface asking "which artifact type is
+ * this extension's own?" needs BOTH, because a pack that claims a host-owned id
+ * registers nothing and would otherwise own nothing.
+ *
+ * A reading, never a registration: a package with no claims answers empty.
+ */
+export function crossNamespaceClaimsBy(packageName: string): readonly string[] {
+  const out: string[] = [];
+  for (const [typeId, claimants] of crossNamespaceClaimLedger) {
+    if (claimants.has(packageName)) out.push(typeId);
+  }
+  return out.sort();
+}
+
+/**
+ * The packages that CLAIMED `typeId` without owning its namespace, sorted.
+ *
+ * The mirror of `objectTypeRegistry.getRegisteringPackage`: that one answers who
+ * REGISTERED a type, this one who claimed it. A HOST-registered type has no
+ * registering package at all (registration without provenance), so every surface
+ * that needs an EXTENSION KEY for such a type — the installed-type picker's
+ * meaning assertion, which is keyed on an extension and on nothing else — has
+ * only this ledger to read it from. `@cinatra-ai/linkedin:post-draft` is exactly
+ * that shape: the host is its single runtime registrar, and
+ * `@cinatra-ai/linkedin-artifacts` is what a person asserting its meaning is
+ * asserting.
+ *
+ * A reading, never a registration: an unclaimed or unknown id answers empty.
+ */
+export function crossNamespaceClaimantsOf(typeId: string): readonly string[] {
+  const claimants = crossNamespaceClaimLedger.get(typeId);
+  return claimants ? [...claimants].sort() : [];
+}
+
+/**
  * The claimed type ids that NOTHING registers — one row per orphaned claim, in
  * declaration order. Read after registration to say out loud what would
  * otherwise be an unexplained gap in the type map.

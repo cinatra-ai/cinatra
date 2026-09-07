@@ -122,6 +122,7 @@ export type AgentTemplateInstallSeed = {
   triggerMode: "full" | "start-only";
   /** The steps the trigger gate holds, [] for a `start-only` agent. */
   gatedSteps: CompiledAgentOas["gatedSteps"];
+  /**
    * The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208),
    * persisted on `agent_templates.artifact_bindings` beside
    * `has_artifact_bindings` and ALWAYS in the same write as `package_version`.

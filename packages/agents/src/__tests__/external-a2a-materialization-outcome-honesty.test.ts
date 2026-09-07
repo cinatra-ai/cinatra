@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import {
+  formatRunFailureFloorLine,
+  runFailureFloorForDisplay,
+} from "../run-failure-floor";
+
+/** What a SURFACE draws from a persisted run error: the sanitized floor lines,
+ *  or null when this failure is not a materialization failure at all. */
+function drawnFloor(error: unknown): string | null {
+  const entries = runFailureFloorForDisplay(typeof error === "string" ? error : null);
+  return entries === null ? null : entries.map(formatRunFailureFloorLine).join("\n");
+}
+
 // cinatra#2497 — the external-A2A terminal path must run the SAME
 // materialization-honesty contract #2496 established for the WayFlow path.
 //
@@ -351,14 +363,20 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     expect(runId).toBe("run-ext-1");
     expect(from).toBe("running");
     expect(to).toBe("failed");
-    // The reason reaches the run-status/UI surface, not just a log line.
-    // Issue 3033: the persisted `error` is now the drawn floor -
-    // a sanitized package / slot / reason triple - and the producer's own
-    // sentence keeps going to the server log (execution.ts writes one warn per
-    // failed outcome before this composes); this suite asserts the PERSISTED row.
+    // THE ROW IS THE RECORD (cinatra#3208): it names the declaration that
+    // failed — the output id and the package — so the stored outcome can be read
+    // back against the version the run executed.
     expect(String(meta?.error)).toContain("draft");
-    expect(String(meta?.error)).toContain("output-not-produced");
-    expect(String(meta?.error)).not.toContain("did not resolve to a string");
+    expect(String(meta?.error)).toContain("@cinatra-ai/blog-post-artifact");
+    // THE FLOOR IS THE READING (issue 3033): what a surface draws from that row
+    // is the sanitized package / slot / reason triple, and the producer's own
+    // sentence never reaches a reader on any road.
+    const floor = drawnFloor(meta?.error);
+    expect(floor).not.toBeNull();
+    expect(floor).toContain("review target unavailable");
+    expect(floor).toContain("draft");
+    expect(floor).toContain("output-not-produced");
+    expect(floor).not.toContain("did not resolve to a string");
     // ...and the full evidence lands in the same payload a green run would carry.
     const stepResults = meta?.stepResults as Array<Record<string, unknown>>;
     expect(Array.isArray(stepResults)).toBe(true);
@@ -382,8 +400,11 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("review target unavailable");
     expect(String(meta?.error)).toContain("summary");
+    const mixedFloor = drawnFloor(meta?.error);
+    expect(mixedFloor).toContain("review target unavailable");
+    expect(mixedFloor).toContain("summary");
+    expect(mixedFloor).not.toContain("did not resolve to a string");
     // Nothing is dropped: the successful ref is preserved alongside the failure.
     expect(meta?.stepResults as unknown[]).toBeDefined();
     const outcomes = (meta?.stepResults as Array<Record<string, unknown>>)[0]
@@ -399,8 +420,9 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
     expect(String(meta?.error)).toContain("(materializer)");
-    expect(String(meta?.error)).toContain("materializer-failed");
-    expect(String(meta?.error)).not.toContain("artifact stack unavailable");
+    const thrownFloor = drawnFloor(meta?.error);
+    expect(thrownFloor).toContain("materializer-failed");
+    expect(thrownFloor).not.toContain("artifact stack unavailable");
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
   });
 
@@ -481,8 +503,10 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("binding-resolution-failed");
-    expect(String(meta?.error)).not.toContain("ECONNREFUSED");
+    expect(String(meta?.error)).toContain("(binding-resolution)");
+    const outageFloor = drawnFloor(meta?.error);
+    expect(outageFloor).toContain("binding-resolution-failed");
+    expect(outageFloor).not.toContain("ECONNREFUSED");
     expect(agUiEventTypes()).toContain("RUN_ERROR");
   });
 

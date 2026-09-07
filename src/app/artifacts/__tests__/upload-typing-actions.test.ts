@@ -346,6 +346,103 @@ describe("assertUploadMeaning — A4-seam matcher-channel candidate (package tar
   });
 });
 
+// ---------------------------------------------------------------------------
+// W9 (cinatra#3033) — A PACK THAT SHIPS A DISPLAY AND NO CLASSIFIER.
+//
+// The ratified drawing (app-artifact-review §XI.10): "Promotion happens only on
+// the matcher's assertion at its threshold and with the person's confirmation,
+// or on the person's own assertion, which outranks the matcher." This action IS
+// the person's own assertion. A pack with no matcher declaration has no
+// threshold — it must not therefore have no road, or its display can never draw
+// (§XI.10: "an associated row still carries the base type").
+// ---------------------------------------------------------------------------
+describe("assertUploadMeaning — the person's own assertion promotes a matcher-less pack (cinatra#3033)", () => {
+  const PACK = "@cinatra-ai/blog-post-artifact";
+  const OWN_TYPE = "@cinatra-ai/blog-post-artifact:post";
+  const CAND = {
+    objectTypeId: OWN_TYPE,
+    extension: PACK,
+    displayName: "Post",
+    extensionLabel: "Blog Post",
+  };
+
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+    objectTypeRegistry.register(
+      {
+        type: OWN_TYPE,
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      PACK,
+    );
+    // THE POINT OF THE CASE: the pack is in NO matcher channel.
+    matcherManifestRegistry._clearForTests();
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "text/markdown", objectType: "@cinatra-ai/markdown-artifact:artifact" },
+    });
+    listInstalledMeaningTypesAcceptingMime.mockReturnValue([CAND]);
+    isSystemExtension.mockReturnValue(false);
+    resolveActiveInstallForActor.mockResolvedValue({
+      id: "inst-bp",
+      isDefault: true,
+      version: "0.1.0",
+    });
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    verifySessionAuthority.mockResolvedValue({ kind: "org-write" });
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+  });
+
+  it("takes the road with NO threshold and the person's-own-assertion authority", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({
+      ok: true,
+      representationRevisionId: "rep_w9",
+      revision: 2,
+      toType: OWN_TYPE,
+      retyped: true,
+    });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(promoteMatchedArtifactType).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extension: PACK,
+        personAsserted: true,
+        threshold: null,
+        confirmed: true,
+        ownType: expect.objectContaining({ typeId: OWN_TYPE }),
+      }),
+    );
+    expect(res).toEqual({
+      ok: true,
+      promotion: {
+        promoted: true,
+        toType: OWN_TYPE,
+        representationRevisionId: "rep_w9",
+        revision: 2,
+      },
+    });
+    // The person's own meaning is written FIRST — the promotion rides it.
+    expect(assertSemanticType).toHaveBeenCalledWith(
+      expect.objectContaining({ extension: PACK, assertedBy: "user" }),
+    );
+  });
+
+  it("reports a refusal from the road instead of claiming a retype", async () => {
+    promoteMatchedArtifactType.mockResolvedValue({ ok: false, reason: "form-not-accepted" });
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: PACK });
+    expect(res).toEqual({
+      ok: true,
+      promotion: { promoted: false, reason: "form-not-accepted" },
+    });
+  });
+});
+
 describe("requestTypeInstall — B4 honest zero-recipient", () => {
   it("zero admins ⇒ NOT ok:true (distinct no-admins reason), notification NOT written", async () => {
     const { requestTypeInstall } = await import("../upload-typing-actions");

@@ -143,6 +143,17 @@ describe("the review binder — the content channel reaches the review target", 
  * source — for the one property that was wrong: it must no longer hand the props
  * builder a hard-coded absence, and it must build the projection through the
  * channel's own server read.
+ *
+ * THE READ THIS PINS IS NOW THE SHARED ONE. The base branch landed enabler 0.20's
+ * pinned-text port (`artifactTextChannelPorts`) and wired this page to it, which
+ * SUPERSEDES the server-ports module this slice had written for itself: the
+ * editor's save road and this page must read a revision's characters through one
+ * function or an unchanged save writes a revision. So the two cases below assert
+ * the SAME two properties they always asserted — no hard-coded absence, and the
+ * form comes from the substrate's own record rather than a caller's claim —
+ * against the port the page actually takes now. Neither assertion is weakened:
+ * the negative claims are unchanged and each positive claim still names a
+ * concrete call in the page's source.
  */
 describe("the artifact page — the second consumer of the same channel", () => {
   it("no longer passes a hard-coded absence, and builds through the channel", async () => {
@@ -152,7 +163,10 @@ describe("the artifact page — the second consumer of the same channel", () => 
     const body = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(body).not.toMatch(/content:\s*absentArtifactContent\(/);
     expect(body).toMatch(/buildArtifactContentProjection/);
-    expect(body).toMatch(/createArtifactContentChannelServerPorts/);
+    expect(body).toMatch(/artifactTextChannelPorts/);
+    // The absence that REMAINS is the channel's own NAMED one, for the classes
+    // this port does not carry — never a blanket absence over a text revision.
+    expect(body).toMatch(/absentArtifactContent\([^)]*"unsupported-form"/);
   });
 
   // THE FORM IS THE SUBSTRATE'S, NEVER THE PAGE'S CLAIM (lifecycle-c W9
@@ -168,8 +182,13 @@ describe("the artifact page — the second consumer of the same channel", () => 
     const page = readFileSync(path.resolve(__dirname, "..", "page.tsx"), "utf8");
     const body = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(body).not.toMatch(/form:\s*resolved\s*\?\s*"file"/);
-    expect(body).toMatch(/form:\s*toRepresentationForm\(/);
-    // And the narrowing refuses anything outside the channel's closed set.
-    expect(body).toMatch(/form === "file" \|\| form === "connectorRef" \|\| form === "dashboard"/);
+    // The form is READ from the substrate's own representation record...
+    expect(body).toMatch(/const representationForm =/);
+    expect(body).toMatch(/getRepresentationByIdForReplay\(/);
+    // ...and it is that read value the channel is told.
+    expect(body).toMatch(/form:\s*representationForm/);
+    // And the CLASS is resolved from that recorded form, never guessed from the
+    // mime alone — the narrowing lives in the channel's own resolver.
+    expect(body).toMatch(/resolveArtifactContentClass\(\{\s*form:\s*representationForm,\s*mime\s*\}\)/);
   });
 });
