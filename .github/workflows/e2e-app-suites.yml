@@ -83,7 +83,7 @@ jobs:
   # -------------------------------------------------------------------------
   detect:
     name: Detect skip — docs-only or draft (e2e-app-suites)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -117,7 +117,7 @@ jobs:
     # (2 routes 500). Change back to `needs.detect.outputs.skip != 'true'` to
     # auto-enable once those routes are fixed / seeded.
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     services:
       postgres:
@@ -202,8 +202,9 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
         # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
         # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
@@ -222,7 +223,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
@@ -350,7 +351,7 @@ jobs:
     # NON-REQUIRED note): promoting it to required additionally needs the
     # build-image docs-only green-STUB so a docs-only PR reports green.
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     services:
       postgres:
@@ -430,7 +431,9 @@ jobs:
 
       - name: Add CI build swap (default-runner only)
         # Same 12G step + rationale as the render-smoke job above (entry-66).
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
+        # and cleanup, and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
@@ -542,7 +545,7 @@ jobs:
     name: Agents-run static invariants (tunnel-wiring)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
