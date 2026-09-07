@@ -487,6 +487,12 @@ jobs:
         # 79 cloned extensions ONCE here (under the job timeout), so the server
         # then boots instantly — vs `pnpm dev` cold-compiling on first request,
         # which exceeded any practical webServer timeout post-cutover.
+        env:
+          # One page-data worker on the two-processor hosted runner: three workers
+          # starve the runner's own heartbeat during page-data collection and GitHub
+          # reclaims it ("runner received a shutdown signal"); the knob maps to
+          # experimental.cpus in next.config.ts. Same cap as the smoke build.
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)

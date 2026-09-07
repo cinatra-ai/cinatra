@@ -11,7 +11,10 @@ import { toast } from "@/lib/cinatra-toast";
 import { AgentInstanceNav } from "@/components/agent-instance-nav";
 import type { AgentInstanceNavProps } from "@/components/agent-instance-nav";
 import { InlinePageTitle, type InlinePageTitleHandle } from "@cinatra-ai/sdk-ui";
-import { publishCrumbContributions } from "@/lib/breadcrumb-contributions";
+import {
+  publishCrumbContributions,
+  type CrumbContribution,
+} from "@/lib/breadcrumb-contributions";
 import { useCrumbEpoch } from "@/components/crumb-epoch-context";
 import { saveRunName } from "./run-name-actions";
 
@@ -28,6 +31,21 @@ type AgentPageLayoutProps = {
   showTriggerTab?: boolean;
   extensionIdentifier?: string | null;
   extensionHref?: string | null;
+  /**
+   * The scope base this run page is mounted under (cinatra#2809) — the run's
+   * address carries it, so the instance crumb this layout publishes has to
+   * carry it too. Absent on the bare global route, where the path is unchanged.
+   */
+  scopeBase?: string | null;
+  /**
+   * The scope's OWN crumbs, resolved by the server render behind that scope's
+   * read gate and handed down here (cinatra#2809). This layout owns the page's
+   * one crumb publish — the bus keeps a single route-scoped snapshot and every
+   * publish replaces it wholesale — so a second island beside it would erase
+   * one of the two. The scope's name therefore travels down and is published
+   * WITH the instance crumb, in one call.
+   */
+  scopeCrumbEntries?: readonly CrumbContribution[];
   children: ReactNode;
 };
 
@@ -128,6 +146,8 @@ export function AgentPageLayout({
   showTriggerTab = false,
   extensionIdentifier,
   extensionHref,
+  scopeBase,
+  scopeCrumbEntries,
   children,
 }: AgentPageLayoutProps) {
   const [runName, setRunName] = useState(initialRunName);
@@ -150,14 +170,23 @@ export function AgentPageLayout({
   // new scope. A new agent/instance re-arms; renames under the armed epoch
   // keep publishing.
   const armedRef = useRef<{ identity: string; epoch: string } | null>(null);
+  // The scope crumbs arrive as a fresh array on every RSC pass; serialize them
+  // so the publish below is keyed by their VALUE, exactly as the publisher
+  // island keys its own effect.
+  const serializedScopeCrumbs = JSON.stringify(scopeCrumbEntries ?? []);
   useEffect(() => {
-    const identity = `${agentId}:${instanceId}`;
+    const identity = `${scopeBase ?? ""}|${agentId}:${instanceId}`;
     if (armedRef.current?.identity !== identity) {
       armedRef.current = { identity, epoch: crumbEpoch };
     }
     if (armedRef.current.epoch !== crumbEpoch) return;
-    const instancePath = `/agents/${agentId}/${instanceId}`;
+    // UNDER THE SCOPE IT IS READ AT (cinatra#2809). The instance crumb targets a
+    // crumb PATH, and on a scoped address that path carries the scope base in
+    // front of it — published at the bare path it matched nothing, and the
+    // trail fell back to the run id's abbreviation on every scoped run page.
+    const instancePath = `${scopeBase ?? ""}/agents/${agentId}/${instanceId}`;
     publishCrumbContributions(pathname, crumbEpoch, [
+      ...(JSON.parse(serializedScopeCrumbs) as CrumbContribution[]),
       { prefix: instancePath, label: crumbLabel },
       // AND NO STEP AFTER IT (cinatra#3223). The layout used to append a third
       // crumb here naming the step the run detail was showing. The ratified
@@ -169,7 +198,7 @@ export function AgentPageLayout({
       // route of its own, so it is not a crumb at all; the rail beside the
       // detail is the you-are-here anchor.
     ]);
-  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel]);
+  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel, scopeBase, serializedScopeCrumbs]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
 
   // Listen for cross-component name updates from HitlApprovalCard:
