@@ -95,6 +95,14 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
+// The ONE review card, stubbed: the assertion below is "this detail draws the
+// review's own page", not a re-test of that card's drawing (it has its own
+// suite). Only the resolved-review case mounts it.
+vi.mock("../review-gate-card", () => ({
+  LIFECYCLE_VIEW_SCHEMA_VERSION: 1,
+  ReviewGateCard: () => <div data-testid="review-gate-card" />,
+}));
+
 // The card's "Start new run" is the REAL StartNewRunButton: the route-graph
 // ratchet fold put both in run-completion-affordances.tsx, so stubbing the
 // button would stub out the card under test. Its router is already mocked
@@ -245,6 +253,43 @@ describe("OrchestratorStepperPanel — terminal completed stage card (cinatra#24
         screen.queryByText(/no step list here to select from/i),
       ).not.toBeNull(),
     );
+    expect(screen.queryByText(/select a completed step/i)).toBeNull();
+  });
+
+  it("draws the resolved review's own page, and no completion card, when the run's last gate was a review (cinatra#3002 fix leg 1)", async () => {
+    // THE READING THE DRAWING GIVES, pinned so it cannot drift silently.
+    //
+    // The first proof round measured that [data-run-completion] never mounts on
+    // a real completed run whose review gates were decided: the run's review
+    // slot still holds the last resolved gate, so this branch draws that gate's
+    // card. The ratified drawing of the run surface settles that this is
+    // right — "One page per gate — the step's own card, and nothing else.
+    // Selecting a step opens that step's page in the run detail, and the page
+    // carries the one card of the step it belongs to", and "two cards are
+    // never stacked in one detail" — so a completion notice is never
+    // stacked over a review's own page.
+    //
+    // What the drawing gives a finished run INSTEAD is a step of its own:
+    // "A finished run says what it made. The rail's last entry is the run's own
+    // record, and its page lists the run's work". That entry does not exist on
+    // this surface yet, and it is not this card: naming it is this leg's
+    // recorded deviation, and mounting the card here would be the wrong answer
+    // to it.
+    // No evidence is queued on purpose: the completion card is what reads the
+    // run's output evidence, and the point of this case is that it never mounts.
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps({
+          initialReviewGate: { ref: "card-ref-resolved-review", awaiting: false },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("review-gate-card")).not.toBeNull(),
+    );
+    expect(document.querySelector("[data-run-completion]")).toBeNull();
     expect(screen.queryByText(/select a completed step/i)).toBeNull();
   });
 });

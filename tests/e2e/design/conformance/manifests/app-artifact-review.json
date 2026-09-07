@@ -1,0 +1,583 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-artifact-review.html",
+  "contentHash": "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+  "surfaces": [
+    {
+      "id": "run-surface",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:agent",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-step-rail",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "run-gate-notification",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "run-skills-step-open",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        },
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        },
+        {
+          "action": "continue",
+          "outcome": "selection-saved"
+        }
+      ],
+      "states": [
+        "kind:skill"
+      ]
+    },
+    {
+      "id": "run-skills-step-running",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        }
+      ],
+      "states": [
+        "kind:skill"
+      ]
+    },
+    {
+      "id": "run-progress-placeholder",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "run-schedule-step",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        },
+        {
+          "action": "save-schedule",
+          "outcome": "rearmed"
+        },
+        {
+          "action": "cancel-schedule",
+          "outcome": "stopped"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-schedule-step-fired",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "run-schedule-step-fired-recurring",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        },
+        {
+          "action": "save-schedule",
+          "outcome": "rearmed"
+        },
+        {
+          "action": "cancel-schedule",
+          "outcome": "stopped"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "run-idea-step",
+      "fields": [
+        {
+          "field": "title",
+          "source": "idea.first-line"
+        }
+      ],
+      "actions": [
+        {
+          "action": "pick-idea",
+          "outcome": "idea-reserved"
+        },
+        {
+          "action": "generate-ideas",
+          "outcome": "ideas-stored"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-outputs-list",
+      "fields": [
+        {
+          "field": "name",
+          "source": "artifact.displayTitle"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-output",
+          "outcome": "artifact-page"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-review-step-post",
+      "fields": [
+        {
+          "field": "name",
+          "source": "artifact.displayTitle"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        },
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-review-step-picture",
+      "fields": [
+        {
+          "field": "prompt",
+          "source": "picture.prompt"
+        }
+      ],
+      "actions": [
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "open-run-step",
+          "outcome": "step-detail"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "run-chip-row",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        },
+        {
+          "action": "continue",
+          "outcome": "selection-saved"
+        }
+      ],
+      "states": [
+        "kind:skill",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-target",
+      "fields": [
+        {
+          "field": "name",
+          "source": "type.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-provenance-native",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-provenance-marketplace",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-target-floor",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "markdown-display-tabs",
+      "fields": [
+        {
+          "field": "content",
+          "source": "representation.markdown"
+        }
+      ],
+      "actions": [
+        {
+          "action": "edit-markdown",
+          "outcome": "revision-saved"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "binary-download-card",
+      "fields": [
+        {
+          "field": "name",
+          "source": "artifact.fileName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "download-artifact",
+          "outcome": "file-downloaded"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-decision-bar",
+      "fields": [],
+      "actions": [
+        {
+          "action": "comment-review",
+          "outcome": "annotated"
+        },
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "review-prompt-window",
+      "fields": [],
+      "actions": [
+        {
+          "action": "request-changes",
+          "outcome": "changes-requested"
+        }
+      ],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "review-decision-disabled",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "review-gate-loading",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "review-gate-blocked",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "per-run-conversation",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "loading"
+      ]
+    },
+    {
+      "id": "per-run-conversation-pending",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "per-run-conversation-empty",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "prompt-window-readings",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "email-body-display",
+      "fields": [
+        {
+          "field": "body",
+          "source": "representation.body-markdown"
+        }
+      ],
+      "actions": [
+        {
+          "action": "edit-email-body",
+          "outcome": "revision-saved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "mixed-kind-display",
+      "fields": [
+        {
+          "field": "form",
+          "source": "representation.content-form"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "screenshot-display",
+      "fields": [
+        {
+          "field": "source",
+          "source": "representation.captured-url"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "slide-deck-display",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "dashboard-display",
+      "fields": [
+        {
+          "field": "layout",
+          "source": "representation.pinned-configuration"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-live-dashboard",
+          "outcome": "dashboard-canonical"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "portlet-display",
+      "fields": [
+        {
+          "field": "entry",
+          "source": "representation.portlet-instance-id"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-live-dashboard",
+          "outcome": "dashboard-canonical"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "drupal-pointer-display",
+      "fields": [
+        {
+          "field": "target",
+          "source": "representation.node-id"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-in-cms",
+          "outcome": "cms-opened"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "cms-page-display",
+      "fields": [
+        {
+          "field": "excerpts",
+          "source": "representation.changed-excerpts"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-in-cms",
+          "outcome": "cms-opened"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "chart-display-only",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "promotion-confirm",
+      "fields": [],
+      "actions": [
+        {
+          "action": "confirm-promotion",
+          "outcome": "row-promoted"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "promoted-row-state",
+      "fields": [
+        {
+          "field": "type",
+          "source": "representation.claiming-type"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    }
+  ]
+}

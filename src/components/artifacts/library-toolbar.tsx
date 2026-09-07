@@ -42,6 +42,7 @@ import {
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
+import { readArtifactsScope } from "@/components/artifacts/library-scope-reading";
 import type { AvailableScopes } from "@/components/access-scope";
 import type { ScopeToken } from "@/lib/scope-filter";
 
@@ -171,11 +172,15 @@ export function LibraryToolbar({
         {/* Artifacts carry no admin-only visibility tier, so the "Workspace:
             Admins only" row is not offered (a stale ?scope=admin collapses to
             the default via the canonical parser). */}
+        {/* cinatra#3229 — §I draws the control as "Scope: Workspace": the field
+            first, its value second, like the Type control beside it. The
+            reading is elected here, at this mount only. */}
         <ScopeFilterCombobox
           id="artifacts-scope-filter"
           value={scopeValue}
           scopes={scopes}
           showAdmin={false}
+          summarizeSelection={readArtifactsScope}
         />
       </ToolbarGroup>
       <div aria-hidden className="flex-1" />

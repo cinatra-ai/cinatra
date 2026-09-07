@@ -42,9 +42,35 @@ export type RunSurfaceRailLabelledKey = "recommendation" | "schedule" | "review"
  */
 export type RunInputStepKey = `input:${number}`;
 
+/**
+ * A GATE THE RUN IS PAUSED ON, ARRIVING AS A TRAILING ENTRY (cinatra#3221).
+ *
+ * The ratified drawing, the agent run surface, the step rail: the rail lists
+ * "the ordinary work steps, and -- inline at the point the run reached it -- a
+ * gate entry (a Skills step to answer, a list to pick one thing from, a review
+ * to decide). The step the run is paused on is highlighted."
+ *
+ * Three of those gates already head the rail under a word of their own: the
+ * skills question, the schedule, the review. THE FOURTH DOES NOT. A run stopped
+ * at a human-in-the-loop screen the agent opened mid-run -- the context
+ * selection the drawing names "a list to pick one thing from" -- had no entry on
+ * the rail at all, so the election below had nothing to elect and the first
+ * proof round photographed a paused run with ZERO highlighted entries in both
+ * palettes. It arrives at the run's live tip, which is the END of the rail, so
+ * it is one key rather than one per gate: the rail carries at most one open
+ * gate, because a run is stopped at one place.
+ *
+ * SINGULAR, AND CARRIED BY THE STEP LIKE AN INPUT FORM'S. It takes no word from
+ * `run-surface-rail-labels.ts`, because the gate's own screen names it -- the
+ * rail says what the step SHOWS, and the row and the card must not say two
+ * different things.
+ */
+export type RunParkedGateStepKey = "gate";
+
 export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
+  | RunParkedGateStepKey
   | "detail";
 
 /** A step that HEADS the rail — every selection but the run's own detail. */

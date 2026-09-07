@@ -43,7 +43,7 @@ import type { RunWindowSurface } from "@cinatra-ai/agents/run-window-conversatio
 // The target's own door and the review surface's own words for its type — not a
 // second query path around either.
 import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
-import { reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 /**
@@ -185,8 +185,9 @@ function renderLabel(value: unknown, fallback: string): string {
 
 /**
  * One reviewed target, in the words the review page's own header uses: its
- * title and its type (`reviewTypeLabel`, the review surface model's own
- * projection — `@cinatra-ai/email:draft` reads "Email").
+ * title and its type (`artifactKindLabelFor`, the ONE kind label — the pack's
+ * declared name where it has one, the package-id floor otherwise, so this line
+ * and the artifact page header cannot name the same pack two ways).
  *
  * FAIL-SOFT AND FAIL-CLOSED AT ONCE: a read that refuses, throws or finds
  * nothing yields the platform's own line rather than an id, so the frame never
@@ -206,7 +207,7 @@ function describeReviewTarget(
   }
   if (!read || read.kind !== "ok") return "(a reviewed target you cannot read)";
   const title = renderLabel(read.artifact.title, "(untitled)");
-  const type = renderLabel(reviewTypeLabel(read.artifact.objectType), "(unknown type)");
+  const type = renderLabel(artifactKindLabelFor(read.artifact.objectType), "(unknown type)");
   return `${title} — ${type}`;
 }
 

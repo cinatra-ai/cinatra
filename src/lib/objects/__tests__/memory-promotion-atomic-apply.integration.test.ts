@@ -35,6 +35,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub without the named
 // exports the objects graph needs; rebind the real sync-leaf-backed primitives
@@ -54,7 +55,7 @@ vi.mock("@/lib/database", async () => {
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_memory_promotion_1381";
 const ORG = "org-mem-1381";
 const REQUESTER = "u-member-1381";

@@ -1,0 +1,271 @@
+{
+  "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. See docs/internals/contracts/core-extension-border.md.",
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/answered-gate-provenance.ts::email_outreach_initial_drafts_update",
+      "reason": "A standing run-scoped persist primitive carrying one pack's name. Its write is bound to an answered gate and its scope is derived from the run, so the scope half of the rule already holds and the name is the debt."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/answered-gate-provenance.ts::email_outreach_recipients_update",
+      "reason": "A standing run-scoped persist primitive carrying one pack's name. The removal it performs is bound to an answered gate and scoped by the run, so the name is the debt, not the authority."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_outreach_initial_drafts_update",
+      "reason": "The passthrough allowlist admits this standing draft-edit primitive under a pack-shaped name. Run, declaring package and actor come from the run-bound frame and never from the request body."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_outreach_initial_drafts_update (occurrence 2)",
+      "reason": "The same standing draft-edit primitive is listed a second time in the route's run-scoped frame set, which is what binds its scope to the verified run. Both listings are recorded so a third cannot ride either."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_outreach_recipients_update",
+      "reason": "The passthrough allowlist admits this standing recipient-set primitive under a pack-shaped name. Run, declaring package and actor come from the run-bound frame and never from the request body."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_outreach_recipients_update (occurrence 2)",
+      "reason": "The same standing recipient-set primitive is listed a second time in the route's run-scoped frame set, which is what binds its scope to the verified run. Both listings are recorded so a third cannot ride either."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_test_delivery_parse_action",
+      "reason": "The passthrough allowlist admits this standing test-delivery primitive under a pack-shaped name. Run, declaring package and submission are derived from the run-bound frame, so only the name crosses."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_test_delivery_parse_action (occurrence 2)",
+      "reason": "The same standing test-delivery primitive is listed a second time in the route's run-scoped frame set, which is what binds its scope to the verified run. Both listings are recorded so a third cannot ride either."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_test_delivery_run_send",
+      "reason": "The passthrough allowlist admits this standing test-delivery primitive under a pack-shaped name. Run, declaring package and submission are derived from the run-bound frame, so only the name crosses."
+    },
+    {
+      "rule": "pack-named-passthrough",
+      "key": "src/app/api/agents/passthrough/route.ts::email_test_delivery_run_send (occurrence 2)",
+      "reason": "The same standing test-delivery primitive is listed a second time in the route's run-scoped frame set, which is what binds its scope to the verified run. Both listings are recorded so a third cannot ride either."
+    },
+    {
+      "rule": "pack-shaped-core-domain",
+      "key": "packages/agents/src/blog-idea-selection-renderer.tsx",
+      "reason": "A host-authored renderer bound to one pack's declared selection screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink.",
+      "files": {
+        "packages/agents/src/blog-idea-selection-renderer.tsx": 145
+      }
+    },
+    {
+      "rule": "pack-shaped-core-domain",
+      "key": "packages/agents/src/campaign-recipients-review-renderer.tsx",
+      "reason": "A host-authored renderer for a pack's review screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink as the pack takes its pixels back.",
+      "files": {
+        "packages/agents/src/campaign-recipients-review-renderer.tsx": 688
+      }
+    },
+    {
+      "rule": "pack-shaped-core-domain",
+      "key": "packages/agents/src/email-drafts-review-renderer.tsx",
+      "reason": "A host-authored renderer for a pack's review screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink as the pack takes its pixels back.",
+      "files": {
+        "packages/agents/src/email-drafts-review-renderer.tsx": 500
+      }
+    },
+    {
+      "rule": "pack-shaped-core-domain",
+      "key": "src/lib/blog",
+      "reason": "The standing host-side blog domain: generation, storage, projections and the WordPress road for a flow that belongs to the blog packs. It predates the border contract and is recorded file by file so it can only shrink.",
+      "files": {
+        "src/lib/blog/application/use-cases.ts": 191,
+        "src/lib/blog/dashboard-url.ts": 61,
+        "src/lib/blog/gemini.ts": 161,
+        "src/lib/blog/generation.ts": 960,
+        "src/lib/blog/index.ts": 16,
+        "src/lib/blog/integration/asset-blog-backfill.ts": 261,
+        "src/lib/blog/integration/asset-blog-store-codec.ts": 181,
+        "src/lib/blog/integration/blog-content-adapters.ts": 137,
+        "src/lib/blog/integration/module.ts": 20,
+        "src/lib/blog/integration/register-object-types.ts": 200,
+        "src/lib/blog/mcp/client/deterministic-client.ts": 122,
+        "src/lib/blog/mcp/handlers.ts": 217,
+        "src/lib/blog/mcp/registry.ts": 152,
+        "src/lib/blog/mcp/schemas.ts": 153,
+        "src/lib/blog/member-post-draft-projection.ts": 163,
+        "src/lib/blog/plugin/definition.ts": 16,
+        "src/lib/blog/ports/blog-content.ts": 144,
+        "src/lib/blog/store.ts": 1606,
+        "src/lib/blog/wordpress.ts": 465
+      }
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/agent-ui-protocol/src/schema-enricher.ts::@cinatra-ai/email:send-as-aliases",
+      "reason": "standing debt: the schema enricher names a pack-declared type id to enrich one field group instead of reading the declaration."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/dashboards/src/mutation-service.ts::@cinatra-ai/dashboard-artifact:dashboard",
+      "reason": "This package cannot import the host module holding the same constant, so it mirrors it. An integration test cross-checks the pair, which reds the build the moment either side is renamed."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/drupal:node",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:body",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:received-reply",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:recipient",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:sender-identity",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:sent-email",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:thread",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/linkedin:post-draft",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/wordpress:post",
+      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/dashboards/dashboard-artifact-surface.ts::@cinatra-ai/dashboard-artifact:dashboard",
+      "reason": "The dashboard artifact type is self-registered by its pack and restated here so the library and detail paths can resolve a declared type without importing the server-only twin writer; a unit test pins the two constants equal."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/dashboards/dashboard-artifact-twin-writer.ts::@cinatra-ai/dashboard-artifact:dashboard",
+      "reason": "The twin writer names the object type it writes for the self-registered dashboard artifact. No dedicated claim is minted for that type, so there is no generated binding to read it from yet."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/email-correlation-queries.ts::@cinatra-ai/email:body",
+      "reason": "standing debt: correlation queries name pack-declared type ids to join stored objects in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/email-correlation-queries.ts::@cinatra-ai/email:received-reply",
+      "reason": "standing debt: correlation queries name pack-declared type ids to join stored objects in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/email-correlation-queries.ts::@cinatra-ai/email:recipient",
+      "reason": "standing debt: correlation queries name pack-declared type ids to join stored objects in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/email-correlation-queries.ts::@cinatra-ai/email:sent-email",
+      "reason": "standing debt: correlation queries name pack-declared type ids to join stored objects in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/member-post-draft-writer-provider.ts::@cinatra-ai/linkedin:post-draft",
+      "reason": "standing debt: the draft writer provider names a pack-declared type id to write the draft it owns."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/drupal:node",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:body",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:received-reply",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:recipient",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:sender-identity",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:sent-email",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/email:thread",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/linkedin:post-draft",
+      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/register-email-providers.ts::@cinatra-ai/email:received-reply",
+      "reason": "standing debt: provider registration names pack-declared type ids while the host owns the provider wiring."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/register-email-providers.ts::@cinatra-ai/email:sender-identity",
+      "reason": "standing debt: provider registration names pack-declared type ids while the host owns the provider wiring."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/register-email-providers.ts::@cinatra-ai/email:sent-email",
+      "reason": "standing debt: provider registration names pack-declared type ids while the host owns the provider wiring."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/test-delivery-send-port-impl.ts::@cinatra-ai/email:sent-email",
+      "reason": "standing debt: the test-delivery port names a pack-declared type id to record what it sent."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/trigger-email-send-use-cases.ts::@cinatra-ai/email:body",
+      "reason": "standing debt: the send use cases name pack-declared type ids to read the objects they assemble."
+    },
+    {
+      "rule": "pack-type-id-in-core",
+      "key": "src/lib/trigger-email-send-use-cases.ts::@cinatra-ai/email:recipient",
+      "reason": "standing debt: the send use cases name pack-declared type ids to read the objects they assemble."
+    },
+    {
+      "rule": "skill-legacy-exception",
+      "key": "config/skill-packaging-legacy-exceptions.json::embeddedSkills :: @cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
+      "reason": "The one embedded skill that shipped before the packaging separation rule. The list is a ratchet for that pre-existing debt and empties as the skill is extracted into its own package."
+    }
+  ]
+}

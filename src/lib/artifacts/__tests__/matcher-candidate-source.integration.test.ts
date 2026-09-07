@@ -86,6 +86,10 @@ vi.mock("../attachment-resolver-ports", () => ({
 }));
 vi.mock("../semantic-assertion-store", () => ({
   assertSemanticType: assertSemanticTypeMock,
+  // cinatra#3118 criterion 6 — the authoritative active-assertion read the
+  // producer fast path keys on. No producer assertion here: these packs are
+  // driven as UPLOADS, so every candidate is classified.
+  listActiveAssertions: () => [],
 }));
 vi.mock("@/lib/extensions-dev-watcher", () => ({
   registerArtifactExtensionSkillsForPackage: lazyRegisterMock,
@@ -196,6 +200,40 @@ afterEach(() => {
   matcherManifestRegistry._clearForTests();
 });
 
+
+// ---------------------------------------------------------------------------
+// cinatra#3118 — the matcher composes ONE delimited, attributed request for the
+// whole candidate set and reads back one verdict entry per candidate identity
+// `(extension, matcherSkillId)`. This mock answers exactly the candidates the
+// runtime asked about, read off the composed prompt's roster.
+// ---------------------------------------------------------------------------
+type RosterEntry = { extension: string; matcherSkillId: string };
+
+function rosterFromPrompt(user: string): RosterEntry[] {
+  const out: RosterEntry[] = [];
+  const re = /extension="([^"]+)" matcherSkillId="([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(user)) !== null) {
+    out.push({ extension: m[1]!, matcherSkillId: m[2]! });
+  }
+  return out;
+}
+
+function batchedLlmMock(
+  verdictFor: (c: RosterEntry) => { matches: boolean; confidence: number },
+) {
+  runLlmMock.mockImplementation(async (input: { user: string }) => ({
+    text: JSON.stringify({
+      verdicts: rosterFromPrompt(input.user).map((c) => ({
+        extension: c.extension,
+        matcherSkillId: c.matcherSkillId,
+        rationale: "r",
+        ...verdictFor(c),
+      })),
+    }),
+  }));
+}
+
 describe("real bridge → meaning-surface channel", () => {
   it("(a) a matcher-only pack (no objectTypes) registers a channel entry — and mints NO object type", () => {
     driveRealBridge(root, { threshold: 0.8 });
@@ -245,7 +283,7 @@ describe("real bridge → REAL matcher runtime candidate discovery", () => {
     listSkillsMock.mockResolvedValue([
       { id: STRATEGY_MATCHER, packageName: STRATEGY_PKG, packageSlug: "fixture-strategy-artifact", content: "Classify." },
     ]);
-    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: true, confidence: 0.95 }) });
+    batchedLlmMock(() => ({ matches: true, confidence: 0.95 }));
     assertSemanticTypeMock.mockReturnValue({ inserted: true, blockedByPrecedence: false });
 
     await runArtifactMatch(

@@ -791,3 +791,106 @@ export function collectArtifactMaterializeNodesFromOasDocument(
 
   return { nodes, errors };
 }
+
+// ---------------------------------------------------------------------------
+// The EXECUTED artifact-binding declaration, persisted (cinatra#3208).
+//
+// Until #3208 the run-completion materializer re-derived a run's bindings by
+// re-reading the PACKAGE REGISTRY for the run's (packageName, packageVersion)
+// pair, while execution itself was bound to the immutable template-version
+// snapshot installed on `agent_templates`. Two authorities, and nothing bound
+// them together: when the registry's copy of a version diverged from the copy
+// the template was compiled from, materialization resolved a declaration the
+// run never executed and failed the run after all of the model work was done
+// (the measured symptom: `titleFrom` output `ideaBatchTitle` did not resolve,
+// named by a RETIRED scalar declaration, on a run whose executed declaration
+// is the fan-out one).
+//
+// This is the serialized form of the declaration the compile that produced the
+// installed template actually found — the normalized bindings plus the typed
+// `cinatra.produces` refs they were validated against. It is persisted on
+// `agent_templates.artifact_bindings` (JSON-as-text, the `gated_steps` /
+// `lifecycle_config` convention) by every install/recompile writer, ALWAYS in
+// the same write as `package_version` so the materializer's version-pin guard
+// can trust the two together, and read back by the materializer INSTEAD of the
+// registry.
+//
+// `null` (an absent column, or a value that does not survive the grammar
+// below) is three-valued exactly as `has_artifact_bindings` is: unknown, fall
+// through to the pre-#3208 registry read. A compile that could not see its
+// sibling package.json also persists `null`, because binding-to-`produces`
+// parity was then never established and the persisted set would be missing the
+// typed produces refs the materializer resolves declared types through.
+// ---------------------------------------------------------------------------
+
+/** Serialized-form version tag — a grammar change bumps it and older rows read as unknown. */
+export const ARTIFACT_BINDING_DECLARATION_VERSION = 1;
+
+export const semanticArtifactProducesRefSchema = z
+  .object({ extension: z.string().min(1), objectTypeId: z.string().min(1).optional() })
+  .strict();
+
+export const collectedArtifactBindingSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    outputId: z.string().min(1),
+    binding: artifactOutputBindingSchema,
+  })
+  .strict();
+
+export const persistedArtifactBindingDeclarationSchema = z
+  .object({
+    v: z.literal(ARTIFACT_BINDING_DECLARATION_VERSION),
+    bindings: z.array(collectedArtifactBindingSchema),
+    producesRefs: z.array(semanticArtifactProducesRefSchema),
+  })
+  .strict();
+
+export type PersistedArtifactBindingDeclaration = {
+  bindings: CollectedArtifactBinding[];
+  producesRefs: SemanticArtifactProducesRef[];
+};
+
+/**
+ * Serialize the executed declaration for the `agent_templates.artifact_bindings`
+ * column. Deterministic (no wall-clock, fixed key order) so reinstalling the
+ * same tarball writes a byte-identical value.
+ */
+export function serializeArtifactBindingDeclaration(
+  declaration: PersistedArtifactBindingDeclaration,
+): string {
+  return JSON.stringify({
+    v: ARTIFACT_BINDING_DECLARATION_VERSION,
+    bindings: declaration.bindings.map((entry) => ({
+      nodeId: entry.nodeId,
+      outputId: entry.outputId,
+      binding: entry.binding,
+    })),
+    producesRefs: declaration.producesRefs.map((ref) =>
+      ref.objectTypeId === undefined
+        ? { extension: ref.extension }
+        : { extension: ref.extension, objectTypeId: ref.objectTypeId },
+    ),
+  });
+}
+
+/**
+ * Parse a persisted declaration back. FAIL-CLOSED: anything that is not a
+ * well-formed declaration of the CURRENT grammar version returns `null`
+ * ("unknown"), and every caller then keeps its pre-#3208 behavior rather than
+ * materializing against a half-understood declaration.
+ */
+export function parseArtifactBindingDeclaration(
+  raw: string | null | undefined,
+): PersistedArtifactBindingDeclaration | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const parsed = persistedArtifactBindingDeclarationSchema.safeParse(json);
+  if (!parsed.success) return null;
+  return { bindings: parsed.data.bindings, producesRefs: parsed.data.producesRefs };
+}

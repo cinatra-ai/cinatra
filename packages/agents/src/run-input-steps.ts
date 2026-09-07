@@ -436,11 +436,44 @@ export function runHasAnsweredInputStep(steps: readonly RunInputStep[]): boolean
   return steps.some((step) => step.settled);
 }
 
+/**
+ * AND THE HANDOFF BETWEEN TWO SETUP QUESTIONS IS STILL THE RUN'S INPUT SPAN
+ * (cinatra#3184 fix leg 4).
+ *
+ * THE LIVE READING THIS LEG WAS SHOT ON. Answering the skills question releases
+ * the run, the release DISPATCHES it, and the decision's own round trip returns
+ * the moment that dispatch lands. The page the reader is handed next is
+ * therefore rendered from the run row in the second or two between the question
+ * just answered and the question the run is walking to: a row that reads
+ * `queued` and carries no step result, no run message and no streamed text. On
+ * the boot the run page's own render read the run at 05:55:13.4Z with that
+ * status, 1.9s before the row moved on, and nothing re-rendered the page after.
+ *
+ * BOTH CLAUSES ABOVE ANSWER NO FOR THAT ROW: the run is not at its input moment
+ * (no form is being asked yet, so there is no interrupt to read) and it has
+ * answered no form yet either. So the rail dropped the run's own input row from
+ * exactly the place the drawing keeps it -- "steps still to come" below the
+ * entry just settled -- and the run's whole lifecycle read three rows, or one
+ * where the agent's later steps had gone with it.
+ *
+ * A RUN THAT HAS PRODUCED NOTHING HAS NOT LEFT ITS FIRST STEP BEHIND, which is
+ * the clause the paragraph above is written against; the handoff is inside that
+ * span, not past it. The row rides UNANSWERED and UNOPENED, because
+ * `atInputMoment` still decides WHICH form is open and it is still false here.
+ * The rail names the form the run is about to ask, and nothing draws it.
+ */
 export function runCarriesInputSteps(
   steps: readonly RunInputStep[],
   atInputMoment: boolean,
+  /**
+   * The run has been released and dispatched and has produced nothing yet --
+   * `runInDispatchHandoff` on the run page. Defaults to `false`, so a caller
+   * that cannot be in that span reads exactly as it always has.
+   */
+  inDispatchHandoff = false,
 ): boolean {
   if (atInputMoment) return runOwesInputStep(steps);
+  if (inDispatchHandoff) return runOwesInputStep(steps) || runHasAnsweredInputStep(steps);
   return runHasAnsweredInputStep(steps);
 }
 

@@ -1061,6 +1061,46 @@ body {
   margin-inline-end: -0.08em;
 }
 
+/* THE TOAST'S CLOSE SITS BESIDE COPY, INSIDE THE TOAST.
+   The ratified drawing describes a toast as the popover surface, a
+   status-coloured border and matching text, the type's icon leading, and Copy
+   and Close on the right — one row, both controls in it. The toast library pins
+   its close control OUTSIDE a corner of the toast with position: absolute and a
+   transform, and the only choice its custom properties offer is WHICH corner;
+   on a real surface that badge measured overlapping the application header's own
+   notification badge. So the placement is a rule rather than a variable, and it
+   is written once here for every toast the application draws.
+   FOUR ATTRIBUTE SELECTORS AGAINST THE LIBRARY'S THREE. Both stylesheets are
+   unlayered, and the library injects its own at run time, so this rule wins on
+   specificity rather than on which of the two the browser happens to see first.
+   GEOMETRY ONLY. Not one colour is written here: the close control keeps
+   whatever the library paints it, in every theme and in every status, so this
+   rule cannot make a toast look wrong in a theme it was never measured in.
+   AND EVERY TOAST, NOT ONLY THE ONE WITH AN ACTION. The toast is a flex row.
+   Where there IS an action the library gives it an automatic margin that pushes
+   it to the end of the row, and ordering the close control after it puts the
+   two together there. Where there is NO action — most toasts in the
+   application — that margin does not exist, and a close control taken out of
+   the corner would have come to rest against the text. So the toast's own text
+   is what takes up the slack instead: it grows to fill the row, and the
+   controls sit at the end of it whether there are two of them or one. Flow
+   order and a growing box carry no physical left or right, so the pair follows
+   the reading direction on its own. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] {
+  position: static;
+  transform: none;
+  order: 1;
+  height: 24px;
+  width: 24px;
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-content] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 ::selection {
   background: rgba(15, 23, 42, 0.14);
 }
