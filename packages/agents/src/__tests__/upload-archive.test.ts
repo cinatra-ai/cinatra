@@ -292,7 +292,17 @@ describe("malformed archives", () => {
     ).rejects.toThrow(/entrypoint "cinatra\/oas\.json" \(from package\.json\) not found/);
   });
 
-  it("rejects a non-agent extension package by kind", async () => {
+  // cinatra#3204 criterion 2 — the connector-refusal test that stood here is
+  // REPLACED, not preserved. A connector archive is now ACCEPTED by the supplied
+  // reader (`resolveSuppliedArchive`, proven in
+  // upload-archive-supplied-kinds.test.ts), and the new refusal set — undeclared
+  // kind, unknown kind, the retired workflow kind, cross-kind smuggling, a
+  // name-to-kind mismatch — is asserted there.
+  //
+  // What survives here is only the AGENT-NARROWED lens the agent import road
+  // still calls: it still declines a connector, and it now names the road that
+  // does take one instead of leaving the operator at a dead end.
+  it("the agent-narrowed reader declines a connector package and names the road that accepts it", async () => {
     const pkg = JSON.stringify({
       name: "@cinatra-ai/some-connector",
       cinatra: { kind: "connector", entrypoint: "cinatra/oas.json" },
@@ -302,7 +312,7 @@ describe("malformed archives", () => {
         { name: "package.json", content: pkg },
         { name: "cinatra/oas.json", content: OAS_FLOW },
       ])),
-    ).rejects.toThrow(/"connector" extension package, not an agent package/);
+    ).rejects.toThrow(/resolveSuppliedArchive/);
   });
 
   it("rejects an archive with neither entrypoint nor agent.json", async () => {

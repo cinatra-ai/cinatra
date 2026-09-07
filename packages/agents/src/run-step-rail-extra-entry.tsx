@@ -194,6 +194,41 @@ export const RUN_RAIL_MARK_CLASS =
 /** The run page's own panel rails read the same mark under the rail's name. */
 export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
 
+/**
+ * THE ROW THAT OPENS NOTHING (cinatra#3002, acceptance 3).
+ *
+ * A run on the agent runtime leaves one step result, and the rail carries it as
+ * a row: it IS a thing that happened and it keeps its place. It opens nothing —
+ * only gate, verification and lifecycle rows carry a target — so fix leg 6 took
+ * the button off it. The row went on drawing the same circle, the same numeral,
+ * the same title and the same box as the rows that DO open, so on pixels
+ * nothing told a reader it does not open: a difference only the DOM carried.
+ *
+ * THE DRAWING GIVES NO SUCH ROW TO COPY. The ratified drawing names ONE action
+ * for this rail — "open-run-step -> step-detail" — and every rail row it draws
+ * opens on selection; its rows are parted by the state ink alone (the entry
+ * passed and the entry ahead share one muted ground, the entry being read takes
+ * the ink). There is no drawn treatment for a row that looks like a step and
+ * cannot be opened, and inventing a mark the drawing does not have would be a
+ * second departure rather than a fix for the first.
+ *
+ * SO THE ROW TAKES THE RAIL'S OWN READING FOR A ROW A READER CANNOT PRESS. This
+ * rail already draws them: a step still ahead is rendered `disabled`, and the
+ * vendored stepper row's own class list is
+ * "... cursor-pointer ... disabled:pointer-events-none disabled:opacity-60" —
+ * so on this very surface "cannot be pressed" is already 60% ink and no pointer
+ * cursor. The literal classes are carried here rather than the `disabled:`
+ * variants because this row is not a disabled CONTROL — it is not a control at
+ * all, and a variant keyed off a button's disabled attribute never fires on a
+ * div.
+ *
+ * WHAT DOES NOT CHANGE: the drawing's row anatomy. The 24px glyph, the numeral,
+ * the title, the 28px box and the marks between the rows are untouched, so the
+ * rail's geometry reads exactly as it was graded. Only the affordance moves,
+ * which is the one thing the row was saying wrongly.
+ */
+export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default opacity-60";
+
 
 // ---------------------------------------------------------------------------
 // The NON-STEP rail rows — gates ("Review"), verifications ("Audit")
@@ -306,6 +341,9 @@ export function RailExtraEntry({
       className="flex w-full min-w-0 items-center gap-1"
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
+      // The row that opens nothing says so here on BOTH rails, so one reading
+      // of the rail answers for both mounts (cinatra#3002).
+      data-rail-openable={entry.openable === false ? "false" : undefined}
       data-rail-gated-step={isGate ? "true" : undefined}
       data-rail-gate-history={isGate && isResolved ? "true" : undefined}
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
@@ -351,6 +389,26 @@ export function RailExtraEntry({
           {indicatorNode}
           {titleNode}
         </Link>
+      ) : entry.openable === false ? (
+        // A SURPLUS STEP-RESULT ROW reaches this component from the live rail
+        // inside `OrchestratorStepperPanel`, which renders every non-spine
+        // entry through here — a `kind: "step"` row past the policy spine
+        // included. It opens nothing, so it is not drawn as a control and not
+        // drawn at the ink of one; it keeps the geometry of the row it stands
+        // beside (`h-auto min-h-8` and the shared row box) so only the
+        // affordance differs. Same reading as the page rail's own step rows —
+        // one row, one declaration (cinatra#3002).
+        <div
+          className={cn(
+            "flex h-auto min-h-8 items-center",
+            RUN_PAGE_RAIL_ROW_CLASS,
+            RUN_PAGE_RAIL_INERT_ROW_CLASS
+          )}
+          data-rail-inert=""
+        >
+          {indicatorNode}
+          {titleNode}
+        </div>
       ) : (
         // The row must be sized by its CONTENT. `StepperTrigger` renders the
         // shared Button, whose default size pins a fixed `h-8` — and a
