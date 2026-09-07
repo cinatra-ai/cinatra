@@ -183,12 +183,12 @@ describe("the repository intake, one per kind (criteria 6, 7, 8 — criterion 30
   for (const kind of ["agent", "skill", "connector", "artifact"] as const) {
     it(`resolves a ${kind.toUpperCase()} from the manifest, pins the ref to a commit sha, and applies the containment policy`, async () => {
       // 6 — the kind comes from the repository's own manifest.
-      const client = makeClient({ entries: fixtureFor(kind), tags: { "v1.0.0": { type: "commit", sha: COMMIT } } });
+      const client = makeClient({ entries: fixtureFor(kind), tags: { "release-a": { type: "commit", sha: COMMIT } } });
       const preview = await previewGitHubSuppliedPackage({
         client,
         owner: "owner",
         repo: "repo",
-        ref: "v1.0.0",
+        ref: "release-a",
       });
       expect(preview.kind).toBe(kind);
       expect(preview.packageName).toBe(`@acme/thing-${kind}`);
@@ -202,7 +202,7 @@ describe("the repository intake, one per kind (criteria 6, 7, 8 — criterion 30
       expect(preview.provenance).toMatchObject({
         type: "github",
         repo: "owner/repo",
-        ref: "v1.0.0",
+        ref: "release-a",
         resolvedSha: COMMIT,
         contentDigest: preview.contentDigest,
       });
@@ -213,10 +213,10 @@ describe("the repository intake, one per kind (criteria 6, 7, 8 — criterion 30
       // submodule entry in an otherwise valid package is refused by name.
       const withSubmodule = makeClient({
         entries: [...fixtureFor(kind), { path: "vendor/dep", mode: "160000", type: "commit" }],
-        tags: { "v1.0.0": { type: "commit", sha: COMMIT } },
+        tags: { "release-a": { type: "commit", sha: COMMIT } },
       });
       await expect(
-        previewGitHubSuppliedPackage({ client: withSubmodule, owner: "owner", repo: "repo", ref: "v1.0.0" }),
+        previewGitHubSuppliedPackage({ client: withSubmodule, owner: "owner", repo: "repo", ref: "release-a" }),
       ).rejects.toThrow(/submodule/i);
     });
   }
