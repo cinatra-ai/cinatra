@@ -63,7 +63,11 @@ jobs:
           POSTGRES_DB: postgres
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5434:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for one host port (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -72,16 +76,22 @@ jobs:
       redis:
         image: redis:8-alpine
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      # SUPABASE_DB_URL and REDIS_URL are deliberately NOT here: they name the
+      # RANDOM host ports the runner mapped for this job's service containers,
+      # which a job-level `env:` cannot read. The first step exports both to
+      # $GITHUB_ENV instead (cinatra#3267).
       SUPABASE_SCHEMA: cinatra_e2e_hmr
-      REDIS_URL: redis://127.0.0.1:6379
       BULLMQ_QUEUE_NAME: cinatra-bg-e2e-hmr
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
@@ -107,6 +117,17 @@ jobs:
       HMR_SMOKE_MAX_CONNECTORS: "4"
       DEV_SERVER_LOG: /tmp/dev-hmr-server.log
     steps:
+      # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
+      # the runner mapped: `job.services.*` is unreadable from a job-level
+      # `env:`, so they are exported here, before the first step that reads
+      # one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
