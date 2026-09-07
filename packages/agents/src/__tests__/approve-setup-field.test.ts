@@ -203,7 +203,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // constant for the whole run, and the queue both retains settled jobs and
       // holds the previous leg ACTIVE across its own unwind — so BullMQ's
       // HSETNX add silently dropped the second approval of a two-field setup.
-      { jobId: expect.stringMatching(/^resume-setup-run-s1:.+/) },
+      { jobId: expect.stringMatching(/^resume-setup-run-s1__.+/) },
     );
   });
 
@@ -270,12 +270,71 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       ];
       expect(payload).toEqual({ runId: "run-two-field", resumedFromSetup: true });
       // The id still names the run it resumes, for anyone reading the queue...
-      expect(String(options.jobId)).toMatch(/^resume-setup-run-two-field:.+/);
+      expect(String(options.jobId)).toMatch(/^resume-setup-run-two-field__.+/);
       jobIds.push(String(options.jobId));
     }
     // ...but the two legs are DIFFERENT jobs. A shared id is what let BullMQ
     // drop the second leg — whether the first was retained-and-settled or still
     // active — and strand the run at `queued` with nothing to run it.
+    expect(jobIds[0]).not.toBe(jobIds[1]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3033 — THE SEPARATOR. The per-leg id above is necessary but its
+  // separator must be one the QUEUE accepts. BullMQ validates a custom job id
+  // and throws `Custom Id cannot contain :` outright, so a colon between the
+  // review-task id and the per-leg suffix turns the whole setup approval into a
+  // 500 before anything is enqueued: the run's status write has already landed,
+  // so the run sits at `queued` with no job and no trigger row — the very
+  // deadlock the per-leg id was added to close, reached by a different door.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3033: the per-leg resume job id carries NO colon (the queue rejects one) and stays unique per leg", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-no-colon",
+      templateId: "tpl-no-colon",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    // Leg one.
+    await approveReviewTaskInternal(
+      "setup-run-no-colon",
+      "actor-1",
+      { postTitle: "A title" },
+      "postTitle",
+    );
+
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-no-colon",
+      templateId: "tpl-no-colon",
+      status: "pending_approval",
+      inputParams: { postTitle: "A title" },
+    });
+
+    // Leg two.
+    await approveReviewTaskInternal(
+      "setup-run-no-colon",
+      "actor-1",
+      { blogPostUrl: "https://example.test/post" },
+      "blogPostUrl",
+    );
+
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const jobIds = bgJobs.enqueueBackgroundJob.mock.calls.map((call) => {
+      const [, , options] = call as [string, Record<string, unknown>, Record<string, unknown>];
+      return String(options.jobId);
+    });
+
+    for (const jobId of jobIds) {
+      // The queue's own rule. A colon here is not a style question: `add`
+      // throws and the approval never enqueues.
+      expect(jobId).not.toContain(":");
+      // It still names the run it resumes, for anyone reading the queue.
+      expect(jobId.startsWith("resume-setup-run-no-colon")).toBe(true);
+      // And it still carries a per-leg suffix — the constant id is what
+      // stranded the run before.
+      expect(jobId.length).toBeGreaterThan("resume-setup-run-no-colon".length);
+    }
     expect(jobIds[0]).not.toBe(jobIds[1]);
   });
 
@@ -458,7 +517,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s2:.+/) },
+      { jobId: expect.stringMatching(/^resume-setup-run-s2__.+/) },
     );
   });
 
@@ -535,7 +594,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s6:.+/) },
+      { jobId: expect.stringMatching(/^resume-setup-run-s6__.+/) },
     );
   });
 
@@ -583,7 +642,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-554a:.+/) },
+      { jobId: expect.stringMatching(/^resume-setup-run-554a__.+/) },
     );
   });
 

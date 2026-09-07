@@ -495,7 +495,12 @@ export async function approveReviewTaskInternal(
         // is already de-duplicated one statement earlier: the org-scoped
         // `pending_approval` CAS inside `resumeRunFromSetupApproval` lets
         // exactly one press through and the loser throws before this line.
-        jobId: `resume-${reviewTaskId}:${randomUUID()}`,
+        // The separator is `__`, not `:`. BullMQ VALIDATES a custom job id
+        // and throws `Custom Id cannot contain :` before it enqueues anything,
+        // so a colon here turned this whole approval into a 500 AFTER the
+        // status write had already committed — the run reached `queued` with no
+        // job and no trigger row: the same dead end by a different door.
+        jobId: `resume-${reviewTaskId}__${randomUUID()}`,
       },
     );
     console.log(
