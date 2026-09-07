@@ -30,7 +30,9 @@ import { agentRuns } from "./schema";
 // Public types
 // ---------------------------------------------------------------------------
 
-export type DurationSource = "history" | "llm-analysis";
+/** `declared` — no history and no analysis: the declared step count over a
+ *  stated band, drawn by the scheduling step (cinatra#3224, `duration-declared.ts`). */
+export type DurationSource = "history" | "llm-analysis" | "declared";
 export type ConfidenceLevel = "low" | "medium" | "high";
 
 export type DurationEstimate = {
