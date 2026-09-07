@@ -1,26 +1,30 @@
 // Per-job service-container port isolation (cinatra#3267).
 //
-// THE FAILURE CLASS. Every job in the two runner-heavy workflows that declares a
-// postgres or a redis service container used to publish it on a FIXED host port
-// (`- 5432:5432`, `- 6379:6379`) and read it back from a hard-coded
-// `127.0.0.1:5432` / `127.0.0.1:6379` URL. On a hosted runner that is harmless —
-// one job owns the whole machine. On a SELF-HOSTED runner it is not: two such
-// jobs scheduled onto one box race for the same two host ports, the second
-// container fails to bind, and the class can only ever be carried by a single
-// runner. That is the ceiling this invariant removes.
+// THE FAILURE CLASS. Every job that declares a postgres or a redis service
+// container used to publish it on a FIXED host port (`- 5432:5432`,
+// `- 5434:5432`, `- 127.0.0.1:6379:6379`) and read it back from a hard-coded
+// `127.0.0.1:5434` / `127.0.0.1:6379` URL; two `docker run` steps pinned a
+// loopback port the same way. On a hosted runner that is harmless — one job
+// owns the whole machine. On a SELF-HOSTED runner it is not: two such jobs
+// scheduled onto one box race for the same host ports, the second container
+// fails to bind at "Initialize containers" with "port is already allocated",
+// and the class can only ever be carried by a single runner. That is the
+// ceiling this invariant removes.
 //
 // THE INVARIANT. A `services:` port entry names the CONTAINER port alone
 // (`- "5432"`), which makes the runner publish a RANDOM free host port, and every
 // consumer reads that mapped port out of the `job.services.<id>.ports` context.
 // The `job` context is NOT available in a job-level `env:` block, so a job-level
-// URL is exported to `$GITHUB_ENV` from the job's first step instead.
+// URL is exported to `$GITHUB_ENV` from the job's first step instead. A
+// step-run container takes the same shape one layer down: `-p 127.0.0.1::4873`
+// publishes a random host port, read back with `docker port <name> 4873/tcp`.
 //
 // This file is the guard. The pure helpers below are unit-tested on synthetic
-// text; the LIVE enforcement block at the bottom runs them against THIS repo's
-// two real workflow files inside the root Vitest suite (the gate of record), so
-// re-pinning a fixed host port — or re-hard-coding a service URL — reds a
-// required check instead of silently re-introducing the collision.
-import { readFileSync } from "node:fs";
+// text; the LIVE enforcement block at the bottom runs them against EVERY
+// workflow file in this repository inside the root Vitest suite (the gate of
+// record), so re-pinning a fixed host port — or re-hard-coding a service URL —
+// reds a required check instead of silently re-introducing the collision.
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,20 +32,34 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 
-/** The two workflows that declare postgres/redis service containers. */
-export const SERVICE_WORKFLOWS = [
-  ".github/workflows/build-image.yml",
-  ".github/workflows/e2e-app-suites.yml",
-];
+const WORKFLOWS_DIR = ".github/workflows";
+
+/**
+ * EVERY workflow file in this repository, enumerated from disk.
+ *
+ * Deliberately not a hand-kept list of "the files that have services today":
+ * the collision class belongs to any job that publishes a container port, and
+ * a hand-kept list silently stops guarding the moment someone adds a service
+ * block to a sixth workflow (cinatra#3267).
+ */
+export const SERVICE_WORKFLOWS = readdirSync(path.join(REPO_ROOT, WORKFLOWS_DIR))
+  .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+  .sort()
+  .map((name) => `${WORKFLOWS_DIR}/${name}`);
 
 /**
  * Every entry inside a `services: ... ports:` list, classified.
  *
- * `fixed` entries are `HOST:CONTAINER` mappings (the collision shape).
- * `containerOnly` entries name the container port alone (the random-host-port
- * shape). Deliberately line-based rather than a YAML load: the guard has to be
- * able to point at the offending LINE, and these files carry expression syntax
- * a strict loader would have to be taught about anyway.
+ * `fixed` entries are `[ADDRESS:]HOST:CONTAINER` mappings (the collision
+ * shape). `containerOnly` entries name the container port alone (the
+ * random-host-port shape). Deliberately line-based rather than a YAML load:
+ * the guard has to be able to point at the offending LINE, and these files
+ * carry expression syntax a strict loader would have to be taught about
+ * anyway.
+ *
+ * A YAML sequence may be indented one level in from its key or sit at the SAME
+ * column as it — both styles are in this repository — so an entry ends the
+ * list only when it is indented LESS than the `ports:` key itself.
  */
 export function classifyServicePortEntries(text) {
   const fixed = [];
@@ -59,18 +77,24 @@ export function classifyServicePortEntries(text) {
     if (raw.trim() === "") return;
     // A comment nested inside the list belongs to the list, and must not be
     // read as the end of it — every entry these workflows carry is commented.
-    if (raw.trim().startsWith("#") && /^\s*/.exec(raw)[0].length > portsIndent) return;
+    if (raw.trim().startsWith("#") && /^\s*/.exec(raw)[0].length >= portsIndent) return;
 
     const item = /^(\s*)-\s*(.*)$/.exec(raw);
-    if (!item || item[1].length <= portsIndent) {
+    if (!item || item[1].length < portsIndent) {
       portsIndent = -1;
       return;
     }
 
     const value = item[2].trim().replace(/^['"]|['"]$/g, "");
-    const mapped = /^(\d+):(\d+)$/.exec(value);
+    const mapped = /^(?:(\d+\.\d+\.\d+\.\d+):)?(\d+):(\d+)$/.exec(value);
     if (mapped) {
-      fixed.push({ line: lineNumber, entry: value, hostPort: mapped[1], containerPort: mapped[2] });
+      fixed.push({
+        line: lineNumber,
+        entry: value,
+        hostAddress: mapped[1] ?? null,
+        hostPort: mapped[2],
+        containerPort: mapped[3],
+      });
       return;
     }
     if (/^\d+$/.test(value)) containerOnly.push({ line: lineNumber, entry: value });
@@ -80,16 +104,17 @@ export function classifyServicePortEntries(text) {
 }
 
 /**
- * `docker run -p [ADDR:]HOST:5432` (or `:6379`) — the same fixed publication,
- * one layer down. A step-run container is the documented escape hatch from
+ * `docker run -p [ADDR:]HOST:CONTAINER` — the same fixed publication, one
+ * layer down. A step-run container is the documented escape hatch from
  * `services:` (a container that must bind-mount a checked-out file), so the
- * guard has to cover it too. `-p 127.0.0.1::5432` — an empty host port — is the
+ * guard has to cover it too, for EVERY container port and not just the two
+ * database ones. `-p 127.0.0.1::4873` — an empty host port — is the
  * random-port form and is NOT a finding.
  */
 export function findFixedDockerRunPublications(text) {
   const hits = [];
   text.split("\n").forEach((raw, index) => {
-    const match = /-p\s+(?:\d+\.\d+\.\d+\.\d+:)?(\d+):(5432|6379)\b/.exec(raw);
+    const match = /-p\s+(?:\d+\.\d+\.\d+\.\d+:)?(\d+):(\d+)\b/.exec(raw);
     if (match) hits.push({ line: index + 1, hostPort: match[1], containerPort: match[2] });
   });
   return hits;
@@ -133,7 +158,7 @@ describe("classifyServicePortEntries", () => {
       postgres:
         image: postgres:18
         ports:
-          - 5432:5432
+          - 5434:5432
         options: >-
           --health-cmd pg_isready
       redis:
@@ -145,8 +170,38 @@ describe("classifyServicePortEntries", () => {
 `;
     const { fixed, containerOnly } = classifyServicePortEntries(text);
     expect(fixed).toHaveLength(1);
-    expect(fixed[0]).toMatchObject({ entry: "5432:5432", hostPort: "5432", containerPort: "5432" });
+    expect(fixed[0]).toMatchObject({ entry: "5434:5432", hostPort: "5434", containerPort: "5432" });
     expect(containerOnly.map((e) => e.entry)).toEqual(["6379"]);
+  });
+
+  it("flags an ADDRESS-prefixed mapping in the same-column sequence style", () => {
+    // design-baselines-refresh.yml's generated style: the sequence sits at the
+    // SAME column as its `ports:` key, and the entry carries a bind address.
+    const text = `    services:
+      postgres:
+        image: postgres:18
+        ports:
+        - 127.0.0.1:5434:5432
+        options: "--health-cmd pg_isready"
+`;
+    const { fixed } = classifyServicePortEntries(text);
+    expect(fixed).toHaveLength(1);
+    expect(fixed[0]).toMatchObject({
+      entry: "127.0.0.1:5434:5432",
+      hostAddress: "127.0.0.1",
+      hostPort: "5434",
+      containerPort: "5432",
+    });
+  });
+
+  it("accepts a bare container port in the same-column sequence style", () => {
+    const text = `        ports:
+        - "5432"
+        options: "--health-cmd pg_isready"
+`;
+    const { fixed, containerOnly } = classifyServicePortEntries(text);
+    expect(fixed).toEqual([]);
+    expect(containerOnly.map((e) => e.entry)).toEqual(["5432"]);
   });
 
   it("reads past a comment nested inside the ports list", () => {
@@ -177,6 +232,13 @@ describe("findFixedDockerRunPublications", () => {
     expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1:6379:6379 redis:8\n")).toHaveLength(1);
     expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1::5432 postgres:18\n")).toEqual([]);
   });
+
+  it("covers container ports beyond the two database ones", () => {
+    expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1:4873:4873 verdaccio\n")).toHaveLength(1);
+    expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1:3010:3010 runtime\n")).toHaveLength(1);
+    expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1::4873 verdaccio\n")).toEqual([]);
+    expect(findFixedDockerRunPublications("docker run -d -p 127.0.0.1::3010 runtime\n")).toEqual([]);
+  });
 });
 
 describe("findServiceUrlAssignments", () => {
@@ -199,7 +261,13 @@ describe("findServiceUrlAssignments", () => {
 describe("LIVE enforcement (cinatra#3267)", () => {
   const read = (rel) => readFileSync(path.join(REPO_ROOT, rel), "utf8");
 
-  it("no service container publishes a FIXED host port (concurrent jobs on one runner never share 5432 or 6379)", () => {
+  it("enumerates every workflow file in the repository", () => {
+    expect(SERVICE_WORKFLOWS.length).toBeGreaterThan(10);
+    expect(SERVICE_WORKFLOWS).toContain(".github/workflows/build-image.yml");
+    expect(SERVICE_WORKFLOWS).toContain(".github/workflows/e2e-app-suites.yml");
+  });
+
+  it("no service container publishes a FIXED host port (concurrent jobs on one runner never share a port)", () => {
     const problems = [];
     for (const rel of SERVICE_WORKFLOWS) {
       const text = read(rel);
@@ -214,12 +282,17 @@ describe("LIVE enforcement (cinatra#3267)", () => {
   });
 
   it("every declared service still publishes its container port", () => {
+    const declared = [];
     for (const rel of SERVICE_WORKFLOWS) {
-      const { containerOnly } = classifyServicePortEntries(read(rel));
-      expect(containerOnly.length).toBeGreaterThan(0);
-      for (const entry of containerOnly) {
-        expect(["5432", "6379"]).toContain(entry.entry);
+      for (const entry of classifyServicePortEntries(read(rel)).containerOnly) {
+        declared.push({ rel, ...entry });
       }
+    }
+    // The repository does declare service containers — a guard that passes
+    // because it found nothing to guard is not a guard.
+    expect(declared.length).toBeGreaterThan(0);
+    for (const entry of declared) {
+      expect(["5432", "6379"]).toContain(entry.entry);
     }
   });
 
