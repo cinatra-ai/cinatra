@@ -548,6 +548,12 @@
   --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  /* The strengthened line. `--line-strong` is declared for the light
+     palette only -- the dark palette must not re-declare it, the
+     etched-rule gate binds to that -- so a boundary that has to stay
+     findable in BOTH palettes draws from `--line-control`, which is
+     `var(--line-strong)` in the light one. */
+  --color-line-control: var(--line-control);
   --color-accent-soft: var(--accent-soft);
   /* Fabric stripe utility tokens. */
   --color-stripe-mid: var(--stripe-mid);

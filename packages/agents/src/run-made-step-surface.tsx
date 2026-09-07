@@ -32,6 +32,24 @@ import {
 //   the row       border:1px solid var(--line); border-radius:8px;
 //                 background:var(--surface-strong); padding:9px 12px
 //   the used row  border:1px dashed var(--line-strong); background:var(--surface)
+//
+// TWO OF THOSE MEASUREMENTS WERE TRANSCRIBED BUT NOT DRAWN, and the first proof
+// round measured both on the live boot:
+//
+//   THE RADIUS. `rounded-lg` computes to 10px under this app's radius scale, so
+//   every row contradicted the 8px this file's own comment claimed. The class
+//   now states the drawing's number literally.
+//
+//   THE USED MARK IN THE DARK PALETTE. `--line-strong` is declared for the
+//   light palette only, and the dark palette must NOT re-declare it — the
+//   etched-rule conformance gate binds to it, and the host suite pins it
+//   undeclared there. So the dashed mark measured 1.20:1 in the dark palette:
+//   the drawing's own mark, invisible. The app already carries a strengthened
+//   line for exactly this, `--line-control`, which resolves to
+//   `var(--line-strong)` in the light palette and to a findable white in the
+//   dark — the drawing's value where the drawing was written, and the same mark
+//   where it was not. Pinned in
+//   src/app/__tests__/run-made-used-row-dark-affordance.test.ts.
 //   the tag       .tag.ext — the blue-tinted type tag
 //   the Used mark .tag — the plain one, beside the type
 //   the control   .btn.link — the blue underlined "Open" with its arrow
@@ -44,10 +62,18 @@ import {
 // never a bare dot"). The WORD is the drawing's: "Finished".
 //
 // THE DARK PALETTE CARRIES THE SAME AFFORDANCE. The first round found the rows'
-// only link reading as near-white body text in the dark palette. The control is
-// `text-primary` and underlined, which is the link token in BOTH palettes, and
-// the row's own title is not a link at all — the row has one control and the
-// drawing says which.
+// only link reading as near-white body text in the dark palette. The row now has
+// ONE control and the drawing says which: a `text-primary`, underlined "Open"
+// with its arrow. That pair is the app's OWN link vocabulary — shadcn's
+// `button variant="link"` is `text-primary underline-offset-4 hover:underline`,
+// and every link in this app draws it — so the underline and the arrow are
+// identical in both palettes and the colour is whatever the palette in force
+// calls a link. SAID PLAINLY: the app's `--primary` is a blue in the light
+// palette and a near-white in the dark one, by the dark palette's own
+// declaration; drawing a bespoke blue here would make this one row the only
+// link in the app that ignores the palette. What is fixed here is the
+// affordance the round actually found missing — a bare title with nothing to
+// say it opens anything.
 //
 // NO "use client": the setup run page's screen is a server component and mounts
 // this surface directly. Every row is a plain link to the artifact's own page,
@@ -56,10 +82,11 @@ import {
 
 /** border:1px solid var(--line); border-radius:8px; background:var(--surface-strong); padding:9px 12px */
 const ROW_CLASS =
-  "flex flex-wrap items-center gap-2.5 rounded-lg border border-line bg-surface-strong px-3 py-[9px]";
-/** border:1px dashed var(--line-strong); background:var(--surface) */
+  "flex flex-wrap items-center gap-2.5 rounded-[8px] border border-line bg-surface-strong px-3 py-[9px]";
+/** border:1px dashed var(--line-strong); background:var(--surface) — drawn from
+ *  `--line-control`, which IS `var(--line-strong)` in the light palette. */
 const USED_ROW_CLASS =
-  "flex flex-wrap items-center gap-2.5 rounded-lg border border-dashed border-line-strong bg-surface px-3 py-[9px]";
+  "flex flex-wrap items-center gap-2.5 rounded-[8px] border border-dashed border-line-control bg-surface px-3 py-[9px]";
 /** .tag.ext — background rgba(54,78,129,0.10); color var(--blue); border rgba(54,78,129,0.30) */
 const TYPE_TAG_CLASS =
   "inline-flex items-center gap-[5px] rounded-full border border-primary/30 bg-primary/10 px-[9px] py-[2px] text-[11px] font-semibold text-primary";

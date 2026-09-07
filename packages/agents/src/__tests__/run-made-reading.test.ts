@@ -65,6 +65,19 @@ describe("the run's last step — what this run made", () => {
     );
   });
 
+  it("reads a Title-Cased pack label as a noun phrase, not with a mid-sentence capital", () => {
+    // The first proof round read back "the blog Post" on the live boot: the
+    // pack spells its label "Blog Post" and only the first word was lowered.
+    expect(runMadeReading([wrote("Blog Post")])).toBe(
+      "One artifact written — the blog post. Each opens on its own page; the run keeps the revision it filed.",
+    );
+    // A word a pack capitalises ITS OWN way is still left alone, wherever it
+    // stands in the label.
+    expect(runMadeReading([wrote("LinkedIn Post")])).toBe(
+      "One artifact written — the LinkedIn post. Each opens on its own page; the run keeps the revision it filed.",
+    );
+  });
+
   it("never splices a row's raw title into the reading", () => {
     const sentence = runMadeReading([wrote("Blog post", "Why migrations are the hardest part")]);
     expect(sentence).not.toContain("Why migrations are the hardest part");

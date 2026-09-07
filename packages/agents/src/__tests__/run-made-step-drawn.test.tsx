@@ -99,13 +99,27 @@ describe("§I.2 — every row carries the four things the drawing names", () => 
     );
     const written = container.querySelector('[data-run-made-used="written"]') as HTMLElement;
     const consumed = container.querySelector('[data-run-made-used="used"]') as HTMLElement;
-    for (const c of ["border", "border-line", "rounded-lg", "bg-surface-strong", "px-3", "py-[9px]"]) {
+    // The drawing states border-radius:8px. `rounded-lg` computes to 10px under
+    // this app's radius scale -- the first proof round measured that on the live
+    // boot, against the class's own transcription of the drawing. The row now
+    // states the drawing's measurement literally, so it cannot drift again.
+    for (const c of ["border", "border-line", "rounded-[8px]", "bg-surface-strong", "px-3", "py-[9px]"]) {
       expect(written.className).toContain(c);
     }
+    expect(written.className).not.toContain("rounded-lg");
     expect(written.className).not.toContain("border-dashed");
-    for (const c of ["border-dashed", "border-line-strong", "bg-surface"]) {
+    // The drawing's dashed used-mark is `var(--line-strong)`. That token is
+    // declared for the light palette only, and the dark palette must NOT
+    // re-declare it (the etched-rule gate binds to that), so the first round
+    // measured the dashed border at 1.20:1 in the dark palette -- not
+    // perceivable. `--line-control` IS `var(--line-strong)` in the light
+    // palette and the app's own strengthened line in the dark one, so the row
+    // draws the drawing's own value in the light palette and keeps the mark
+    // findable in the dark.
+    for (const c of ["border-dashed", "border-line-control", "bg-surface", "rounded-[8px]"]) {
       expect(consumed.className).toContain(c);
     }
+    expect(consumed.className).not.toContain("border-line-strong");
     // "that artifact too, marked used" -- the drawing's own tag beside its type.
     expect(consumed.querySelector("[data-run-made-used-tag]")?.textContent).toBe("Used");
     expect(written.querySelector("[data-run-made-used-tag]")).toBeNull();
@@ -115,8 +129,12 @@ describe("§I.2 — every row carries the four things the drawing names", () => 
     // The palette does not change the class; a token that resolves to the link
     // colour in BOTH palettes is what the round found missing on the bare rows.
     const { container } = render(<RunMadeStepSurface rows={[wrote()]} reading="x" />);
+    // `text-primary underline` is the app's OWN link vocabulary -- shadcn's
+    // `button variant="link"` is exactly that, and every link in the app draws
+    // it -- so the control reads as the app's link in whichever palette is on.
     const open = container.querySelector("[data-run-made-open]") as HTMLElement;
     expect(open.className).toContain("text-primary");
+    expect(open.className).toContain("underline");
   });
 });
 
@@ -153,6 +171,14 @@ describe("§I.2 — the reading names a CATEGORY, never a spliced raw title", ()
     expect(runMadeCategoryPhrase("Blog post")).toBe("the blog post");
     expect(runMadeCategoryPhrase("LinkedIn post")).toBe("the LinkedIn post");
     expect(runMadeCategoryPhrase("PDF")).toBe("the PDF");
+    // A pack that Title-Cases every word of its label ("Blog Post") must still
+    // read as a noun phrase inside the sentence: the first round's live reading
+    // was "the blog Post", a mid-sentence capital the drawing's clause has
+    // nowhere in it.
+    expect(runMadeCategoryPhrase("Blog Post")).toBe("the blog post");
+    expect(runMadeCategoryPhrase("LinkedIn Post")).toBe("the LinkedIn post");
+    expect(runMadeCategoryPhrase("Structured Data Record")).toBe("the structured data record");
+    expect(runMadeCategoryPhrase("PDF Report")).toBe("the PDF report");
   });
 });
 

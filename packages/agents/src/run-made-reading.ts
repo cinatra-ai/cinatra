@@ -102,22 +102,37 @@ function nameList(phrases: readonly string[]): string {
 }
 
 /**
+ * A word in the ORDINARY capitalized shape — a capital, then lower case, and
+ * nothing else. "Blog" and "Post" are; "LinkedIn" and "PDF" are not: those are
+ * how the packs spell themselves, and lowering them would be the host
+ * overriding a pack's spelling, which `artifact-kind-label.ts` rules out in as
+ * many words.
+ */
+function ordinaryCapitalized(word: string): boolean {
+  return word.length > 0 && word === word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+/**
  * THE CATEGORY PHRASE for one row — "the blog post", "the LinkedIn post".
  *
  * The label arrives in the pack's own spelling, which is a TITLE in a tag and a
- * NOUN in a sentence, so exactly one thing is adjusted: an ordinary capitalized
- * first word is lowered ("Blog post" reads "the blog post"), and a word the
- * pack capitalized ITS OWN way is left alone — "LinkedIn" and "PDF" are how
- * those packs spell themselves, and lowering them would be the host overriding
- * a pack's spelling, which `artifact-kind-label.ts` rules out in as many words.
+ * NOUN in a sentence, so exactly one thing is adjusted: every ordinary
+ * capitalized word is lowered, and a word the pack capitalized ITS OWN way is
+ * left alone.
+ *
+ * EVERY word, not only the first (fix leg 2). The first leg lowered the head
+ * word alone, so a pack that Title-Cases its whole label read back on the live
+ * boot as "the blog Post" — a mid-sentence capital the drawing's own clause
+ * ("the post and its featured image, the LinkedIn post") has nowhere in it. The
+ * rule was always per-word; it was applied to one word.
  */
 export function runMadeCategoryPhrase(typeLabel: string): string {
   const label = typeLabel.trim();
   if (label.length === 0) return "the artifact";
-  const [first, ...rest] = label.split(" ");
-  const ordinary = first === first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-  const head = ordinary ? first.toLowerCase() : first;
-  return `the ${[head, ...rest].join(" ")}`;
+  const words = label
+    .split(" ")
+    .map((word) => (ordinaryCapitalized(word) ? word.toLowerCase() : word));
+  return `the ${words.join(" ")}`;
 }
 
 /**
