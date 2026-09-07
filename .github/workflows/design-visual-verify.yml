@@ -471,7 +471,7 @@ jobs:
         # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
         # unresponsiveness mid page-data collection. Subshell-guarded so a
         # swap-setup failure NEVER fails the job. Mirrors the build-image jobs.
-        if: ${{ runner.environment == 'github-hosted' }}
+        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build

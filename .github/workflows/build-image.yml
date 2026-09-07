@@ -2935,7 +2935,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3707,7 +3707,7 @@ jobs:
         # file cleanup on failure, swapon --show/df -h diagnostics); GitHub-hosted
         # runners ONLY (a self-hosted runner brings its own memory and cleanup,
         # and this step's tools are not on its path).
-        if: ${{ runner.environment == 'github-hosted' }}
+        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -4427,7 +4427,7 @@ jobs:
         # mid-build on the held PRs with no swap at all.
         # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
         # and cleanup, and this step's tools are not on its path).
-        if: ${{ runner.environment == 'github-hosted' }}
+        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
