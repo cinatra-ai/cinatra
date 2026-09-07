@@ -15,7 +15,7 @@ concurrency:
 jobs:
   refresh:
     name: design baselines refresh (end-to-end runner)
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       redis:
