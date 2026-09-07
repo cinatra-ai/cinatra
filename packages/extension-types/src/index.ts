@@ -592,3 +592,361 @@ export function resolveSkillExtensionRole(
   if ((cinatra as { internal?: unknown }).internal === true) return "internal";
   return "injectable";
 }
+
+// ---------------------------------------------------------------------------
+// THE SUPPLIED-PACKAGE TREE (cinatra#3204 D3, generalized in leg 2) — ONE kind
+// resolution, shared by every road a supplied package can arrive on.
+//
+// The archive reader (packages/agents) read a ZIP; the repository intake
+// (packages/skills) reads a Git tree. Neither of those differences reaches the
+// question they both have to answer, which is: what does this package SAY it
+// is, does it actually carry what that kind needs, and what exactly was
+// delivered? That question has one answer, so it has one implementation, and it
+// lives here — in the leaf both packages already depend on — rather than being
+// re-typed on each road, where the two copies would drift the first time a kind
+// is added.
+//
+// A road supplies only two things: the delivered entries, and the NOUN it wants
+// its refusals to use ("archive" for an upload, "repository" for a Git tree), so
+// an operator is told what they actually handed over.
+// ---------------------------------------------------------------------------
+
+/**
+ * The intake caps. They are generous for a real extension package and ruinous
+ * for a decompression bomb or a repository somebody pointed at a mirror of the
+ * Linux kernel. Both roads enforce THESE numbers: a cap that is only enforced on
+ * one road is not a cap, it is a suggestion with a second door.
+ */
+export const MAX_SUPPLIED_TREE_ENTRIES = 20_000;
+export const MAX_SUPPLIED_ENTRY_BYTES = 64 * 1024 * 1024;
+export const MAX_SUPPLIED_TREE_BYTES = 128 * 1024 * 1024;
+
+/**
+ * Refuse an entry name that could write outside the extraction root.
+ *
+ * Three shapes, all refused: an ABSOLUTE path (`/etc/...`, or a Windows drive
+ * or UNC path), any `..` PATH SEGMENT, and a BACKSLASH anywhere. The backslash
+ * rule is not paranoia about Windows — it is that a name containing one is
+ * ambiguous about where its segments divide, and an ambiguous path is exactly
+ * what a traversal check has to be certain about.
+ *
+ * `rootNoun` only names the root in the refusal text. It changes no rule: the
+ * repository road and the archive road refuse exactly the same names.
+ */
+export function suppliedEntryNameRefusal(name: string, rootNoun = "archive"): string | null {
+  if (name.length === 0) return "an entry with an empty name";
+  if (name.includes("\\")) {
+    return `entry "${name}" contains a backslash, so where its path segments divide is ambiguous`;
+  }
+  if (name.startsWith("/") || /^[A-Za-z]:[/]/.test(name)) {
+    return `entry "${name}" is an absolute path`;
+  }
+  if (name.split("/").some((segment) => segment === "..")) {
+    return `entry "${name}" traverses out of the ${rootNoun} root`;
+  }
+  return null;
+}
+
+/**
+ * The four kinds the product can actually install. `workflow` is NOT among them:
+ * its host handler was removed and the literal survives in the canonical union
+ * only until the in-app consumer narrowing completes, so accepting a workflow
+ * package here would promise an install that has nowhere to go. It is refused BY
+ * NAME rather than falling into the "unknown kind" bucket, because "we retired
+ * this" and "we have never heard of this" are different things to be told.
+ */
+export const SUPPLIED_PACKAGE_KINDS = ["agent", "skill", "connector", "artifact"] as const;
+export type SuppliedPackageKind = (typeof SUPPLIED_PACKAGE_KINDS)[number];
+
+/** The retired kinds, refused by name. */
+export const RETIRED_SUPPLIED_PACKAGE_KINDS: readonly string[] = ["workflow"];
+
+/** The manifest fields the kind resolution reads. Nothing else is interpreted. */
+export type SuppliedPackageManifest = {
+  name?: unknown;
+  version?: unknown;
+  cinatra?: { kind?: unknown; entrypoint?: unknown; uiSurface?: unknown; serverEntry?: unknown };
+};
+
+export type ResolvedSuppliedPackageTree = {
+  /** The kind the package DECLARED and whose payload was found. */
+  kind: SuppliedPackageKind;
+  /** The declared package name, validated against the delivered contents. */
+  packageName: string;
+  /** The declared version. */
+  version: string;
+  /** package.json text (always present — a supplied package must declare itself). */
+  packageJson: string;
+  /**
+   * The payload this kind requires, by delivery-relative path. Which paths those
+   * are is the kind's own business (see resolveSuppliedKindPayload); the
+   * reader's job is to prove they are THERE, not to interpret them.
+   */
+  payload: Map<string, string>;
+  /** The content digest over the delivered tree (cinatra#3204 D2). */
+  contentDigest: string;
+  /** The single top-level folder that was stripped, or null. */
+  strippedPrefix: string | null;
+  /**
+   * EXACTLY the entries the digest was computed over, prefix stripped. A road
+   * that goes on to pack these bytes packs THIS map, so the digest it declared
+   * and the tree it delivered cannot be two different things.
+   */
+  deliveredEntries: Map<string, Uint8Array>;
+};
+
+/** How a road wants its refusals worded. It changes no rule. */
+export type SuppliedTreeSubject = {
+  /** "archive", "repository" — the noun in `Invalid <noun>: ...`. */
+  noun: string;
+  /** How an EMPTY delivery is described. */
+  emptyDescription: string;
+};
+
+export const SUPPLIED_ARCHIVE_SUBJECT: SuppliedTreeSubject = {
+  noun: "archive",
+  emptyDescription: "the ZIP file contains no files",
+};
+
+export const SUPPLIED_REPOSITORY_SUBJECT: SuppliedTreeSubject = {
+  noun: "repository",
+  emptyDescription: "the repository tree contains no files",
+};
+
+/**
+ * Resolve the payload a KIND requires, or say what is missing.
+ *
+ * Each kind's requirement is the one its own installer already depends on, so a
+ * package that resolves here is a package that has what the install road will
+ * later look for — and a package that does not is refused at intake instead of
+ * halfway through an install:
+ *
+ *   agent     — the OAS Flow document: `cinatra.entrypoint`, else the
+ *               conventional `cinatra/oas.json`, else a legacy root `agent.json`.
+ *   skill     — at least one `SKILL.md` (the catalog is built from these).
+ *   connector — the declared `cinatra.serverEntry` (the module the pipeline
+ *               later hot-loads; its presence is checkable, and checking it is
+ *               NOT running it).
+ *   artifact  — the declared `cinatra.entrypoint` descriptor, else the
+ *               conventional `cinatra/artifact.json`.
+ */
+export function resolveSuppliedKindPayload(
+  kind: SuppliedPackageKind,
+  pkg: SuppliedPackageManifest,
+  get: (name: string) => string | undefined,
+  names: readonly string[],
+): { payload: Map<string, string> } | { missing: string } {
+  const payload = new Map<string, string>();
+  const norm = (p: string) => p.replace(/^\.\//, "");
+  const entrypoint = typeof pkg.cinatra?.entrypoint === "string" ? norm(pkg.cinatra.entrypoint) : null;
+
+  if (kind === "agent") {
+    if (entrypoint) {
+      const doc = get(entrypoint);
+      if (doc === undefined) {
+        return { missing: `the entrypoint "${entrypoint}" that package.json names` };
+      }
+      payload.set(entrypoint, doc);
+      return { payload };
+    }
+    const conventional = get("cinatra/oas.json");
+    if (conventional !== undefined) {
+      payload.set("cinatra/oas.json", conventional);
+      return { payload };
+    }
+    const legacy = get("agent.json");
+    if (legacy !== undefined) {
+      payload.set("agent.json", legacy);
+      return { payload };
+    }
+    return {
+      missing: 'an OAS Flow document (a package.json "cinatra.entrypoint", a cinatra/oas.json, or a root agent.json)',
+    };
+  }
+
+  if (kind === "skill") {
+    let found = false;
+    for (const name of names) {
+      if (name === "SKILL.md" || name.endsWith("/SKILL.md")) {
+        const text = get(name);
+        if (text !== undefined) {
+          payload.set(name, text);
+          found = true;
+        }
+      }
+    }
+    return found ? { payload } : { missing: "a SKILL.md" };
+  }
+
+  if (kind === "connector") {
+    const serverEntry = typeof pkg.cinatra?.serverEntry === "string" ? norm(pkg.cinatra.serverEntry) : null;
+    if (!serverEntry) {
+      return { missing: 'a package.json "cinatra.serverEntry"' };
+    }
+    const module = get(serverEntry);
+    if (module === undefined) {
+      return { missing: `the serverEntry "${serverEntry}" that package.json names` };
+    }
+    // READ, never run. The module's TEXT is carried so the caller can show what
+    // the package ships; nothing imports or evaluates it here.
+    payload.set(serverEntry, module);
+    return { payload };
+  }
+
+  // artifact
+  const descriptorPath = entrypoint ?? "cinatra/artifact.json";
+  const descriptor = get(descriptorPath);
+  if (descriptor === undefined) {
+    return {
+      missing: entrypoint
+        ? `the entrypoint "${entrypoint}" that package.json names`
+        : "an artifact descriptor (a package.json \"cinatra.entrypoint\", or a cinatra/artifact.json)",
+    };
+  }
+  payload.set(descriptorPath, descriptor);
+  return { payload };
+}
+
+/**
+ * Read a SUPPLIED package tree of ANY of the four live kinds, from ANY road.
+ *
+ * The reader does not decide in advance what the delivery must be: it reads what
+ * the package SAYS it is and then proves the package actually contains what that
+ * kind needs. A package declaring a kind whose payload is absent is refused
+ * naming both — what was declared and what was not found — because "invalid
+ * package" tells an operator nothing they can act on.
+ *
+ * REFUSALS, each by name: no declared kind; an unknown kind; a retired kind; a
+ * missing or unparseable package.json; a missing `name` or `version`; a name
+ * that disagrees with the delivery's own top-level folder; and the kind's
+ * missing payload. Every one of them happens before anything is written
+ * anywhere — this function has no filesystem, no network and no execution, so a
+ * refusal here cannot have left a trace.
+ */
+export async function resolveSuppliedPackageTree(
+  entries: Map<string, Uint8Array>,
+  subject: SuppliedTreeSubject = SUPPLIED_ARCHIVE_SUBJECT,
+): Promise<ResolvedSuppliedPackageTree> {
+  const { noun } = subject;
+  if (entries.size === 0) {
+    throw new Error(`Invalid ${noun}: ${subject.emptyDescription}.`);
+  }
+
+  // Single top-level folder tolerance. Both roads decide it the same way, so
+  // both agree about what "the root" means.
+  const topSegments = new Set<string>();
+  for (const name of entries.keys()) {
+    const slash = name.indexOf("/");
+    topSegments.add(slash < 0 ? "" : name.slice(0, slash));
+  }
+  let strippedPrefix: string | null = null;
+  if (topSegments.size === 1) {
+    const [segment] = topSegments;
+    if (segment !== "" && entries.has(`${segment}/package.json`)) strippedPrefix = segment;
+  }
+  const prefix = strippedPrefix === null ? "" : `${strippedPrefix}/`;
+
+  const td = new TextDecoder("utf-8");
+  const deliveredEntries = new Map<string, Uint8Array>();
+  const files = new Map<string, string>();
+  const names: string[] = [];
+  for (const [name, bytes] of entries) {
+    if (prefix !== "" && !name.startsWith(prefix)) continue;
+    const rel = name.slice(prefix.length);
+    if (rel.length === 0) continue;
+    deliveredEntries.set(rel, bytes);
+    files.set(rel, td.decode(bytes));
+    names.push(rel);
+  }
+  const get = (name: string) => files.get(name);
+
+  const packageJson = get("package.json");
+  if (packageJson === undefined) {
+    throw new Error(
+      `Invalid ${noun}: no package.json found. A supplied extension package must declare itself.`,
+    );
+  }
+  let pkg: SuppliedPackageManifest;
+  try {
+    pkg = JSON.parse(packageJson) as SuppliedPackageManifest;
+  } catch {
+    throw new Error(`Invalid ${noun}: package.json is not valid JSON.`);
+  }
+
+  // KIND. Undeclared, retired and unknown are three different refusals, and each
+  // says what is accepted.
+  const accepted = SUPPLIED_PACKAGE_KINDS.join(", ");
+  const declaredKind = pkg.cinatra?.kind;
+  if (declaredKind === undefined || declaredKind === null || declaredKind === "") {
+    throw new Error(
+      `Invalid ${noun}: package.json declares no cinatra.kind. Accepted kinds are ${accepted}.`,
+    );
+  }
+  if (typeof declaredKind !== "string") {
+    throw new Error(
+      `Invalid ${noun}: package.json declares a non-string cinatra.kind. Accepted kinds are ${accepted}.`,
+    );
+  }
+  if (RETIRED_SUPPLIED_PACKAGE_KINDS.includes(declaredKind)) {
+    throw new Error(
+      `Invalid ${noun}: "${declaredKind}" is a retired extension kind and cannot be installed. Accepted kinds are ${accepted}.`,
+    );
+  }
+  if (!(SUPPLIED_PACKAGE_KINDS as readonly string[]).includes(declaredKind)) {
+    throw new Error(
+      `Invalid ${noun}: "${declaredKind}" is not an extension kind this product installs. Accepted kinds are ${accepted}.`,
+    );
+  }
+  const kind = declaredKind as SuppliedPackageKind;
+
+  // IDENTITY: name and version must be declared, and the name must agree with
+  // the delivery's own top-level folder when it has one. A package whose folder
+  // says one thing and whose manifest says another is refused rather than
+  // silently believed, because whichever of the two a later step trusts, the
+  // other one was a lie.
+  const packageName = typeof pkg.name === "string" ? pkg.name.trim() : "";
+  const version = typeof pkg.version === "string" ? pkg.version.trim() : "";
+  if (packageName === "") {
+    throw new Error(`Invalid ${noun}: package.json declares no name.`);
+  }
+  if (version === "") {
+    throw new Error(`Invalid ${noun}: package.json for "${packageName}" declares no version.`);
+  }
+  if (strippedPrefix !== null) {
+    const unscoped = packageName.includes("/") ? packageName.slice(packageName.indexOf("/") + 1) : packageName;
+    if (strippedPrefix !== packageName && strippedPrefix !== unscoped) {
+      throw new Error(
+        `Invalid ${noun}: package.json declares the name "${packageName}", but the ${noun}'s top-level folder is "${strippedPrefix}".`,
+      );
+    }
+  }
+
+  // PAYLOAD (and the cross-kind smuggling case): a payload of kind A that
+  // DECLARES kind B is refused here, because kind B's required payload is not
+  // the one the delivery carries.
+  const resolved = resolveSuppliedKindPayload(kind, pkg, get, names);
+  if ("missing" in resolved) {
+    throw new Error(
+      `Invalid ${noun}: this package declares kind "${kind}" but does not contain ${resolved.missing}.`,
+    );
+  }
+
+  // CONTENT DIGEST over the DELIVERED tree — the same encoding the canonical row
+  // records and the install pipeline re-verifies. Computed over the bytes as
+  // they arrived (prefix stripped, so the same package delivered under a
+  // different folder name gives the same digest).
+  const digestEntries: ContentDigestEntry[] = [];
+  for (const [path, bytes] of deliveredEntries) digestEntries.push({ path, bytes });
+  const contentDigest = await computeContentDigest(digestEntries);
+
+  return {
+    kind,
+    packageName,
+    version,
+    packageJson,
+    payload: resolved.payload,
+    contentDigest,
+    strippedPrefix,
+    deliveredEntries,
+  };
+}
