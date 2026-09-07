@@ -941,7 +941,9 @@ jobs:
       # of the suite's default loud-but-passing skip — standing up this lane is
       # the whole point of giving it something to require (PR #2678's recorded
       # residual).
-      CINATRA_TEST_VERDACCIO_URL: http://127.0.0.1:4873
+      # CINATRA_TEST_VERDACCIO_URL is NOT set here: the disposable registry
+      # below publishes a RANDOM host port, so the step that starts it reads
+      # the mapping back and exports the URL to $GITHUB_ENV (cinatra#3267).
       CINATRA_TEST_VERDACCIO_REQUIRED: "1"
     steps:
       # SUPABASE_DB_URL / CINATRA_TEST_DB_URL / REDIS_URL, resolved against
@@ -1023,12 +1025,23 @@ jobs:
           # single-tenant, ephemeral GitHub-hosted runner, but free and
           # matches scripts/ci/works-after/verdaccio.sh's identical `-p
           # 127.0.0.1::4873`.
-          docker run -d --name agents-it-verdaccio -p 127.0.0.1:4873:4873 \
+          # An EMPTY host port: Docker picks a free one, so two jobs running
+          # this registry on ONE self-hosted machine never race for 4873
+          # (cinatra#3267). The mapping is read back below and published as
+          # CINATRA_TEST_VERDACCIO_URL for the integration suite further down.
+          docker run -d --name agents-it-verdaccio -p 127.0.0.1::4873 \
             -v "${GITHUB_WORKSPACE}/docker/verdaccio/config.ci.yaml:/verdaccio/conf/config.yaml:ro" \
             "$VERDACCIO_IMAGE" >/dev/null
+          VERDACCIO_PORT="$(docker port agents-it-verdaccio 4873/tcp | head -n 1 | sed 's/.*://')"
+          [ -n "$VERDACCIO_PORT" ] || { echo "::error::could not read back the mapped verdaccio host port"; exit 1; }
+          VERDACCIO_URL="http://127.0.0.1:${VERDACCIO_PORT}"
+          # $GITHUB_ENV reaches the LATER steps (the integration suite reads
+          # process.env.CINATRA_TEST_VERDACCIO_URL); this step's own curl loop
+          # has to use the local variable, which $GITHUB_ENV does not feed.
+          echo "CINATRA_TEST_VERDACCIO_URL=${VERDACCIO_URL}" >> "$GITHUB_ENV"
           for i in $(seq 1 40); do
-            if curl -fsS "${CINATRA_TEST_VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
-              echo "verdaccio is up at ${CINATRA_TEST_VERDACCIO_URL} (attempt ${i}/40)"
+            if curl -fsS "${VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
+              echo "verdaccio is up at ${VERDACCIO_URL} (attempt ${i}/40)"
               exit 0
             fi
             sleep 3
