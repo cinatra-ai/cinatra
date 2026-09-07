@@ -539,8 +539,11 @@ export async function resolveOneSkillAssignability(
 /** The reserved VIRTUAL namespace. Never a real package, never a match key. */
 const RESERVED_VIRTUAL_PACKAGE = "@cinatra-ai/chat";
 
-/** The persisted-id prefixes `resolveSkillPackageSource` mints. */
-const PACKAGE_ID_PREFIXES = ["verdaccio:", "github:"] as const;
+/** The persisted-id prefixes `resolveSkillPackageSource` mints.
+ *  `local:` joined them with the supplied-file source kind (cinatra#3204 D2);
+ *  a locally supplied pack's name must be recovered the same way the other two
+ *  are, or its assignments would be keyed on a string carrying the prefix. */
+const PACKAGE_ID_PREFIXES = ["verdaccio:", "github:", "local:"] as const;
 
 /**
  * The package NAME a persisted `skill_packages` id denotes.

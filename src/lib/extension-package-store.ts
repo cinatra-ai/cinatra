@@ -20,7 +20,7 @@ import "server-only";
 // store path to the verified tarball, the content hash detects on-disk
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   classifyServerEntryArtifact,
@@ -37,6 +37,7 @@ import {
   isExtensionStoreKind,
   parseModuleImports,
   scanHostPeerValueImports,
+  sriForBytes,
   sriMatches,
   storeDigestDirV2,
   storeTarballPathV2,
@@ -49,6 +50,7 @@ import {
 import {
   assertNoUnsafeEntries,
   atomicReplaceDir,
+  isContainedRealpath,
   pathExists,
 } from "@/lib/fs-safety";
 import {
@@ -671,7 +673,7 @@ async function readPresentNodeModules(nmDir: string): Promise<Set<string>> {
  * post-install symlink swap can't evade the hash) — callers treat a throw as a
  * failed verification.
  */
-async function collectFileEntries(dir: string, excludeTopLevel: readonly string[]): Promise<ContentHashEntry[]> {
+export async function collectFileEntries(dir: string, excludeTopLevel: readonly string[]): Promise<ContentHashEntry[]> {
   const exclude = new Set(excludeTopLevel);
   const out: ContentHashEntry[] = [];
   async function walk(current: string, relBase: string): Promise<void> {
@@ -1076,3 +1078,149 @@ async function resolveSelfPackageImport(
 // The recursive tree-verify + EXDEV-safe atomic replace-dir swap now live in the
 // consolidated `@/lib/fs-safety` module (cinatra#798); `atomicReplaceDir` is
 // imported at the top of this file.
+
+// ---------------------------------------------------------------------------
+// SUPPLIED PACKAGES (cinatra#3204 D1/D2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Materialize a SUPPLIED snapshot — bytes the operator handed us rather than
+ * bytes a registry served — into the same content-addressed store.
+ *
+ * It is `materializePackageToStore` with the fetch replaced, and nothing else.
+ * That is the point: the extraction, the `package/` prefix strip, the
+ * no-scripts rule, the symlink refusal, the kind-segregated placement, the
+ * sidecar and the content hash are one implementation, so a supplied package
+ * cannot end up in the store on weaker terms than a published one.
+ *
+ * The SRI is computed over the supplied bytes here and re-verified inside the
+ * materializer before anything is written — the same "verify before write"
+ * ordering the registry road relies on. It attests the transfer, not the author.
+ */
+export async function materializeSuppliedPackageToStore(input: {
+  packageName: string;
+  version: string;
+  tarball: Uint8Array;
+  storeRoot?: string;
+  expectedKind?: ExtensionStoreKind;
+}): Promise<MaterializedPackage> {
+  const bytes = input.tarball;
+  const expectedIntegrity = sriForBytes(bytes, "sha512");
+  return materializePackageToStore(
+    {
+      packageName: input.packageName,
+      version: input.version,
+      expectedIntegrity,
+      // No registry served this. The store sidecar records the honest origin
+      // marker instead of a URL nobody fetched from.
+      registryUrl: SUPPLIED_PACKAGE_STORE_ORIGIN,
+      ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
+      ...(input.expectedKind ? { expectedKind: input.expectedKind } : {}),
+      plan: null,
+      expectedClosureHash: null,
+    },
+    // The fetch is the ONLY substitution: it hands back the bytes we were given
+    // instead of downloading any. The Buffer wrapper is a VIEW over the same
+    // bytes (no copy) — the fetch contract is typed in Buffer terms because
+    // every other producer is pacote.
+    { fetchTarball: async () => ({ bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), integrity: expectedIntegrity }) },
+  );
+}
+
+/** The sidecar `registryUrl` a supplied package records. Never a real URL. */
+export const SUPPLIED_PACKAGE_STORE_ORIGIN = "supplied:operator";
+
+/**
+ * Recompute the SUPPLIED content digest over a MATERIALIZED store dir — the
+ * verification half of the supplied road.
+ *
+ * It walks the dir with the same entry collector the content hash uses (so a
+ * symlink is a refusal here too), excludes the store's own sidecar, and folds
+ * the result through the shared canonical-tree encoding. Recomputing over what
+ * LANDED, rather than over the tarball framing, is what lets the pipeline say
+ * "the bytes previewed are the bytes installed" instead of "the archive I was
+ * handed described itself consistently".
+ */
+export async function computeSuppliedContentDigestForStoreDir(storeDir: string): Promise<string> {
+  const { computeContentDigest } = await import("@cinatra-ai/extension-types");
+  const entries = await collectFileEntries(storeDir, [STORE_SIDECAR_FILENAME]);
+  return computeContentDigest(entries.map((e) => ({ path: e.relPath, bytes: e.bytes })));
+}
+
+// ---------------------------------------------------------------------------
+// THE SUPPLIED SNAPSHOT (cinatra#3204 D1)
+//
+// A supplied canonical row NAMES the immutable snapshot its bytes came from —
+// `local.path`, or the staged snapshot a `github` row was fetched into. This
+// module is the ONE reader of that name, so there is exactly one answer to
+// "where are a supplied install's bytes?".
+//
+// It is deliberately narrow:
+//
+//   - the snapshot is a FILE, read whole. Nothing here walks a directory,
+//     follows a link or reconstructs an archive — the supplied road's integrity
+//     argument rests on the bytes being the same object that was previewed, and
+//     re-deriving them would break exactly that;
+//   - the path is CONTAINED under the host's supplied-snapshot root, checked by
+//     realpath. A canonical row's `path` is data, and data that names a file
+//     path must never be able to name one outside the area the host owns;
+//   - a missing or unreadable snapshot THROWS with a reason. The caller turns
+//     that into a named, non-finalizing outcome; it never becomes a quiet
+//     success.
+// ---------------------------------------------------------------------------
+/**
+ * The root every supplied snapshot must live under. Configurable because the
+ * upload road stages into the host's data volume, which differs per deployment;
+ * the default sits beside the extension data root the store already uses.
+ */
+export function resolveSuppliedSnapshotRoot(): string {
+  const configured = process.env.CINATRA_SUPPLIED_SNAPSHOT_ROOT;
+  if (configured && configured.length > 0) return path.resolve(configured);
+  return path.resolve("/data/extension-uploads");
+}
+
+/** The snapshot location a supplied source names. */
+type SuppliedSnapshotSource =
+  | { type: "local"; path: string }
+  | { type: "github"; path?: string; repo: string; resolvedSha: string };
+
+/**
+ * Read a supplied row's immutable snapshot.
+ *
+ * A `github` row's `path` is optional in the canonical shape, so a github row
+ * that names no staged snapshot is refused BY NAME rather than guessed at: this
+ * leg delivers the pipeline entry and the provenance, and the repository intake
+ * that stages such a snapshot is the next leg. Refusing loudly is the honest
+ * behaviour until it exists.
+ */
+export async function readSuppliedSnapshot(source: SuppliedSnapshotSource): Promise<Uint8Array> {
+  const named = source.type === "local" ? source.path : source.path;
+  if (!named || named.length === 0) {
+    throw new Error(
+      source.type === "github"
+        ? `the github source for ${source.repo}@${source.resolvedSha} names no staged snapshot — repository intake stages one; nothing to install from`
+        : "the local source names no snapshot path — nothing to install from",
+    );
+  }
+
+  const root = resolveSuppliedSnapshotRoot();
+  const candidate = path.resolve(root, named);
+  // Containment is checked on the REALPATH of both ends, so a symlinked snapshot
+  // (or a symlinked root) cannot point the read outside the area the host owns.
+  // A path that does not resolve at all is a missing snapshot, and it is named
+  // as one rather than reported as a containment failure.
+  let realCandidate: string;
+  let realRoot: string;
+  try {
+    realRoot = await realpath(root);
+    realCandidate = await realpath(candidate);
+  } catch {
+    throw new Error(`the supplied snapshot "${named}" is missing or unreadable`);
+  }
+  if (!isContainedRealpath(realCandidate, realRoot)) {
+    throw new Error(
+      `the supplied snapshot path "${named}" resolves outside the supplied-snapshot root — refusing to read it`,
+    );
+  }
+  return new Uint8Array(await readFile(realCandidate));
+}
