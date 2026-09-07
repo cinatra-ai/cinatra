@@ -17,8 +17,8 @@
 //
 // TWO DEPARTURES RECORDED, NOT FIXED — input-otp is beyond the first ten rows
 // of the issue's table. See the two `RECORDED DEPARTURE` blocks.
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render } from "@testing-library/react";
 
 import {
   InputOTP,
@@ -47,7 +47,47 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-afterEach(cleanup);
+// The primitive schedules three UNCANCELLED timers on mount (0ms, 10ms and
+// 50ms) whose callback pushes the input's selection back into React state; the
+// effect that starts them returns no cleanup, so they outlive the unmount. On a
+// wholesale run this file's jsdom environment is torn down as soon as the file
+// ends, the late callback still reaches react-dom's state dispatch, and that
+// dispatch reads `window` to resolve the update's priority — a `window is not
+// defined` thrown with no test left to attribute it to, which fails the whole
+// run although every case here passed.
+//
+// Faking exactly those four timer functions keeps the primitive's timers on a
+// clock this file owns: each case runs them while its own environment is still
+// standing, unmounts, then drops whatever is left before real timers come back.
+// The environment therefore goes away with an empty queue. This is a test-
+// LIFECYCLE fix — no clause, assertion or component behaviour is touched.
+const TIMER_FNS = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+] as const;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: [...TIMER_FNS] });
+});
+
+afterEach(() => {
+  // Run what the mount scheduled, while the tree and the environment are both
+  // still here. `runOnlyPendingTimers` drains the queue as it stands and does
+  // not chase timers scheduled by those callbacks, so this cannot spin.
+  act(() => {
+    vi.runOnlyPendingTimers();
+  });
+  // Unmount, which also clears the timers the primitive DOES cancel.
+  cleanup();
+  // Flush anything the unmount pass queued, then drop the remainder.
+  act(() => {
+    vi.runOnlyPendingTimers();
+  });
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
 
 function renderOTP() {
   const { container } = render(
