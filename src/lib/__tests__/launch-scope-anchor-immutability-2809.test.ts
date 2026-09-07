@@ -3,7 +3,7 @@
 // The issue's sentence: "The IMMUTABLE `launch_scope_anchor` lives on
 // `agent_runs` and `assistant_threads`, stamped from the exact launch route".
 //
-// CONVERGENCE ROUND (codex, this lane). `assertLaunchScopeAnchorNotMutated`
+// WHY THIS GUARANTEE IS PINNED ON THE SOURCE. `assertLaunchScopeAnchorNotMutated`
 // existed but nothing called it, and nothing could: the guard lives in the
 // host's `src/lib` while the writers live in the store, which four LOCKED
 // route graphs reach -- importing it there would add a module to every one of

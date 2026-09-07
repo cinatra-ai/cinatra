@@ -156,7 +156,7 @@ describe("canonical run and thread addresses", () => {
   it("re-homes a thread's bare chat path under its anchor, and leaves a flat one alone", () => {
     expect(
       canonicalThreadPath({ chatPath: "/chat/acme/helper/my-thread", anchor: { v: 1, kind: "team", id: "t1" } }),
-      // CONVERGENCE ROUND (codex, this lane): this read
+      // A SECOND CUT AT THIS ASSERTION. The first read
       // "/teams/t1/chat/acme/helper/my-thread" -- an address NO route answers,
       // because the scoped mount is <base>/assistants, not <base>/chat. The
       // canonical home a reader is redirected to must be a home they can reach.
@@ -286,7 +286,7 @@ describe("minting the anchor FROM the launching route's scope", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CONVERGENCE ROUND (codex, this lane). Two fail-open edges the first cut left.
+// TWO FAIL-OPEN EDGES the first cut of this module left open.
 // ---------------------------------------------------------------------------
 describe("the canonical thread address (convergence)", () => {
   it("re-homes under the scoped MOUNT, for every anchored kind", () => {

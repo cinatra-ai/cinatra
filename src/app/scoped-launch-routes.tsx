@@ -29,12 +29,57 @@ import {
   resolveScopedAssistantRoute,
 } from "@/lib/scoped-launch-route";
 import { AGENT_LAUNCH_SEGMENT } from "@/lib/agent-url";
-import { ScopeSurfaceSettingsShell } from "@/components/scope-surface-settings-shell";
+import type { ScopeSurfaceSettingsSubject } from "@/components/scope-surface-settings-shell";
 import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import { scopeSurfaceBase } from "@/lib/scope-surfaces";
-import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 
 type SearchParams = Record<string, string | string[] | undefined>;
+
+// ---------------------------------------------------------------------------
+// WHAT THE BUILD MUST NOT BE MADE TO CARRY (cinatra#2809 fix leg 3).
+//
+// `next build` collects page data by LOADING each route entry and evaluating
+// its eager module graph. Ten entries mount this shell, so every module reached
+// eagerly from here is paid for ten times over in the collector — and the
+// production build of this branch was reclaimed by the constrained runner
+// inside exactly that step, three times, while the base branch passed.
+//
+// Neither of the two modules below is needed to LOAD a scoped route; both are
+// needed only once a request has picked a shape:
+//
+//   - the settings shell is a client-component tree that only the `settings`
+//     shape ever renders, and
+//   - the per-scope NAME READ is a `server-only` module that pulls the Drizzle
+//     stores and the organization/team/project read gates behind it.
+//
+// So they travel the same way the plugins registry and the chat mount already
+// travel here — behind `await import(...)`, in a chunk the collector never
+// evaluates. The measured effect on each of the ten entries is a build graph of
+// 158 modules falling to 142, against a `requireAuthSession` floor of 151 that
+// every authenticated route in the repository already pays.
+//
+// `src/lib/__tests__/scoped-launch-build-graph-2809.test.ts` holds the ceiling.
+// ---------------------------------------------------------------------------
+
+/** The gated per-scope name, read at request time. */
+async function readScopeName(scope: ScopeSurfaceRef): Promise<string | null> {
+  const { readScopeSurfaceEntityName } = await import(
+    "@/lib/scope-surface-entity-name"
+  );
+  return readScopeSurfaceEntityName(scope);
+}
+
+/** The settings pane's shell, rendered at request time. */
+async function renderScopeSurfaceSettingsShell(props: {
+  scope: ScopeSurfaceRef;
+  scopeTitle?: string | null;
+  subject: ScopeSurfaceSettingsSubject;
+}): Promise<React.ReactNode> {
+  const { ScopeSurfaceSettingsShell } = await import(
+    "@/components/scope-surface-settings-shell"
+  );
+  return <ScopeSurfaceSettingsShell {...props} />;
+}
 
 type AgentInstanceScreen = (props: {
   agentId: string;
@@ -63,19 +108,17 @@ export async function ScopedAgentsRoute({
   // repeats that scope's own gate — so every page under this base publishes the
   // SAME name the scope's landing publishes, and a reader who may not be told
   // it gets the id abbreviation on all of them alike.
-  const scopeTitle = await readScopeSurfaceEntityName(scope);
+  const scopeTitle = await readScopeName(scope);
 
   if (route.kind === "settings") {
     // The SHELL only. This epic pins the settings HREF and proves it resolves;
     // the pane's contents and their end-to-end navigation acceptance belong to
     // the assignment epic, which fills it in place.
-    return (
-      <ScopeSurfaceSettingsShell
-        scope={scope}
-        scopeTitle={scopeTitle}
-        subject={{ kind: "agent", packageName: `@${route.vendor}/${route.packageName}` }}
-      />
-    );
+    return renderScopeSurfaceSettingsShell({
+      scope,
+      scopeTitle,
+      subject: { kind: "agent", packageName: `@${route.vendor}/${route.packageName}` },
+    });
   }
 
   // The sub-routes of an instance (its schedule, its results, its review) are
@@ -119,13 +162,11 @@ export async function ScopedAssistantsRoute({
   if (route.kind === "not-found") notFound();
 
   if (route.kind === "settings") {
-    return (
-      <ScopeSurfaceSettingsShell
-        scope={scope}
-        scopeTitle={await readScopeSurfaceEntityName(scope)}
-        subject={{ kind: "assistant", packageName: route.assistantPackageName }}
-      />
-    );
+    return renderScopeSurfaceSettingsShell({
+      scope,
+      scopeTitle: await readScopeName(scope),
+      subject: { kind: "assistant", packageName: route.assistantPackageName },
+    });
   }
 
   // THE SAME RENDERER, mounted under this base. The mount takes the trailing
@@ -156,7 +197,7 @@ export async function scopedSurfaceMetadata(
   surface: "Agents" | "Assistants",
 ): Promise<Metadata> {
   try {
-    const name = await readScopeSurfaceEntityName(scope);
+    const name = await readScopeName(scope);
     return { title: name ? surface + " — " + name : surface };
   } catch {
     // A name is a convenience on this surface, never its subject.

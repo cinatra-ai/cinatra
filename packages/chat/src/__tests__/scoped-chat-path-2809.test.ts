@@ -123,7 +123,7 @@ describe("the three pathname readers see through the base", () => {
   });
 });
 
-// CONVERGENCE ROUND (codex, this lane): the codec's own base validator carried
+// THE SAME HOST ESCAPE ON THIS SIDE OF THE BORDER: the codec's own base validator carried
 // the same backslash hole as the host's, so the scoped MOUNT could be rooted at
 // another host. Same rule, pinned on this side of the border too.
 describe("the chat mount refuses a backslash base (convergence)", () => {

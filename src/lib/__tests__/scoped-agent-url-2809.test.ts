@@ -93,7 +93,7 @@ describe("`new` and `settings` are reserved below the vendor/package pair", () =
 });
 
 // ---------------------------------------------------------------------------
-// CONVERGENCE ROUND (codex, this lane): the base validator accepted a BACKSLASH.
+// A HOST ESCAPE THE FIRST CUT LET THROUGH: the base validator accepted a BACKSLASH.
 // `/\\attacker.example` passed `[^/\\s]+` and minted
 // `/\\attacker.example/agents/…`; a browser reads `/\\` as `//` and resolves that
 // to https://attacker.example/agents/… — the very host escape the validator

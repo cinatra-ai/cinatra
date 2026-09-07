@@ -134,7 +134,7 @@ describe("AGENTS_NAV never escapes the scope it renders in", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CONVERGENCE ROUND (codex, this lane): the published contract and the path
+// THE ONE INPUT THE TWO SIDES DISAGREED ON. The published contract and the path
 // builders disagreed PRECISELY on the reserved collision -- the one input where
 // disagreeing turns an instance link into a launcher.
 // ---------------------------------------------------------------------------

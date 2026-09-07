@@ -156,8 +156,8 @@ export function scopeSurfaceAgentSettingsHref(
 
 /** A PERSISTED run's address at this scope.
  *
- *  The reserved words are refused HERE too, not only in `buildAgentInstancePath`
- *  (convergence finding on this lane): the two are the same contract seen from
+ *  The reserved words are refused HERE too, not only in `buildAgentInstancePath`:
+ *  the two are the same contract seen from
  *  two sides, and where they disagreed they disagreed precisely on the
  *  collision — an instance link minted for a run whose id is `new` or
  *  `settings` would have resolved to the LAUNCHER or to the settings shell. */

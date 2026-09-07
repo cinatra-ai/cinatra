@@ -173,7 +173,7 @@ describe("the vendor level is a pageless container", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CONVERGENCE ROUND (codex, this lane): the HOME-scope override was wired on
+// A SECOND CUT AT THE HOME SCOPE. The override was wired on
 // the agent-instance branch only. A persisted conversation read at the BARE
 // chat address -- what a stale bookmark holds, and what the reader is at for
 // the instant before the canonical-home redirect -- collapsed to a scopeless

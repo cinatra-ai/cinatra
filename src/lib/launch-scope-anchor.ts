@@ -162,7 +162,7 @@ export function parseLaunchScopeAnchor(raw: unknown): LaunchScopeAnchorV1 | null
     // carries the key at all — `null` included — is one no mint on this build
     // can have produced. Fail closed: read it as unanchored rather than
     // canonicalizing an instance under /workspace on a payload we cannot
-    // vouch for (convergence finding on this lane).
+    // vouch for.
     return Object.prototype.hasOwnProperty.call(obj, "id")
       ? null
       : { v: LAUNCH_SCOPE_ANCHOR_VERSION, kind: "workspace" };
@@ -246,8 +246,8 @@ export function canonicalThreadPath(row: {
 }): string {
   const base = launchScopeAnchorBase(row.anchor);
   if (base === null) return row.chatPath;
-  // THE BASE IS A PREFIX OF THE MOUNT, NOT OF THE BARE PATH (convergence
-  // finding on this lane). The scoped mount answers at `<base>/assistants/…`,
+  // THE BASE IS A PREFIX OF THE MOUNT, NOT OF THE BARE PATH. The scoped
+  // mount answers at `<base>/assistants/…`,
   // so re-homing a thread swaps the mount root for the scoped segment. Simply
   // concatenating produced `<base>/chat/…`, which resolves to NO route — a
   // canonical home the reader could never reach.
