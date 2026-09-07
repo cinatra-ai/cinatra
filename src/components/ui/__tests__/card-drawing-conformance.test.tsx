@@ -172,14 +172,17 @@ function depthOfBlock(selector: string): number {
   return depth;
 }
 
+// Escape every regular-expression metacharacter, the backslash included, so a
+// token value with any shape can be matched literally.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe('clause: "10–12px radius"', () => {
   it("cuts the card two steps above the radius base, not on the shared xl step", () => {
     expect(globals()).toMatch(
       new RegExp(
-        `\\[data-slot="card"\\]\\s*\\{[^}]*border-radius:\\s*${CORNER.replace(
-          /[()+]/g,
-          "\\$&",
-        )}\\s*;`,
+        `\\[data-slot="card"\\]\\s*\\{[^}]*border-radius:\\s*${escapeRegExp(CORNER)}\\s*;`,
       ),
     );
   });
