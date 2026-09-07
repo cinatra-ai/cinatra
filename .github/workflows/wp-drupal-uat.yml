@@ -295,7 +295,7 @@ jobs:
         if: needs.changed-paths.outputs.run_uat != 'true'
         run: echo "No WP/Drupal contract paths touched, or draft/override-labeled PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
       - name: Reclaim runner disk (real-run only — full UAT stack + browsers exhaust ubuntu-latest)
-        if: ${{ needs.changed-paths.outputs.run_uat == 'true' && runner.environment == 'github-hosted' }}
+        if: ${{ needs.changed-paths.outputs.run_uat == 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         # See the nightly job's identical step: run 28865808274 died on
         # "No space left on device" (2026-07-07). Real-run path only.
         run: |
@@ -580,7 +580,7 @@ jobs:
       OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
       - name: Reclaim runner disk (full UAT stack + browsers exhaust ubuntu-latest)
-        if: ${{ runner.environment == 'github-hosted' }}
+        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
         # The 2026-07-07 on-demand proof (run 28865808274) died with "No space
         # left on device" at the end of the suite: WP+Drupal+nango+app images,
         # pnpm store, Next build cache and Playwright browsers together overflow
