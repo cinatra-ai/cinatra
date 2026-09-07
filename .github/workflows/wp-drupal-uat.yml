@@ -222,7 +222,11 @@ jobs:
           POSTGRES_DB: postgres
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5434:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for one host port (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -231,7 +235,11 @@ jobs:
       redis:
         image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'redis:8-alpine' || '' }}
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -239,13 +247,13 @@ jobs:
           --health-retries 10
     env:
       # In-repo, zero-secret app-service env mirroring dashboard-live-verify.yml.
-      # The connection string is the same literal the CLI's own rebuildEnvLocal()
-      # writes; the Postgres service publishes 5434 above. Job-level env is
-      # inherited by every step INCLUDING the composite action's steps, so
-      # `cinatra setup dev` (run inside the composite action) finds SUPABASE_DB_URL
-      # and a live DB. (cinatra#173)
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
-      REDIS_URL: redis://127.0.0.1:6379
+      # SUPABASE_DB_URL and REDIS_URL are NOT set here: the Postgres and Redis
+      # services above publish RANDOM host ports, which a job-level `env:`
+      # cannot read (`job.services.*` is unavailable there), so the real-run
+      # path's first step exports both to $GITHUB_ENV instead (cinatra#3267).
+      # $GITHUB_ENV is inherited by every step INCLUDING the composite action's
+      # steps, so `cinatra setup dev` (run inside the composite action) still
+      # finds SUPABASE_DB_URL and a live DB. (cinatra#173)
       # scripted-test-provider.ts fail-CLOSES unless this is exactly 'development'
       # (and NODE_ENV != production); `setup dev` also asserts the configured
       # runtime mode equals development. Do NOT set NODE_ENV=production here.
@@ -294,6 +302,17 @@ jobs:
       - name: No contract paths touched (or draft/override) → gate passes quickly
         if: needs.changed-paths.outputs.run_uat != 'true'
         run: echo "No WP/Drupal contract paths touched, or draft/override-labeled PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
+      # Real-run path only, exactly like every step below: on the fast-pass /
+      # draft / override path the service images are the empty string, no
+      # container starts, and there is no mapped port to read (cinatra#3267).
+      - name: Export the mapped service ports
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - name: Reclaim runner disk (real-run only — full UAT stack + browsers exhaust ubuntu-latest)
         if: needs.changed-paths.outputs.run_uat == 'true'
         # See the nightly job's identical step: run 28865808274 died on
@@ -529,7 +548,11 @@ jobs:
           POSTGRES_DB: postgres
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5434:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for one host port (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -538,7 +561,11 @@ jobs:
       redis:
         image: redis:8-alpine
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -546,11 +573,11 @@ jobs:
           --health-retries 10
     env:
       # In-repo, zero-secret app-service env mirroring dashboard-live-verify.yml
-      # (and the uat-gate job above). Job-level env reaches the composite
-      # action's steps, so `cinatra setup dev` finds SUPABASE_DB_URL + a live DB
-      # on ubuntu-latest. (cinatra#173)
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
-      REDIS_URL: redis://127.0.0.1:6379
+      # (and the uat-gate job above). SUPABASE_DB_URL and REDIS_URL are NOT set
+      # here: the services above publish RANDOM host ports, unreadable from a
+      # job-level `env:`, so the first step exports both to $GITHUB_ENV — which
+      # reaches the composite action's steps just the same, so `cinatra setup
+      # dev` finds SUPABASE_DB_URL + a live DB. (cinatra#173, cinatra#3267)
       # scripted-test-provider.ts fail-CLOSES unless this is exactly 'development'
       # (and NODE_ENV != production); `setup dev` also asserts development.
       CINATRA_RUNTIME_MODE: development
@@ -579,6 +606,17 @@ jobs:
       # OpenAI call. Zero-secret placeholder (mirrors dashboard-live-verify.yml).
       OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
+      # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
+      # the runner mapped: `job.services.*` is unreadable from a job-level
+      # `env:`, so they are exported here, before the first step that reads
+      # one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - name: Reclaim runner disk (full UAT stack + browsers exhaust ubuntu-latest)
         # The 2026-07-07 on-demand proof (run 28865808274) died with "No space
         # left on device" at the end of the suite: WP+Drupal+nango+app images,
