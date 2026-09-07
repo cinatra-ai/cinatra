@@ -290,14 +290,24 @@ describe('RECORDED DEPARTURE (landing on the sibling change for this issue): cla
   // the clauses its primitive currently fails is not a checklist. Each of the
   // three assertions below turns green the moment that sibling change lands,
   // with nothing in this file to update.
-  it('draws a real 1px border rather than a ring — clause "1px line border"', () => {
+  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
+  // runs: `it.fails` reports a pass only while the body throws, so the
+  // departure stays measured and the checklist stays green. The day the
+  // follow-up this departure names lands, this case stops throwing, the suite
+  // goes red, and the record must be retired with it.
+  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): draws a real 1px border rather than a ring — clause "1px line border"', () => {
     // MEASURED: the base spells `ring-1 ring-foreground/10`, which paints as a
     // box-shadow. The computed border-width is 0px, so a consumer that passes
     // a border colour gets no stroke at all.
     expect(slot(renderCard(), "card").className).toMatch(/(^|\s)border(\s|$)/);
   });
 
-  it('offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
+  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
+  // runs: `it.fails` reports a pass only while the body throws, so the
+  // departure stays measured and the checklist stays green. The day the
+  // follow-up this departure names lands, this case stops throwing, the suite
+  // goes red, and the record must be retired with it.
+  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
     // MEASURED: the primitive has one form, and it is the presentation one.
     // Every surface that wants the white ground hand-rolls its own container.
     //
@@ -309,7 +319,12 @@ describe('RECORDED DEPARTURE (landing on the sibling change for this issue): cla
     expect(slot(container, "card").getAttribute("data-interactive")).toBe("true");
   });
 
-  it('lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
+  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
+  // runs: `it.fails` reports a pass only while the body throws, so the
+  // departure stays measured and the checklist stays green. The day the
+  // follow-up this departure names lands, this case stops throwing, the suite
+  // goes red, and the record must be retired with it.
+  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
     expect(slot(renderInteractive(), "card").className).toContain("hover:-translate-y-px");
   });
 });

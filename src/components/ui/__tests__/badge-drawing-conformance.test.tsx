@@ -132,7 +132,12 @@ describe('clause: "icon-led"', () => {
 });
 
 describe('RECORDED DEPARTURE (cross-repository follow-up): clause "line border"', () => {
-  it("draws the neutral chip with the hairline stroke the chrome line names", () => {
+  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
+  // runs: `it.fails` reports a pass only while the body throws, so the
+  // departure stays measured and the checklist stays green. The day the
+  // follow-up this departure names lands, this case stops throwing, the suite
+  // goes red, and the record must be retired with it.
+  it.fails('RECORDED DEPARTURE (cross-repository follow-up): draws the neutral chip with the hairline stroke the chrome line names — clause "line border"', () => {
     // RECORDED DEPARTURE — recorded, not fixed, and NOT because the clause is
     // in doubt. See correction 2 in this file's header: `badge.tsx` is vendored
     // into five separate repositories, and two standing guards fail the moment

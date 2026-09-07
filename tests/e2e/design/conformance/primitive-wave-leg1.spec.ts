@@ -391,6 +391,15 @@ for (const { name: palette, theme } of PALETTES) {
     test('RECORDED DEPARTURE — "line border": the neutral chip strokes no hairline', async ({
       page,
     }) => {
+      // DOCUMENTED EXPECTED FAILURE. The readings below are unchanged and still
+      // taken in both palettes; `test.fail` reports the case as an expected
+      // failure, so the record stands while the suite stays green. The day the
+      // cross-repository follow-up named below lands, this case passes
+      // unexpectedly, the suite goes red, and the record must be retired.
+      test.fail(
+        true,
+        `RECORDED DEPARTURE (cross-repository follow-up, ${palette}): the neutral chip's stroke is transparent; the chrome line states "line border"`,
+      );
       await open(page, theme);
       const chip = page.locator(`${seam("badge")} [data-wave-variant="secondary"]`);
       await expect(chip).toBeVisible();

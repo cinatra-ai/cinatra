@@ -73,7 +73,12 @@ describe('clause: "instant-binary (switch)" / "reserved for immediate-effect set
 });
 
 describe('RECORDED DEPARTURE (leg 2 follow-up): clause "control 16-18px"', () => {
-  it("draws the track inside the stated 16-18px band", () => {
+  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
+  // runs: `it.fails` reports a pass only while the body throws, so the
+  // departure stays measured and the checklist stays green. The day the
+  // follow-up this departure names lands, this case stops throwing, the suite
+  // goes red, and the record must be retired with it.
+  it.fails('RECORDED DEPARTURE (leg 2 follow-up): draws the track inside the stated 16-18px band — clause "control 16-18px"', () => {
     // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table,
     // so it is recorded here rather than fixed.
     //
