@@ -326,6 +326,12 @@ jobs:
         # OPENAI_API_KEY + SUPABASE_DB_URL the build needs.
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # One page-data worker on the two-processor hosted runner: three workers
+          # starve the runner's own heartbeat during page-data collection and GitHub
+          # reclaims it ("runner received a shutdown signal") on any branch whose
+          # route set makes that phase long enough; the knob maps to
+          # experimental.cpus in next.config.ts.
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Start standalone server on port 3100
