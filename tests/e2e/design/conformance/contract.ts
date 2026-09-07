@@ -60,10 +60,10 @@ import {
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-review-target-header-fixture-data";
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
+import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
 import {
   reviewRevisionMarker,
   reviewTargetRowFacts,
-  reviewTypeLabel,
 } from "../../../../src/lib/artifacts/review-surface-model";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
@@ -576,7 +576,7 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
-//     `reviewTypeLabel` from the row's type id), the type id on the meta line,
+//     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
 //     the pinned revision (addressed by the exact id, read as the elided marker
 //     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
@@ -676,7 +676,7 @@ export function reviewTargetHeaderDriver(
         await expect(header).toContainText(seed.title);
         // "… over a mono meta line carrying its type …". The TAG carries the
         // label, the line carries the id. The expected label is derived by the
-        // PRODUCT's own `reviewTypeLabel` from the row's type id — the call the
+        // PRODUCT's own `artifactKindLabelFor` from the row's type id — the call the
         // server-side composer makes — so a harness that ever worded a label of
         // its own is red here, and the tag is asserted on BOTH readings: the
         // attribute value and the text a reader actually sees.
@@ -684,9 +684,9 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveCount(1);
         await expect(tag).toHaveAttribute(
           "data-review-target-type",
-          reviewTypeLabel(seed.objectType),
+          artifactKindLabelFor(seed.objectType),
         );
-        await expect(tag).toHaveText(reviewTypeLabel(seed.objectType));
+        await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
         // with a pinned marker) …". Addressed by the EXACT revision the gate

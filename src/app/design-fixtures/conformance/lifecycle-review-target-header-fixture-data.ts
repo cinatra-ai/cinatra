@@ -25,7 +25,7 @@
 // id, pinned revision id, and the four authorized row values (owner level,
 // visibility, MIME, updated instant) — and NOTHING the product composes out of
 // them. The type tag's wording and the meta line's row facts are composed by the
-// product's own `reviewTypeLabel` and `reviewTargetRowFacts`, the same two calls
+// product's own `artifactKindLabelFor` and `reviewTargetRowFacts`, the same two calls
 // the server-side composer makes (src/lib/lifecycle/lifecycle-target-headers.ts).
 // A fixture that named a finished fact instead would make the driver an echo
 // test — it would prove only that the React component prints the props it was

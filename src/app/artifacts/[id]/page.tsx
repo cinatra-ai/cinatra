@@ -43,6 +43,7 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
@@ -302,6 +303,12 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     <Main className="min-h-screen">
       <PageHeader
         title={title}
+        // The kind, in the pack's OWN words: `artifactKindLabelFor` returns the
+        // label the claiming pack declares (`cinatra.displayName`) and floors to
+        // the package-id derivation only when nothing is declared. The review
+        // line reads the same function on the same objectType, so the two
+        // surfaces cannot name one pack two ways.
+        label={artifact.objectType ? artifactKindLabelFor(artifact.objectType) : undefined}
         description={`${mime || "unknown"} · ${sizeBytes} bytes`}
         divider={false}
         actions={
