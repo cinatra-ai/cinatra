@@ -41,6 +41,32 @@ import {
 import { runSeedRequest } from "./run-seed-request";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
 
+/**
+ * THE SLUG THE RUN ROUTE IS BUILT FROM (cinatra#3002, fix leg 4).
+ *
+ * "Start new run" calls `createAndTriggerRun({templateSlug})` and then routes to
+ * `/agents/{vendor}/{packageName}/{runId}` — a TWO-segment path. The run's
+ * package name yields that slug once its npm scope marker is dropped, but only
+ * when the package actually carries a vendor segment. An unscoped package name
+ * ("blog-draft-writer-agent") strips to ONE segment: the lookup would then read
+ * it as a bare name rather than a package identity, and even a successful
+ * create would navigate to a path with no page behind it.
+ *
+ * So the shape is CHECKED, not assumed (convergence finding, 2026-09-05). A
+ * name that cannot produce the route's two non-empty segments yields no slug at
+ * all, and the card leaves the control out rather than mount one that routes
+ * nowhere — the documented behaviour for a caller without a slug.
+ */
+export function runRouteSlugFromPackageName(
+  packageName: string | null | undefined,
+): string | undefined {
+  const stripped = (packageName ?? "").replace(/^@/, "");
+  const segments = stripped.split("/");
+  if (segments.length !== 2) return undefined;
+  if (segments.some((segment) => segment.trim() === "")) return undefined;
+  return stripped;
+}
+
 // THE RUN-PAGE LINK IS GONE (cinatra#2997), AND SO IS THE BUILDER IT NEEDED.
 //
 // The maintainer's words: "Also, the 'Open the run page' link in the top right
@@ -319,6 +345,16 @@ export function InlineAgentRunCard({
         agentPackageName={seed.agentPackageName ?? undefined}
         traceId={seed.traceId ?? undefined}
         inputParams={seed.inputParams}
+        // THE SLUG "START NEW RUN" NEEDS (cinatra#3002, fix leg 4). The panel
+        // draws that control from `agentId`, and this wrapper used to pass none
+        // — so the conversation had nothing to give it even once the panel
+        // stopped withholding it. The value is the run's package name in the
+        // form the run route (`/agents/{vendor}/{packageName}`) and
+        // `createAndTriggerRun`'s template lookup both read, and its shape is
+        // checked before it is handed over (see the helper above).
+        // `templateId` beside it is the BUILDER's identifier for the
+        // HITL-assist endpoints and is not a slug.
+        agentId={runRouteSlugFromPackageName(seed.agentPackageName)}
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
