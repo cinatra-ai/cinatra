@@ -83,6 +83,15 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     // mutable column therefore never supplies assignment scope; this one does,
     // and is written once. Operator twin = migrations/core/core__0100.
     { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS assignment_scope_snapshot jsonb` },
+    // `launch_scope_anchor` (cinatra#2809, per-scope surfaces S3, epic #2806):
+    // the IMMUTABLE vantage the conversation was LAUNCHED from, which decides
+    // its ONE canonical address. It exists for the same reason its neighbour
+    // above does and then some: `project_id` is mutable, so a move would
+    // silently re-address every bookmark to the conversation. Written once from
+    // the launch route, never updated, never inferred, never backfilled — an
+    // absent value means the thread stays on the flat `/chat` route.
+    // Operator-upgrade twin = migrations/core/core__0102.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS launch_scope_anchor jsonb` },
     // `team_id` (cinatra#1037 P5.6 drop-history PR2 CUTOVER, coordinator-authorized
     // Fork-B extension): the team the thread is owned by — the structured twin of
     // chat_threads' payload.teamId, the axis the list/http/classifier visibility
