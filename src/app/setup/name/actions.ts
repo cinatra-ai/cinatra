@@ -329,6 +329,19 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
       // credentials (routinely a stale user left behind by an app-data reset).
       // Actionable, not "see server logs".
       if (e instanceof VerdaccioUserCredentialConflictError) {
+        // cinatra#3207 item 3 — the round-two reproduction read the redirect
+        // response itself: 303, Location
+        // `/setup/name?error=registry-user-credential-conflict`, no identity
+        // row written. The person does get the static toast, but the SERVER
+        // record carried only "POST /setup/name 303": this refusal and an
+        // identity row that does not read back both return to the same step,
+        // and nothing in the log separated them — which is why the first round
+        // could not name the cause from the server side. One line ends that
+        // ambiguity. The redirect road, its code and its message are unchanged.
+        console.error(
+          "[saveInstanceIdentityAction] registry-user-credential-conflict for namespace",
+          instanceNamespace,
+        );
         redirectWithErrorCode("registry-user-credential-conflict");
       }
       if (e instanceof VerdaccioRegistrationDisabledError) {
