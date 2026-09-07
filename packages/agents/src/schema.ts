@@ -375,6 +375,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // resolve to workspace + the durable organization and nothing else.
   // Migration: src/lib/drizzle-store.ts entry + core__0100.
   assignmentScopeSnapshot: jsonb("assignment_scope_snapshot"),
+  // launch_scope_anchor (cinatra#2809, per-scope surfaces S3, epic #2806): the
+  // IMMUTABLE vantage this run was LAUNCHED from — the closed
+  // LaunchScopeAnchorV1 payload, read only by src/lib/launch-scope-anchor.ts.
+  // It decides the run's ONE canonical address, which is why it must not be
+  // derivable from a column that moves. NULL for a pre-migration row and for
+  // every headless / A2A / global writer, which resolves to unanchored and
+  // stays on the flat bare route. Deliberately NOT the same thing as
+  // assignmentScopeSnapshot above (which scopes assignments, not addresses).
+  // Migration: src/lib/drizzle-store.ts entry + core__0102.
+  launchScopeAnchor: jsonb("launch_scope_anchor"),
   // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
   // creation from the LOCKED template owner anchor + org + project launch, and
   // re-derived + containment-checked at MCP-token mint. NULL only for a corrupt
