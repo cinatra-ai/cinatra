@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
@@ -575,6 +575,36 @@ function scrubWayflowHistoryCredentials(value: unknown): unknown {
 export const CINATRA_ENDNODE_OUTPUTS_SENTINEL = "__cinatra_endnode_outputs__";
 
 type HistoryMessage = { role?: string; parts?: readonly unknown[] };
+
+// ---------------------------------------------------------------------------
+// THE DEFAULT ROAD's runner slot (cinatra#3029, epic #3023 W5).
+//
+// The pickup core is registered here at BOOT (the system-loops seed phase) and
+// read from the terminal path below. globalThis-backed for the same reason the
+// unbound-derivation runner slot is: a worker dispatching from a different
+// bundle's module instance must still see the boot registration.
+// ---------------------------------------------------------------------------
+export type DefaultRoadPickupRunner = {
+  pickup: (input: {
+    runId: string;
+    orgId: string;
+    templateId: string;
+    packageVersion: string | null;
+    createdBy: string | null;
+    endNodeOutputs: Record<string, unknown>;
+    boundOutputIds: string[];
+  }) => Promise<ReadonlyArray<Record<string, unknown>>>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraDefaultRoadPickupRunner: DefaultRoadPickupRunner | undefined;
+}
+
+/** Boot-only registrar for the slot above (see src/lib/boot/phases/system-loops.ts). */
+export function registerDefaultRoadPickupRunner(runner: DefaultRoadPickupRunner): void {
+  globalThis.__cinatraDefaultRoadPickupRunner = runner;
+}
 
 /**
  * Walk WayFlow `task.history` and return the EndNode output object the
@@ -1819,10 +1849,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       .map((p) => p.text!)
       .join("") ?? "";
   let parsedOutput: unknown = finalText;
-  let finalOutputIsJson = false;
   try {
     parsedOutput = JSON.parse(finalText);
-    finalOutputIsJson = true;
   } catch {
     // not JSON — keep raw text
   }
@@ -1924,30 +1952,79 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     (outcome) => outcome.ok !== true,
   );
 
-  // Unbound-output capture (cinatra#1893, epic #1883 A5). The derivation-outbox
-  // row is written ATOMICALLY with the terminal CAS + snapshot below — a
-  // transaction-local capture only (produces/binding discovery is the derivation
-  // job's concern, NOT a registry read in this hot completion path). Captured for
-  // EVERY non-empty WayFlow terminal-success run; the job later types it against
-  // the agent's validated `produces` or emits an advisory. Empty output ⇒ nothing
-  // to capture (no row, no advisory). File-part outputs + the external-A2A
-  // completion branch are explicit v1 deferrals (this is the internal WayFlow
-  // success path only).
-  // Only a genuine terminal SUCCESS captures an unbound-output row (the meta
-  // key is legal for `to === "completed"` only). The #2486 failure branch below
-  // therefore neither captures nor enqueues.
-  const derivationOutbox =
-    finalText.length > 0
-      ? {
-          orgId: run.orgId,
-          templateId: run.templateId,
-          packageVersion: run.packageVersion,
-          createdBy: run.runBy,
-          content: finalText,
-          contentIsJson: finalOutputIsJson,
-          contentHash: createHash("sha256").update(finalText, "utf8").digest("hex"),
+  // THE DEFAULT ROAD (cinatra#3029, epic #3023 W5 — plan items 0.17/0.18).
+  //
+  // RETIRED HERE: the response-text derivation. Until this slice the terminal
+  // path captured the run's whole final RESPONSE TEXT into a one-row outbox, a
+  // post-terminal job typed that one blob against the agent's declared output
+  // types only, and on a miss the output was DROPPED with a "not captured"
+  // advisory — so undeclared work the run really made never became an artifact,
+  // and one bound output switched derivation off for the whole agent.
+  //
+  // AFTER: the pickup runs ONCE PER END-NODE OUTPUT at or above the document
+  // floor that no binding names, types each one through the detection ladder,
+  // and writes it through THE ONE write path with one ledger row per item under
+  // a reserved id, deduping identical bytes within the run. The response TEXT is
+  // not an output and takes no road; a datum below the floor takes no road; bytes
+  // every rung refuses land under the binary base. Nothing is dropped, so the
+  // advisory retires with the road that needed it.
+  //
+  // Emitted FILES are the other half of the pickup (plan item 0.22) and are W6.
+  //
+  // NOT part of the #2486 materialization-honesty gate: a DECLARED binding that
+  // fails is a broken promise and fails the run (above); an UNDECLARED output the
+  // default road could not file is a visible per-output outcome on the run's own
+  // record. The pickup never throws.
+  let defaultRoadPickups: Array<Record<string, unknown>> = [];
+  if (endNodeOutputs !== null && materializationFailures.length === 0) {
+    try {
+      // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
+      // the ladder, the artifact writer and the pooled-db graph, and this module
+      // sits in the reachable first-party graph of the LOCKED dev-perf routes -
+      // so even a dynamic import("@/lib/artifacts/default-road-pickup-run")
+      // specifier here would pull all of it into every one of those routes.
+      // Same posture as the unbound-derivation / GC-reaper runners: the core is
+      // BOOT-REGISTERED into a globalThis-backed slot by the system-loops seed
+      // phase (src/lib/boot/phases/system-loops.ts), so a worker running from a
+      // different bundle instance still sees it. An empty slot means the boot
+      // seed has not run in this bundle: the road is skipped LOUDLY and the run
+      // verdict is untouched.
+      const runner = globalThis.__cinatraDefaultRoadPickupRunner;
+      if (!runner) {
+        // Skip the ROAD only - never the terminal transition below.
+        throw new Error(
+          "the default-road pickup runner slot is empty (the boot seed has not run in this bundle)",
+        );
+      }
+      defaultRoadPickups = (await runner.pickup({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        endNodeOutputs: endNodeOutputs as Record<string, unknown>,
+        // The binding rung already named these; the default road never runs twice
+        // over the same output.
+        boundOutputIds: artifactMaterializations
+          .map((outcome) => outcome.outputId)
+          .filter((id): id is string => typeof id === "string"),
+      })) as unknown as Array<Record<string, unknown>>;
+      for (const outcome of defaultRoadPickups) {
+        if (outcome.ok !== true && typeof outcome.error === "string") {
+          console.warn(
+            `[default-road] run=${runId} output=${String(outcome.outputId)} took no road: ${outcome.error}`,
+          );
         }
-      : undefined;
+      }
+    } catch (err) {
+      // Defense-in-depth: the pickup never throws by contract.
+      console.warn(
+        `[default-road] run=${runId} pickup threw (the run's verdict is unchanged):`,
+        err instanceof Error ? err.message : err,
+      );
+      defaultRoadPickups = [];
+    }
+  }
 
   // The ONE terminal stepResults payload — identical on the success and the
   // #2486 materialization-failure edge, so a failed run keeps every bit of
@@ -1971,6 +2048,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // Key absent when the run's package declares no bindings.
       ...(artifactMaterializations.length > 0
         ? { artifact_materializations: artifactMaterializations }
+        : {}),
+      // THE DEFAULT ROAD's per-output outcomes (cinatra#3029): one entry per
+      // end-node output the road looked at — the artifact it wrote and the
+      // ladder rung that decided its form, or why the output took no road.
+      // Key absent when the run emitted no end-node outputs.
+      ...(defaultRoadPickups.length > 0
+        ? { default_road_pickups: defaultRoadPickups }
         : {}),
       history: scrubbedHistory,
     },
@@ -2022,7 +2106,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   let transitioned = true;
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
-    ...(derivationOutbox ? { derivationOutbox } : {}),
     stepResults: terminalStepResults,
   }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
@@ -2035,46 +2118,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   });
 
   if (!transitioned) return;
-
-  // Unbound-output derivation (cinatra#1893): the outbox row committed with the
-  // terminal transition above; enqueue the one-shot derivation job best-effort.
-  // A failed enqueue never destabilizes the completed run — the durable outbox
-  // row + the reconciliation sweep guarantee eventual derivation. Only when a row
-  // was actually captured (non-empty output).
-  //
-  // Enqueued INLINE through the background-jobs modules (which this locked
-  // dev-perf route already reaches) rather than via a dedicated leaf module, so
-  // the WayFlow terminal-success hot path adds no first-party graph pressure to
-  // the ratchet-tracked routes (route-graph ratchet). The derivation CORE stays
-  // out of this path entirely — it is reached only by the boot-registered worker
-  // slot (see background-jobs-registry's UnboundOutputDerivationRunner slot).
-  if (derivationOutbox) {
-    try {
-      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
-      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
-      await enqueueBackgroundJob(
-        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
-        { runId, orgId: run.orgId },
-        {
-          // 3 attempts (1 + 2 retries), exponential backoff — a transient DB/LLM
-          // blip in the one-shot derive gets a bounded retry; the sweep covers
-          // anything beyond. Colon-free jobId de-dupes a crash-restart re-enqueue
-          // (the row lease makes a double-drive safe anyway; this avoids churn).
-          attempts: 3,
-          backoff: { type: "exponential", delay: 5_000 },
-          jobId: `unbound-output-derive__${runId}`,
-          // The derivation worker anchors its own org-scoped System actor; it
-          // must not inherit the run principal's frame.
-          inheritActorContext: false,
-        },
-      );
-    } catch (e) {
-      console.warn(
-        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
-        e instanceof Error ? e.message : e,
-      );
-    }
-  }
 
   // 1. Publish terminal AG-UI event immediately so the operator's UI shows
   //    "completed" without waiting on autosave latency.

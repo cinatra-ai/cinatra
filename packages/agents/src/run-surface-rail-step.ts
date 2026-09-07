@@ -67,10 +67,22 @@ export type RunInputStepKey = `input:${number}`;
  */
 export type RunParkedGateStepKey = "gate";
 
+/**
+ * THE RUN'S LAST STEP — what the run made (cinatra#3029).
+ *
+ * The ratified drawing's artifact review, section I.2, ends the rail with the
+ * run's own artifacts: "What this run made". It is the run's LAST step, so it is
+ * one key rather than one per artifact — the artifacts are the ROWS INSIDE it,
+ * each opening on its own page. It carries its own word (run-made-reading.ts)
+ * for the same reason a gate does: the step says what it SHOWS.
+ */
+export type RunMadeStepKey = "made";
+
 export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
   | RunParkedGateStepKey
+  | RunMadeStepKey
   | "detail";
 
 /** A step that HEADS the rail — every selection but the run's own detail. */

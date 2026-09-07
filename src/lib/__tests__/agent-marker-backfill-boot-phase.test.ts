@@ -43,8 +43,13 @@ const triggerWayflowReload = vi.fn(async () => ({
   reason: "container_unreachable",
   detail: "no wayflow container in this verify harness",
 }));
-vi.mock("@cinatra-ai/agents", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@cinatra-ai/agents")>();
+// The phase reaches the reload client through its OWN subpath (cinatra#3029),
+// so the seam is stubbed at that module rather than at the package barrel. Same
+// seam, same real surface: `backfillPublishedMarkers` is still the REAL one,
+// imported from its own subpath and left unmocked.
+vi.mock("@cinatra-ai/agents/wayflow-reload-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@cinatra-ai/agents/wayflow-reload-client")>();
   return { ...actual, triggerWayflowReload };
 });
 

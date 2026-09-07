@@ -125,6 +125,15 @@ import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-ste
 // client module reaches it as a client reference whose `.schedule` reads
 // `undefined` rather than the label (cinatra#2970).
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
+// The run's last step and its readings (cinatra#3029). Another module with NO
+// "use client" directive, for the same reason the labels are: the server screen
+// reads the real words.
+import {
+  RUN_MADE_STEP_LABEL,
+  runMadeReading,
+  type RunMadeArtifactRow,
+} from "./run-made-reading";
+import { RunMadeStepSurface } from "./run-made-step-surface";
 import { buildRunInputRailSteps } from "./run-input-rail-steps";
 // The gate's own screen names its rail row, by the same rule the gate's card
 // titles itself (cinatra#3221) -- one derivation, so the row and the card
@@ -1896,6 +1905,22 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // opens on, and whether the rail still owes the run's later steps, are two
   // questions about the same fact -- so the fact is read here and handed to
   // both, rather than derived twice and able to disagree.
+  // WHAT THIS RUN MADE (cinatra#3029, acceptance item 5). Read HERE, in the
+  // screen's async body, because the rail below is composed synchronously and
+  // the step's rows are a database read. A run that is not over yet has not
+  // finished making anything, so the step is drawn only on a TERMINAL run — and
+  // it is drawn even when the run made nothing, because the drawing gives the
+  // empty case its own reading rather than an empty panel.
+  const runMadeRows: RunMadeArtifactRow[] =
+    run && isTerminalRunStatus(run.status)
+      ? await (async () => {
+          const { listRunMadeArtifacts } = await import(
+            "@/lib/artifacts/run-made-artifacts"
+          );
+          return listRunMadeArtifacts({ orgId: run.orgId, runId: run.id });
+        })()
+      : [];
+
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
@@ -2450,6 +2475,40 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     runSurfaceRailNumberedCount(railSteps.map((step) => step.key)),
                   ),
                 );
+              }
+              // THE RUN'S LAST STEP (cinatra#3029). It goes on the END of the
+              // rail, after the steps still to come, because it is what the run
+              // made once every one of them was done. A terminal run always
+              // carries it: with rows it lists them, with none it draws the
+              // drawing's empty reading.
+              if (run && isTerminalRunStatus(run.status)) {
+                const madeRailStep: RunSurfaceRailStep = {
+                  key: "made",
+                  reached: true,
+                  settled: true,
+                  surface: (
+                    <RunMadeStepSurface rows={runMadeRows} reading={runMadeReading(runMadeRows)} />
+                  ),
+                  row: null,
+                };
+                railSteps.push({
+                  ...madeRailStep,
+                  row: (
+                    <RunSurfaceRailRow
+                      selectionKey="made"
+                      label={RUN_MADE_STEP_LABEL}
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                      reached
+                      settled
+                      selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
+                      conformanceId="run-surface-rail-step"
+                      indicatorConformanceId="run-surface-rail-indicator"
+                      action="open-made-step"
+                    />
+                  ),
+                });
               }
               // The page's OWN rail rows. The gate rows above are drawn by
               // their own step components rather than by this rail, because the

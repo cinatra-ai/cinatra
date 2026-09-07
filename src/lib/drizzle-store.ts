@@ -2008,12 +2008,19 @@ $body$` },
   run_id                      text NOT NULL,
   output_id                   text NOT NULL,
   node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output','default_road')),
   extension                   text NOT NULL,
   content_hash                text NOT NULL,
   artifact_id                 text,
   representation_revision_id  text,
   phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
+  -- cinatra#3029: the detection ladder's recorded verdict for a default_road
+  -- row: the DECIDING RUNG, its reason, and (model rung only) the confidence
+  -- and the model. Null on every path that does not run the ladder.
+  detection_rung              text,
+  detection_reason            text,
+  detection_confidence        double precision,
+  detection_model             text,
   created_at                  timestamptz NOT NULL DEFAULT now()
 )` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
