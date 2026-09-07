@@ -171,6 +171,10 @@ async function createAndTriggerRunCore(
   userId: string,
   orgId: string,
   template: AgentTemplateRecord,
+  /** The vantage this launch was made FROM (cinatra#2809) — minted by the
+   *  launching ROUTE, which is the only caller that knows it. Absent on the
+   *  bare global launcher, and the run is then unanchored. */
+  launchScopeAnchor?: unknown,
 ): Promise<CreatePendingRunResult> {
   // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605). This is
   // the run-start the /agents card's Run link lands on, so it must apply the
@@ -210,6 +214,10 @@ async function createAndTriggerRunCore(
       frame: { userId },
       interactive: true,
       authority,
+      // Threaded onto the ONE fence every producer goes through, so the run is
+      // stamped with the vantage it was launched from and lives at that
+      // vantage's address from the moment it exists (cinatra#2809).
+      launchScopeAnchor,
       template: {
         packageName: template.packageName,
         lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
@@ -280,8 +288,10 @@ export async function createAndTriggerRunWithContext(
   userId: string,
   orgId: string,
   template: AgentTemplateRecord,
+  /** See `createAndTriggerRunCore` — the launching route's own vantage. */
+  launchScopeAnchor?: unknown,
 ): Promise<CreatePendingRunResult> {
-  return createAndTriggerRunCore(userId, orgId, template);
+  return createAndTriggerRunCore(userId, orgId, template, launchScopeAnchor);
 }
 
 export type ResetAgentRunArgs = {

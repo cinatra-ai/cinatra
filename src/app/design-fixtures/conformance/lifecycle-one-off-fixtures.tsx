@@ -25,7 +25,7 @@
 // fetch wrapper, no route stub, no seeded server answer. Every component
 // mounted here is props-only, so mounting it needs none. The one thing a mount
 // supplies that is not a literal is the review target's TYPE LABEL, and even
-// that is not written down — it is derived by the shipped `reviewTypeLabel`, so
+// that is not written down — it is derived by the shipped `artifactKindLabelFor`, so
 // the binding the driver grades is the product's own.
 //
 // THE HARNESS NAMES NO READING. Which mode the chip row is in, which control it
@@ -52,7 +52,7 @@ import type { ReactElement } from "react";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewTargetHeader, SuggestionChips } from "@cinatra-ai/agents/review-gate-card";
 import { ReviewGateBlocked, ReviewGateLoading, ReviewGatePlaceholder } from "@cinatra-ai/agents/review-gate-states";
-import { reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 
 import {
   LIFECYCLE_MATRIX_SUGGESTION,
@@ -65,11 +65,11 @@ import {
 /**
  * The pinned target's header, composed the way the review surface model
  * composes a real one: the title as authored, and the TYPE LABEL derived from
- * the type id by the shipped `reviewTypeLabel`. The harness writes no label.
+ * the type id by the shipped `artifactKindLabelFor`. The harness writes no label.
  */
 const REVIEW_TARGET_HEADER = {
   title: LIFECYCLE_REVIEW_TARGET_FIXTURE.title,
-  typeLabel: reviewTypeLabel(LIFECYCLE_REVIEW_TARGET_FIXTURE.objectType),
+  typeLabel: artifactKindLabelFor(LIFECYCLE_REVIEW_TARGET_FIXTURE.objectType),
   objectType: LIFECYCLE_REVIEW_TARGET_FIXTURE.objectType,
   revisionId: LIFECYCLE_REVIEW_TARGET_FIXTURE.revisionId,
   facts: [...LIFECYCLE_REVIEW_TARGET_FIXTURE.facts],

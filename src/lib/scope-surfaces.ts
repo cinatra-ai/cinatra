@@ -79,6 +79,130 @@ export function scopeSurfaceTabHrefs(scope: ScopeSurfaceRef): {
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE LAUNCH AND SETTINGS HREF CONTRACT (cinatra#2809, per-scope surfaces S3).
+//
+// A card on a scope's Agents or Assistants tab carries a Run button, a Chat
+// button and a Settings button, and every one of them must land INSIDE the
+// scope the reader is looking at — a launch made from a team belongs to that
+// team. #2808 draws those cards; this module answers what they point at, so
+// the two slices cannot disagree about an address.
+//
+// The grammar is the path builders' (`src/lib/agent-url.ts` for agents, the
+// chat codec's mount for assistants), with the scope's own landing route in
+// front. It is composed here rather than imported: this module is deliberately
+// dependency-free — it is reached from the app shell, which the chat mount's
+// module graph is measured through — and the agreement with both builders is
+// pinned by a unit test instead of by an import.
+// ---------------------------------------------------------------------------
+
+/** The launcher segment below the vendor/package pair — a fresh run. */
+export const SCOPE_SURFACE_LAUNCH_SEGMENT = "new";
+
+/** The settings segment below the vendor/package pair. */
+export const SCOPE_SURFACE_SETTINGS_SEGMENT = "settings";
+
+/** The segment the scoped assistants mount answers on. */
+export const SCOPE_SURFACE_ASSISTANTS_SEGMENT = "assistants";
+
+/** A path segment is valid when non-empty and slash/whitespace-free — the same
+ *  rule the chat codec applies, so an address minted here can be parsed back. */
+function assertSegment(seg: string): string {
+  if (typeof seg !== "string" || seg.length === 0 || /[\s/]/.test(seg)) {
+    throw new Error(`scope-surfaces: invalid path segment ${JSON.stringify(seg)}`);
+  }
+  return seg;
+}
+
+/** A segment that addresses a PERSISTED thing, so it may not occupy one of the
+ *  reserved words below the vendor/package pair. */
+function assertUnreservedSegment(seg: string): string {
+  assertSegment(seg);
+  if (seg === SCOPE_SURFACE_LAUNCH_SEGMENT || seg === SCOPE_SURFACE_SETTINGS_SEGMENT) {
+    throw new Error(`scope-surfaces: reserved path segment ${JSON.stringify(seg)}`);
+  }
+  return seg;
+}
+
+/** `@vendor/name` → `vendor/name`; an unscoped name stays as it is. */
+function agentPackageSegments(agentPackageName: string): string {
+  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
+  return match ? `${match[1]}/${match[2]}` : agentPackageName;
+}
+
+/** The agent's package base at this scope — `<base>/agents/<vendor>/<package>`. */
+export function scopeSurfaceAgentBaseHref(
+  scope: ScopeSurfaceRef,
+  agentPackageName: string,
+): string {
+  return `${scopeSurfaceBase(scope)}/agents/${agentPackageSegments(agentPackageName)}`;
+}
+
+/** The Run button's target: a FRESH run of this agent, at this scope. */
+export function scopeSurfaceAgentLaunchHref(
+  scope: ScopeSurfaceRef,
+  agentPackageName: string,
+): string {
+  return `${scopeSurfaceAgentBaseHref(scope, agentPackageName)}/${SCOPE_SURFACE_LAUNCH_SEGMENT}`;
+}
+
+/** The Settings button's target — the contract #2808's cards compose on. */
+export function scopeSurfaceAgentSettingsHref(
+  scope: ScopeSurfaceRef,
+  agentPackageName: string,
+): string {
+  return `${scopeSurfaceAgentBaseHref(scope, agentPackageName)}/${SCOPE_SURFACE_SETTINGS_SEGMENT}`;
+}
+
+/** A PERSISTED run's address at this scope.
+ *
+ *  The reserved words are refused HERE too, not only in `buildAgentInstancePath`:
+ *  the two are the same contract seen from
+ *  two sides, and where they disagreed they disagreed precisely on the
+ *  collision — an instance link minted for a run whose id is `new` or
+ *  `settings` would have resolved to the LAUNCHER or to the settings shell. */
+export function scopeSurfaceAgentInstanceHref(
+  scope: ScopeSurfaceRef,
+  agentPackageName: string,
+  instanceId: string,
+): string {
+  assertUnreservedSegment(instanceId);
+  return `${scopeSurfaceAgentBaseHref(scope, agentPackageName)}/${instanceId}`;
+}
+
+/** The assistant's mount at this scope — `<base>/assistants/<vendor>/<slug>`. */
+export function scopeSurfaceAssistantBaseHref(
+  scope: ScopeSurfaceRef,
+  assistant: { vendor: string; slug: string },
+): string {
+  return `${scopeSurfaceBase(scope)}/${SCOPE_SURFACE_ASSISTANTS_SEGMENT}/${assertSegment(
+    assistant.vendor,
+  )}/${assertSegment(assistant.slug)}`;
+}
+
+/** The Chat button's target. A remote-capable assistant's launch is scoped to
+ *  one connected site, which is the optional third segment. */
+export function scopeSurfaceAssistantLaunchHref(
+  scope: ScopeSurfaceRef,
+  assistant: { vendor: string; slug: string; instance?: string },
+): string {
+  const base = scopeSurfaceAssistantBaseHref(scope, assistant);
+  // The connected site is a persisted thing addressed below the pair, so it
+  // takes the reserved-word rule with it: `…/<vendor>/<slug>/settings` is the
+  // settings shell's own address and must not be mintable as a conversation.
+  return assistant.instance == null
+    ? base
+    : `${base}/${assertUnreservedSegment(assistant.instance)}`;
+}
+
+/** The assistant analog of the agent Settings href. */
+export function scopeSurfaceAssistantSettingsHref(
+  scope: ScopeSurfaceRef,
+  assistant: { vendor: string; slug: string },
+): string {
+  return `${scopeSurfaceAssistantBaseHref(scope, assistant)}/${SCOPE_SURFACE_SETTINGS_SEGMENT}`;
+}
+
 /** The kicker above the page title — the scope KIND, never the entity name. */
 export const SCOPE_SURFACE_KIND_LABEL: Record<ScopeSurfaceKind, string> = {
   workspace: "Workspace",
