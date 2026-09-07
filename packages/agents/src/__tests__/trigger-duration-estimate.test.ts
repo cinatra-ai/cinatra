@@ -28,12 +28,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbState = vi.hoisted(() => ({
   // rows returned by the next `select().from(agentRuns).where(...)` chain
   rows: [] as Array<{ startedAt: Date | null; completedAt: Date | null }>,
+  limitCalls: [] as number[],
 }));
 
 const mockDb = vi.hoisted(() => {
   const selectChain = {
     from: () => selectChain,
-    where: async () => dbState.rows,
+    where: () => selectChain,
+    // The history read is BOUNDED (cinatra#3174 fix leg 1, converge round): it
+    // orders by the completion stamp and takes the most recent window, so the
+    // chain the mock offers has to carry those two links. `limitCalls` is what
+    // the bound itself is pinned on.
+    orderBy: () => selectChain,
+    limit: (n: number) => {
+      dbState.limitCalls.push(n);
+      return Promise.resolve(dbState.rows);
+    },
     then: (onFulfilled: (value: unknown[]) => unknown) =>
       Promise.resolve(dbState.rows).then(onFulfilled),
   };
@@ -69,6 +79,7 @@ import {
 
 beforeEach(() => {
   dbState.rows = [];
+  dbState.limitCalls = [];
   llmMock.runDeterministicLlmTask.mockReset();
   // Default: returns the smallest valid envelope
   llmMock.runDeterministicLlmTask.mockResolvedValue({ content: "{}" });
@@ -79,6 +90,19 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("estimateFromHistory — Tier 1 (aggregate from completed agent_runs)", () => {
+  it("reads a BOUNDED window, not every completed run the template ever had", async () => {
+    // cinatra#3174 fix leg 1, converge round: the settled schedule card asks
+    // for this estimate on every resolve, and a resolve happens on every window
+    // focus for every settled card in the transcript.
+    const now = Date.now();
+    dbState.rows = Array.from({ length: 5 }, (_, i) => ({
+      startedAt: new Date(now + i * 1000),
+      completedAt: new Date(now + i * 1000 + 60000),
+    }));
+    await estimateFromHistory("tmpl-1");
+    expect(dbState.limitCalls).toEqual([50]);
+  });
+
   it("returns null when there are zero completed runs", async () => {
     dbState.rows = [];
     const result = await estimateFromHistory("tmpl-1");
