@@ -276,6 +276,11 @@ function firedEnvelope(runId: string = RUN_ID) {
     kind: "trigger_schedule_proposal",
     state: { state: "settled" },
     body: firedBody(runId),
+    // THE FIRED READING RIDES THE ANSWER (cinatra#3174 fix leg 1). A one-off's
+    // gate stamp is no longer read as its firing on its own — the run it gated
+    // has to have actually run — so the resolver states the reading beside the
+    // body, and this fixture is a schedule that HAS fired.
+    firedOnce: true,
   };
 }
 
@@ -662,6 +667,7 @@ describe("a recurring schedule never gets the spent sentence", () => {
     cardReading.current = {
       kind: "trigger_schedule_proposal",
       state: { state: "settled" },
+      firedOnce: true,
       body: {
         ...firedBody(RUN_ID),
         triggerType: "recurring",

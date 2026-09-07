@@ -116,12 +116,22 @@ function parkedScheduleRailStep(above: readonly RunSurfaceRailStep[]): RunSurfac
   };
 }
 
-/** The run page's still-to-come rows, added the way the screen adds them. */
+/**
+ * The run page's still-to-come rows, added the way the screen adds them.
+ *
+ * `gateStepInRail` is the screen's own `hasRecommendationStep` -- whether the
+ * run HOLDS a skills gate step of its own. Both runs composed in this file are
+ * parked at their schedule with the Skills entry still a forecast row (that is
+ * the reading the file is about: "the unreached Skills entry was drawn ABOVE
+ * it"), so the run holds no recommendation step and the mirror passes `false`.
+ * The rows still ride, because the run's answered input form rides them.
+ */
 function withUpcomingRows(railSteps: RunSurfaceRailStep[]): RunSurfaceRailStep[] {
   const keys = upcomingRunRailStepKeys({
     drawUpcoming: railDrawsUpcomingRunSteps({
       inputStepIsOpen: false,
       inputStepsInRail: true,
+      gateStepInRail: false,
       hasExecution: false,
     }),
     drawnKeys: railSteps.map((step) => step.key),

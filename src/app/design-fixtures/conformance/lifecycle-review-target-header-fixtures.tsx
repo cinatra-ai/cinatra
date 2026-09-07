@@ -30,7 +30,7 @@
 // THE HARNESS COMPOSES NOTHING THE PRODUCT COMPOSES. A fixture row carries the
 // stored artifact's own values and stops there; the two readings the header
 // draws over them — the type TAG's label and the meta line's row FACTS — are
-// composed HERE by the product's own `reviewTypeLabel` and
+// composed HERE by the product's own `artifactKindLabelFor` and
 // `reviewTargetRowFacts`, which are the same two calls the server-side composer
 // makes (src/lib/lifecycle/lifecycle-target-headers.ts:154). So this mount is
 // the shipped chain composer → component with the transport left out, and a
@@ -52,7 +52,8 @@ import type { ReactElement } from "react";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewTargetHeaders } from "@cinatra-ai/agents/review-gate-card";
 
-import { reviewTargetRowFacts, reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
 
 import {
   LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
@@ -72,7 +73,7 @@ function ReviewTargetHeaderFixture({
     revisionId: seed.revisionId,
     // Both readings are worded by the SURFACE MODEL, never by the harness —
     // the same two calls the server-side composer makes.
-    typeLabel: reviewTypeLabel(seed.objectType),
+    typeLabel: artifactKindLabelFor(seed.objectType),
     facts: reviewTargetRowFacts(seed.row, now),
   }));
 

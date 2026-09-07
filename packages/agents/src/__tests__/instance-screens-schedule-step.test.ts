@@ -51,10 +51,48 @@ describe("runHasExecutionRecord — the armed run has not run", () => {
     expect(runHasExecutionRecord({ runStatus: null, ...NO_RECORD })).toBe(false);
   });
 
-  it("answers YES for a run that is in an execution, with or without output yet", () => {
-    for (const runStatus of ["queued", "running", "pending_approval", "waiting_trigger"]) {
+  it("answers YES for a run that is IN an execution, with or without output yet", () => {
+    // Each of these names a run the work is happening inside, so the status is
+    // the record for them even before the first line of output.
+    for (const runStatus of ["running", "waiting_trigger"]) {
       expect(runHasExecutionRecord({ runStatus, ...NO_RECORD })).toBe(true);
     }
+  });
+
+  // AND `queued` READS THE RECORD TOO (cinatra#3184 fix leg 4). It sat in the
+  // live set above as "reached only by DISPATCHING the run", which is true and
+  // is not the same claim: the dispatch CAS writes `queued` before anything has
+  // been picked up, and the run page is rendered at exactly that moment --
+  // answering the skills question releases the run, the decision's own round
+  // trip returns as the dispatch lands, and the refresh that follows reads the
+  // run mid-handoff. Driven on a boot, the page read `queued` with nothing
+  // behind it and drew the settled Skills row alone with Setup lit over it. A
+  // re-queued retry still reads true, because its record answers.
+  it("reads the RECORD for a queued run -- the dispatch precedes the work", () => {
+    expect(runHasExecutionRecord({ runStatus: "queued", ...NO_RECORD })).toBe(false);
+    expect(
+      runHasExecutionRecord({ runStatus: "queued", ...NO_RECORD, stepResultCount: 1 }),
+    ).toBe(true);
+  });
+
+  // AND `pending_approval` READS THE RECORD (cinatra#3184 fix leg 3). It was in
+  // the live set above until the second graded reading of that branch measured
+  // the counterexample: answering the run's skills question releases the run,
+  // and the gate it parks at next writes `pending_approval` with no step
+  // result, no run message and no streamed text behind it. Reading the status
+  // there called a run that had produced nothing an execution, which collapsed
+  // the run page's rail to the settled Skills row alone and lit Setup over it.
+  it("reads the RECORD for an approval gate -- a run can park there before it has run", () => {
+    expect(runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD })).toBe(false);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, stepResultCount: 1 }),
+    ).toBe(true);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, runMessageCount: 1 }),
+    ).toBe(true);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, streamedTextLength: 12 }),
+    ).toBe(true);
   });
 
   it("reads the RECORD for the terminal statuses — a cancelled schedule never ran", () => {

@@ -56,12 +56,39 @@ const ABSENT: LifecycleCardState = { state: "absent" };
 export type TriggerScheduleProposalCard = {
   state: LifecycleCardState;
   view: TriggerScheduleProposalViewBody | null;
+  /**
+   * THE DURABLE FIRED SIGNAL, BESIDE THE BODY AND NEVER IN IT (cinatra#3174,
+   * moved out by cinatra#3193). The resolver already reads it off the trigger
+   * row's own stamps for the floor; the card needs it too, because "Fired,
+   * recurring" is a reading of its own and nothing else the settled body
+   * carries can tell it from "Configured" once the schedule has been stopped.
+   *
+   * It is not a field of the version-1 body because it cannot be: that schema
+   * is `.strict()` and its version is a `z.literal`, so a new key blanks the
+   * card on every bundle still running the shipped schema and a version bump
+   * blanks every card on all of them. Omission - the compromise `superseded`
+   * and `stopped` take - narrows that harm to a rare state, and a schedule that
+   * has fired is the COMMON state. So the reading rides the resolve ANSWER, as
+   * a sibling of the body, on the seam that already tolerates one (see
+   * `parseLifecycleResolveEnvelope`, which reads the answer by name and ignores
+   * every other key). `false` for every phase but `settled`.
+   */
+  firedOnce: boolean;
+  /**
+   * THE ESTIMATED-DURATION LINE FOR THE SETTLED READING (cinatra#3174 fix leg
+   * 1), beside the body on the same seam and for the same reason as
+   * `firedOnce`. `null` for every phase but `settled`, and for a settled card
+   * whose template has no history to estimate from — which draws no line.
+   */
+  durationCopy: string | null;
 };
 
 /** The one "nothing to draw" answer. */
 export const ABSENT_PROPOSAL_CARD: TriggerScheduleProposalCard = {
   state: ABSENT,
   view: null,
+  firedOnce: false,
+  durationCopy: null,
 };
 
 /**
@@ -149,16 +176,18 @@ export async function resolveTriggerScheduleProposalCard(params: {
         version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
         agentName: resolved.agentName,
         schedule: waitingRows,
-        // The per-template duration read is the scheduling step's own; this card
-        // asks for it no more than the proposal card does. `null` renders the
-        // honest "Unavailable." the form draws.
-        durationCopy: null,
+        // THE DRAWING'S OWN LINE, on the reading the reader meets first
+        // (cinatra#3174 fix leg 1, converge round). §VI draws "Estimated run
+        // duration" beneath the rows in every one of its five pictures. `null`
+        // draws NO line — the section gives no wording for a missing estimate,
+        // so none is invented.
+        durationCopy: resolved.durationCopy,
         canConfirm: resolved.canConfirm,
         restrictedReason: resolved.restrictedReason,
         // WHICH ROAD THE PRESS TAKES — see the field's own note on the wire.
         runPending: true,
       };
-      return { state, view };
+      return { state, view, firedOnce: false, durationCopy: resolved.durationCopy };
     }
 
     // EXPIRED — a DRAWN reading, never an absence (cinatra#2836; plan (A) §7.2
@@ -212,7 +241,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
         // expired" is worded exactly as "what was armed" would have been.
         scheduleCopy: describeProposalSchedule(resolved.proposal.schedule),
       };
-      return { state, view };
+      return { state, view, firedOnce: false, durationCopy: resolved.durationCopy };
     }
 
     if (resolved.phase === "proposal") {
@@ -247,15 +276,13 @@ export async function resolveTriggerScheduleProposalCard(params: {
         version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
         agentName: resolved.agentName,
         schedule: proposalRows,
-        // The duration estimate is a per-template read the scheduling step
-        // already performs on its own surface; the card asks for it separately
-        // rather than paying for it on every resolve of an already-settled
-        // proposal. `null` renders the honest "Unavailable." the form draws.
-        durationCopy: null,
+        // THE DRAWING'S OWN LINE (cinatra#3174 fix leg 1, converge round) —
+        // see the waiting card's copy of this note. `null` draws no line.
+        durationCopy: resolved.durationCopy,
         canConfirm: resolved.canConfirm,
         restrictedReason: resolved.restrictedReason,
       };
-      return { state, view };
+      return { state, view, firedOnce: false, durationCopy: resolved.durationCopy };
     }
 
     // Settled — §VI: "The settled card is the trigger's chrome." No floor to
@@ -298,6 +325,17 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // the run's own Trigger tab. It is deliberately empty here rather than
       // wrong: S2 mounts the shared step tree, which reads it authoritatively.
       gatedSteps: [],
+      // READ BY NO RENDERER, AND STILL SENT (cinatra#3174 fix leg 2). Every
+      // §VI reading is keyed on the phase and on whether the schedule has
+      // FIRED, never on this gate stamp — see the field's own note in
+      // `trigger-schedule-proposal-view.ts` for why, and the one-card gate's
+      // contract row for the authorized list it left. The emission stays
+      // because a stale bundle's copy of the settled schema declares this a
+      // REQUIRED key and would fail the parse without it, exactly as for
+      // `canRelease` below.
+      //
+      // `resolved.released` itself is NOT retired: it is what `canSaveInstalled`
+      // refuses a spent one-off's re-save on. Only the wire reading is gone.
       released: resolved.released,
       // OMITTED UNLESS TRUE, for the reason `superseded` is (cinatra#2972).
       ...(resolved.stopped ? { stopped: true as const } : {}),
@@ -337,7 +375,12 @@ export async function resolveTriggerScheduleProposalCard(params: {
         !resolved.stopped &&
         !resolved.arming,
     };
-    return { state: { state: "settled" }, view };
+    return {
+      state: { state: "settled" },
+      view,
+      firedOnce: resolved.firedOnce,
+      durationCopy: resolved.durationCopy,
+    };
   } catch {
     // A store/transport failure must not become an existence signal either.
     return ABSENT_PROPOSAL_CARD;
