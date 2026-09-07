@@ -373,6 +373,51 @@ async function submitHitlScreenThroughBroker(input: {
 }
 
 /**
+ * THE SCREEN'S OWN STATE, KEPT BY THE CONTAINER THAT MOVES IT (cinatra#3193).
+ *
+ * A conversation may have to MOVE this card between two containers: the turn
+ * that carries a settled schedule card draws the agent's own next screen in a
+ * marked place of its own rather than beside the card, and which of the two
+ * that is becomes known only when the schedule settles - which can be long
+ * after a person started typing into the screen. The two placements have
+ * different parents, so React reconciles them as different trees: the instance
+ * that was on screen is unmounted and a new one is mounted in its place.
+ *
+ * What that costs, without this, is everything the instance was holding: the
+ * authorized answer it had already read (so the screen BLANKS for as long as
+ * the re-read takes) and the half-typed answer the person had not sent yet (so
+ * their words are simply gone). Neither is acceptable for a card that exists to
+ * be answered.
+ *
+ * So the state that must outlive the move is held by the container that CAUSES
+ * the move, in a box it passes down, and this card reads it on mount and writes
+ * it on every change. It is deliberately NOT a module-level cache: the box
+ * belongs to one container and one run, it dies with the turn that owns it, and
+ * a card whose host passes none behaves exactly as it always did.
+ *
+ * NOTHING HERE IS AN AUTHORIZATION. The carried state is an answer this very
+ * card already resolved for this reader in this tab, re-read from scratch on
+ * mount like every other mount; it shortens the blank, it never stands in for a
+ * read.
+ */
+export type AgentHitlScreenCarry = {
+  /** The run the carried state belongs to. A box holding another run's answer
+   *  is not this card's answer and is ignored. */
+  runId: string;
+  /** The last authorized answer, or `null` if none has landed yet. */
+  state: AgentHitlScreenState | null;
+  /** The gate the buffer below was typed into (`hitlGateKey`), so a buffer that
+   *  belongs to a question no longer on screen is dropped exactly as it is
+   *  inside one instance's lifetime. */
+  gateKey: string | null;
+  /** What the person typed and has not sent. */
+  buffered: Record<string, unknown>;
+};
+
+/** The box itself — a ref the moving container owns. */
+export type AgentHitlScreenCarrier = { current: AgentHitlScreenCarry | null };
+
+/**
  * The authorized state for one run, re-read on the four events that can change
  * it and on nothing else.
  *
@@ -384,10 +429,16 @@ export function useAgentHitlScreenState(params: {
   wireRef: string | null;
   reloadToken: number;
   auth: LifecycleCardAuth | null;
+  /** The answer a previous instance of this same card already held for this
+   *  same run (cinatra#3193). Seeds the first frame so a card that was MOVED
+   *  rather than opened does not blank while it re-reads. */
+  carried?: AgentHitlScreenState | null;
+  /** Where to put every answer this hook lands, so it outlives the move. */
+  onResolved?: (state: AgentHitlScreenState) => void;
 }): AgentHitlScreenState | null {
-  const { runId, wireRef, reloadToken, auth } = params;
+  const { runId, wireRef, reloadToken, auth, carried, onResolved } = params;
   const [resolved, setResolved] = useState<{ runId: string; state: AgentHitlScreenState } | null>(
-    null,
+    () => (runId && carried ? { runId, state: carried } : null),
   );
   const [focusToken, setFocusToken] = useState(0);
 
@@ -409,10 +460,15 @@ export function useAgentHitlScreenState(params: {
       // authorized answer stands, and an unread card stays silent.
       if (!live || state === null) return;
       setResolved({ runId, state });
+      onResolved?.(state);
     })();
     return () => {
       live = false;
     };
+    // `onResolved` is deliberately NOT a dependency: it is a write-through into
+    // the host's box, and re-issuing an authorized read because a callback
+    // identity changed would be a second request for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, wireRef, reloadToken, focusToken, auth]);
 
   // An answer that belongs to a DIFFERENT run is not this card's answer.
@@ -869,6 +925,7 @@ export function AgentHitlScreenCard({
   runId,
   wireRef,
   screen,
+  carrier,
 }: {
   runId: string;
   /**
@@ -883,6 +940,16 @@ export function AgentHitlScreenCard({
    * surface. Absent, the card composes the shipped fields and Continue itself.
    */
   screen?: ReactNode;
+  /**
+   * WHERE THIS CARD'S STATE LIVES WHEN THE HOST MOVES IT (cinatra#3193). See
+   * `AgentHitlScreenCarry`: a host that draws this card in two different
+   * containers passes a box of its own, and the card reads it on mount and
+   * writes it on every change, so neither the authorized answer nor the
+   * person's half-typed one is lost to the relocation. Omitted - which is every
+   * host that never moves the card - the card keeps its state exactly where it
+   * always did.
+   */
+  carrier?: AgentHitlScreenCarrier;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
@@ -891,7 +958,32 @@ export function AgentHitlScreenCard({
   const present = host !== null;
 
   const [reloadToken, setReloadToken] = useState(0);
-  const [buffered, setBuffered] = useState<Record<string, unknown>>(EMPTY_BUFFER);
+  // THE BOX'S OWN CONTENTS, READ ONCE, ON MOUNT. A box holding another run's
+  // state is not this card's state, so it is ignored rather than adopted.
+  const carriedRef = useRef<AgentHitlScreenCarry | null>(
+    carrier?.current?.runId === runId ? carrier.current : null,
+  );
+  const writeCarry = useCallback(
+    (patch: Partial<Omit<AgentHitlScreenCarry, "runId">>) => {
+      if (!carrier) return;
+      const base: AgentHitlScreenCarry =
+        carrier.current?.runId === runId
+          ? carrier.current
+          : { runId, state: null, gateKey: null, buffered: EMPTY_BUFFER };
+      carrier.current = { ...base, ...patch, runId };
+    },
+    [carrier, runId],
+  );
+  const [buffered, setBufferedState] = useState<Record<string, unknown>>(
+    () => carriedRef.current?.buffered ?? EMPTY_BUFFER,
+  );
+  const setBuffered = useCallback(
+    (next: Record<string, unknown>) => {
+      setBufferedState(next);
+      writeCarry({ buffered: next });
+    },
+    [writeCarry],
+  );
   const [submitting, setSubmitting] = useState(false);
 
   // THE SETUP GATE'S ANSWER, HELD BETWEEN THE FIELD AND THE CARD'S CONTINUE.
@@ -936,14 +1028,23 @@ export function AgentHitlScreenCard({
   // Hooks run unconditionally (rules of hooks); a surface with no declared host —
   // or one that supplies its own screen — asks for nothing, because the empty
   // run id short-circuits the read.
+  const onResolvedState = useCallback(
+    (next: AgentHitlScreenState) => writeCarry({ state: next }),
+    [writeCarry],
+  );
   const state = useAgentHitlScreenState({
     runId: present && !hostSuppliesScreen ? runId : "",
     wireRef: wireRef ?? null,
     reloadToken,
     auth,
+    carried: carriedRef.current?.state ?? null,
+    onResolved: onResolvedState,
   });
 
-  const onBuffer = useCallback((next: Record<string, unknown>) => setBuffered(next), []);
+  const onBuffer = useCallback(
+    (next: Record<string, unknown>) => setBuffered(next),
+    [setBuffered],
+  );
 
   const gate = state !== null && state.state === "asking" ? state.gate : null;
 
@@ -959,10 +1060,22 @@ export function AgentHitlScreenCard({
   // buffer whose key does not match the gate on screen is not this gate's
   // answer and is not read, and the effect below drops it.
   const gateKey = gate === null ? null : hitlGateKey(gate);
-  const bufferedGateRef = useRef<string | null>(null);
+  // SEEDED FROM THE BOX (cinatra#3193), so a card that was MOVED mid-answer
+  // knows which question the words it is holding were typed into. A card with
+  // no box starts where it always did: holding nothing, for no gate.
+  const bufferedGateRef = useRef<string | null>(carriedRef.current?.gateKey ?? null);
   useEffect(() => {
+    // NO GATE ON SCREEN IS NOT A DIFFERENT GATE (cinatra#3193). `gate` is null
+    // on every first frame - the read has not landed yet - and on any frame the
+    // run is not asking. Treating that as a gate change threw away the words a
+    // moved card was carrying before its own re-read could say they still
+    // belonged to the question on screen. What ends a buffer is another gate
+    // taking the screen, which the comparison below still catches the moment
+    // one does.
+    if (gateKey === null) return;
     if (bufferedGateRef.current === gateKey) return;
     bufferedGateRef.current = gateKey;
+    writeCarry({ gateKey, buffered: EMPTY_BUFFER });
     setBuffered(EMPTY_BUFFER);
     // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
     // the buffer does, and so does the flush that produced it: the renderer is
@@ -970,7 +1083,7 @@ export function AgentHitlScreenCard({
     // from the previous gate would answer the next question with the last one's
     // field.
     setupAnswerRef.current = null;
-  }, [gateKey]);
+  }, [gateKey, setBuffered, writeCarry]);
   // Read in the SAME render the key changed in, so a submit that lands before
   // the effect runs cannot carry the previous gate's values either.
   const activeBuffered = bufferedGateRef.current === gateKey ? buffered : EMPTY_BUFFER;

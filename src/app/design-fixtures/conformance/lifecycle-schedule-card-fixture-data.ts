@@ -77,6 +77,21 @@ export type LifecycleScheduleCardFixture = {
   /** The resolver's own body, likewise in the protocol's own type. */
   body: TriggerScheduleProposalViewBody;
   /**
+   * THE FIRING, AS THE RESOLVER ANSWERS IT — the aside's own `firedOnce`, not a
+   * key of the body (cinatra#3174 fix legs 1 and 2). The two fired readings are
+   * elected by this one durable signal; `released` marks the side-effect gate
+   * opening and no reading is keyed on it any more, so a row that means "this
+   * schedule has fired" has to say it here or the card cannot know.
+   */
+  firedOnce: boolean;
+  /**
+   * The estimated-duration line the resolver renders, or `null` for a template
+   * with no history — which still draws the LINE, over the card's own word for
+   * the empty reading. Carried beside the body for the same reason `firedOnce`
+   * is: the settled and expired bodies are `.strict()`, version-1 schemas.
+   */
+  durationCopy: string | null;
+  /**
    * The ONE answer this row's decision endpoint gives, in the protocol's own
    * outcome type. The harness returns it and computes nothing from it: what the
    * card then draws is the card's.
@@ -124,13 +139,18 @@ const ONE_OFF_JULY: ProposedSchedule = {
 const AGENT_NAME = "Weekly cohort sweep";
 const RUN_ID = "run-conformance-schedule";
 
+/** The one estimated-duration value the ratified drawing gives anywhere. The
+ *  resolver renders this sentence and hands it beside the body; the card draws
+ *  the line in every reading. */
+const DURATION_COPY = "About 45s \u2013 3.4 hr.";
+
 /** Reading 1 — "First shown — nothing exists yet · editable · Confirm". */
 const FIRST_SHOWN_BODY: TriggerScheduleProposalViewBody = {
   phase: "proposal",
   version: 1,
   agentName: AGENT_NAME,
   schedule: RECURRING_NINE,
-  durationCopy: "About 45s – 3.4 hr.",
+  durationCopy: DURATION_COPY,
   canConfirm: true,
   restrictedReason: null,
 };
@@ -164,8 +184,10 @@ const EXPIRED_BODY: TriggerScheduleProposalViewBody = {
 };
 
 /** Reading 4 — "Fired, one-off — the schedule was spent · read-only · none at
- *  all". `released` IS the firing for a one-off, and it is what closes the card
- *  to changes. */
+ *  all". WHAT CLOSES THIS CARD IS THE ROW'S OWN `firedOnce`, not `released`
+ *  (cinatra#3174 fix leg 1): the gate stamp marks the side effect opening, and
+ *  a one-off whose run then failed without starting was never spent. The stamp
+ *  stays true on the body because the wire carries it; nothing reads it. */
 const FIRED_BODY: TriggerScheduleProposalViewBody = {
   phase: "settled",
   version: 1,
@@ -183,9 +205,11 @@ const FIRED_BODY: TriggerScheduleProposalViewBody = {
 };
 
 /** Reading 5 — "Fired, recurring — runs still to come · editable · Save changes
- *  · Cancel schedule". A recurring schedule's firing is `canCancel`'s business,
- *  read server-side off the tick's own stamp; `released` says nothing about it,
- *  because a tick opens the COPY's gate and never this run's. */
+ *  · Cancel schedule". The firing is the row's own `firedOnce`, off the tick's
+ *  server-side stamp; `released` says nothing about it, because a tick opens the
+ *  COPY's gate and never this run's. `canCancel` is a separate question — it is
+ *  what the FLOOR's second control is drawn from (cinatra#3174 fix leg 3), on
+ *  every host, and it is not what elects the reading. */
 const FIRED_RECURRING_BODY: TriggerScheduleProposalViewBody = {
   phase: "settled",
   version: 1,
@@ -222,6 +246,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "card",
     state: PENDING,
     body: FIRST_SHOWN_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: REFUSED,
     answerDelayMs: 1_200,
   },
@@ -231,6 +257,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "floor",
     state: PENDING,
     body: FIRST_SHOWN_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: { kind: "confirmed", runId: RUN_ID, alreadyConfirmed: false },
     answerDelayMs: 1_200,
   },
@@ -240,6 +268,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "card",
     state: SETTLED,
     body: CONFIGURED_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
     answerDelayMs: 1_200,
   },
@@ -249,6 +279,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "floor",
     state: SETTLED,
     body: CONFIGURED_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
     answerDelayMs: 0,
   },
@@ -258,6 +290,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "card",
     state: SETTLED,
     body: EXPIRED_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: REFUSED,
     answerDelayMs: 1_200,
   },
@@ -267,6 +301,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "floor",
     state: SETTLED,
     body: EXPIRED_BODY,
+    firedOnce: false,
+    durationCopy: DURATION_COPY,
     answer: { kind: "confirmed", runId: RUN_ID, alreadyConfirmed: false },
     answerDelayMs: 1_200,
   },
@@ -276,6 +312,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "card",
     state: SETTLED,
     body: FIRED_BODY,
+    firedOnce: true,
+    durationCopy: DURATION_COPY,
     // A spent one-off asks nothing, so nothing here is ever called. The row
     // still declares an answer rather than a special case: a fixture whose
     // transport could not answer would be a fixture that proves the floor is
@@ -289,6 +327,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "card",
     state: SETTLED,
     body: FIRED_RECURRING_BODY,
+    firedOnce: true,
+    durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
     answerDelayMs: 1_200,
   },
@@ -298,6 +338,8 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     part: "floor",
     state: SETTLED,
     body: FIRED_RECURRING_BODY,
+    firedOnce: true,
+    durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
     answerDelayMs: 0,
   },
