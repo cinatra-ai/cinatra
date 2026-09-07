@@ -44,7 +44,18 @@
 // Function` and no process API in this file at all.
 // ---------------------------------------------------------------------------
 
-import { computeContentDigest } from "@cinatra-ai/extension-types";
+import {
+  MAX_SUPPLIED_ENTRY_BYTES,
+  MAX_SUPPLIED_TREE_BYTES,
+  MAX_SUPPLIED_TREE_ENTRIES,
+  SUPPLIED_ARCHIVE_SUBJECT,
+  SUPPLIED_PACKAGE_KINDS,
+  computeContentDigest,
+  resolveSuppliedPackageTree,
+  suppliedEntryNameRefusal,
+  type ResolvedSuppliedPackageTree,
+  type SuppliedPackageKind,
+} from "@cinatra-ai/extension-types";
 
 const EOCD_SIG = 0x06054b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -65,9 +76,9 @@ const LICENSE_SIDECAR_NAMES = ["LICENSE", "LICENSE.md", "COPYING", ".spdx"] as c
  * Enforced on the CENTRAL DIRECTORY's declared sizes, so the refusal happens
  * before a single byte is inflated.
  */
-export const MAX_ARCHIVE_ENTRIES = 20_000;
-export const MAX_ARCHIVE_ENTRY_BYTES = 64 * 1024 * 1024;
-export const MAX_ARCHIVE_TOTAL_BYTES = 128 * 1024 * 1024;
+export const MAX_ARCHIVE_ENTRIES = MAX_SUPPLIED_TREE_ENTRIES;
+export const MAX_ARCHIVE_ENTRY_BYTES = MAX_SUPPLIED_ENTRY_BYTES;
+export const MAX_ARCHIVE_TOTAL_BYTES = MAX_SUPPLIED_TREE_BYTES;
 
 /** Unix file-type bits carried in a ZIP central directory's external attributes. */
 const S_IFMT = 0o170000;
@@ -86,19 +97,7 @@ const S_IFLNK = 0o120000;
  * is the FIRST, and it is here so that no consumer of these entries can be the
  * first to notice.
  */
-export function archiveEntryNameRefusal(name: string): string | null {
-  if (name.length === 0) return "an entry with an empty name";
-  if (name.includes("\\")) {
-    return `entry "${name}" contains a backslash, so where its path segments divide is ambiguous`;
-  }
-  if (name.startsWith("/") || /^[A-Za-z]:[/]/.test(name)) {
-    return `entry "${name}" is an absolute path`;
-  }
-  if (name.split("/").some((segment) => segment === "..")) {
-    return `entry "${name}" traverses out of the archive root`;
-  }
-  return null;
-}
+export const archiveEntryNameRefusal = suppliedEntryNameRefusal;
 
 // ---------------------------------------------------------------------------
 // ZIP reading
@@ -377,149 +376,24 @@ export function resolveAgentArchive(entries: Map<string, Uint8Array>): ResolvedA
 // ---------------------------------------------------------------------------
 
 /**
- * The four kinds the product can actually install. `workflow` is NOT among them:
- * its host handler was removed and the literal survives in the canonical union
- * only until the in-app consumer narrowing completes, so accepting a workflow
- * archive here would promise an install that has nowhere to go. It is refused BY
- * NAME rather than falling into the "unknown kind" bucket, because "we retired
- * this" and "we have never heard of this" are different things to be told.
+ * The four kinds the product can actually install, and the reader's own names
+ * for the SHARED resolution. Both are re-exports, not copies: the kind list, the
+ * refusal set and the payload rules live in the dependency-free leaf
+ * (`@cinatra-ai/extension-types`) so the repository intake (cinatra#3204 leg 2)
+ * resolves through the SAME implementation this reader does. A kind added on one
+ * road is added on both, because there is only one road for that decision.
  */
-export const SUPPLIED_ARCHIVE_KINDS = ["agent", "skill", "connector", "artifact"] as const;
-export type SuppliedArchiveKind = (typeof SUPPLIED_ARCHIVE_KINDS)[number];
-
-/** The retired kind, refused by name. */
-const RETIRED_ARCHIVE_KINDS = new Set(["workflow"]);
-
-export type ResolvedSuppliedArchive = {
-  /** The kind the package DECLARED and whose payload was found. */
-  kind: SuppliedArchiveKind;
-  /** The declared package name, validated against the archive contents. */
-  packageName: string;
-  /** The declared version. */
-  version: string;
-  /** package.json text (always present — a supplied package must declare itself). */
-  packageJson: string;
-  /**
-   * The payload this kind requires, by archive-relative path. Which paths those
-   * are is the kind's own business (see resolveKindPayload); the reader's job is
-   * to prove they are THERE, not to interpret them.
-   */
-  payload: Map<string, string>;
-  /** The content digest over the delivered tree (cinatra#3204 D2). */
-  contentDigest: string;
-  /** The single top-level folder that was stripped, or null. */
-  strippedPrefix: string | null;
-};
-
-type ParsedManifest = {
-  name?: unknown;
-  version?: unknown;
-  cinatra?: { kind?: unknown; entrypoint?: unknown; uiSurface?: unknown; serverEntry?: unknown };
-};
+export const SUPPLIED_ARCHIVE_KINDS = SUPPLIED_PACKAGE_KINDS;
+export type SuppliedArchiveKind = SuppliedPackageKind;
+export type ResolvedSuppliedArchive = ResolvedSuppliedPackageTree;
 
 /**
- * Resolve the payload a KIND requires, or say what is missing.
+ * Read a SUPPLIED package ARCHIVE of any of the four live kinds.
  *
- * Each kind's requirement is the one its own installer already depends on, so a
- * package that resolves here is a package that has what the install road will
- * later look for — and a package that does not is refused at intake instead of
- * halfway through an install:
- *
- *   agent     — the OAS Flow document: `cinatra.entrypoint`, else the
- *               conventional `cinatra/oas.json`, else a legacy root `agent.json`.
- *   skill     — at least one `SKILL.md` (the catalog is built from these).
- *   connector — the declared `cinatra.serverEntry` (the module the pipeline
- *               later hot-loads; its presence is checkable, and checking it is
- *               NOT running it).
- *   artifact  — the declared `cinatra.entrypoint` descriptor, else the
- *               conventional `cinatra/artifact.json`.
- */
-function resolveKindPayload(
-  kind: SuppliedArchiveKind,
-  pkg: ParsedManifest,
-  get: (name: string) => string | undefined,
-  names: readonly string[],
-): { payload: Map<string, string> } | { missing: string } {
-  const payload = new Map<string, string>();
-  const norm = (p: string) => p.replace(/^\.\//, "");
-  const entrypoint = typeof pkg.cinatra?.entrypoint === "string" ? norm(pkg.cinatra.entrypoint) : null;
-
-  if (kind === "agent") {
-    if (entrypoint) {
-      const doc = get(entrypoint);
-      if (doc === undefined) {
-        return { missing: `the entrypoint "${entrypoint}" that package.json names` };
-      }
-      payload.set(entrypoint, doc);
-      return { payload };
-    }
-    const conventional = get("cinatra/oas.json");
-    if (conventional !== undefined) {
-      payload.set("cinatra/oas.json", conventional);
-      return { payload };
-    }
-    const legacy = get("agent.json");
-    if (legacy !== undefined) {
-      payload.set("agent.json", legacy);
-      return { payload };
-    }
-    return {
-      missing: 'an OAS Flow document (a package.json "cinatra.entrypoint", a cinatra/oas.json, or a root agent.json)',
-    };
-  }
-
-  if (kind === "skill") {
-    let found = false;
-    for (const name of names) {
-      if (name === "SKILL.md" || name.endsWith("/SKILL.md")) {
-        const text = get(name);
-        if (text !== undefined) {
-          payload.set(name, text);
-          found = true;
-        }
-      }
-    }
-    return found ? { payload } : { missing: "a SKILL.md" };
-  }
-
-  if (kind === "connector") {
-    const serverEntry = typeof pkg.cinatra?.serverEntry === "string" ? norm(pkg.cinatra.serverEntry) : null;
-    if (!serverEntry) {
-      return { missing: 'a package.json "cinatra.serverEntry"' };
-    }
-    const module = get(serverEntry);
-    if (module === undefined) {
-      return { missing: `the serverEntry "${serverEntry}" that package.json names` };
-    }
-    // READ, never run. The module's TEXT is carried so the caller can show what
-    // the package ships; nothing imports or evaluates it here.
-    payload.set(serverEntry, module);
-    return { payload };
-  }
-
-  // artifact
-  const descriptorPath = entrypoint ?? "cinatra/artifact.json";
-  const descriptor = get(descriptorPath);
-  if (descriptor === undefined) {
-    return {
-      missing: entrypoint
-        ? `the entrypoint "${entrypoint}" that package.json names`
-        : "an artifact descriptor (a package.json \"cinatra.entrypoint\", or a cinatra/artifact.json)",
-    };
-  }
-  payload.set(descriptorPath, descriptor);
-  return { payload };
-}
-
-/**
- * Read a SUPPLIED package archive of ANY of the four live kinds.
- *
- * This replaces the agent-only intake: the reader no longer decides in advance
- * what the archive must be, it reads what the archive SAYS it is and then proves
- * the package actually contains what that kind needs. A package declaring a kind
- * whose payload is absent is refused naming both — what was declared and what
- * was not found — because "invalid archive" tells an operator nothing they can
- * act on.
+ * Everything specific to a ZIP happens HERE — the macOS junk entries a zipper
+ * adds are dropped before the tree is read — and everything that is about the
+ * PACKAGE happens in the shared resolver: the declared kind, the identity, the
+ * kind's required payload, and the content digest over the delivered tree.
  *
  * REFUSALS, each by name: no declared kind; an unknown kind; the retired
  * `workflow` kind; a missing or unparseable package.json; a missing `name` or
@@ -536,129 +410,7 @@ export async function resolveSuppliedArchive(
     if (isJunkEntry(name)) continue;
     raw.set(name, bytes);
   }
-  if (raw.size === 0) {
-    throw new Error("Invalid archive: the ZIP file contains no files.");
-  }
-
-  // Single top-level folder tolerance, decided the same way the agent reader
-  // decides it, so both readers agree about what "the root" means.
-  const topSegments = new Set<string>();
-  for (const name of raw.keys()) {
-    const slash = name.indexOf("/");
-    topSegments.add(slash < 0 ? "" : name.slice(0, slash));
-  }
-  let strippedPrefix: string | null = null;
-  if (topSegments.size === 1) {
-    const [segment] = topSegments;
-    if (segment !== "" && raw.has(`${segment}/package.json`)) strippedPrefix = segment;
-  }
-  const prefix = strippedPrefix === null ? "" : `${strippedPrefix}/`;
-
-  const td = new TextDecoder("utf-8");
-  const files = new Map<string, string>();
-  const names: string[] = [];
-  for (const [name, bytes] of raw) {
-    if (prefix !== "" && !name.startsWith(prefix)) continue;
-    const rel = name.slice(prefix.length);
-    if (rel.length === 0) continue;
-    files.set(rel, td.decode(bytes));
-    names.push(rel);
-  }
-  const get = (name: string) => files.get(name);
-
-  const packageJson = get("package.json");
-  if (packageJson === undefined) {
-    throw new Error(
-      "Invalid archive: no package.json found. A supplied extension package must declare itself.",
-    );
-  }
-  let pkg: ParsedManifest;
-  try {
-    pkg = JSON.parse(packageJson) as ParsedManifest;
-  } catch {
-    throw new Error("Invalid archive: package.json is not valid JSON.");
-  }
-
-  // KIND (criterion 1). Undeclared, retired and unknown are three different
-  // refusals, and each says what is accepted.
-  const accepted = SUPPLIED_ARCHIVE_KINDS.join(", ");
-  const declaredKind = pkg.cinatra?.kind;
-  if (declaredKind === undefined || declaredKind === null || declaredKind === "") {
-    throw new Error(
-      `Invalid archive: package.json declares no cinatra.kind. Accepted kinds are ${accepted}.`,
-    );
-  }
-  if (typeof declaredKind !== "string") {
-    throw new Error(
-      `Invalid archive: package.json declares a non-string cinatra.kind. Accepted kinds are ${accepted}.`,
-    );
-  }
-  if (RETIRED_ARCHIVE_KINDS.has(declaredKind)) {
-    throw new Error(
-      `Invalid archive: "${declaredKind}" is a retired extension kind and cannot be installed. Accepted kinds are ${accepted}.`,
-    );
-  }
-  if (!(SUPPLIED_ARCHIVE_KINDS as readonly string[]).includes(declaredKind)) {
-    throw new Error(
-      `Invalid archive: "${declaredKind}" is not an extension kind this product installs. Accepted kinds are ${accepted}.`,
-    );
-  }
-  const kind = declaredKind as SuppliedArchiveKind;
-
-  // IDENTITY (criterion 3): name and version must be declared, and the name must
-  // agree with the archive's own top-level folder when it has one. A package
-  // whose folder says one thing and whose manifest says another is refused
-  // rather than silently believed, because whichever of the two a later step
-  // trusts, the other one was a lie.
-  const packageName = typeof pkg.name === "string" ? pkg.name.trim() : "";
-  const version = typeof pkg.version === "string" ? pkg.version.trim() : "";
-  if (packageName === "") {
-    throw new Error("Invalid archive: package.json declares no name.");
-  }
-  if (version === "") {
-    throw new Error(`Invalid archive: package.json for "${packageName}" declares no version.`);
-  }
-  if (strippedPrefix !== null) {
-    const unscoped = packageName.includes("/") ? packageName.slice(packageName.indexOf("/") + 1) : packageName;
-    if (strippedPrefix !== packageName && strippedPrefix !== unscoped) {
-      throw new Error(
-        `Invalid archive: package.json declares the name "${packageName}", but the archive's top-level folder is "${strippedPrefix}".`,
-      );
-    }
-  }
-
-  // PAYLOAD (criterion 1 + the cross-kind smuggling case of criterion 4): a
-  // payload of kind A that DECLARES kind B is refused here, because kind B's
-  // required payload is not the one the archive carries.
-  const resolved = resolveKindPayload(kind, pkg, get, names);
-  if ("missing" in resolved) {
-    throw new Error(
-      `Invalid archive: this package declares kind "${kind}" but does not contain ${resolved.missing}.`,
-    );
-  }
-
-  // CONTENT DIGEST over the DELIVERED tree — the same encoding the canonical row
-  // records and the install pipeline re-verifies. Computed over the bytes as
-  // they arrived (prefix stripped, so a re-zip under a different folder name
-  // gives the same digest for the same package).
-  const digestEntries: { path: string; bytes: Uint8Array }[] = [];
-  for (const [name, bytes] of raw) {
-    if (prefix !== "" && !name.startsWith(prefix)) continue;
-    const rel = name.slice(prefix.length);
-    if (rel.length === 0) continue;
-    digestEntries.push({ path: rel, bytes });
-  }
-  const contentDigest = await computeContentDigest(digestEntries);
-
-  return {
-    kind,
-    packageName,
-    version,
-    packageJson,
-    payload: resolved.payload,
-    contentDigest,
-    strippedPrefix,
-  };
+  return resolveSuppliedPackageTree(raw, SUPPLIED_ARCHIVE_SUBJECT);
 }
 
 // ---------------------------------------------------------------------------
