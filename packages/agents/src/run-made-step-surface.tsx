@@ -75,6 +75,41 @@ import {
 // affordance the round actually found missing — a bare title with nothing to
 // say it opens anything.
 //
+// THE SIZES ARE NAMED, NOT BRACKETED (fix leg 3). The second round graded this
+// surface 44 of 44 and the design system's own gate was RED on it: five
+// arbitrary `text-[…]` / `tracking-[…]` literals. A bracket literal is a size
+// that belongs to one file, so the scale cannot be moved from the token table
+// and the site drifts a pixel at a time. Every size here is now a NAMED token
+// carrying the drawing's own number, transcribed beside it:
+//
+//   the heading      14px/700     text-sm font-bold     (already standard)
+//   the phrase       12px/1.5     text-xs leading-[1.5] (already standard)
+//   a row's title    13px/700     text-row-title
+//   the type tag     10px         text-badge-xs
+//   the Used tag     10px         text-badge-xs
+//   the fact line    10px/0.04em  text-fact-line        (size AND tracking)
+//   the Open control 12px         text-xs               (already standard)
+//   the empty read   12.5px/1.55  text-reading
+//
+// THE TAGS MOVED A PIXEL, TOWARDS THE DRAWING. They were drawn at 11px against
+// the drawing's 10px — a departure the second round did not measure. The gate's
+// own `text-badge-xs` IS 10px, so the named token corrects the size rather than
+// merely satisfying the rule.
+//
+// THREE SIZES HAD NO NAME, so the token table names them (cinatra#3029): 13px,
+// 12.5px and the 0.04em tracking. The nearest standard size is a whole pixel
+// from each, and a pixel from the drawing is a departure the second round's
+// 44 of 44 does not survive; the table already answers exactly this twice in
+// its own comments (--text-scope-caption, --text-scope-empty-title).
+//
+// THE THREE ARE NAMED BY THEIR ROLE, NOT BY THIS SURFACE. `text-row-title` is
+// a row's own title in any bordered list row, `text-reading` is the sentence a
+// surface reports back with, `text-fact-line` is the mono line of facts under
+// a title — each a step of the scale the whole site may reuse, not a size this
+// file owns. A token named after the surface that first needed it would be a
+// bracket literal wearing a name. The gate is untouched — it is as strict on
+// this file as on any other.
+//
 // NO "use client": the setup run page's screen is a server component and mounts
 // this surface directly. Every row is a plain link to the artifact's own page,
 // so the step needs no client state at all.
@@ -89,10 +124,10 @@ const USED_ROW_CLASS =
   "flex flex-wrap items-center gap-2.5 rounded-[8px] border border-dashed border-line-control bg-surface px-3 py-[9px]";
 /** .tag.ext — background rgba(54,78,129,0.10); color var(--blue); border rgba(54,78,129,0.30) */
 const TYPE_TAG_CLASS =
-  "inline-flex items-center gap-[5px] rounded-full border border-primary/30 bg-primary/10 px-[9px] py-[2px] text-[11px] font-semibold text-primary";
+  "inline-flex items-center gap-[5px] rounded-full border border-primary/30 bg-primary/10 px-[9px] py-[2px] text-badge-xs font-semibold text-primary";
 /** .tag — background var(--surface-muted); color var(--ink); border var(--line) */
 const USED_TAG_CLASS =
-  "inline-flex items-center gap-[5px] rounded-full border border-line bg-surface-muted px-[9px] py-[2px] text-[11px] font-semibold text-foreground";
+  "inline-flex items-center gap-[5px] rounded-full border border-line bg-surface-muted px-[9px] py-[2px] text-badge-xs font-semibold text-foreground";
 /** .btn.link — color var(--blue); underline; text-underline-offset 3px */
 const OPEN_CONTROL_CLASS =
   "inline-flex items-center gap-1 px-0.5 py-1 text-xs text-primary underline underline-offset-[3px]";
@@ -138,7 +173,7 @@ export function RunMadeStepSurface({
         <p
           role="status"
           data-run-made-reading=""
-          className="m-0 text-[12.5px] leading-[1.55] text-foreground"
+          className="m-0 text-reading leading-[1.55] text-foreground"
         >
           {reading}
         </p>
@@ -164,7 +199,7 @@ export function RunMadeStepSurface({
                 <span className="flex flex-wrap items-center gap-[7px]">
                   <span
                     data-run-made-row-title=""
-                    className="text-[13px] font-bold text-foreground"
+                    className="text-row-title font-bold text-foreground"
                   >
                     {row.title}
                   </span>
@@ -179,7 +214,7 @@ export function RunMadeStepSurface({
                 </span>
                 <span
                   data-run-made-row-revision=""
-                  className="mt-[3px] block font-mono text-[10px] tracking-[0.04em] text-muted-foreground"
+                  className="mt-[3px] block font-mono text-fact-line text-muted-foreground"
                 >
                   {runMadeRowFacts(row)}
                 </span>

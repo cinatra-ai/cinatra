@@ -26,6 +26,7 @@
  */
 import React from "react";
 import { cleanup, render } from "@testing-library/react";
+import { Button } from "@/components/ui/button";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -207,9 +208,14 @@ describe("§I.2 — the rail's last entry is the run's own record", () => {
         steps={[madeStep]}
         rail={
           <div data-conformance-id="run-step-rail">
-            <button type="button" data-run-surface-rail-step="" data-page-rail-row="">
+            <Button
+              type="button"
+              variant="ghost"
+              data-run-surface-rail-step=""
+              data-page-rail-row=""
+            >
               Review
-            </button>
+            </Button>
           </div>
         }
         detail={<div>detail</div>}
