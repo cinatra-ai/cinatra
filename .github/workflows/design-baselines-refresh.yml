@@ -1,6 +1,8 @@
 # design-baselines-refresh — dispatch-only. Re-draws the two /design-fixtures pixel
-# baselines on the runner class that runs the design job (the end-to-end runner),
-# so the committed goldens match the machine that compares them. The same setup
+# baselines on the runner class that runs the design comparison (PIXEL, the hosted
+# class — see the class list at the top of build-image.yml: the goldens are drawn
+# there and the comparison never passes anywhere else), so the committed goldens
+# match the machine that compares them. The same setup
 # as design-visual-verify's job (services, env, install, build, server), minus the
 # contract/ratchet checks; the last step runs the pixel project with
 # --update-snapshots and uploads tests/e2e/design/__screenshots__/ as an artifact
@@ -14,8 +16,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
-    name: design baselines refresh (end-to-end runner)
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    name: design baselines refresh (pixel runner)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       redis:

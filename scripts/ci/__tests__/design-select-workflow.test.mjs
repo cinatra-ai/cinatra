@@ -94,14 +94,16 @@ describe("the cheap job comes first", () => {
   });
 
   it("gives `select` and the expensive job each their own runner class", () => {
-    // The four-class routing form. The cheap selection job takes the gate
-    // class; the expensive job takes the end-to-end class, which is the
-    // class that stays on the self-hosted box.
+    // The routing form. The cheap selection job takes the gate class; the
+    // expensive job takes PIXEL, a class of its own, because the committed
+    // goldens are drawn on the hosted class and the picture comparison never
+    // passes on a self-hosted machine that renders the fixtures page
+    // differently.
     expect(SELECT).toContain(
       "runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-latest\"') }}",
     );
     expect(PIXEL_DIFF).toContain(
-      "runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '\"ubuntu-latest\"') }}",
+      "runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '\"ubuntu-latest\"') }}",
     );
   });
 

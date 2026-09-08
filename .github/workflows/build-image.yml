@@ -1,13 +1,21 @@
 # CI runner routing is VARIABLE-DRIVEN: every job in every workflow reads
 # `runs-on: ${{ fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') }}` for one of
-# four classes — POOL (the install-heavy invariant jobs pinned to the dedicated
+# five classes — POOL (the install-heavy invariant jobs pinned to the dedicated
 # six-runner box), HEAVY (a pnpm install plus node work, no `services:`/`container:`),
-# E2E (declares `services:`/`container:` or drives a browser, Playwright or docker) and
-# GATE (small gate/lint/aggregator jobs) — so routing is changed by setting the
+# E2E (declares `services:`/`container:` or drives a browser, Playwright or docker),
+# GATE (small gate/lint/aggregator jobs) and PIXEL (the two jobs that draw or compare
+# the committed /design-fixtures picture goldens) — so routing is changed by setting the
 # repository variable, never by pushing a workflow: each variable holds a JSON string,
 # either a quoted label (`"ubuntu-latest"`) or a label array
 # (`["self-hosted","linux","x64","cinatra-ci"]`), and an unset variable falls back to
 # `ubuntu-latest`. CI_RUNNER_* supersedes the older `vars.CI_BUILD_RUNNER` escape hatch.
+#
+# PIXEL is a class of its own for one reason: the goldens are DRAWN on the hosted
+# class, and a self-hosted machine renders the fixtures page differently, so the
+# picture comparison never passes anywhere else. Its two jobs are the `pixel-diff` job
+# of design-visual-verify.yml and the `refresh` job of design-baselines-refresh.yml.
+# Point PIXEL somewhere else only together with a full goldens re-draw on that same
+# machine, never on its own.
 name: Build and publish image
 
 on:
