@@ -79,16 +79,16 @@ export const GATEWAY_SERVICE = "cinatra-exec-gateway";
 
 /**
  * THE JOB-SCOPED NAMES — the compose PROJECT this harness brings the stack up
- * under, and the two networks it creates.
+ * under, and the three networks it creates.
  *
  * Each of these used to be a fixed literal, which put every battery on a
  * machine onto ONE project and ONE set of networks. A second battery job on the
  * same runner box then either found the first job's network with a container
  * attached and refused to run, or brought its own stack up and tore the first
  * one down on teardown — in both cases before executing a single assertion
- * (cinatra#3320 for the sandbox network, cinatra#3327 for the project and the
- * gateway's egress leg). A machine per job hid that on the hosted road; a shared
- * pool does not.
+ * (cinatra#3320 for the sandbox network, cinatra#3327 for the project, the
+ * gateway's egress leg and the broker's app-facing leg). A machine per job hid
+ * that on the hosted road; a shared pool does not.
  *
  * So every name carries THIS JOB'S OWN IDENTITY — the run id, the job and the
  * attempt when the CI environment offers them — plus a short random
@@ -96,8 +96,9 @@ export const GATEWAY_SERVICE = "cinatra-exec-gateway";
  * there is no per-leg identifier in the environment at all. Off CI there is no
  * identity to read and the random half carries the whole name.
  *
- * The two network names are handed to compose as `CINATRA_EXEC_SANDBOX_NETWORK`
- * and `CINATRA_EXEC_EGRESS_NETWORK`. The sandbox variable does double duty: the
+ * The three network names are handed to compose as
+ * `CINATRA_EXEC_SANDBOX_NETWORK`, `CINATRA_EXEC_EGRESS_NETWORK` and
+ * `CINATRA_EXEC_APP_NETWORK`. The sandbox variable does double duty: the
  * compose file uses it BOTH for the network's real `name` and for the
  * `EXEC_SANDBOX_NETWORK` the broker asserts and attaches sandboxes to — one
  * variable, so the two can never drift into naming different networks. Every
@@ -109,14 +110,17 @@ export const GATEWAY_SERVICE = "cinatra-exec-gateway";
  */
 export const SANDBOX_NETWORK_BASE_NAME = "cinatra-exec-internal";
 export const EGRESS_NETWORK_BASE_NAME = "cinatra-exec-egress";
+export const APP_NETWORK_BASE_NAME = "cinatra-exec-app";
 export const COMPOSE_PROJECT_BASE_NAME = "cinatra-exec-l5e2e";
 
 /**
  * What the names are read from. `process.env` satisfies it, and so does one
  * job's identity written out on its own — which is how the rule is testable
- * without standing up a process environment. Exactly six variables are ever
+ * without standing up a process environment. Exactly eight variables are ever
  * read: CINATRA_EXEC_SANDBOX_NETWORK, CINATRA_EXEC_EGRESS_NETWORK,
- * CINATRA_EXEC_COMPOSE_PROJECT, GITHUB_RUN_ID, GITHUB_JOB, GITHUB_RUN_ATTEMPT.
+ * CINATRA_EXEC_APP_NETWORK, CINATRA_EXEC_COMPOSE_PROJECT,
+ * CINATRA_EXEC_BROKER_HOST_PORT, GITHUB_RUN_ID, GITHUB_JOB,
+ * GITHUB_RUN_ATTEMPT.
  */
 export type JobScopedNameEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -154,6 +158,22 @@ export function egressNetworkNameFor(
 }
 
 /**
+ * The broker's app-facing leg, on the same rule. This one is not shared between
+ * jobs in the way the other two were — compose REFUSES it outright: a network
+ * that already exists under another project's ownership is not adopted, so the
+ * first job on a runner box owned the fixed name and every later job's `up`
+ * failed with "a network with name cinatra-exec-app exists but was not created
+ * for project ..." before a single assertion ran.
+ */
+export function appNetworkNameFor(
+  env: JobScopedNameEnvironment = process.env,
+): string {
+  const pinned = env.CINATRA_EXEC_APP_NETWORK?.trim();
+  if (pinned) return pinned;
+  return jobScopedName(APP_NETWORK_BASE_NAME, env);
+}
+
+/**
  * The compose PROJECT name, on the same rule — but compose accepts a NARROWER
  * alphabet than docker does for a network: lower case, no dots. A job name is
  * free to carry both, so the derived name is folded down rather than handed to
@@ -183,6 +203,7 @@ export function nameIsPinned(
   variable:
     | "CINATRA_EXEC_SANDBOX_NETWORK"
     | "CINATRA_EXEC_EGRESS_NETWORK"
+    | "CINATRA_EXEC_APP_NETWORK"
     | "CINATRA_EXEC_COMPOSE_PROJECT",
   env: JobScopedNameEnvironment = process.env,
 ): boolean {
@@ -196,14 +217,51 @@ export function nameIsPinned(
  */
 export const INTERNAL_NETWORK = sandboxNetworkNameFor();
 export const EGRESS_NETWORK = egressNetworkNameFor();
+export const APP_NETWORK = appNetworkNameFor();
 export const COMPOSE_PROJECT = composeProjectNameFor();
 
 /** Same resolution, remembered: reclaim must not touch an operator's network. */
 const INTERNAL_NETWORK_PINNED = nameIsPinned("CINATRA_EXEC_SANDBOX_NETWORK");
 const EGRESS_NETWORK_PINNED = nameIsPinned("CINATRA_EXEC_EGRESS_NETWORK");
+const APP_NETWORK_PINNED = nameIsPinned("CINATRA_EXEC_APP_NETWORK");
 
-/** The broker's published loopback port, fixed by the compose file. */
-export const BROKER_HOST_PORT = 4100;
+/**
+ * The broker's PUBLISHED loopback port, on the same rule as the names above and
+ * for the same reason: a published port is a HOST-wide object, not a
+ * project-scoped one. Two stacks on one runner box cannot both bind
+ * 127.0.0.1:4100, so a fixed publish turns the second job away at `up` exactly
+ * the way the fixed network name did — the same collision one layer down.
+ *
+ * Only the HOST side moves. The container port stays 4100, every in-topology
+ * dial stays what it was, and an unset variable leaves an ordinary deployment
+ * publishing 4100, the port it has always published.
+ *
+ * The port is drawn from this process's own randomness rather than from the job
+ * identity: every leg of a matrix shares run id, job and attempt, so identity
+ * alone would put two concurrent legs back onto one port. The range sits below
+ * the usual ephemeral range so an outgoing socket on the box is not holding it.
+ */
+export const BROKER_HOST_PORT_BASE = 4100;
+const BROKER_HOST_PORT_RANGE_START = 20_000;
+const BROKER_HOST_PORT_RANGE_END = 31_999;
+
+export function brokerHostPortFor(env: JobScopedNameEnvironment = process.env): number {
+  const pinned = env.CINATRA_EXEC_BROKER_HOST_PORT?.trim();
+  if (pinned) {
+    const parsed = Number(pinned);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+      throw new Error(
+        `CINATRA_EXEC_BROKER_HOST_PORT must be a TCP port between 1 and 65535, got "${pinned}".`,
+      );
+    }
+    return parsed;
+  }
+  const span = BROKER_HOST_PORT_RANGE_END - BROKER_HOST_PORT_RANGE_START + 1;
+  return BROKER_HOST_PORT_RANGE_START + (randomBytes(2).readUInt16BE(0) % span);
+}
+
+/** Resolved ONCE, like the names: the publish and every client must agree. */
+export const BROKER_HOST_PORT = brokerHostPortFor();
 
 export type RunResult = { exitCode: number; stdout: string; stderr: string };
 
@@ -565,6 +623,8 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     CINATRA_EXEC_INSTANCE: options.instance,
     CINATRA_EXEC_SANDBOX_NETWORK: INTERNAL_NETWORK,
     CINATRA_EXEC_EGRESS_NETWORK: EGRESS_NETWORK,
+    CINATRA_EXEC_APP_NETWORK: APP_NETWORK,
+    CINATRA_EXEC_BROKER_HOST_PORT: String(BROKER_HOST_PORT),
     CINATRA_EXEC_ENV_DIR: envDir,
     CINATRA_EXEC_TLS_DIR: tlsDir,
     CINATRA_EXEC_LEASE_DIR: leaseDir,
@@ -641,6 +701,7 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
   // --- up -----------------------------------------------------------------
   await reclaimJobNetwork(INTERNAL_NETWORK, "sandbox", INTERNAL_NETWORK_PINNED);
   await reclaimJobNetwork(EGRESS_NETWORK, "egress", EGRESS_NETWORK_PINNED);
+  await reclaimJobNetwork(APP_NETWORK, "app", APP_NETWORK_PINNED);
   const up = await compose(["up", "-d", "--wait", "--wait-timeout", "90"], 300_000);
   if (up.exitCode !== 0) {
     const brokerLog = await compose(["logs", "--no-color", BROKER_SERVICE], 60_000);
@@ -665,12 +726,13 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
  * names are the collisions cinatra#3320 and cinatra#3327 closed.
  *
  * A PINNED name is the one case where that reasoning does not hold, so it is
- * refused outright. An operator who sets `CINATRA_EXEC_SANDBOX_NETWORK` or
- * `CINATRA_EXEC_EGRESS_NETWORK` may well be naming a network somebody else
- * provisioned, and an idle network is not an abandoned one: removing it would
- * silently replace its configuration with the battery's. Naming a network is
- * not consent to have it destroyed. Compose then either adopts the network as
- * it stands or fails saying so, which is the operator's decision to make.
+ * refused outright. An operator who sets `CINATRA_EXEC_SANDBOX_NETWORK`,
+ * `CINATRA_EXEC_EGRESS_NETWORK` or `CINATRA_EXEC_APP_NETWORK` may well be naming
+ * a network somebody else provisioned, and an idle network is not an abandoned
+ * one: removing it would silently replace its configuration with the battery's.
+ * Naming a network is not consent to have it destroyed. Compose then either
+ * adopts the network as it stands or fails saying so, which is the operator's
+ * decision to make.
  *
  * For a derived name the removal stays CONDITIONAL and that condition is the
  * safety property: a network with a container still attached is somebody's live

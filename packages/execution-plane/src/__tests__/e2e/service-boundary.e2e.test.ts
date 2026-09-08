@@ -48,6 +48,7 @@ import {
 } from "./support/exec-rpc";
 import { issueExecLeaf } from "./support/throwaway-pki";
 import {
+  APP_NETWORK,
   BROKER_HOST_PORT,
   BROKER_SERVICE,
   GATEWAY_SERVICE,
@@ -1301,7 +1302,11 @@ describe("7. isolation: the topology's own invariants, checked on the running st
       "{{json .NetworkSettings.Ports}}",
       brokerId,
     ]);
-    expect(published.stdout).toContain("4100");
+    // The CONTAINER port, which never moves, and THIS job's own host port —
+    // the host side is per job so two stacks on one box can both publish
+    // (cinatra#3327).
+    expect(published.stdout).toContain("4100/tcp");
+    expect(published.stdout).toContain(String(BROKER_HOST_PORT));
     expect(published.stdout).toContain("127.0.0.1");
     expect((await app.health()).protocolVersion).toBe(EXEC_PROTOCOL_VERSION);
 
@@ -1313,7 +1318,9 @@ describe("7. isolation: the topology's own invariants, checked on the running st
       "inspect",
       "--format",
       "{{json .Options}}|{{len .Containers}}",
-      "cinatra-exec-app",
+      // This job's own app-facing network: the name is derived per job so two
+      // battery jobs on one runner box do not fight over it (cinatra#3327).
+      APP_NETWORK,
     ]);
     expect(inspected.exitCode).toBe(0);
     const [options, attached] = inspected.stdout.trim().split("|");
