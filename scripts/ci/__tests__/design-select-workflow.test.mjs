@@ -93,13 +93,18 @@ describe("the cheap job comes first", () => {
     expect(jobIds()).toContain("pixel-diff");
   });
 
-  it("gives `select` a runner class of its own without touching the expensive job's", () => {
-    // The four-class routing form the sibling change introduces. The expensive
-    // job keeps its own opt-in larger-runner lever, untouched.
+  it("gives `select` and the expensive job each their own runner class", () => {
+    // The routing form. The cheap selection job takes the gate class; the
+    // expensive job takes PIXEL, a class of its own, because the committed
+    // goldens are drawn on the hosted class and the picture comparison never
+    // passes on a self-hosted machine that renders the fixtures page
+    // differently.
     expect(SELECT).toContain(
       "runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-latest\"') }}",
     );
-    expect(PIXEL_DIFF).toContain("runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}");
+    expect(PIXEL_DIFF).toContain(
+      "runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '\"ubuntu-latest\"') }}",
+    );
   });
 
   it("pays no install, no build, no browser and no boot in `select`", () => {
