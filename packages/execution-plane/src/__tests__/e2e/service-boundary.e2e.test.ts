@@ -38,6 +38,7 @@ import { BrokerServiceClient } from "../../service/broker-client";
 import { EXEC_PROTOCOL_VERSION } from "../../service/protocol";
 import { containerNamePrefixFor } from "../../l0-profile";
 import type { ExecResult, ExecutionAuditRecord } from "../../types";
+import { workspaceVolumeName } from "../../workspace";
 import {
   mintVoucher,
   rawExecRpc,
@@ -140,6 +141,13 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 function carrierFor(runId: string, orgId: string = ORG, userId: string = USER): string {
+  // CLAIMED BEFORE THE OPEN, not after it. The broker provisions the L2
+  // workspace volume for this run key before it can refuse for a later reason,
+  // and every arm that opens expecting a refusal reaches this helper too, so a
+  // registration that waited for a returned job id would leave those volumes
+  // owned by nobody — and teardown removes only what this stack owns. The run
+  // key is knowable here; the job id is appended when the open returns.
+  stack.own(runId, "");
   return sealExecutionSession(
     mintExecutionSession({ orgId, userId, surface: SURFACE, runId }),
     { secret: stack.carrierSecret },
@@ -166,6 +174,11 @@ async function openJob(
   const opened = await app.openJob(carrierFor(runId, orgId, userId));
   if (!opened.ok) throw new Error(`openJob refused: ${opened.reason} — ${opened.message}`);
   jobSessions.set(opened.jobId, { orgId, userId, runId });
+  // The job id, appended to the run key `carrierFor` already claimed. Teardown
+  // sweeps only what this stack was told is its own; an unregistered job leaves
+  // its containers and volumes on the host rather than a concurrent battery
+  // losing its own to this file's teardown.
+  stack.own(runId, opened.jobId);
   return opened.jobId;
 }
 
@@ -261,6 +274,10 @@ describe("1. transport: mutual TLS on both hops, fail-closed on every negative",
     const runId = `l5-hop-${randomUUID()}`;
     const jobId = await openJob(runId);
     expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
+    // The receipt is THIS run's own volume, named for it. Asserting merely that
+    // the daemon holds SOME l2 volume passes on a concurrently running
+    // battery's workspace and would stay green with the hop broken
+    // (cinatra#3327).
     const volumes = await docker([
       "volume",
       "ls",
@@ -268,7 +285,8 @@ describe("1. transport: mutual TLS on both hops, fail-closed on every negative",
       "--filter",
       "label=ai.cinatra.execution-plane=l2",
     ]);
-    expect(volumes.stdout.trim().length).toBeGreaterThan(0);
+    const names = volumes.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+    expect(names).toContain(workspaceVolumeName(runId));
     await app.closeJob(jobId, { removeWorkspace: true });
   });
 
@@ -1468,6 +1486,9 @@ describe("7. isolation: the topology's own invariants, checked on the running st
       const theirs = await app.openJob(theirCarrier);
       expect(theirs.ok).toBe(true);
       if (!theirs.ok) return;
+      // Opened outside the helper above, so it is registered here: it is a job
+      // of this stack like any other, and teardown removes only what it owns.
+      stack.own(runId, theirs.jobId);
       try {
         const command = "echo cross-org-replay";
         const voucher = mintVoucher(stack, {

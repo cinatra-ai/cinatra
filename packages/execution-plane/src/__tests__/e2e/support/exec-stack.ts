@@ -47,6 +47,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SANDBOX_CONTAINER_JOB_LABEL, SANDBOX_CONTAINER_LABEL } from "../../../l0-profile";
+import { skillsVolumeName } from "../../../staging";
+import { workspaceVolumeName } from "../../../workspace";
+
 import {
   createThrowawayCa,
   issueExecLeaf,
@@ -62,14 +66,22 @@ export const REPO_ROOT = path.resolve(
 );
 
 /**
- * Lane-unique image tags. The battery must never clobber the
- * `cinatra-sandbox-l0:dev` tag the pre-existing docker battery builds, and must
- * never adopt another project's containers — which is also why the compose
- * PROJECT is no longer a constant here but derived per job below.
+ * The three images this harness BUILDS, as a repository and a tag base.
+ *
+ * The tag used to be the bare literal `l5e2e` on all three. That kept the
+ * battery off the `cinatra-sandbox-l0:dev` tag the pre-existing docker battery
+ * builds, but it left every battery job on a machine sharing ONE tag — and a
+ * tag is a host-wide MUTABLE reference, not a name a project owns. `docker
+ * build -t` moves it. A second job's rebuild therefore re-pointed the tag a
+ * first job's stack was still resolving, silently, with nothing failing: the
+ * running stack could be handed a different image than the one it had built and
+ * asserted the digest of. The resolved refs below carry the job's own identity,
+ * exactly as the networks and the compose project do (`jobScopedImageFor`).
  */
-export const L0_IMAGE = "cinatra-sandbox-l0:l5e2e";
-export const WORKER_IMAGE = "cinatra-exec-worker:l5e2e";
-export const BROKER_IMAGE = "cinatra-exec-broker-carrier:l5e2e";
+export const L0_IMAGE_REPOSITORY = "cinatra-sandbox-l0";
+export const WORKER_IMAGE_REPOSITORY = "cinatra-exec-worker";
+export const BROKER_IMAGE_REPOSITORY = "cinatra-exec-broker-carrier";
+export const IMAGE_TAG_BASE_NAME = "l5e2e";
 export const COMPOSE_FILE = "docker-compose.exec.yml";
 
 /** Service names as the compose file declares them (also the DNS aliases). */
@@ -190,6 +202,27 @@ export function composeProjectNameFor(
 }
 
 /**
+ * THE BUILT IMAGES, ON THE SAME RULE AS THE NAMES ABOVE.
+ *
+ * Two jobs building one tag on one machine race in a way a name collision does
+ * not even hint at: nothing fails and nothing is refused — the second build
+ * simply takes the name, and the first job goes on resolving a tag that now
+ * points at another job's image. Suffixing the tag with the job's identity
+ * makes every build's target this job's own.
+ *
+ * The REPOSITORY half never moves: it is what a reader recognises in `docker
+ * images`, and nothing outside this harness resolves these tags at all — the
+ * compose file is handed the fully-resolved refs through its own variables, so
+ * a deployment that sets those variables itself is untouched by any of this.
+ */
+export function jobScopedImageFor(
+  repository: string,
+  env: JobScopedNameEnvironment = process.env,
+): string {
+  return `${repository}:${jobScopedName(IMAGE_TAG_BASE_NAME, env)}`;
+}
+
+/**
  * Whether a name was PINNED in the environment rather than derived here.
  *
  * This is the difference between a name this process invented — which nothing
@@ -219,6 +252,15 @@ export const INTERNAL_NETWORK = sandboxNetworkNameFor();
 export const EGRESS_NETWORK = egressNetworkNameFor();
 export const APP_NETWORK = appNetworkNameFor();
 export const COMPOSE_PROJECT = composeProjectNameFor();
+
+/**
+ * Resolved ONCE for the same reason the names are: the build, the compose
+ * invocation that runs the image and the teardown that drops the tag must all
+ * name the same three refs.
+ */
+export const L0_IMAGE = jobScopedImageFor(L0_IMAGE_REPOSITORY);
+export const WORKER_IMAGE = jobScopedImageFor(WORKER_IMAGE_REPOSITORY);
+export const BROKER_IMAGE = jobScopedImageFor(BROKER_IMAGE_REPOSITORY);
 
 /** Same resolution, remembered: reclaim must not touch an operator's network. */
 const INTERNAL_NETWORK_PINNED = nameIsPinned("CINATRA_EXEC_SANDBOX_NETWORK");
@@ -407,6 +449,18 @@ export type ExecStack = {
   leasePath: string;
   tlsDir: string;
   workDir: string;
+  /**
+   * Remember one job as THIS stack's own, so teardown may sweep what it left
+   * on the host: the run key its L2 workspace volume is named after, and the
+   * broker job id its sandbox containers carry on their ownership label and
+   * its skills volume is named after.
+   *
+   * Append-only, and called at the moment a job is opened. A job that is closed
+   * again still owns whatever it left behind, and a battery that never
+   * registers a job leaves that job's leftovers on the host rather than a
+   * sibling job's work being removed in its place — see `sweepExecArtifacts`.
+   */
+  own(runKey: string, jobId: string): void;
   leaf(role: ExecRole, overrides?: LeafOverrides): ExecCertificate;
   /**
    * Write the lease IN PLACE — a truncating `writeFileSync`, deliberately NOT
@@ -455,6 +509,28 @@ const nowEpochS = (): number => Math.floor(Date.now() / 1000);
  * never skip, when the real thing cannot run.
  */
 export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecStack> {
+  try {
+    return await bringUpExecStackOrThrow(options);
+  } catch (error) {
+    // A SETUP THAT DIES PART-WAY STILL DROPS THIS RUN'S OWN TAGS.
+    //
+    // The tags are unique to this run now, which is what stops a sibling's
+    // rebuild from re-pointing them — and is also why nothing can ever reclaim
+    // them afterwards: the next process derives different names and does not
+    // know these. The only teardown that removes them is `stack.down()`, and a
+    // battery that never receives a stack never calls it, so a worker build
+    // that fails after the L0 build succeeded used to leave that tag on the box
+    // permanently. On a self-hosted runner nothing else collects it.
+    //
+    // Removal is best-effort by construction (`docker` resolves failures into
+    // an exit code rather than throwing), and the original failure is what the
+    // battery must see, so it is rethrown unchanged.
+    await removeJobScopedImages();
+    throw error;
+  }
+}
+
+async function bringUpExecStackOrThrow(options: ExecStackOptions): Promise<ExecStack> {
   const info = await docker(["info", "--format", "{{.ServerVersion}}"], { timeoutMs: 60_000 });
   if (info.exitCode !== 0) {
     throw new Error(
@@ -638,6 +714,13 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     ...(auditSpoolDir ? { CINATRA_EXEC_AUDIT_SPOOL_DIR: auditSpoolDir } : {}),
   };
 
+  // Everything the plane creates through the HOST socket, as this run is able
+  // to name it. The ownership label the worker stamps is the same on every
+  // execution plane on the machine, so the label alone cannot say whose an
+  // artifact is; the job id on the container and the volume's own name can.
+  const ownedJobIds = new Set<string>();
+  const ownedWorkspaceKeys = new Set<string>();
+
   const stack: ExecStack = {
     options,
     ca,
@@ -653,6 +736,10 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     leasePath,
     tlsDir,
     workDir,
+    own: (runKey, jobId) => {
+      if (runKey.length > 0) ownedWorkspaceKeys.add(runKey);
+      if (jobId.length > 0) ownedJobIds.add(jobId);
+    },
     leaf,
     writeLease,
     readLease: () => {
@@ -697,7 +784,8 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     },
     down: async () => {
       await compose(["down", "-v", "--remove-orphans", "-t", "5"], 180_000);
-      await sweepExecArtifacts();
+      await sweepExecArtifacts({ jobIds: ownedJobIds, workspaceKeys: ownedWorkspaceKeys });
+      await removeJobScopedImages();
       rmSync(workDir, { recursive: true, force: true });
     },
   };
@@ -774,19 +862,84 @@ async function reclaimJobNetwork(
 }
 
 /**
- * Remove every volume and container the execution plane stamped its ownership
- * label on. The worker creates these through the HOST socket, so they are not
- * compose-managed and `compose down -v` does not reach them.
+ * What one run created through the host socket, as that run can name it.
  */
-export async function sweepExecArtifacts(): Promise<void> {
+export type ExecArtifactOwnership = {
+  /** Broker job ids — the sandbox containers' job label, and the skills volumes. */
+  readonly jobIds: ReadonlySet<string>;
+  /** Run keys — the L2 workspace volume is named after the session's run id. */
+  readonly workspaceKeys: ReadonlySet<string>;
+};
+
+/**
+ * The two ownership questions the sweep asks, as a pure pair — the sweep itself
+ * needs a docker daemon, this does not, so the RULE is provable in the unit
+ * tier where the collision it prevents cannot be reproduced at all.
+ */
+export function artifactsOwnedBy(owned: ExecArtifactOwnership): {
+  ownsJob(jobId: string): boolean;
+  ownsVolume(name: string): boolean;
+} {
+  const volumeNames = new Set<string>([
+    ...[...owned.jobIds].map((jobId) => skillsVolumeName(jobId)),
+    ...[...owned.workspaceKeys].map((key) => workspaceVolumeName(key)),
+    // The broker's L2 workspace key is `session.runId ?? jobId` (see
+    // `broker.ts`), so a job opened WITHOUT a run id names its workspace volume
+    // after the job id instead. Claiming both spellings for every owned job is
+    // what makes ownership answer for every volume the plane can create for
+    // it; claiming one and not the other would leave that volume on the host
+    // for good, since no later run can name it either.
+    ...[...owned.jobIds].map((jobId) => workspaceVolumeName(jobId)),
+  ]);
+  return {
+    ownsJob: (jobId) => jobId.length > 0 && owned.jobIds.has(jobId),
+    ownsVolume: (name) => volumeNames.has(name),
+  };
+}
+
+/**
+ * Remove the volumes and containers THIS RUN's plane stamped its ownership
+ * label on. The worker creates them through the HOST socket, so they are not
+ * compose-managed and `compose down -v` does not reach them.
+ *
+ * SCOPED TO THE RUN, and that is the second half of cinatra#3327. The ownership
+ * label is identical on every execution plane on the machine, so a sweep that
+ * selected on the label alone force-removed a CONCURRENT job's live sandbox
+ * containers and its L2 volumes the instant any one job finished. The sibling
+ * then failed arms that had nothing to do with it — "a run with work in flight
+ * is never reaped" reads exactly like a reaper defect when the container was in
+ * fact torn out from under it by another job's teardown. The label still
+ * selects the candidates; the job id each container carries, and the volume's
+ * own name, decide which of them are ours.
+ *
+ * Ownership is what the caller REMEMBERED through `stack.own`, and nothing else
+ * can be removed here. A job a battery never registered therefore leaves its
+ * containers behind instead of a sibling losing its own: leftovers on a runner
+ * box are recoverable, another run's destroyed work is not.
+ *
+ * Passing no ownership at all keeps the historical host-wide sweep, for a
+ * caller that genuinely owns the whole daemon. A battery is never that caller.
+ */
+export async function sweepExecArtifacts(owned?: ExecArtifactOwnership): Promise<void> {
+  const scope = owned ? artifactsOwnedBy(owned) : null;
   const containers = await docker([
     "ps",
     "--all",
-    "--quiet",
     "--filter",
-    "label=ai.cinatra.execution-plane",
+    `label=${SANDBOX_CONTAINER_LABEL}`,
+    "--format",
+    `{{.ID}}\t{{.Label "${SANDBOX_CONTAINER_JOB_LABEL}"}}`,
   ]);
-  for (const id of containers.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+  for (const line of containers.stdout.split("\n").filter((l) => l.trim().length > 0)) {
+    // Read the two columns POSITIONALLY. A container whose job label is empty
+    // prints a trailing separator and nothing after it, so trimming the line
+    // first would collapse the row to one field and leave the job id
+    // `undefined` — which is the one row this loop must be most careful with.
+    const columns = line.split("\t");
+    const id = (columns[0] ?? "").trim();
+    const jobId = (columns[1] ?? "").trim();
+    if (id.length === 0) continue;
+    if (scope && !scope.ownsJob(jobId)) continue;
     await docker(["rm", "--force", id]);
   }
   const volumes = await docker([
@@ -794,9 +947,30 @@ export async function sweepExecArtifacts(): Promise<void> {
     "ls",
     "--quiet",
     "--filter",
-    "label=ai.cinatra.execution-plane",
+    `label=${SANDBOX_CONTAINER_LABEL}`,
   ]);
   for (const name of volumes.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    if (scope && !scope.ownsVolume(name)) continue;
     await docker(["volume", "rm", "--force", name]);
+  }
+}
+
+/**
+ * Drop the image tags this run created.
+ *
+ * A per-job tag is unique, so without this every battery job on a runner box
+ * would leave three more image references behind for good. `docker image rm` on
+ * a tag only UNTAGS while another reference to the same image remains, so a
+ * sibling job whose build produced byte-identical layers keeps its own tag and
+ * its own image. Where this run held the LAST reference the image itself goes,
+ * along with parents no other tag names — which is the point, and is why the
+ * claim is about the BUILD cache rather than the image store: BuildKit's cache
+ * is a separate store that `image rm` does not reach, so the next job on the
+ * box still builds from cache. Failures are ignored on purpose — a tag that was
+ * never built, or one a container still holds, is not a teardown error.
+ */
+async function removeJobScopedImages(): Promise<void> {
+  for (const tag of [`${BROKER_IMAGE}-bundle-src`, BROKER_IMAGE, WORKER_IMAGE, L0_IMAGE]) {
+    await docker(["image", "rm", tag]);
   }
 }
