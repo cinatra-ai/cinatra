@@ -323,7 +323,7 @@ jobs:
         # unresponsiveness ("runner received a shutdown signal" mid page-data
         # collection). Subshell-guarded so a swap-setup failure NEVER fails the job.
         # Mirrors the build-image build/e2e jobs.
-        if: ${{ needs.detect.outputs.run_real == 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ needs.detect.outputs.run_real == 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build

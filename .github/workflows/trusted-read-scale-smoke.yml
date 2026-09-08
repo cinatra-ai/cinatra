@@ -79,7 +79,14 @@ concurrency:
 jobs:
   scale-smoke:
     name: Live provider-scale proof (boot pinned fixture)
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    # HOSTED, not the E2E class: this proof boots a WordPress fixture and drives
+    # it over MCP, and on the shared self-hosted pool it died twice with
+    # `connector instance MCP session no longer exists (session not found)`
+    # against a stack it does not have to itself. It moves to the E2E class once
+    # the proof gets a fixture stack of its own there. The disk reclaim below is
+    # therefore GitHub-hosted-only by construction, like the guarded reclaims in
+    # the build-carrying workflows.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Reclaim runner disk (image build can exhaust ubuntu-latest)

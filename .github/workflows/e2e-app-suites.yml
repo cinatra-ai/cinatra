@@ -244,7 +244,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
@@ -475,7 +475,7 @@ jobs:
         # Same 12G step + rationale as the render-smoke job above (entry-66).
         # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
         # and cleanup, and this step's tools are not on its path).
-        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the

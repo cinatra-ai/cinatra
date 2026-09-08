@@ -25,6 +25,25 @@
 # concurrently running jobs that tag did not survive the gap (the exec worker image at
 # fc2a44cf). Its member is the `build-and-smoke-worker` job of build-exec-images.yml.
 # Point SMOKE only at a machine whose docker daemon belongs to one job at a time.
+#
+# THE EXCEPTIONS, and each is written beside the job itself: three jobs name
+# `ubuntu-latest` directly instead of a class, because each was MEASURED to fail
+# on the self-hosted pool for a reason that belongs to the pool rather than to
+# the job — the `image` job (the image it builds never reaches the pool's docker
+# daemon, so its prod-boot e2e cannot run it), `chat-hitl-held-turn-e2e` (its web
+# server does not boot there) and the `scale-smoke` job of
+# trusted-read-scale-smoke.yml (it loses its MCP session to a shared stack).
+# Each carries its measured reason and the condition under which it goes back to
+# a class.
+#
+# THE HOST-MUTATION STEPS are a separate matter from routing: the steps that
+# reclaim runner disk or add a swapfile mutate the machine they run on, so each
+# is guarded by `runner.environment == 'github-hosted'` and by nothing else. A
+# throwaway hosted runner may be reshaped; a self-hosted machine shared with
+# other jobs may not. That guard must never be ANDed with a repository variable:
+# an unset variable turns the steps off on the hosted runners too, and the
+# production build then dies mid-compile on a 16 GB machine with only the stock
+# swap.
 name: Build and publish image
 
 on:
@@ -3016,7 +3035,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3166,11 +3185,16 @@ jobs:
     name: Chat-HITL held-turn dev-runtime e2e
     needs: detect
     if: ${{ always() }}
-    # Same opt-in larger-runner lever the sibling e2e jobs use. Unset keeps
-    # `ubuntu-latest`. This job runs the DEV runtime rather than a production
-    # build, so it never pays `pnpm build`'s memory peak — but Turbopack compiles
-    # each route cold on first hit, which is why the budgets below are generous.
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    # HOSTED, not the E2E class the sibling e2e jobs take: this flow's web
+    # server does not start on the shared self-hosted pool — its boot log ends on
+    # an extension migration the pool's database role refuses — while it starts
+    # on a GitHub-hosted runner every time. It moves to the E2E class once that
+    # boot is fixed there.
+    #
+    # This job runs the DEV runtime rather than a production build, so it never
+    # pays `pnpm build`'s memory peak — but Turbopack compiles each route cold on
+    # first hit, which is why the budgets below are generous.
+    runs-on: ubuntu-latest
     # The flow drives two full held turns. The FIRST `POST /api/chat` compiles the
     # chat route graph cold before the pre-router dispatches at all — minutes on a
     # contended runner, with nothing in `agent_runs` while it happens. 50 minutes
@@ -3365,7 +3389,7 @@ jobs:
       # Headroom is what this job can give, so it gives it — the wp-drupal-uat
       # recipe, unchanged in intent. Nothing here touches what the flow asserts.
       - name: Reclaim runner disk (so the swapfile below has room)
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Same reclaim the UAT gate does before enlarging swap. Disk was never
         # this job's constraint; this exists only so the 16G file below fits with
         # room to spare.
@@ -3374,7 +3398,7 @@ jobs:
           df -h /
 
       - name: Enlarge swap + record the memory baseline
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Turns the cliff into a slowdown the suite can still finish and REPORT
         # THROUGH, which is the part that matters for a required gate: a slow red
         # names a failing test, a reclaimed runner names nothing. The baseline is
@@ -3556,13 +3580,14 @@ jobs:
       # still run and report on their own, and the job is red for whichever
       # failed. The docs-only skip is unchanged.
       #
-      # `shell: bash` IS LOAD-BEARING. This job's `runs-on:` is an expression
-      # (`${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}`), and an expression can
-      # resolve to anything — so a static reader cannot know the default shell is
-      # `bash -e` and must refuse to credit a step that leaves it implicit.
-      # `scripts/audit/ci-pinned-tests-exist.mjs` is exactly such a reader, and
-      # its direction 4 is what keeps these four steps from being quietly
-      # deleted; without this line it reports the tiers as run by nobody.
+      # `shell: bash` IS LOAD-BEARING and stays even though this job now names
+      # `ubuntu-latest` directly rather than a routing class. A static reader has
+      # to be able to see the shell these steps run under, and an expression can
+      # resolve to anything — so the reader refuses to credit a step that leaves
+      # the shell implicit. `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
+      # such a reader, and its direction 4 is what keeps these four steps from
+      # being quietly deleted; without this line it reports the tiers as run by
+      # nobody the moment the job goes back to a class.
       # Explicit `bash` is `bash -eo pipefail`, which is STRICTER than the
       # implicit `bash -e` the steps around them get — and identical for these,
       # which run one command each and contain no pipeline.
@@ -3695,9 +3720,9 @@ jobs:
       # under `set -e` it can only add a red, never mask one.
       #
       # `shell: bash` and `!cancelled()` are the siblings' and load-bearing for
-      # the same two reasons stated at the tiers above: this job's `runs-on:` is
-      # an expression, so a static reader must refuse a step that leaves the
-      # shell implicit — and `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
+      # the same two reasons stated at the tiers above: the shell stays explicit
+      # so a static reader can credit the step whatever this job's `runs-on:`
+      # resolves to — and `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
       # such a reader, its direction 5 being what keeps THIS step from being
       # quietly deleted — and a red e2e above must not hide a red gate.
       - name: One-card gate — every lifecycle card kind drawn by a named owner (cinatra#2936, W6)
@@ -3719,16 +3744,15 @@ jobs:
     # new cost is a discarded image build on a push whose unit tier fails.
     needs: [detect]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    # The `build` job (docker buildx build + next build) is the workflow's long
-    # pole (~10-11 min, mostly `next build` on a 2-vCPU runner). To accelerate it,
-    # set the org/repo variable CI_BUILD_RUNNER to a larger label (e.g.
-    # `ubuntu-latest-4-cores`) AFTER confirming availability with the manual
-    # `runner-probe.yml` workflow. Unset (the default) keeps `ubuntu-latest`, so
-    # this is a zero-risk no-op until the variable is set, and rollback is a
-    # variable flip — not a code revert. There is no in-job fallback for an
-    # unavailable runner label (runner selection precedes all steps), hence the
-    # probe-first discipline.
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    # HOSTED, not the E2E class: the prod-boot e2e step below RUNS the image this
+    # job builds a step earlier. The build step already asks for `load: true`,
+    # and on the self-hosted pool's docker-container buildx driver the image
+    # still did not arrive in the daemon the e2e then reaches — it answered
+    # `Unable to find image 'cinatra-prod-boot-e2e:ci' locally` — while a
+    # GitHub-hosted runner's docker driver puts it there every time. This job
+    # moves to the E2E class once that hand-off works on the pool; the
+    # self-hosted cache arms below are kept ready for exactly that.
+    runs-on: ubuntu-latest
     # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
     # for the image build (next build is the dominant pole) plus ~3-5 min for
     # the prod-boot e2e (image load + fresh-DB setup + boot + probes); we've
@@ -3775,7 +3799,7 @@ jobs:
         # BEFORE the build. Best-effort -- a prune hiccup never fails the job.
         # GitHub-hosted runners ONLY: it deletes shared toolchains and prunes all
         # docker state, which must never run on a self-hosted runner.
-        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           set +e
@@ -3809,7 +3833,7 @@ jobs:
         # file cleanup on failure, swapon --show/df -h diagnostics); GitHub-hosted
         # runners ONLY (a self-hosted runner brings its own memory and cleanup,
         # and this step's tools are not on its path).
-        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3849,7 +3873,7 @@ jobs:
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
       # behind `type=gha` is only served to GitHub-hosted runners: on the
-      # self-hosted class this job routes to, buildx died inside the build at
+      # self-hosted class this job was routed to, buildx died inside the build at
       # "importing cache manifest from gha" with an HTML error page where a
       # cache manifest belongs, and the image build failed outright. So on a
       # self-hosted runner the build caches to a directory the runner user owns
@@ -4529,7 +4553,7 @@ jobs:
         # mid-build on the held PRs with no swap at all.
         # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
         # and cleanup, and this step's tools are not on its path).
-        if: ${{ runner.environment == 'github-hosted' && vars.CI_BUILD_SWAP == 'on' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
