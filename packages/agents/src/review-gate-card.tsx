@@ -136,6 +136,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -169,6 +170,7 @@ import {
   useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useRunDetailPromptWindowSlot,
   type ComposerCommentAction,
   type ComposerCommentResult,
   type ComposerFocusBinding,
@@ -1860,6 +1862,11 @@ export function ReviewGatePromptWindow({
   boundCardRef?: string | null;
 }) {
   const router = useRouter();
+  // WHERE THE RUN DETAIL ENDS (cinatra#3149, fix leg 4). A host that declares
+  // a slot draws the window there - after the frame it holds the card's body
+  // in - and every host that declares none draws it exactly where it is
+  // composed, inside the gate's own body.
+  const detailSlot = useRunDetailPromptWindowSlot();
   // THE SLOT IS THE WINDOW'S OWN ELEMENT, held in state rather than a ref so the
   // first commit that creates it re-renders the panel into it. The panel is a
   // portal by construction (it was written to escape a scrolling document), and
@@ -1928,7 +1935,7 @@ export function ReviewGatePromptWindow({
     }
   };
 
-  return (
+  const windowNode = (
     // The conversational prompt window (cinatra#2063): the
     // typed change request IS how changes are requested — there is no dedicated
     // "request changes" button (the three-affordance decision floor is unchanged).
@@ -1954,6 +1961,18 @@ export function ReviewGatePromptWindow({
       />
     </div>
   );
+
+  // THE FRAME ENDS AT THE DECISION BAR (cinatra#3149, fix leg 4). On a host
+  // that declared the run detail's slot the window is moved into it: out of
+  // the visible panel that host draws around the card's body, and onto the
+  // detail's own ground beneath it, which is the foot the drawing draws.
+  //
+  // THE MARKUP IS THE SAME MARKUP and the window is still the GATE's - one
+  // window per gate, drawn by the card that owns the decision, offered on the
+  // server's own permission answer (cinatra#3141 item 1 is untouched). Only
+  // the box it lands in changes, which is exactly what the drawing says
+  // changes from one host to the next.
+  return detailSlot ? createPortal(windowNode, detailSlot) : windowNode;
 }
 
 /** Map the review submit outcome to a conversational reply + whether the surface

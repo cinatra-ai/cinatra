@@ -39,6 +39,7 @@ import {
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  RunDetailPromptWindowSlot,
   useRunReviewSlot,
   type RunReviewSlot,
   type RunReviewSlotReader,
@@ -1779,7 +1780,14 @@ export function AgenticRunPanel({
 
   if (reviewScreenNode !== null || runIsWorking) {
     return (
-      <>
+      // THE RUN DETAIL ENDS IN THE PROMPT WINDOW, NOT THE CARD'S FRAME
+      // (cinatra#3149, fix leg 4). The section below is the visible rounded
+      // panel a reader sees around the review; the drawing ends that panel at
+      // the decision bar and ends the detail itself in the window beneath it.
+      // Declaring the mount as this detail's slot is what moves the gate's own
+      // window out of the panel and onto the detail's ground, without moving it
+      // out of the gate that owns it.
+      <RunDetailPromptWindowSlot target={portalTarget}>
         <section
           // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
           // eleventh set). The drawn card frame is
@@ -1804,7 +1812,7 @@ export function AgenticRunPanel({
           {reviewScreenNode ?? <ReviewGatePlaceholder />}
         </section>
         {hitlConversationPanelNode}
-      </>
+      </RunDetailPromptWindowSlot>
     );
   }
 

@@ -301,23 +301,18 @@ export function RailExtraEntry({
           {entry.verification?.outcome ?? "verified"}
         </span>
       ) : null}
-      {isLifecycle ? (
-        <>
-          <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-            {entry.lifecycleDecision?.decidedBy ?? lifecycleOutcome ?? "policy"}
-          </span>
-          {/* The REASON is the point of the entry: a user must be able to
-              tell a deliberately-skipped review from no machinery running.
-              It WRAPS inside the narrow rail (never truncates) — a clipped
-              reason answers nothing. */}
-          <span
-            className="mt-0.5 block max-w-36 text-start text-badge-2xs leading-4 break-words whitespace-normal text-muted-foreground"
-            data-rail-lifecycle-reason=""
-          >
-            {entry.lifecycleDecision?.reason}
-          </span>
-        </>
-      ) : null}
+      {/* A LIFECYCLE ENTRY IS ITS ONE NAME (cinatra#3149, fix leg 4). The
+          drawing's rail entry is a glyph and one span, and its section I rule
+          gives a settled entry the SETTLEMENT it was closed with -- "records
+          how it was settled" -- never a reason. The projection already folds
+          that settlement into the label ("Review skipped", "Review not
+          classifiable", "Review pending policy"), exactly as the drawing folds
+          "Review the post continued" into one name, so this row had a badge
+          repeating the lattice's own word beside a label that already carried
+          it, over a whole sentence of reason drawn as a second line. A proof
+          round read both back as text the rail does not draw. The outcome and
+          the decider stay on the row below as passive data attributes, where a
+          walk can read them and a reader is not shown them. */}
     </StepperTitle>
   );
 
@@ -366,7 +361,6 @@ export function RailExtraEntry({
       data-rail-lifecycle-decided-by={
         isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined
       }
-      title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
     >
       {isGate && entry.gate ? (
         // A gate row links into the run-embedded review surface. A resolved
