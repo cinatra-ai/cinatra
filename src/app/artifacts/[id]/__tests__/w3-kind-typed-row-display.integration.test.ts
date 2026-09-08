@@ -71,7 +71,24 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 // REAL database that happens to carry the reserved credential pair as the
 // placeholder — skipping this tier while still reporting green.
 const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
-const TEST_SCHEMA = "cinatra_test_w3_kind_typed_row";
+// THE TEST SCHEMA IS STATED BEFORE ANY IMPORT EVALUATES, and that is not a
+// style choice. `@/lib/postgres-config` resolves the schema ONCE, at module
+// load (`export const postgresSchema = process.env.SUPABASE_SCHEMA?.trim() ||
+// "cinatra"`), so whichever of this file's imports reaches that module first
+// freezes the value the store will write to. The page-resolver imports below
+// now reach it — the detection ladder that landed on main pulled the store
+// spine into the resolver graph — so a `process.env.SUPABASE_SCHEMA =` in
+// `beforeAll` arrives after the const is already "cinatra": every row this
+// suite minted went to the DEFAULT schema, the read-back found nothing, and
+// three rungs failed with "no representation row" while the store was in fact
+// working perfectly. `vi.hoisted` runs above the import block, which is the
+// only place the assignment can be made and still be true for every module in
+// the graph. Nothing about what the rungs assert changes.
+const TEST_SCHEMA = vi.hoisted(() => {
+  const schema = "cinatra_test_w3_kind_typed_row";
+  process.env.SUPABASE_SCHEMA = schema;
+  return schema;
+});
 const ORG = "org-3091-kind-typed";
 
 /** The packs whose kinds this suite mints rows of, read off disk at their pins. */
@@ -203,7 +220,6 @@ function dispatchForRow(row: { objectType: string; mime: string }) {
 
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
-  process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
   process.env.CINATRA_ARTIFACT_DATA_ROOT = mkdtempSync(path.join(tmpdir(), "cin-3091-"));
 
   const client = new Client({ connectionString: DB_URL });
@@ -349,15 +365,26 @@ describe.skipIf(!HAS_REAL_DB)(
 //     registered the type for nobody;
 //   - the screenshot kind could be minted directly, but the classifier that
 //     mints it in production could not honour the pack's matcher skill, because
-//     that skill was owned by a SIBLING package and neither trust anchor holds
-//     for a sibling — the package-owned anchor because the owner is not the
-//     artifact package, the declared-edge anchor because a manifest-declared
-//     sibling is not a resolved provider edge.
+//     the pack named a bundle it was not the resolved provider of, so neither
+//     trust anchor held.
 //
-// Both were fixed in the packs' own repositories and re-pinned here. NOTHING in
-// this repository was relaxed to make these rungs pass: the namespace rule, the
-// exclusivity of the two anchors, and the shadow rule are byte-unchanged, and
-// the rungs below call the shipped functions rather than re-deriving them.
+// The deck fix landed in that pack's own repository and was re-pinned here. The
+// screenshot pack answered the same question the OTHER way, in its own
+// repository and at the pin this fleet carries: it ships NO matcher bundle,
+// because the platform's skill-packaging verdict refuses a `SKILL.md` inside a
+// `kind:"artifact"` package outright (`skill-md-in-non-skill-package`, with an
+// empty fixture allowlist for extension repos and no declaration that can make
+// it conform). Its bundle therefore lives in the sibling provider package
+// `@cinatra-ai/screenshot-matcher-skill`, and the artifact pack declares the
+// runtime `role:"matcher"` edge that reaches it. So at these pins the
+// screenshot pack takes the DECLARED-EDGE arm, exactly as the deck pack does.
+// The rung below asserts the arm the PINNED TREE takes, read off the shipped
+// resolver; the host special-cases neither package to get there.
+//
+// NOTHING in this repository was relaxed to make these rungs pass: the namespace
+// rule, the exclusivity of the two anchors, and the shadow rule are
+// byte-unchanged, and the rungs below call the shipped functions rather than
+// re-deriving them.
 //
 // What these rungs do NOT claim: the classifier's LLM call itself is not
 // exercised (it needs a provider credential this tier has none of, and must
@@ -395,64 +422,79 @@ describe.skipIf(!HAS_REAL_DB)("kind-typed creation at the re-pinned heads (#3091
     });
   });
 
-  it("the screenshot kind: the classifier's trust road holds on the PACKAGE-OWNED arm, with the bundle inside the pack that owns it", async () => {
+  it("the screenshot kind: the classifier's trust road holds on the DECLARED-EDGE arm, with the bundle inside the PROVIDER pack the edge resolves to", async () => {
     const PKG = "@cinatra-ai/screenshot-artifact";
+    const PROVIDER = "@cinatra-ai/screenshot-matcher-skill";
     const PKG_DIR = path.resolve(REPO_ROOT, "extensions/cinatra-ai/screenshot-artifact");
     registerArtifactExtensionDir(PKG_DIR);
 
     // 1) What the pack's manifest names as its matcher, read off the pinned
-    //    tree through the same registry the bridge fills at boot.
+    //    tree through the same registry the bridge fills at boot. The id sits
+    //    in the PROVIDER's namespace, which is the declaration half of the
+    //    post-extraction arm — and is exactly what the package-owned anchor
+    //    refuses, since that one requires a self-namespaced id.
     const matcherSkillId = matcherManifestRegistry.get(PKG)?.matcherSkillIds[0] ?? "";
-    expect(matcherSkillId).toBe(PKG + ":screenshot-matcher");
+    expect(matcherSkillId).toBe(PROVIDER + ":screenshot-matcher");
 
-    // 2) The bundle really SHIPS inside the pack that owns it. This is the half
-    //    a sibling package can never give, and the half the anchor is about.
-    const bundle = path.join(PKG_DIR, "skills", "screenshot-matcher", "SKILL.md");
-    expect(existsSync(bundle)).toBe(true);
-    const bundleText = readFileSync(bundle, "utf8");
+    // 2) WHICH ARM the runtime takes, and what the other one is left with. The
+    //    two anchors are exclusive, so this single fact decides the trust
+    //    question; the resolution is asserted by shape rather than by a bare
+    //    non-null, because a resolution to some OTHER provider would be the
+    //    substitution the anchor exists to refuse.
+    const { resolveDeclaredSkillEdgeForPackageWithReason } = await import(
+      "../../../../../packages/skills/src/extension-skill-resolver"
+    );
+    const outcome = await resolveDeclaredSkillEdgeForPackageWithReason(PKG, "matcher");
+    expect(outcome.reason).toBeNull();
+    expect(outcome.resolution).toMatchObject({
+      packageName: PROVIDER,
+      slug: "screenshot-matcher",
+      skillId: matcherSkillId,
+    });
+    const resolution = outcome.resolution;
+    if (!resolution) throw new Error("the declared matcher edge did not resolve");
+
+    // 3) The bundle really SHIPS inside the PROVIDER pack the edge resolved to,
+    //    read at the path the resolver itself named rather than at a path this
+    //    test guessed. The artifact pack ships none, and must not: a `SKILL.md`
+    //    inside a `kind:"artifact"` package is refused by the packaging verdict,
+    //    which is why the bundle was extracted to the sibling in the first place.
+    expect(existsSync(resolution.sourcePath)).toBe(true);
+    expect(existsSync(path.join(PKG_DIR, "skills", "screenshot-matcher", "SKILL.md"))).toBe(false);
+    const bundleText = readFileSync(resolution.sourcePath, "utf8");
     // A bundle with an empty body is skipped by the runtime one check further
     // on, so an existing-but-empty file would be a green rung over a road that
     // still does not run.
     expect(parseFrontmatter(bundleText).body.trim().length).toBeGreaterThan(0);
 
-    // 3) WHICH ARM the runtime takes, and WHY the other one is empty. The two
-    //    anchors are exclusive, so this single fact decides the trust question;
-    //    it is asserted with the named reason token rather than a bare null,
-    //    because a bare null is exactly what the proof leg could not read.
-    const { resolveDeclaredSkillEdgeForPackageWithReason } = await import(
-      "../../../../../packages/skills/src/extension-skill-resolver"
-    );
-    const outcome = await resolveDeclaredSkillEdgeForPackageWithReason(PKG, "matcher");
-    expect(outcome.resolution).toBeNull();
-    expect(outcome.reason).toBe("no-single-declared-edge-for-role");
-
     // 4) The runtime's OWN trust predicates — the shipped functions, called
-    //    with the real ids and the real bundle — on the catalog row a
-    //    co-located registration produces for that bundle. Package-owned trust
-    //    holds; the declared-edge arm correctly confers nothing on an empty
-    //    resolution. Neither anchor is widened anywhere in this delta.
+    //    with the real ids and the real bundle — on the catalog row the
+    //    PROVIDER's registration produces for that bundle. Declared-edge trust
+    //    holds; the package-owned arm correctly confers nothing on a bundle the
+    //    artifact package does not own. Neither anchor is widened anywhere in
+    //    this delta.
     const { __test } = await import("@/lib/artifacts/matcher-runtime");
     const catalogRow = {
       id: matcherSkillId,
-      packageName: PKG,
-      packageSlug: "screenshot-artifact",
+      packageName: PROVIDER,
+      packageSlug: "screenshot-matcher-skill",
       content: bundleText,
     };
-    expect(__test.skillPackageOwned(catalogRow, matcherSkillId, PKG)).toBe(true);
-    expect(__test.skillMatchesResolvedEdge(catalogRow, matcherSkillId, outcome.resolution)).toBe(
-      false,
-    );
+    expect(__test.skillMatchesResolvedEdge(catalogRow, matcherSkillId, resolution)).toBe(true);
+    expect(__test.skillPackageOwned(catalogRow, matcherSkillId, PKG)).toBe(false);
   });
 });
 
 // THE OTHER HALF OF THE SAME QUESTION — the classifier's trust road, measured at
-// the same pins. The previous leg asked whether each pack's declared edge
-// resolves, and read a single shape onto both packs. At these pins that is the
-// wrong question: the two anchors are EXCLUSIVE, so what decides the trust road
-// is WHICH ARM a pack takes, and the two packs now take different ones. That is
-// the shape the extraction wave always intended — a pack that owns its bundle
-// takes the package-owned anchor, a pack whose bundle lives in a provider
-// package takes the declared edge — and this describe pins one pack to each.
+// the same pins. The two anchors are EXCLUSIVE, so what decides the trust road
+// is WHICH ARM a pack takes, and this describe reads that arm off each pack's
+// pinned tree rather than asserting the arm someone expected it to be on. At
+// these pins BOTH packs take the declared edge: each one's matcher bundle lives
+// in its own `-skill` provider package, which is the end state cinatra#2090's
+// extraction wave moves every artifact pack to, and which the packaging verdict
+// makes the only conforming shape for a `kind:"artifact"` package. The
+// package-owned anchor stays live in the runtime for the packs the rolling wave
+// has not reached yet, and the rung above measures that it confers nothing here.
 //
 // DB-GATED like the rest of the file, and the earlier claim that this describe
 // needed no database was WRONG. The resolution walks the installed tree, but the
@@ -476,18 +518,27 @@ describe.skipIf(!HAS_REAL_DB)("which matcher trust arm each pack takes, at these
       await import("../../../../../packages/skills/src/extension-skill-resolver")
     ).resolveDeclaredSkillEdgeForPackageWithReason(consumer, "matcher");
 
-  it("the screenshot pack takes the PACKAGE-OWNED arm: it declares no matcher edge, and the id it names is its own", async () => {
+  it("the screenshot pack takes the DECLARED-EDGE arm: the edge resolves to its provider's one bundle, and the manifest names that same id", async () => {
     const consumer = "@cinatra-ai/screenshot-artifact";
+    const provider = "@cinatra-ai/screenshot-matcher-skill";
+    const slug = "screenshot-matcher";
     const outcome = await resolveEdge(consumer);
-    expect(outcome.resolution).toBeNull();
-    expect(outcome.reason).toBe("no-single-declared-edge-for-role");
+    expect(outcome.reason).toBeNull();
+    expect(outcome.resolution).toMatchObject({
+      packageName: provider,
+      slug,
+      skillId: provider + ":" + slug,
+    });
     registerArtifactExtensionDir(
       path.resolve(REPO_ROOT, "extensions/cinatra-ai", consumer.split("/")[1]!),
     );
-    // Self-namespaced, which is what the package-owned anchor requires of the
-    // ID half as well as of the catalog row's owner.
+    // The runtime honours a catalog row only when BOTH halves agree with what
+    // the edge resolved to. The declaration side of that agreement holds here:
+    // the id the manifest names is PROVIDER-namespaced, not self-namespaced,
+    // which is what the post-extraction arm requires and what the package-owned
+    // arm refuses.
     expect(matcherManifestRegistry.get(consumer)?.matcherSkillIds).toContain(
-      consumer + ":screenshot-matcher",
+      provider + ":" + slug,
     );
   });
 

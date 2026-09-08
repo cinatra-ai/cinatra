@@ -46,15 +46,32 @@ import { pickArtifactRenderer } from "../renderer-dispatch";
 const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..", "..");
 const ORG = "org_w3_reachability";
 
-// The kinds this leg is answering for: the three the proof leg owed, plus the
-// three whose byte-road reading came back empty. Each row names the pack, the
-// object type a row of the kind carries, and a form the pack accepts.
+// EVERY DISPLAY THE WAVE STEPS TO VERSION 2, not a sample of them. The host's
+// display contract moves to version 2 in this change, and a pack mounts under
+// it only if the generated map says so, so the rung below has to name each of
+// the eleven — the nine shipped displays acceptance item 1 counts, plus the two
+// this wave adds — or the step is asserted for the kinds someone happened to
+// list and merely assumed for the rest. Each row names the pack, the object
+// type a row of the kind carries (read off the registry, never guessed), and a
+// form the pack accepts.
 const KINDS = [
+  // the two new displays
   ["screenshot-artifact", "@cinatra-ai/screenshot-artifact:screenshot", "image/png"],
   ["slide-deck-artifact", "@cinatra-ai/slide-deck-artifact:deck", "application/pdf"],
-  ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:artifact", "application/vnd.cinatra.cms-fields+json"],
+  // the six media kinds that ride the byte capability
+  ["audio-artifact", "@cinatra-ai/audio-artifact:recording", "audio/mpeg"],
+  ["video-artifact", "@cinatra-ai/video-artifact:video", "video/mp4"],
+  ["image-artifact", "@cinatra-ai/image-artifact:image", "image/png"],
   ["pdf-artifact", "@cinatra-ai/pdf-artifact:document", "application/pdf"],
+  [
+    "document-artifact",
+    "@cinatra-ai/document-artifact:artifact",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
+  ["zip-artifact", "@cinatra-ai/zip-artifact:artifact", "application/zip"],
+  // the three moved onto the content channel
   ["json-artifact", "@cinatra-ai/json-artifact:artifact", "application/json"],
+  ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:artifact", "application/vnd.cinatra.cms-fields+json"],
   ["text-artifact", "@cinatra-ai/text-artifact:artifact", "text/csv"],
 ] as const;
 
