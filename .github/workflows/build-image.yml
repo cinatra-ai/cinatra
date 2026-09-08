@@ -3668,6 +3668,24 @@ jobs:
         shell: bash
         run: pnpm test:lifecycle-c-w4
 
+      # cinatra#3030 (lifecycle-c W6) — the run folder's pickup (enabler 0.22),
+      # the file bindings and file fan-out (0.27) and the mid-run revision (0.30)
+      # against a real database and a real disk. The unit tier proves what each
+      # road DECIDES against substituted ports; what only Postgres and a
+      # filesystem together can show is that a file staged in a run folder
+      # reaches the one write path and leaves a default_road ledger row under the
+      # reserved file id, that a bound file lands under the extension its BINDING
+      # named rather than the agent's declared kind, that a file pattern writes
+      # one artifact per match over one content-addressed resource, and that a
+      # second append naming a base the first already built on is refused BY THE
+      # UNIQUE INDEX with no ledger row and no produced event left behind. Wired
+      # here on arrival, by the same convention as the tiers above, so it cannot
+      # join the class of root tiers that run nowhere.
+      - name: Run folder pickup + file bindings + mid-run revision — real-DB tier (cinatra#3030, lifecycle-c W6)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:run-folder
+
       # cinatra#3052 — the widget schedule grant's own real-DB tier, wired in
       # the SAME change that adds it, beside the four tiers above and for the
       # reason the block above records: a root config that no workflow invokes
