@@ -228,8 +228,15 @@ networks:
     name: ${CINATRA_EXEC_SANDBOX_NETWORK:-cinatra-exec-internal}
     internal: true
   # The gateway's internet leg. Nothing else is ever attached to it.
+  #
+  # OVERRIDABLE, and unset it is the name it has always been — the same rule the
+  # sandbox network above carries. The E2E batteries set
+  # CINATRA_EXEC_EGRESS_NETWORK to a name carrying their own job identity: two
+  # battery jobs on ONE machine would otherwise share this network, and the first
+  # one to finish removed it out from under the second, whose gateway then had no
+  # network to attach to at all (cinatra#3327).
   cinatra-exec-egress:
-    name: cinatra-exec-egress
+    name: ${CINATRA_EXEC_EGRESS_NETWORK:-cinatra-exec-egress}
   # The broker's app-facing leg. Deliberately NOT internal — that is the entire
   # point: a container on an internal network cannot have a published port, so
   # without this the loopback publish above is silently a no-op. Only the broker
