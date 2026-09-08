@@ -424,12 +424,34 @@ jobs:
     name: Build + smoke-test the exec worker image
     needs: changes
     if: ${{ needs.changes.outputs.worker == 'true' }}
-    # Deliberately the default GitHub-hosted (amd64) runner rather than
-    # build-image.yml's `vars.CI_BUILD_RUNNER` escape hatch: the image below is
-    # pinned to linux/amd64, and a runner variable that could later name an arm64
-    # label would either emulate the whole workspace install or smoke-test an
-    # architecture nobody publishes. Native build, native smoke, no drift.
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    # THE SMOKE CLASS, AND WHY IT IS ITS OWN (cinatra#3267). This job builds an
+    # image, LOADS it into the runner's own docker daemon, and has to still find
+    # that tag in the NEXT step. On the shared self-hosted pool it did not. At
+    # fc2a44cf the build step logged `#21 importing to docker ... DONE 0.4s` and
+    # named `docker.io/library/cinatra-exec-worker:ci` in its own metadata; 71
+    # seconds later — the time its cache export took — the smoke step's first
+    # `docker run` answered "Unable to find image 'cinatra-exec-worker:ci'
+    # locally" and fell through to a registry pull, which was denied. The pool
+    # divides one machine between several runner slots that share one docker
+    # engine, and this job's own log records that a job-completed hook is
+    # configured on that pool, so a cleanup fired by another job finishing in
+    # that window and reaching the shared engine is the plain reading. It is a
+    # reading and not a proven cause: this run's own job list shows no sibling of
+    # this run finishing inside those 71 seconds. Either way the
+    # reading that matters stands: a tag one step loads there is not durable into
+    # the step that runs it.
+    # The build is pinned to linux/amd64 besides, so a class that could later
+    # name an arm64 label would either emulate the whole workspace install or
+    # smoke-test an architecture nobody publishes.
+    # Hence a class of its own, defaulting to the GitHub-hosted runner, whose
+    # docker daemon belongs to this job alone. That default is also where this
+    # job has always run and passed: on main it reads `runs-on: ubuntu-latest`,
+    # and giving it the E2E class — which this repository points at the pool —
+    # is what moved it. So SMOKE is not a retreat to the hosted class, it is
+    # the class this job's own contract needs, named and pinned instead of
+    # implied. Point CI_RUNNER_SMOKE at another machine only if that machine's
+    # docker daemon is likewise not shared with jobs running at the same time.
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_SMOKE || '"ubuntu-latest"') }}
     # Generous: the build installs the whole pnpm workspace and runs esbuild.
     timeout-minutes: 30
     steps:
@@ -503,6 +525,14 @@ jobs:
           IMG: cinatra-exec-worker:ci
         run: |
           set -euo pipefail
+
+          # 0. The image has to BE here first. `docker run` on a tag the local
+          #    daemon does not hold falls through to a registry pull, so the
+          #    `||` arm below reported an ABSENT IMAGE as a missing docker CLI,
+          #    which is a different defect entirely. Assert presence on its own so
+          #    the two readings can never be confused again.
+          docker image inspect "$IMG" >/dev/null 2>&1 \
+            || { echo "::error::${IMG} is not in this runner's docker daemon — the build step loaded it and it did not survive to this step"; exit 1; }
 
           # 1. The docker CLI — the entire reason this image is not the app
           #    image. Print the version so a regression is legible in the log.
