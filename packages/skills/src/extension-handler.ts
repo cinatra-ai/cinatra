@@ -117,11 +117,45 @@ function filterSkillsForScope(
 // methods (install / update / uninstall / archive / restore), each of which
 // dispatches on the resolved kind.
 
+/**
+ * The planned canonical row anchor, in the shape the dispatcher threads it.
+ * Structural on purpose: a static import of `@cinatra-ai/extensions` from this
+ * package would close a dependency cycle (that package depends on this one), so
+ * the shared resolver is reached the same way every other cross-package call in
+ * this package reaches one — lazily, inside the call.
+ */
+type InstallRowOwnershipInput = {
+  ownerLevel: string;
+  ownerId: string | null;
+  organizationId: string | null;
+};
+
+/**
+ * The organization scope a skill install resolves its FINALIZED store payload
+ * at: the planned anchor's organization when the dispatcher threaded one, the
+ * actor's organization otherwise (byte-identical to the previous derivation for
+ * every caller that plans no anchor).
+ */
+async function resolveSkillInstallAnchorOrgId(
+  actor: Actor,
+  planned: InstallRowOwnershipInput | null,
+): Promise<string | null> {
+  if (!planned) return actor.orgId ?? null;
+  const { resolveNativeInstallOwnership } = await import(
+    "@cinatra-ai/extensions/canonical-types"
+  );
+  return resolveNativeInstallOwnership(actor.orgId ?? null, planned as never).anchorOrgId;
+}
+
 export function createSkillExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "skill",
 
-    async install(ref: PackageRef, actor: Actor): Promise<void> {
+    async install(
+      ref: PackageRef,
+      actor: Actor,
+      options?: { destination?: "private" | "public"; rowOwnership?: InstallRowOwnershipInput },
+    ): Promise<void> {
       const source = resolveSkillPackageSource(ref);
       if (source.kind === "github") {
         await installSkillPackageFromGitHub(ref.packageName);
@@ -137,10 +171,19 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
         // is about WHERE THE PAYLOAD IS (the finalized store) rather than which
         // registry it came from; the honest provenance lives on the canonical
         // row, not in this call.
+        // cinatra#3204 criterion 16: the payload was finalized at the anchor the
+        // DISPATCHER planned (the scope the operator chose on the install
+        // screen), which is not the actor's organization whenever the two
+        // differ — a "Workspace: All" install finalizes at the org-NULL
+        // workspace anchor while the actor still has an active organization.
+        // Looking the payload up at `actor.orgId` therefore missed it and the
+        // handler refused a package that had just been installed correctly.
+        // The anchor rule is not re-derived here: it is the same shared
+        // function the canonical row is anchored by.
         await installSkillPackageFromVerdaccio({
           packageName: ref.packageName,
           packageVersion: ref.version,
-          orgId: actor.orgId ?? null,
+          orgId: await resolveSkillInstallAnchorOrgId(actor, options?.rowOwnership ?? null),
         });
       }
       // Explicit lifecycle rebuild (cinatra#1364) BEFORE matching, so matching

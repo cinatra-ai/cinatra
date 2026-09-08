@@ -1169,15 +1169,43 @@ export async function computeSuppliedContentDigestForStoreDir(storeDir: string):
 //     that into a named, non-finalizing outcome; it never becomes a quiet
 //     success.
 // ---------------------------------------------------------------------------
+/** The container default, used when the deployment configures no root at all. */
+export const DEFAULT_SUPPLIED_SNAPSHOT_ROOT = "/data/extension-uploads";
+
 /**
  * The root every supplied snapshot must live under. Configurable because the
  * upload road stages into the host's data volume, which differs per deployment;
  * the default sits beside the extension data root the store already uses.
+ *
+ * That last sentence is the whole precedence, and it is now true of the code as
+ * well as of the comment (cinatra#3204 leg 3): a deployment that moved its
+ * extension data root off the container default moved its whole extension
+ * volume, and staging supplied bytes at a fixed "/data/extension-uploads" would
+ * put them on a different filesystem than every other extension byte the host
+ * owns - the split that makes a supplied install fail with a raw EACCES on any
+ * host whose data root is elsewhere. So:
+ *
+ *   CINATRA_SUPPLIED_SNAPSHOT_ROOT  - an explicit root, always wins;
+ *   CINATRA_EXTENSION_DATA_ROOT     - the deploy-owned extension volume: the
+ *                                     snapshots sit BESIDE it, as the sibling
+ *                                     "extension-uploads" directory;
+ *   otherwise                       - the container default, unchanged.
+ *
+ * Env-only and synchronous on purpose: this resolves on the write path of every
+ * supplied install, and the data root's DB-metadata tier is an admin
+ * convenience the deploy env var already overrides (@/lib/extension-data-root)
+ * - reading the database here would make a path resolution depend on schema
+ * readiness.
  */
 export function resolveSuppliedSnapshotRoot(): string {
   const configured = process.env.CINATRA_SUPPLIED_SNAPSHOT_ROOT;
-  if (configured && configured.length > 0) return path.resolve(configured);
-  return path.resolve("/data/extension-uploads");
+  if (configured && configured.trim().length > 0) return path.resolve(configured.trim());
+  const dataRoot = process.env.CINATRA_EXTENSION_DATA_ROOT;
+  if (dataRoot && dataRoot.trim().length > 0) {
+    const resolved = path.resolve(dataRoot.trim());
+    return path.join(path.dirname(resolved), "extension-uploads");
+  }
+  return path.resolve(DEFAULT_SUPPLIED_SNAPSHOT_ROOT);
 }
 
 /** The snapshot location a supplied source names. */

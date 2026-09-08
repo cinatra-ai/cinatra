@@ -333,6 +333,7 @@
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",
     "test:e2e:marketplace-install": "playwright test -c tests/e2e/config/marketplace-install.config.ts",
+    "test:e2e:extensions-upload": "playwright test -c tests/e2e/config/extensions-upload.config.ts",
     "test:e2e:markdown-editor": "playwright test -c tests/e2e/config/markdown-editor.config.ts",
     "test:e2e:dashboards": "playwright test -c tests/e2e/config/dashboards.config.ts",
     "test:e2e:agents-run": "playwright test -c tests/e2e/config/agents-run.config.ts",

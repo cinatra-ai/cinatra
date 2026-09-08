@@ -1,212 +1,217 @@
 "use client";
 
-import { useState, useTransition } from "react";
+// ---------------------------------------------------------------------------
+// The Upload Extension screen's GITHUB tab (cinatra#3204 leg 3).
+//
+// It used to be a skill-only road. It is now the repository road for ANY of the
+// four live kinds, and three things about it are deliberately different:
+//
+//   THE PRECONDITION IS STATED, NOT LEAKED (criterion 9). The two failure states
+//   are genuinely different — no owning connector at all, versus an installed
+//   connector with no usable connection — and each is named, with a link to
+//   where it is actually fixed. Submit is disabled in both. The operator never
+//   meets a raw capability refusal.
+//
+//   THE REF IS PINNED ONCE (criterion 7). Looking a repository up resolves the
+//   submitted ref to ONE immutable commit sha, and that sha is DISPLAYED. The
+//   install re-reads at exactly that commit and refuses if the bytes moved, so a
+//   branch that advances between preview and install cannot swap the contents.
+//
+//   THE VISIBILITY CLAIM IS GONE (criterion 10). This road reaches whatever the
+//   configured connection can reach; it never promised public-only, and it no
+//   longer says so.
+//
+// The scope question is the SAME panel the File tab and the store use. The old
+// collapsed "configure access & ownership" editor is gone — one question, asked
+// once (criterion 17).
+// ---------------------------------------------------------------------------
+
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "@/lib/cinatra-toast";
-import { GitBranchIcon, TagIcon, ScaleIcon, LinkIcon, Loader2 } from "lucide-react";
+import { LinkIcon, Loader2 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  fetchGitHubSkillRepoMetadata,
-  installGitHubSkillExtension,
-  type FetchGitHubSkillRepoMetadataResult,
-} from "@cinatra-ai/skills/actions";
-// Candidate search goes through the generic action with resourceId=null
-// (upload mode). Admin-only gate is enforced inside.
-import { searchExtensionCoOwnerCandidates } from "@cinatra-ai/extensions/permissions-actions";
-import {
-  PermissionsFormDraft,
-  type PermissionsFormDraftValue,
-} from "@/components/permissions-form-draft";
-import type { AvailableScopes } from "@/components/access-combobox";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import { toast } from "@/lib/cinatra-toast";
+import type { ExtensionScopedInstallAction } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
 
-// "Latest code from the default branch" is represented as an empty ref so it
-// doesn't collide with any real tag name.
-const LATEST_CODE_VALUE = "__latest_code__";
+import {
+  installSuppliedRepositoryAction,
+  previewSuppliedRepositoryAction,
+  readGitHubUploadPreconditionAction,
+  type GitHubUploadPrecondition,
+  type SuppliedPackagePreview,
+} from "./supplied-install-actions";
+import {
+  UploadConsentBlock,
+  UploadInstallScopePanel,
+  consentPayload,
+  type UploadConsentPromptValue,
+  type UploadInstallScopeContext,
+} from "./upload-install-scope-panel";
 
-type RepoMetadata = Extract<FetchGitHubSkillRepoMetadataResult, { ok: true }>["metadata"];
-/** The pre-install Anthropic-upload confirmation (cinatra#2092, epic #2086 S5):
- *  the FULL resolved dependency closure, the data-egress advisory, and the
- *  digest the install call must echo back as the operator's consent evidence. */
-type UploadConsentPrompt = Extract<
-  FetchGitHubSkillRepoMetadataResult,
-  { ok: true }
->["uploadConsentPrompt"];
-
-// Default policy applied when the operator doesn't open the advanced
-// "Configure access & ownership" panel. Mirrors the skill-package detail
-// page's fallback.
-const DEFAULT_DRAFT_POLICY: AgentAuthPolicy = {
-  runListVisibility: ["owner"],
-  runDataVisibility: ["owner"],
-  runExecuteVisibility: ["owner"],
-  allowRunSharing: true,
+const KIND_LABEL: Record<string, string> = {
+  agent: "Agent",
+  skill: "Skill",
+  connector: "Connector",
+  artifact: "Artifact",
 };
 
-export type ImportSkillFromGitHubFormProps = {
-  /** Server-resolved scope tree for the access-combobox; required when the
-   *  PermissionsFormDraft is mounted. */
-  availableScopes: AvailableScopes;
+export type ImportPackageFromGitHubFormProps = {
+  installScope: UploadInstallScopeContext;
+  /** Resolved on the server for the first paint; re-read on mount so a
+   *  connector installed in another tab is picked up without a reload. */
+  precondition: GitHubUploadPrecondition;
 };
 
-export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGitHubFormProps) {
+export function ImportPackageFromGitHubForm({
+  installScope,
+  precondition: initialPrecondition,
+}: ImportPackageFromGitHubFormProps) {
   const router = useRouter();
+  // The kind's own listing, recorded by a completed install (see the note
+  // on `installAction` below).
+  const [installedDestination, setInstalledDestination] = useState<string | null>(null);
+  useEffect(() => {
+    if (!installedDestination) return;
+    router.push(installedDestination);
+  }, [installedDestination, router]);
   const [repoUrl, setRepoUrl] = useState("");
-  const [metadata, setMetadata] = useState<RepoMetadata | null>(null);
-  const [releaseChoice, setReleaseChoice] = useState<string>(LATEST_CODE_VALUE);
-  const [error, setError] = useState<string | null>(null);
-  const [isFetching, startFetch] = useTransition();
-  const [isInstalling, startInstall] = useTransition();
+  const [ref, setRef] = useState("");
+  const [preview, setPreview] = useState<SuppliedPackagePreview | null>(null);
+  const [precondition, setPrecondition] =
+    useState<GitHubUploadPrecondition>(initialPrecondition);
+  const [isLooking, startLookup] = useTransition();
+  // The upload-consent confirmation rides on the preview (the server builds it
+  // from the same builder the File tab's own lookup uses). Always starts
+  // UNTICKED, and is cleared with every new lookup.
+  const [consentChecked, setConsentChecked] = useState(false);
+  const consentPrompt: UploadConsentPromptValue | null =
+    (preview?.consentPrompt as UploadConsentPromptValue | undefined) ?? null;
 
-  // cinatra#2092 (epic #2086 S5) — the interactive upload-consent confirmation.
-  // Resolved SERVER-SIDE by the pre-install lookup so the operator sees the
-  // FULL resolved dependency closure and the data-egress advisory BEFORE they
-  // install. Default OFF: consent is an explicit act, and the install sends
-  // nothing unless the box is ticked (the server is the boundary — it
-  // re-resolves the closure and refuses a confirmation whose digest does not
-  // match what was actually shown).
-  const [uploadConsentPrompt, setUploadConsentPrompt] =
-    useState<UploadConsentPrompt | null>(null);
-  const [uploadConsentChecked, setUploadConsentChecked] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void readGitHubUploadPreconditionAction().then((next) => {
+      if (live) setPrecondition(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
-  // Controlled draft for upload-time access/ownership capture. Collapsed by
-  // default ("Configure access & ownership (advanced)") so the happy-path
-  // remains 2-click. When the operator opens the panel, the draft state is
-  // threaded into installGitHubSkillExtension's `permissions` arg and applied
-  // server-side after the package row exists.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [permissionsDraft, setPermissionsDraft] = useState<PermissionsFormDraftValue>({
-    policy: DEFAULT_DRAFT_POLICY,
-    coOwners: [],
-  });
+  const ready = precondition.state === "ready";
 
   const handleLookup = (event: React.FormEvent) => {
     event.preventDefault();
-    setError(null);
-    setMetadata(null);
-    startFetch(async () => {
-      const result = await fetchGitHubSkillRepoMetadata(repoUrl);
+    if (!ready) return;
+    setPreview(null);
+    setConsentChecked(false);
+    startLookup(async () => {
+      const result = await previewSuppliedRepositoryAction({
+        repoUrl,
+        ...(ref.trim() ? { ref: ref.trim() } : {}),
+      });
       if (!result.ok) {
-        setError(result.error);
+        toast.error(result.error);
         return;
       }
-      setMetadata(result.metadata);
-      setUploadConsentPrompt(result.uploadConsentPrompt);
-      setUploadConsentChecked(false);
-      // Preselect the latest non-prerelease release when one exists; else stay
-      // on "Latest code". The releases array preserves the listReleases order
-      // (newest first), so the first non-prerelease is the latest stable.
-      const latestStable = result.metadata.releases.find((release) => !release.prerelease);
-      setReleaseChoice(latestStable ? latestStable.tagName : LATEST_CODE_VALUE);
+      setPreview(result.preview);
     });
   };
 
-  const handleInstall = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!metadata) return;
-    setError(null);
-    startInstall(async () => {
-      const ref = releaseChoice === LATEST_CODE_VALUE ? undefined : releaseChoice;
-      // Only send policy when the operator actually opened the advanced
-      // panel; otherwise the server falls through to its default
-      // (NULL → admin-only edit, install actor as primary owner).
-      const permissions = advancedOpen
-        ? {
-            policy: permissionsDraft.policy,
-            coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
-          }
-        : undefined;
-      // cinatra#2092 (S5): send the consent decision ONLY when the operator
-      // ticked the box on a prompt that actually applies. `interactive: true`
-      // makes the server require the closure-confirmation digest to match the
-      // closure it re-resolves — the box alone is never sufficient.
-      const anthropicUploadConsent =
-        uploadConsentPrompt?.consentApplies && uploadConsentChecked
-          ? {
-              granted: true,
-              confirmedClosureDigest: uploadConsentPrompt.closureDigest,
-              interactive: true,
-            }
-          : undefined;
-      const result = await installGitHubSkillExtension({
-        repoUrl,
-        ref,
-        permissions,
-        anthropicUploadConsent,
-      });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      // Toast immediately so the user gets feedback before the route transition.
-      toast.success(
-        `Installed ${metadata?.fullName ?? "skill package"}${
-          result.ref ? ` (${result.ref})` : ""
-        }`,
-      );
-      // The install action collects non-fatal warnings from the post-create
-      // permissions step (e.g. one co-owner id no longer exists) so the
-      // package row is on disk but some configuration didn't stick. Surface
-      // each warning as a toast so the operator knows to re-configure at the
-      // detail page.
-      for (const warning of result.warnings) {
-        toast.warning(warning, { duration: 8000 });
-      }
-      // The unified /skills list surfaces every installed skill row (backed by
-      // cinatra.skill_packages), which is where this install lands. The
-      // agent-only /configuration/extensions catalog does not surface skill rows.
-      router.push("/skills");
+  const handleCancel = () => {
+    setPreview(null);
+  };
+
+  // WHERE A COMPLETED INSTALL TAKES THE OPERATOR, and why it is recorded in
+  // state rather than pushed from inside the action.
+  //
+  // The store's install panel invokes this action from a React form action
+  // (`<form action={handleSubmit}>`), so the whole call runs inside the
+  // transition that owns the panel's pending state. A router navigation issued
+  // from inside that transition never happens: the transition commits the
+  // panel's own re-render and the pending navigation is dropped with it —
+  // measured on the running app, where the install returned `ok:true` with
+  // `/agents` and the page was still on the upload screen three seconds later.
+  // `redirect()` from inside the action is dropped for the same reason.
+  //
+  // So the action RECORDS the destination and the effect at the top of this
+  // component performs the navigation once the transition has committed —
+  // outside it, where the router acts.
+  const installAction: ExtensionScopedInstallAction = async ({ accessTarget }) => {
+    if (!preview || !preview.resolvedSha) return;
+    const consent = consentPayload(consentPrompt, consentChecked);
+    const result = await installSuppliedRepositoryAction({
+      repoUrl,
+      ref: preview.ref ?? "",
+      pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
+      accessTarget,
+      ...(consent ? { anthropicUploadConsent: consent } : {}),
     });
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    for (const warning of result.warnings ?? []) toast.warning(warning);
+    toast.success(
+      `Installed ${result.packageName} ${result.version} — ${result.observable.label.toLowerCase()}`,
+    );
+    setInstalledDestination(result.observable.href);
   };
 
   return (
-    <form onSubmit={metadata ? handleInstall : handleLookup} className="flex flex-col gap-6">
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="github-repo-url">GitHub repository URL</FieldLabel>
-          <div className="flex items-center gap-2">
-            <InputGroup className="flex-1">
-              <InputGroupInput
-                id="github-repo-url"
-                type="url"
-                placeholder="https://github.com/owner/repo"
-                value={repoUrl}
-                onChange={(event) => {
-                  setRepoUrl(event.target.value);
-                  if (metadata) {
-                    // Clearing the preview when the URL changes prevents
-                    // installing one repo with another repo's release tag.
-                    // Suppressed while an install is in flight so editing
-                    // the URL mid-install can't make the dialog vanish.
-                    if (isInstalling) return;
-                    setMetadata(null);
-                    setReleaseChoice(LATEST_CODE_VALUE);
-                  }
-                }}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={isFetching || isInstalling}
-                readOnly={isInstalling}
-              />
-              <InputGroupAddon>
-                <LinkIcon aria-hidden="true" />
-              </InputGroupAddon>
-            </InputGroup>
-            {!metadata && (
-              <Button type="submit" disabled={!repoUrl.trim() || isFetching}>
-                {isFetching ? (
+    <div className="flex flex-col gap-6">
+      {!ready && (
+        <Alert variant="destructive" data-testid="github-upload-precondition">
+          <AlertTitle>
+            {precondition.state === "no-connector"
+              ? "The GitHub connector is not available"
+              : "There is no usable GitHub connection"}
+          </AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-3">
+            <span>{"message" in precondition ? precondition.message : ""}</span>
+            {"fixHref" in precondition && (
+              <Button asChild size="sm" variant="outline">
+                <Link href={precondition.fixHref}>{precondition.fixLabel}</Link>
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <form onSubmit={handleLookup} className="flex flex-col gap-6">
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="github-repo-url">Repository URL</FieldLabel>
+            <div className="flex items-center gap-2">
+              <InputGroup className="flex-1">
+                <InputGroupInput
+                  id="github-repo-url"
+                  type="url"
+                  placeholder="https://github.com/owner/repo"
+                  value={repoUrl}
+                  onChange={(event) => {
+                    setRepoUrl(event.target.value);
+                    setPreview(null);
+                  }}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={!ready || isLooking}
+                />
+                <InputGroupAddon>
+                  <LinkIcon aria-hidden="true" />
+                </InputGroupAddon>
+              </InputGroup>
+              <Button
+                type="submit"
+                data-testid="github-upload-submit"
+                disabled={!ready || !repoUrl.trim() || isLooking}
+              >
+                {isLooking ? (
                   <>
                     <Loader2 data-icon="inline-start" className="animate-spin" aria-hidden="true" />
                     Looking up…
@@ -215,167 +220,68 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
                   "Continue"
                 )}
               </Button>
-            )}
-          </div>
-          <FieldDescription>
-            Public github.com repositories only. Paste the full URL (e.g. <code className="text-foreground">https://github.com/owner/repo</code>).
-          </FieldDescription>
-        </Field>
-      </FieldGroup>
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>Could not install skill package</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {metadata && (
-        <div className="flex flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-foreground">{metadata.fullName}</p>
-              {metadata.licenseSpdxId && (
-                <Badge variant="outline" className="gap-1 text-xs">
-                  <ScaleIcon className="h-3 w-3" aria-hidden="true" />
-                  {metadata.licenseSpdxId}
-                </Badge>
-              )}
             </div>
-            {metadata.description && (
-              <p className="text-xs text-muted-foreground">{metadata.description}</p>
-            )}
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <GitBranchIcon className="h-3 w-3" aria-hidden="true" />
-              Default branch: <span className="text-foreground">{metadata.defaultBranch}</span>
-            </p>
-          </div>
-
-          <Field>
-            <FieldLabel htmlFor="github-release-select">Version to install</FieldLabel>
-            <Select
-              value={releaseChoice}
-              onValueChange={setReleaseChoice}
-              disabled={metadata.releases.length === 0 || isInstalling}
-            >
-              <SelectTrigger id="github-release-select" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={LATEST_CODE_VALUE}>
-                  Latest code from <span className="font-medium">{metadata.defaultBranch}</span>
-                </SelectItem>
-                {metadata.releases.map((release) => (
-                  <SelectItem key={release.tagName} value={release.tagName}>
-                    <span className="inline-flex items-center gap-2">
-                      <TagIcon className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
-                      <span className="font-medium">{release.tagName}</span>
-                      {release.name && release.name !== release.tagName && (
-                        <span className="text-xs text-muted-foreground">— {release.name}</span>
-                      )}
-                      {release.prerelease && (
-                        <Badge variant="outline" className="text-[10px] uppercase">pre-release</Badge>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {metadata.releases.length === 0 && (
-              <FieldDescription>
-                This repository has no GitHub Releases. The latest code from the default branch will be installed.
-              </FieldDescription>
-            )}
+            <FieldDescription>
+              A github.com repository holding an agent, skill, connector or artifact package.
+              The package declares its own kind; this instance reads it from the repository.
+            </FieldDescription>
           </Field>
 
-          {/* Anthropic upload consent (cinatra#2092, epic #2086 S5). Rendered
-              only when the workspace opt-in is ON — with it OFF nothing can
-              egress, so asking for consent would be misleading. Lists the FULL
-              resolved dependency closure and carries the data-egress advisory;
-              the checkbox is the operator's explicit consent act. */}
-          {uploadConsentPrompt?.consentApplies && (
-            <Alert data-testid="anthropic-upload-consent">
-              <AlertTitle>{uploadConsentPrompt.headline}</AlertTitle>
-              <AlertDescription className="flex flex-col gap-2">
-                <span>{uploadConsentPrompt.advisory}</span>
-                <ul className="flex flex-col gap-1">
-                  {uploadConsentPrompt.closureLines.map((line) => (
-                    <li key={line} className="font-mono text-xs">
-                      {line}
-                    </li>
-                  ))}
-                </ul>
-                <label className="flex items-start gap-2 text-sm">
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={uploadConsentChecked}
-                    onCheckedChange={(checked) => setUploadConsentChecked(checked === true)}
-                    disabled={isInstalling}
-                    data-testid="anthropic-upload-consent-checkbox"
-                  />
-                  <span>
-                    Allow uploading these skills to the Anthropic Skills API. Leave
-                    unchecked to install without any upload — you can grant consent
-                    later.
-                  </span>
-                </label>
-              </AlertDescription>
-            </Alert>
-          )}
+          <Field>
+            <FieldLabel htmlFor="github-ref">
+              Branch, tag or commit <span className="text-muted-foreground">(optional)</span>
+            </FieldLabel>
+            <Input
+              id="github-ref"
+              placeholder="the repository's default branch"
+              value={ref}
+              onChange={(event) => {
+                setRef(event.target.value);
+                setPreview(null);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={!ready || isLooking}
+            />
+            <FieldDescription>
+              Whatever you name is resolved once to a single commit, shown below, and installed at
+              exactly that commit.
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+      </form>
 
-          {/* Optional access & ownership capture. Collapsed by default. When
-              opened, the values are threaded through installGitHubSkillExtension
-              and applied atomically after the package row exists. */}
-          <div className="flex flex-col gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="self-start text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => setAdvancedOpen((prev) => !prev)}
-              disabled={isInstalling}
-            >
-              {advancedOpen
-                ? "Hide access & ownership"
-                : "Configure access & ownership (advanced)"}
-            </Button>
-            {advancedOpen && (
-              <PermissionsFormDraft
-                value={permissionsDraft}
-                onChange={setPermissionsDraft}
-                availableScopes={availableScopes}
-                searchCandidates={async (q, page) => {
-                  const result = await searchExtensionCoOwnerCandidates(
-                    "skill_package",
-                    null,
-                    q,
-                    page,
-                  );
-                  if (!result.ok) return { ok: false, error: result.error };
-                  return { ok: true, results: result.results, hasMore: result.hasMore };
-                }}
-                disabled={isInstalling}
+      {preview && (
+        <UploadInstallScopePanel
+          scope={installScope}
+          installAction={installAction}
+          packageName={preview.packageName}
+          packageVersion={preview.version}
+          displayName={preview.packageName}
+          onCancel={handleCancel}
+          header={
+            <div className="flex flex-col gap-1" data-testid="upload-resolved-package">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" data-testid="upload-resolved-kind">
+                  {KIND_LABEL[preview.kind] ?? preview.kind}
+                </Badge>
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {preview.packageName}
+                </p>
+                <span className="text-xs text-muted-foreground">{preview.version}</span>
+              </div>
+              <p className="font-mono text-[11px] text-muted-foreground" data-testid="upload-pinned-sha">
+                {preview.repo} pinned at {preview.resolvedSha}
+              </p>
+              <UploadConsentBlock
+                prompt={consentPrompt}
+                checked={consentChecked}
+                onCheckedChange={setConsentChecked}
               />
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              Clones into <code className="text-foreground">data/skills/</code> and registers the package locally.
-            </p>
-            <Button type="submit" disabled={isInstalling}>
-              {isInstalling ? (
-                <>
-                  <Loader2 data-icon="inline-start" className="animate-spin" aria-hidden="true" />
-                  Installing…
-                </>
-              ) : (
-                "Install skill package"
-              )}
-            </Button>
-          </div>
-        </div>
+            </div>
+          }
+        />
       )}
-    </form>
+    </div>
   );
 }
