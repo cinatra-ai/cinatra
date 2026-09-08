@@ -77,8 +77,63 @@ export const BROKER_SERVICE = "cinatra-exec-broker";
 export const WORKER_SERVICE = "cinatra-exec-worker";
 export const GATEWAY_SERVICE = "cinatra-exec-gateway";
 
-/** The internal sandbox network — `internal: true`, fixed name by design. */
-export const INTERNAL_NETWORK = "cinatra-exec-internal";
+/**
+ * The internal sandbox network — `internal: true`, and named PER JOB.
+ *
+ * The name used to be the fixed string below, which put every battery on a
+ * machine onto ONE docker network: a second battery job on the same runner box
+ * found the first job's network with a container attached and refused to run
+ * before executing a single assertion (cinatra#3320). A machine per job hid
+ * that on the hosted road; a shared pool does not.
+ *
+ * So the name carries THIS JOB'S OWN IDENTITY — the run id, the job and the
+ * attempt when the CI environment offers them — plus a short random
+ * discriminator, because every leg of a matrix shares all three of those and
+ * there is no per-leg identifier in the environment at all. Off CI there is no
+ * identity to read and the random half carries the whole name.
+ *
+ * The value is handed to compose as `CINATRA_EXEC_SANDBOX_NETWORK`, which the
+ * compose file uses BOTH for the network's real `name` and for the
+ * `EXEC_SANDBOX_NETWORK` the broker asserts and attaches sandboxes to — one
+ * variable, so the two can never drift into naming different networks. The
+ * compose DEFAULT is unchanged, so a deployment that never sets the variable
+ * brings up exactly the topology it brought up before.
+ *
+ * An explicit `CINATRA_EXEC_SANDBOX_NETWORK` in the environment always wins:
+ * that is an operator naming the network, and the harness must not fight it.
+ */
+export const SANDBOX_NETWORK_BASE_NAME = "cinatra-exec-internal";
+
+/**
+ * What the name is read from. `process.env` satisfies it, and so does one job's
+ * identity written out on its own — which is how the rule is testable without
+ * standing up a process environment. Exactly four variables are ever read:
+ * CINATRA_EXEC_SANDBOX_NETWORK, GITHUB_RUN_ID, GITHUB_JOB, GITHUB_RUN_ATTEMPT.
+ */
+export type SandboxNetworkEnvironment = Readonly<Record<string, string | undefined>>;
+
+export function sandboxNetworkNameFor(
+  env: SandboxNetworkEnvironment = process.env,
+): string {
+  const pinned = env.CINATRA_EXEC_SANDBOX_NETWORK?.trim();
+  if (pinned) return pinned;
+  const jobIdentity = [env.GITHUB_RUN_ID, env.GITHUB_JOB, env.GITHUB_RUN_ATTEMPT]
+    .map((part) => (part ?? "").trim())
+    .filter((part) => part.length > 0)
+    .join("-")
+    .replace(/[^A-Za-z0-9_.-]+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, 32);
+  const discriminator = randomBytes(4).toString("hex");
+  return [SANDBOX_NETWORK_BASE_NAME, jobIdentity, discriminator].filter(Boolean).join("-");
+}
+
+/**
+ * Resolved ONCE, at import: `up`, `ps`, `logs`, `down` and the reclaim step
+ * below must all name the same network, and a value re-derived per call would
+ * leave a stack behind on teardown.
+ */
+export const INTERNAL_NETWORK = sandboxNetworkNameFor();
 
 /** The broker's published loopback port, fixed by the compose file. */
 export const BROKER_HOST_PORT = 4100;
@@ -441,6 +496,7 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     CINATRA_EXEC_WORKER_IMAGE: WORKER_IMAGE,
     CINATRA_SANDBOX_L0_IMAGE: L0_IMAGE,
     CINATRA_EXEC_INSTANCE: options.instance,
+    CINATRA_EXEC_SANDBOX_NETWORK: INTERNAL_NETWORK,
     CINATRA_EXEC_ENV_DIR: envDir,
     CINATRA_EXEC_TLS_DIR: tlsDir,
     CINATRA_EXEC_LEASE_DIR: leaseDir,
@@ -529,15 +585,17 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
 }
 
 /**
- * Hand `cinatra-exec-internal` to compose when a previous run left it behind.
+ * Hand THIS JOB'S OWN network to compose when an earlier attempt left it behind.
  *
- * The name is FIXED by design — the worker is told this exact string and
- * asserts the network really is internal — so it cannot be made lane-unique.
- * The in-process docker battery creates the same network directly (not through
- * compose) and does not remove it, and compose refuses to adopt a network it did
- * not label.
+ * The name carries the job's identity and a random discriminator (see
+ * `sandboxNetworkNameFor`), so the only network this step can ever name is one
+ * this process itself named: a sibling battery on the same machine has a
+ * different name and is never touched, and the in-process docker battery — which
+ * creates the deployment-default network directly, not through compose, and does
+ * not remove it — no longer shares a name with this one. That shared name is the
+ * collision cinatra#3320 closed.
  *
- * The removal is CONDITIONAL and that condition is the safety property: a
+ * The removal stays CONDITIONAL and that condition is the safety property: a
  * network with a container still attached is somebody's live work, so it is left
  * alone and `up` fails loudly rather than a sibling being torn out from under
  * its own run. `docker network rm` would refuse anyway; checking first turns a
@@ -556,9 +614,9 @@ async function reclaimInternalNetwork(): Promise<void> {
   if (composeLabel && composeLabel.length > 0) return; // already compose-owned
   if (attached !== "0") {
     throw new Error(
-      `The fixed sandbox network "${INTERNAL_NETWORK}" exists outside compose and still has ` +
-        `${attached} container(s) attached. Refusing to remove it — that is another run's work. ` +
-        "Stop whatever is using it and re-run.",
+      `The sandbox network "${INTERNAL_NETWORK}" named for this job exists outside compose ` +
+        `and still has ${attached} container(s) attached. Refusing to remove it — that is ` +
+        "another run's work. Stop whatever is using it and re-run.",
     );
   }
   await docker(["network", "rm", INTERNAL_NETWORK]);
