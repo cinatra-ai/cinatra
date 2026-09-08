@@ -53,7 +53,7 @@ concurrency:
 jobs:
   hmr-smoke:
     name: Warm dev-session HMR smoke (report-only)
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     services:
       postgres:
