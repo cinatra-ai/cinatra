@@ -22,7 +22,14 @@ import {
   readZipEntries,
   resolveSuppliedArchive,
 } from "../upload-archive";
-import { computeContentDigest } from "@cinatra-ai/extension-types";
+import {
+  MAX_SUPPLIED_TREE_BYTES,
+  MAX_SUPPLIED_TREE_ENTRIES,
+  SUPPLIED_PACKAGE_KINDS,
+  SUPPLIED_REPOSITORY_SUBJECT,
+  computeContentDigest,
+  resolveSuppliedPackageTree,
+} from "@cinatra-ai/extension-types";
 
 // ---------------------------------------------------------------------------
 // Fixtures — one minimal, VALID package per live kind.
@@ -338,5 +345,34 @@ describe("no package code is executed (criterion 5)", () => {
     expect(body).not.toMatch(/\brequire\s*\(/);
     expect(body).not.toMatch(/child_process/);
     expect(body).not.toMatch(/node:fs/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE predicate, every road (cinatra#3204 leg 2, criterion 6)
+// ---------------------------------------------------------------------------
+
+describe("the kind predicate is SHARED, not copied (criterion 6)", () => {
+  it("resolves through the leaf package's list, so the repository road cannot drift", () => {
+    // Identity, not equality. A second list that happened to agree today is
+    // exactly the thing this assertion exists to forbid.
+    expect(SUPPLIED_ARCHIVE_KINDS).toBe(SUPPLIED_PACKAGE_KINDS);
+  });
+
+  it("enforces the leaf package's caps, so a cap raised on one road is raised on both", () => {
+    expect(MAX_ARCHIVE_ENTRIES).toBe(MAX_SUPPLIED_TREE_ENTRIES);
+    expect(MAX_ARCHIVE_TOTAL_BYTES).toBe(MAX_SUPPLIED_TREE_BYTES);
+  });
+
+  it("refuses a REPOSITORY by its own noun, through the same resolution", async () => {
+    // The shared resolver is the archive reader's own body; only the noun in the
+    // refusal changes, so the repository road can say "repository" without a
+    // second implementation of what is accepted.
+    await expect(
+      resolveSuppliedPackageTree(
+        new Map([["README.md", new TextEncoder().encode("hi")]]),
+        SUPPLIED_REPOSITORY_SUBJECT,
+      ),
+    ).rejects.toThrow(/Invalid repository: no package\.json found/);
   });
 });

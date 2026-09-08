@@ -32,6 +32,7 @@ import {
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  type MaterializationDetection,
 } from "./materialization-ledger";
 
 // ---------------------------------------------------------------------------
@@ -535,9 +536,14 @@ export async function writeClaimedArtifact(input: {
   /** Ledger identity: the EndNode output name (bindings), the node id (tool), or
    *  the reserved `derived_output` sentinel (cinatra#1893 unbound-output job). */
   outputId: string;
-  /** The calling node id, or null on the `derived_output` path (no node). */
+  /** The calling node id, or null on the `derived_output` / `default_road`
+   *  paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output";
+  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
+  /** The detection ladder's recorded verdict (cinatra#3029, the `default_road`
+   *  path only) — journalled on the ledger row this write claims, so the
+   *  DECIDING RUNG of every default-road artifact is auditable. */
+  detection?: MaterializationDetection | null;
   extension: string;
   title: string;
   mime: string;
@@ -598,6 +604,7 @@ export async function writeClaimedArtifact(input: {
     path: input.path,
     extension: input.extension,
     contentHash,
+    detection: input.detection ?? null,
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -1250,3 +1257,7 @@ export async function materializeToolArtifact(input: {
     };
   }
 }
+
+// The default road's PURE pickup (cinatra#3029) types its ownership seam on
+// the same shape this module writes with.
+export type { ScopeDerivedOwnership };

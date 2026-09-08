@@ -34,6 +34,10 @@ import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
 import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
 import {
+  PrimitiveWaveConformanceFixtures,
+  PrimitiveWaveOverlayFixtures,
+} from "./primitive-wave-fixtures";
+import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
 } from "./fixture-data";
@@ -380,6 +384,39 @@ export default function ConformanceHarnessPage() {
                 the shipped chip row the four host declarations and the three
                 reader readings. No transport substitution anywhere. */}
             <LifecycleOneOffFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Shared primitives graded against the components drawing (cinatra#3189
+              leg 1: accordion, alert, avatar, badge, breadcrumb, checkbox,
+              collapsible)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* The REAL primitives, no substitution. Every clause of their
+                drawing sections that names a rendered value is read here, in
+                the browser, under the apps own palette — the waves own
+                method note: a value carried by a token or a scale step cannot
+                be graded outside the palette the surface renders in. */}
+            <PrimitiveWaveConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Shared overlays graded against the components drawing (cinatra#3189
+              leg 1: dialog, alert dialog, dropdown menu)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* Split from the row above because each overlay has to be opened
+                before it paints; the suite clicks the trigger, then reads the
+                panel. */}
+            <PrimitiveWaveOverlayFixtures />
           </CardContent>
         </Card>
       </PageContent>

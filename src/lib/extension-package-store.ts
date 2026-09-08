@@ -21,6 +21,7 @@ import "server-only";
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   classifyServerEntryArtifact,
@@ -1223,4 +1224,46 @@ export async function readSuppliedSnapshot(source: SuppliedSnapshotSource): Prom
     );
   }
   return new Uint8Array(await readFile(realCandidate));
+}
+
+/** A snapshot file name is a 64-character lowercase hex digest plus `.tgz`. */
+const SUPPLIED_SNAPSHOT_NAME = /^[0-9a-f]{64}\.tgz$/;
+
+/**
+ * Stage a supplied package's immutable snapshot so a later install can re-read it.
+ *
+ * `readSuppliedSnapshot` refuses a row that names no staged snapshot, so a road
+ * that installs from supplied bytes must leave those bytes behind or the row it
+ * writes is unusable the next time the runtime activates it. The file NAME is
+ * derived from the content digest alone — never from a repository-supplied path
+ * — so nothing an untrusted source controls reaches the filesystem, and the same
+ * bytes always stage to the same file (the write is idempotent by construction).
+ *
+ * Returns the ROOT-RELATIVE name to record as the provenance `path`.
+ */
+export async function writeSuppliedSnapshot(contentDigest: string, tarball: Uint8Array): Promise<string> {
+  const name = `${contentDigest}.tgz`;
+  if (!SUPPLIED_SNAPSHOT_NAME.test(name)) {
+    throw new Error(
+      `the content digest "${contentDigest}" is not a 64-character hex digest — refusing to stage a snapshot under a name derived from it`,
+    );
+  }
+  const root = resolveSuppliedSnapshotRoot();
+  await mkdir(root, { recursive: true });
+  const target = path.join(root, name);
+  // Written through a temporary file in the SAME directory and promoted through
+  // the app layer's sanctioned EXDEV-safe move, so a concurrent reader never sees
+  // a half-written snapshot under the final name and no unsanctioned move lands
+  // on the extension store surface (cinatra#874). Staging and target are always
+  // siblings under the one snapshot root, so the promote is intra-filesystem and
+  // the primitive's cross-filesystem copy fallback is unreachable from here.
+  const staging = path.join(root, `.${name}.${randomUUID()}.partial`);
+  await writeFile(staging, tarball);
+  try {
+    await atomicReplaceDir(staging, target);
+  } catch (err) {
+    await rm(staging, { force: true });
+    throw err;
+  }
+  return name;
 }
