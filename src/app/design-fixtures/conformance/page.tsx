@@ -37,6 +37,7 @@ import {
   PrimitiveWaveConformanceFixtures,
   PrimitiveWaveOverlayFixtures,
 } from "./primitive-wave-fixtures";
+import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -402,6 +403,22 @@ export default function ConformanceHarnessPage() {
                 method note: a value carried by a token or a scale step cannot
                 be graded outside the palette the surface renders in. */}
             <PrimitiveWaveConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Shared primitives graded against the components drawing (cinatra#3189
+              leg 2: input OTP, scroll area, sidebar, switch, table, toggle)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* The REAL primitives, no substitution — the same method as the
+                leg 1 row above. Every clause of their drawing sections that
+                names a rendered value is read here, in the browser, under the
+                app's own palette, and in both palettes the product ships. */}
+            <PrimitiveWaveLeg2ConformanceFixtures />
           </CardContent>
         </Card>
 
