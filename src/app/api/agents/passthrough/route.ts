@@ -435,7 +435,7 @@ export async function POST(req: Request): Promise<Response> {
       // though the compiler also checks. Dynamic import keeps the host
       // artifact stack out of this route's static module graph (same
       // posture as execution.ts).
-      const { materializeToolArtifact, authorizeToolMaterializeWrite } = await import(
+      const { materializeToolArtifact } = await import(
         "@/lib/artifacts/run-artifact-materializer"
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
@@ -453,7 +453,14 @@ export async function POST(req: Request): Promise<Response> {
         // round). An append reaches the store directly, so the produces check,
         // the text-authorable form, the content cap and the declared target
         // type are asked HERE — and the resolved type is handed down, so an
-        // append may not revise an artifact of another type.
+        // append may not revise an artifact of another type. The write
+        // authorizer is imported HERE, in the append branch that is its only
+        // DIRECT caller in this route — the create path takes the same
+        // authorization inside materializeToolArtifact and need not reach for
+        // this export at all.
+        const { authorizeToolMaterializeWrite } = await import(
+          "@/lib/artifacts/run-artifact-materializer"
+        );
         const authorized = await authorizeToolMaterializeWrite({
           orgId: run.orgId,
           templateId: run.templateId,
