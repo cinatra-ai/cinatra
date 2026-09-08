@@ -154,13 +154,20 @@ export interface ArtifactPromotionDeps {
     requestedBy?: string;
     excludeRequester?: string;
   }): number;
+  /** CAS pending -> approved | rejected. The outcome names its OWN cause,
+   *  measured at the statement's single snapshot, so a lost CAS never has to be
+   *  explained by a second read of a newer world. */
   casDecideRequest(input: {
     id: string;
     orgId: string;
     decidedBy: string;
     decision: "approve" | "reject";
     note?: string | null;
-  }): boolean;
+    /** The decider whose membership must ALSO hold at the moment of the write.
+     *  The REJECT path passes it; the approve path carries its membership half
+     *  inside the atomic widen instead. */
+    requireMemberUserId?: string;
+  }): store.ArtifactPromotionCasDecideOutcome;
   markSuperseded(input: { id: string; orgId: string }): boolean;
   /** Reverse a just-claimed 'approved' request whose widen did not land: `to:
    *  'superseded'` voids it permanently; `to: 'pending'` makes it re-decidable
@@ -200,6 +207,15 @@ export interface ArtifactPromotionDeps {
     actor: ApprovalViewer;
   }): Promise<WidenOutcome>;
   scanContent(content: unknown): { clean: boolean };
+  /** Is the DECIDER a member of `actor.orgId`? Resolved through the SAME
+   *  membership-grounded org-write mint the atomic widen runs, so a platform
+   *  administrator who is not a member answers `false`. The REJECT path asks
+   *  directly, because it writes no object row and so has no widen to carry
+   *  the mint.
+   *
+   *  "Not a member" is a VALUE. An INFRASTRUCTURE failure THROWS, so a database
+   *  outage can never be reported as a permanent authorization refusal. */
+  isDeciderAMember(actor: ApprovalViewer): Promise<boolean>;
 }
 
 let cachedProdDeps: Promise<ArtifactPromotionDeps> | null = null;
@@ -293,6 +309,18 @@ async function productionDeps(): Promise<ArtifactPromotionDeps> {
         }
       },
       scanContent: (content) => scanArtifactContentForSecrets(content),
+      isDeciderAMember: async (actor) => {
+        try {
+          await verifySessionAuthority(actor.userId, actor.orgId);
+          return true;
+        } catch (error) {
+          // ONLY the membership refusal is a false. Everything else is infra
+          // and must escape, so the ladder reports `transient` rather than a
+          // permanent "you are not a member".
+          if (error instanceof OrgWriteAuthorityError) return false;
+          throw error;
+        }
+      },
     } satisfies ArtifactPromotionDeps;
   })();
   return cachedProdDeps;
@@ -522,7 +550,11 @@ export interface DecideArtifactPromotionArgs {
  *   1. reviewer is not an admin                 → 'not_authorized'
  *   2. request unknown (or another org's)       → 'not_found'
  *   3. request not pending                       → 'invalid_state'
- *   4. reject  → CAS pending→rejected, row UNTOUCHED; a lost CAS is 'conflict'
+ *   4. reject  → the decider's MEMBERSHIP is re-checked (the platform role at
+ *                step 1 is not membership), then CAS pending→rejected with the
+ *                membership riding inside the statement, row UNTOUCHED; a lost
+ *                CAS is 'conflict', or 'not_authorized' when the membership arm
+ *                is what lost
  *   5. approve →
  *        a. no expectedVersion                   → 'version_required'
  *        b. the row vanished                      → 'not_found'
@@ -565,14 +597,53 @@ export async function decideArtifactPromotion(
 
   // 4. reject — the row is NEVER touched; a lost CAS is a conflict.
   if (args.action === "reject") {
-    const won = deps.casDecideRequest({
+    // MEMBERSHIP, not the platform role. `viewer.isAdmin` at step 1 is the
+    // PLATFORM role (`isPlatformAdmin(session)` / `platformRole ===
+    // 'platform_admin'`), which says nothing about this organization. On the
+    // approve path the org-write authority minted inside the widen is the
+    // second, membership-grounded half of the gate, and it correctly refuses a
+    // platform administrator who is not a member. The reject path writes no
+    // object row, so it had no widen to carry that half, and a rejection is
+    // PERMANENT for the request: without this the same non-member could list an
+    // organization's promotion inbox and reject its requests for good. The
+    // memory sibling closed exactly this hole; this is that same half.
+    let isMember: boolean;
+    try {
+      isMember = await deps.isDeciderAMember(viewer);
+    } catch {
+      // Infra, not authorization. Nothing was written, so the retry is safe.
+      return { ok: false, code: "transient", message: "The promotion decision failed; retry it." };
+    }
+    if (!isMember) {
+      return {
+        ok: false,
+        code: "not_authorized",
+        message:
+          "You are not a member of this organization, so you cannot decide this promotion request.",
+      };
+    }
+    // The membership rides INSIDE the reject CAS as well, so a membership
+    // revoked between the read above and this write refuses the reject rather
+    // than letting a now-non-member decide the request for good. The statement
+    // reports WHICH arm it lost on, measured at its own snapshot, so the answer
+    // below is about the write that was attempted and not about a newer world.
+    const rejected = deps.casDecideRequest({
       id: request.id,
       orgId: viewer.orgId,
       decidedBy: viewer.userId,
       decision: "reject",
       note: args.reason ?? null,
+      requireMemberUserId: viewer.userId,
     });
-    if (!won) {
+    if (!rejected.ok) {
+      if (rejected.reason === "not_a_member") {
+        return {
+          ok: false,
+          code: "not_authorized",
+          message:
+            "You are not a member of this organization, so you cannot decide this promotion request.",
+        };
+      }
       return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
     }
     return { ok: true };
@@ -664,7 +735,7 @@ export async function decideArtifactPromotion(
     decision: "approve",
     note: args.reason ?? null,
   });
-  if (!claimed) {
+  if (!claimed.ok) {
     return { ok: false, code: "conflict", message: "The request was decided concurrently; re-open the inbox." };
   }
 
