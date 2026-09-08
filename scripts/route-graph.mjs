@@ -373,7 +373,14 @@ function isInlineTypeOnly(clause) {
   return members.every((mm) => /^type\s+/.test(mm));
 }
 
-function extractSpecifiers(source) {
+// `staticOnly: true` follows ONLY the edges a bundler resolves EAGERLY —
+// `import ... from "y"` and the bare side-effect `import "y"`. A dynamic
+// `import("y")` / `require("y")` is emitted as a SEPARATE chunk that is loaded
+// at request time, so it is NOT part of what `next build`'s page-data
+// collection evaluates when it loads a route entry. The default (both kinds
+// followed) is the reachable-graph pressure metric the route-graph reporter
+// and its ratchet have always measured, and is unchanged by this option.
+function extractSpecifiers(source, opts = {}) {
   const code = stripJsonc(source); // reuse: strips // and /* */ comments, respects strings
   const specs = new Set();
   // import/export <clause> from "y". Skip statements the TS/Turbopack pipeline
@@ -391,8 +398,12 @@ function extractSpecifiers(source) {
   }
   const other = [
     /\bimport\s*["']([^"']+)["']/g, // import "y" (side-effect)
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import("y")
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // require("y")
+    ...(opts.staticOnly
+      ? []
+      : [
+          /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import("y")
+          /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // require("y")
+        ]),
   ];
   for (const re of other) {
     let x;
@@ -413,7 +424,7 @@ function ownerOf(abs) {
 }
 
 // BFS the first-party reachable graph from a set of entry files.
-function reachableFrom(entryAbsList) {
+function reachableFrom(entryAbsList, opts = {}) {
   const visited = new Set();
   const missing = new Set();
   const queue = [...entryAbsList];
@@ -427,7 +438,7 @@ function reachableFrom(entryAbsList) {
       continue;
     }
     if (cur.endsWith(".json")) continue; // json leaf, no imports to follow
-    for (const spec of extractSpecifiers(source)) {
+    for (const spec of extractSpecifiers(source, opts)) {
       const r = resolveSpecifier(spec, cur);
       if (r.kind === "missing") {
         missing.add(`${spec} (from ${path.relative(REPO_ROOT, cur)})`);
@@ -443,10 +454,10 @@ function reachableFrom(entryAbsList) {
   return { visited, missing };
 }
 
-export function analyzeRoute(entryRel) {
+export function analyzeRoute(entryRel, opts = {}) {
   const entryAbs = tryFile(path.join(REPO_ROOT, entryRel));
   if (!entryAbs) return { ok: false, error: `entry not found: ${entryRel}` };
-  const { visited, missing } = reachableFrom([entryAbs]);
+  const { visited, missing } = reachableFrom([entryAbs], opts);
   // count excludes the entry itself? Include entry in graph but report both.
   const modules = [...visited];
   const byOwner = {};

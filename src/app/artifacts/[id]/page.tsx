@@ -41,6 +41,7 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
@@ -337,7 +338,17 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
               className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-sans text-xs font-semibold not-italic text-primary"
               data-testid="artifact-kind-label"
             >
-              {header.kindLabel}
+              {/* THE KIND, IN THE PACK'S OWN WORDS, BESIDE THE TITLE. The
+                  drawing writes the kind between the display title and the mono
+                  meta line on the artifact's own page, so it is drawn inside the
+                  h1 rather than in the header's small label slot above it. The
+                  WORDS are not derived here: `artifactKindLabelFor` returns what
+                  the claiming pack declares (`cinatra.displayName`) and floors to
+                  the package-id derivation only when a pack has declared nothing.
+                  The review line and the run page read the same function over the
+                  same `objectType`, so no two surfaces can word one pack its own
+                  way — the border correction main carries, kept whole here. */}
+              {artifactKindLabelFor(artifact.objectType)}
             </span>
           </span>
         }

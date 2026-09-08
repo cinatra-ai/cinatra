@@ -609,6 +609,28 @@ export type LaunchInput = {
   template?: Pick<AgentTemplateRecord, "packageName"> & { lifecycleConfig?: string | null };
   /** A headless producer that mints its own authority hands it in here. */
   authority?: OrgWriteAuthority | undefined;
+  /**
+   * The vantage this launch was made FROM (cinatra#2809, epic #2806) — the
+   * scope base of the route the person launched on, as the closed
+   * `LaunchScopeAnchorV1` payload `src/lib/launch-scope-anchor.ts` owns and
+   * `buildLaunchScopeAnchor` mints. Carried as `unknown` through the fence: the
+   * payload is validated where it is MINTED and decoded where it is READ, and
+   * naming the type here would add that module to four locked route graphs
+   * whose counts may only ever shrink.
+   *
+   * IT LIVES ON THE FENCE, not on each producer. This function is the single
+   * place every way of creating a run goes through, so an anchor threaded here
+   * reaches all of them — including one added tomorrow — and no producer can
+   * forget it. A producer that launches from NO vantage of ours (headless, A2A,
+   * a global entry point) simply omits it and the run is unanchored: the
+   * absence is the honest record, and nothing here infers a home from the org,
+   * the project or the actor, because all three move.
+   *
+   * Composed and recurring descendants INHERIT their parent's anchor by passing
+   * the parent's value here — a child of a team-scoped run belongs to that team
+   * however far down the chain it was born.
+   */
+  launchScopeAnchor?: unknown;
 };
 
 /**
@@ -698,6 +720,7 @@ async function runTheLaunch(
             ...create.input,
             runBy: create.input.runBy,
             humanPresent: humanPresent ? true : undefined,
+            launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,
         )
@@ -706,6 +729,7 @@ async function runTheLaunch(
             ...create.input,
             initialStatus: parkOnCreate ? "pending_input" : "queued",
             humanPresent: humanPresent ? true : undefined,
+            launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,
         );

@@ -14,7 +14,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-import { reviewTargetRowFacts, reviewTypeLabel } from "@/lib/artifacts/review-surface-model";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
 
 import { LifecycleReviewTargetHeaderFixtures } from "../lifecycle-review-target-header-fixtures";
 import {
@@ -75,7 +76,7 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
       const tags = root.querySelectorAll("[data-review-target-type]");
       expect(tags.length).toBe(fixture.headers.length);
       fixture.headers.forEach((seed, index) => {
-        const label = reviewTypeLabel(seed.objectType);
+        const label = artifactKindLabelFor(seed.objectType);
         // Worded by the surface model the server-side composer words it with —
         // never a label the fixture row named for itself. Asserted on BOTH
         // readings, so a tag that kept the attribute and lost the text a reader

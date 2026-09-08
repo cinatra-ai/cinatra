@@ -52,12 +52,12 @@ import { resolveLibraryDashboardPointers } from "@/lib/dashboards/dashboard-arti
 import { LibraryToolbar } from "./library-toolbar";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
 import { DashboardLibraryRow } from "./dashboard-library-row";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
   LibraryUploadButton,
   LibraryUploadDropZone,
   LibraryUploadProvider,
 } from "./library-upload";
-import { extensionDisplayName } from "@/lib/artifacts/extension-display-name";
 
 // ---------------------------------------------------------------------------
 // Presentation helpers (pure)
@@ -65,13 +65,10 @@ import { extensionDisplayName } from "@/lib/artifacts/extension-display-name";
 
 const DEFAULT_ARTIFACT_FACET = "__default__";
 
-/** Prettify an extension package id into a display name:
- * `@cinatra-ai/prospect-lists:list` → "Prospect Lists". THE LEAF MOVED
- * (wave 3 fix leg): the artifact page draws the same label beside its title,
- * and the two have to be one function rather than two that agree today. The
- * call site here is unchanged, and the name is re-exported so nothing that
- * needs the string has to import this server-only surface module. */
-export { extensionDisplayName } from "@/lib/artifacts/extension-display-name";
+// The claiming pack's kind label is DECLARED by the pack and read through the
+// one host function (`@/lib/artifacts/artifact-kind-label`). The former local
+// `extensionDisplayName` derivation is deleted: the library facet, the review
+// line and the artifact page header now cannot word the same pack differently.
 
 // The renderer glyph (§III) is resolved by `LibraryRowGlyph` through the
 // artifact-UI dispatch spine: a claimed row resolves its winner's registered
@@ -282,7 +279,7 @@ function buildFacetOptions(
   }
   const opts = Array.from(exts)
     .sort()
-    .map((e) => ({ value: e, label: extensionDisplayName(e) }));
+    .map((e) => ({ value: e, label: artifactKindLabelFor(e) }));
   if (hasDefault) {
     opts.push({ value: DEFAULT_ARTIFACT_FACET, label: "Default artifact" });
   }
@@ -359,7 +356,7 @@ function ClaimChip({ identity }: { identity: EffectiveIdentity }) {
   if (identity.kind === "extension") {
     return (
       <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-        {extensionDisplayName(identity.extension)}
+        {artifactKindLabelFor(identity.extension)}
       </span>
     );
   }

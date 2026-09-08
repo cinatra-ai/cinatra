@@ -263,7 +263,7 @@ export async function readSyncedAnthropicSkillTargets(): Promise<
   const { deriveApiKeyFingerprint, deriveEnvironmentNamespace } = await import(
     "@/lib/anthropic-skill-sync-service"
   );
-  const fingerprint = deriveApiKeyFingerprint();
+  const fingerprint = await deriveApiKeyFingerprint();
   if (!fingerprint) {
     throw new Error(
       "cannot identify the Anthropic API-key namespace, so the uploaded skill set is unknown",

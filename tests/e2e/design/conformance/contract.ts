@@ -60,10 +60,10 @@ import {
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-review-target-header-fixture-data";
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
+import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
 import {
   reviewRevisionMarker,
   reviewTargetRowFacts,
-  reviewTypeLabel,
 } from "../../../../src/lib/artifacts/review-surface-model";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
@@ -576,7 +576,7 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
-//     `reviewTypeLabel` from the row's type id), the type id on the meta line,
+//     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
 //     the pinned revision (addressed by the exact id, read as the elided marker
 //     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
@@ -676,7 +676,7 @@ export function reviewTargetHeaderDriver(
         await expect(header).toContainText(seed.title);
         // "… over a mono meta line carrying its type …". The TAG carries the
         // label, the line carries the id. The expected label is derived by the
-        // PRODUCT's own `reviewTypeLabel` from the row's type id — the call the
+        // PRODUCT's own `artifactKindLabelFor` from the row's type id — the call the
         // server-side composer makes — so a harness that ever worded a label of
         // its own is red here, and the tag is asserted on BOTH readings: the
         // attribute value and the text a reader actually sees.
@@ -684,9 +684,9 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveCount(1);
         await expect(tag).toHaveAttribute(
           "data-review-target-type",
-          reviewTypeLabel(seed.objectType),
+          artifactKindLabelFor(seed.objectType),
         );
-        await expect(tag).toHaveText(reviewTypeLabel(seed.objectType));
+        await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
         // with a pinned marker) …". Addressed by the EXACT revision the gate
@@ -870,14 +870,39 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
         await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeDisabled();
         await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toHaveCount(0);
       }
-      // "It is the only control." The floor carries exactly ONE thing to press
-      // on every drawn reading — this is also what pins the deferral named
-      // below: Cancel schedule is absent in the conversation rather than
-      // disabled, on the fired-recurring floor as much as anywhere else.
-      await expect(scheduleFloor(root).getByRole("button")).toHaveCount(1);
-      await expect(
-        scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
-      ).toHaveCount(0);
+      // WHAT THE FIRED-RECURRING FLOOR REALLY CARRIES (cinatra#3174 fix leg 8).
+      // This assertion used to read "the floor carries exactly ONE thing to
+      // press on every drawn reading", and it said so of the fired-recurring
+      // floor too — which contradicts the ratified drawing this whole suite
+      // exists to measure. Section VI: "A recurring schedule is never spent by
+      // firing: … it keeps editable rows over Save changes, and gains Cancel
+      // schedule beside them", and "Cancel schedule appears only where the
+      // schedule is recurring, and it stops the recurring schedule and then
+      // leaves the rows no longer editable." So the drawing puts TWO controls on
+      // this one floor and one on every other, and a contract asserting one here
+      // was asserting exactly the absence the second graded proof round already
+      // failed the product for. The drawing is the source of truth, so the
+      // contract moves to it rather than the other way round.
+      if (reading === "fired-recurring") {
+        await expect(scheduleFloor(root).getByRole("button")).toHaveCount(2);
+        await expect(
+          scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
+        ).toBeVisible();
+      } else {
+        // "It is the only control." Everywhere else the floor still carries
+        // exactly one thing to press, and the narrowing is the drawing's own —
+        // "Cancel schedule appears only where the schedule is recurring" — so
+        // over a one-off, and over a schedule that has not fired, the control is
+        // ABSENT rather than disabled. The reading AFTER the stop is not one of
+        // the five these rows draw: the section leaves "the rows no longer
+        // editable", which is the floorless read-only card the `fired` branch
+        // above already measures, and no stopped row exists here to assert it
+        // on. Adding that row is its own change with its own proof.
+        await expect(scheduleFloor(root).getByRole("button")).toHaveCount(1);
+        await expect(
+          scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
+        ).toHaveCount(0);
+      }
     },
     fields: {},
     actions: {},
@@ -951,18 +976,25 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-save-floor":
     case "schedule-card-fired-recurring-floor":
-      // NO `cancel-schedule` DRIVER, AND NOT BECAUSE ONE WAS SKIPPED. The
-      // fired-recurring floor is annotated with a SECOND act, and the shipped
-      // card draws that control only where the plan puts it: Cancel schedule is
-      // the page step's and the run card's, never the conversation's, so on the
-      // in-thread host the card draws no such control at all — absent by rule
-      // rather than disabled. A driver wave cannot settle that: either the
-      // drawing gives the in-conversation floor an act the product deliberately
-      // withholds there, or the product withholds an act the drawing grants. It
-      // is named on the wave's readiness list for the drawing to answer, and it
-      // is NOT approximated through the run-card host — these nine surfaces are
-      // the conversation's readings, and asserting one of them on another host
-      // would prove something the drawing never said.
+      // NO `cancel-schedule` DRIVER — AND THE REASON CHANGED (cinatra#3174 fix
+      // leg 5). It used to be that the shipped card drew that control only on
+      // the two page hosts, so the in-conversation floor had no such control to
+      // drive. That is no longer the product: the ratified drawing's own
+      // fired-recurring example draws the card IN A CHAT THREAD with "Save
+      // changes" and "Cancel schedule" side by side, and the second graded proof
+      // round failed the floor against it, so the host map was retired and the
+      // control is now drawn wherever `canCancel` says the schedule is
+      // recurring — this host included.
+      //
+      // What is missing now is the HARNESS's half, not the product's: a fixture
+      // row declares ONE answer for its decision endpoint, and this row's is
+      // `saved`, so a cancel press here could only ever be answered with the
+      // outcome of a save. Giving the row a per-op answer is its own change with
+      // its own proof, and this leg is a forward-merge; the act stays on the
+      // wave's readiness list, now for the harness to answer rather than the
+      // drawing. It is still NOT approximated through the run-card host — these
+      // nine surfaces are the conversation's readings, and asserting one of them
+      // on another host would prove something the drawing never said.
       driver.actions["save-schedule"] = {
         outcome: "rearmed",
         run: async (_page, root) => {

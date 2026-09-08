@@ -80,7 +80,7 @@ describe("§II — the library keeps its conformance anchor + claimed/plain chip
 
   it("an extension identity renders the claiming-extension chip; the floor/plain renders the Default artifact chip", () => {
     expect(LIB).toMatch(/identity\.kind === "extension"/);
-    expect(LIB).toMatch(/extensionDisplayName\(identity\.extension\)/);
+    expect(LIB).toMatch(/artifactKindLabelFor\(identity\.extension\)/);
     expect(LIB).toMatch(/Default artifact/);
   });
 });

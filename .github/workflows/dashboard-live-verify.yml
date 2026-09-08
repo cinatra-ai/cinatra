@@ -150,7 +150,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5434:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for one host port (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -159,7 +163,11 @@ jobs:
       redis:
         image: ${{ needs.detect.outputs.run_real == 'true' && 'redis:8' || '' }}
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -167,9 +175,11 @@ jobs:
           --health-retries 10
 
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      # SUPABASE_DB_URL and REDIS_URL are deliberately NOT here: they name the
+      # RANDOM host ports the runner mapped for this job's service containers,
+      # which a job-level `env:` cannot read. The real-smoke path's first step
+      # exports both to $GITHUB_ENV instead (cinatra#3267).
       SUPABASE_SCHEMA: cinatra_e2e_dashboard
-      REDIS_URL: redis://127.0.0.1:6379
       BULLMQ_QUEUE_NAME: cinatra-bg-e2e-dashboard
       BETTER_AUTH_URL: http://localhost:3100
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3100
@@ -217,6 +227,17 @@ jobs:
       - name: Skip stub (no dashboard-surface changes)
         if: ${{ needs.detect.outputs.run_real != 'true' }}
         run: echo "No dashboard-surface changes, or draft PR; reporting /agents Playwright smoke as a green stub (the real smoke runs on ready, non-draft PRs that touch dashboard paths, and on merge_group)."
+
+      # Carries the same run_real guard the real-smoke steps below do: on
+      # the stub path the service images are the empty string, no container
+      # starts, and there is no mapped port to read (cinatra#3267).
+      - name: Export the mapped service ports
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
 
       # ----- real smoke path: everything below is gated on dashboards==true -----
       - name: Checkout
@@ -326,6 +347,12 @@ jobs:
         # OPENAI_API_KEY + SUPABASE_DB_URL the build needs.
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # One page-data worker on the two-processor hosted runner: three workers
+          # starve the runner's own heartbeat during page-data collection and GitHub
+          # reclaims it ("runner received a shutdown signal") on any branch whose
+          # route set makes that phase long enough; the knob maps to
+          # experimental.cpus in next.config.ts.
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Start standalone server on port 3100
