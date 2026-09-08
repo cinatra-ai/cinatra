@@ -97,7 +97,7 @@ concurrency:
 jobs:
   validate-shape:
     name: Validate agent.json shape (legacy schema check)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
     steps:
       - name: Checkout
@@ -116,7 +116,7 @@ jobs:
 
   validate-runtime-invariants:
     name: Validate OAS runtime invariants
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     steps:
       - name: Checkout
@@ -144,7 +144,7 @@ jobs:
 
   validate-wayflow-mount:
     name: WayFlow mount guard (standalone + orchestrated, pinned tree)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:
     # the only place `docker/wayflow/tests/test_repo_agents_load.py` ran was the
     # `works-after proof` workflow, which (a) fires only on upgrade paths — the
