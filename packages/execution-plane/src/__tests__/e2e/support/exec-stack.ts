@@ -33,7 +33,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { generateKeyPairSync, randomBytes, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomInt, type KeyObject } from "node:crypto";
 import {
   mkdtempSync,
   mkdirSync,
@@ -256,8 +256,12 @@ export function brokerHostPortFor(env: JobScopedNameEnvironment = process.env): 
     }
     return parsed;
   }
-  const span = BROKER_HOST_PORT_RANGE_END - BROKER_HOST_PORT_RANGE_START + 1;
-  return BROKER_HOST_PORT_RANGE_START + (randomBytes(2).readUInt16BE(0) % span);
+  // Drawn uniformly across the whole range. A modulo over raw random bytes
+  // would lean on the low end of it — the span is not a whole divisor of the
+  // byte width, so the first values of the range would come up more often than
+  // the last — and a port picked more often is a port two stacks collide on
+  // more often, which is the very thing this range exists to avoid.
+  return randomInt(BROKER_HOST_PORT_RANGE_START, BROKER_HOST_PORT_RANGE_END + 1);
 }
 
 /** Resolved ONCE, like the names: the publish and every client must agree. */
