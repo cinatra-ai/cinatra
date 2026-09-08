@@ -133,6 +133,15 @@ import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-ste
 // client module reaches it as a client reference whose `.schedule` reads
 // `undefined` rather than the label (cinatra#2970).
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
+// The run's last step and its readings (cinatra#3029). Another module with NO
+// "use client" directive, for the same reason the labels are: the server screen
+// reads the real words.
+import {
+  RUN_MADE_STEP_LABEL,
+  runMadeReading,
+  type RunMadeArtifactRow,
+} from "./run-made-reading";
+import { RunMadeStepSurface } from "./run-made-step-surface";
 import { buildRunInputRailSteps } from "./run-input-rail-steps";
 // The gate's own screen names its rail row, by the same rule the gate's card
 // titles itself (cinatra#3221) -- one derivation, so the row and the card
@@ -1975,6 +1984,22 @@ export async function SetupScreen({
   // opens on, and whether the rail still owes the run's later steps, are two
   // questions about the same fact -- so the fact is read here and handed to
   // both, rather than derived twice and able to disagree.
+  // WHAT THIS RUN MADE (cinatra#3029, acceptance item 5). Read HERE, in the
+  // screen's async body, because the rail below is composed synchronously and
+  // the step's rows are a database read. A run that is not over yet has not
+  // finished making anything, so the step is drawn only on a TERMINAL run — and
+  // it is drawn even when the run made nothing, because the drawing gives the
+  // empty case its own reading rather than an empty panel.
+  const runMadeRows: RunMadeArtifactRow[] =
+    run && isTerminalRunStatus(run.status)
+      ? await (async () => {
+          const { listRunMadeArtifacts } = await import(
+            "@/lib/artifacts/run-made-artifacts"
+          );
+          return listRunMadeArtifacts({ orgId: run.orgId, runId: run.id });
+        })()
+      : [];
+
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
@@ -2566,6 +2591,60 @@ export async function SetupScreen({
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
                 />
               ) : null;
+              // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
+              //
+              // The ratified drawing's artifact review, section I.2: "The
+              // rail's last entry is the run's own record." It is composed
+              // AFTER the page's own rail above, and its row is marked `tail`,
+              // for two reasons the first proof round measured together:
+              //
+              //   • the row itself has to stand LAST. Pushed with the gate
+              //     steps it was drawn above the page's rows, so the trailing
+              //     Review row landed BENEATH the run's record and the rail
+              //     read as two rails, one of them ending on somebody else's
+              //     step;
+              //   • and its NUMERAL has to continue the series the reader can
+              //     see. Composed first, this step consumed a numeral the
+              //     page's own rows were then offset by, which numbered the
+              //     work steps after the record they come before.
+              //
+              // Nothing else moves with the reorder: `screenDrawsPageRail`
+              // reads `gateStepCount` only to keep a pre-dispatch run's rail
+              // suppressed (`pending_input`), and a run at a TERMINAL status —
+              // the only run that carries this step at all — is never at that
+              // status.
+              if (run && isTerminalRunStatus(run.status)) {
+                const madeRailStep: RunSurfaceRailStep = {
+                  key: "made",
+                  reached: true,
+                  settled: true,
+                  tail: true,
+                  surface: (
+                    <RunMadeStepSurface rows={runMadeRows} reading={runMadeReading(runMadeRows)} />
+                  ),
+                  row: null,
+                };
+                railSteps.push({
+                  ...madeRailStep,
+                  row: (
+                    <RunSurfaceRailRow
+                      selectionKey="made"
+                      label={RUN_MADE_STEP_LABEL}
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
+                        (railDraws ? rail.entries.length : 0) +
+                        1
+                      }
+                      reached
+                      settled
+                      selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
+                      conformanceId="run-surface-rail-step"
+                      indicatorConformanceId="run-surface-rail-indicator"
+                      action="open-made-step"
+                    />
+                  ),
+                });
+              }
               // THE TWO COLUMNS. With a gate step, the frame owns them: the
               // steps head the rail and they open ON THE RIGHT, in the run
               // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,
