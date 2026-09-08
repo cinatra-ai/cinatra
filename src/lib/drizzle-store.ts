@@ -24,6 +24,7 @@ import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSch
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
+  artifactMaterializationLedgerSchemaQueries,
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
@@ -1987,41 +1988,13 @@ $body$` },
     // trigger. Existing deployments also converge via migration core__0036.
     ...semanticAssertionSchemaQueries(schemaName),
     // ---- artifact_materializations idempotency ledger (cinatra#923) ----
-
-    // Claim-then-write-then-finalize journal for declarative artifact
-    // materialization (the install-op-journal shape). One row per attempted
-    // materialization; the 4-part unique key is the RETRY-idempotency
-    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
-    // hits the same key, reads the finalized row's refs and returns them
-    // instead of writing a second artifact. `phase` transitions
-    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
-    // artifact write — no window in which a committed artifact is invisible
-    // to the ledger). An unfinalized (crashed) claim is re-used by the next
-    // re-drive.
-    //
-    // `output_id` identity per path: the EndNode output name for
-    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
-    // the authoring step id for `llm_emit` provenance rows (unique per emit,
-    // so legitimately distinct same-byte emits never collide on the key).
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
-  id                          text PRIMARY KEY,
-  org_id                      text NOT NULL,
-  run_id                      text NOT NULL,
-  output_id                   text NOT NULL,
-  node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
-  extension                   text NOT NULL,
-  content_hash                text NOT NULL,
-  artifact_id                 text,
-  representation_revision_id  text,
-  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
-  created_at                  timestamptz NOT NULL DEFAULT now()
-)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
-    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
-    // declarative rows of one run by extension + content hash.
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
+    // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#3029;
+    // the same extract-leaf pattern as run_context_selections and
+    // object_content_snapshots below -- an EXISTING drizzle-store import, so the
+    // locked route graphs gain no module). The statements are unchanged and are
+    // spread in at the position they were written in; the reasoning, and why the
+    // detection ladder's four columns are what moved it, live in the leaf.
+    ...artifactMaterializationLedgerSchemaQueries(schemaName),
     // ---- run_context_selections audit table ----
     // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#1430
     // vertical slice; extract-leaf pattern — an EXISTING drizzle-store import,

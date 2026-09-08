@@ -40,8 +40,24 @@ export type MaterializationPath =
   | "materialize_tool"
   | "llm_emit"
   // cinatra#1893 (epic #1883 A5): the post-terminal derivation job's path — the
-  // produces-scoped capture of an UNBOUND run's final output.
-  | "derived_output";
+  // produces-scoped capture of an UNBOUND run's final output. RETIRED as a
+  // write path by cinatra#3029 (the response-text derivation retires); the
+  // value stays legal so historical rows keep reading.
+  | "derived_output"
+  // cinatra#3029 (epic #3023 W5): THE DEFAULT ROAD — one row per end-node
+  // output at or above the document floor that no binding names, carrying the
+  // detection ladder's deciding rung.
+  | "default_road";
+
+/** The detection ladder's recorded verdict, journalled on the row that write
+ *  produced (cinatra#3029 item 0.18: "the verdict, model and rung recorded on
+ *  the ledger row"). Absent on every path that does not run the ladder. */
+export type MaterializationDetection = {
+  rung: string;
+  reason: string;
+  confidence: number | null;
+  model: string | null;
+};
 
 export type MaterializationClaim =
   | {
@@ -95,14 +111,17 @@ export async function claimMaterialization(input: {
   path: MaterializationPath;
   extension: string;
   contentHash: string;
+  /** The detection ladder's verdict (the `default_road` path only). */
+  detection?: MaterializationDetection | null;
 }): Promise<MaterializationClaim> {
   ensurePostgresSchema();
   const s = schema();
   const id = randomUUID();
   const inserted = await pool().query(
     `INSERT INTO "${s}"."artifact_materializations"
-   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed')
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+    detection_rung, detection_reason, detection_confidence, detection_model)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12)
  ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
  RETURNING id`,
     [
@@ -114,6 +133,10 @@ export async function claimMaterialization(input: {
       input.path,
       input.extension,
       input.contentHash,
+      input.detection?.rung ?? null,
+      input.detection?.reason ?? null,
+      input.detection?.confidence ?? null,
+      input.detection?.model ?? null,
     ],
   );
   if (inserted.rows.length > 0) {

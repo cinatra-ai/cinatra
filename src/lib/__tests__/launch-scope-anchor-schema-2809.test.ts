@@ -93,12 +93,40 @@ describe("the operator-upgrade half", () => {
     // ledger never dedupes. The number is therefore read against the WHOLE
     // ledger here, so a collision shows in this suite and not only in the gate,
     // and a forward onto a branch that shipped one meanwhile renumbers.
+    //
+    // NOT-ALREADY-TAKEN, never HIGHEST (cinatra#3029). This read once also
+    // asserted that no OTHER fragment carried a higher number, which is a claim
+    // that the shipped ledger may never grow: the next migration merged after
+    // this one fails it whatever number it takes, and the ledger is append-only
+    // by construction. The runner refuses a boot on a DUPLICATE and on nothing
+    // else, so a duplicate is what is read — and it is read over every
+    // fragment, not this one alone, because the collision that stopped this
+    // branch was a PAIR of fragments claiming 0102 and the fault belongs to the
+    // pair, not to whichever half a suite happens to own.
+    const fragments = readdirSync(join(ROOT, MANIFEST_DIR))
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => ({
+        name,
+        seq: (JSON.parse(read(join(MANIFEST_DIR, name))) as { seq: string }).seq,
+      }));
     const fragment = JSON.parse(read(FRAGMENT)) as { seq: string };
-    const others = readdirSync(join(ROOT, MANIFEST_DIR))
-      .filter((name) => name.endsWith(".json") && name !== basename(FRAGMENT))
-      .map((name) => (JSON.parse(read(join(MANIFEST_DIR, name))) as { seq: string }).seq);
-    expect(others).not.toContain(fragment.seq);
-    expect(Math.max(...others.map(Number))).toBeLessThan(Number(fragment.seq));
+    const others = fragments.filter((entry) => entry.name !== basename(FRAGMENT));
+    expect(others.map((entry) => entry.seq)).not.toContain(fragment.seq);
+
+    // NO number in the ledger is claimed twice, by anyone.
+    const claimants = new Map<string, string[]>();
+    for (const entry of fragments) {
+      claimants.set(entry.seq, [...(claimants.get(entry.seq) ?? []), entry.name]);
+    }
+    expect([...claimants].filter(([, names]) => names.length > 1)).toEqual([]);
+
+    // And a renumber renames BOTH halves of a pair: every fragment's file name
+    // states the number the fragment claims, so half a renumber — the JSON
+    // moved and the module left behind, or the reverse — cannot pass for a
+    // whole one.
+    for (const entry of fragments) {
+      expect(entry.name).toContain(`core__${entry.seq}_`);
+    }
   });
 });
 

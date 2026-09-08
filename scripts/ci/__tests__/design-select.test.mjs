@@ -27,6 +27,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -135,6 +136,36 @@ const select = (changedFiles, files = REPO) =>
 
 const selectWith = (specFiles, files, changedFiles) =>
   selectFamilies({ changedFiles, ...buildFamilies({ specFiles, io: makeIo(files) }) });
+
+// THE REAL-REPO WALK — ONCE FOR THE WHOLE FILE.
+//
+// `buildFamilies` over THIS repo's discovered specs is a real breadth-first
+// walk of every family's import graph: it reads and scans every reachable
+// source file. Measured on a two-worker box it takes about 29 seconds, and the
+// cases below used to run it once EACH — six walks per file — which put every
+// one of those cases within a second of the suite's 30 s per-case limit and
+// turned the root suite red whenever the runner carried other jobs.
+//
+// The walk takes no arguments and reads nothing that a case can change, and
+// `selectFamilies` only READS the families and the unresolved list it is given
+// (it never mutates either), so one walk serves every case. `realWalks` counts
+// the walks the file actually performs; the last block asserts it stays 1.
+let realWalks = 0;
+let realWalkResult = null;
+const realRepo = () => {
+  if (realWalkResult === null) {
+    realWalks += 1;
+    realWalkResult = buildFamilies({ specFiles: discoverSpecFiles() });
+  }
+  return realWalkResult;
+};
+
+// The one walk is charged to whichever case reaches `realRepo` first, and the
+// walk alone measured 29 s of the 30 s this suite allows a case by default —
+// no headroom at all once the runner carries other jobs. THIS FILE therefore
+// takes a limit sized to the work it really does (four times the measured
+// walk), rather than the suite raising its limit for every other file.
+vi.setConfig({ testTimeout: 120_000 });
 
 describe("1. NO UI — nothing to check, nothing runs", () => {
   it("skips Playwright when the diff touches no UI file", () => {
@@ -395,12 +426,12 @@ describe("5. THE INVOCATION and THIS repo", () => {
     // The guard that keeps the feature alive: one unresolvable import anywhere
     // in a family's graph fails the whole selection open to the full suite, so
     // a drift that breaks resolution must red HERE, not silently un-narrow CI.
-    const { unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { unresolved } = realRepo();
     expect(unresolved).toEqual([]);
   });
 
   it("narrows THIS repo to the families that mount a changed fixture page", () => {
-    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { families, unresolved } = realRepo();
     const result = selectFamilies({
       changedFiles: ["src/app/design-fixtures/agents-card/page.tsx"],
       families,
@@ -415,7 +446,7 @@ describe("5. THE INVOCATION and THIS repo", () => {
   // proved by the WHOLE suite — a narrowed (or skipped) run would let the file
   // that governs the selection certify its own selection.
   it("runs THIS repo's WHOLE suite for a workflow-only change", () => {
-    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { families, unresolved } = realRepo();
     const result = selectFamilies({
       changedFiles: [".github/workflows/design-visual-verify.yml", "README.md"],
       families,
@@ -426,7 +457,7 @@ describe("5. THE INVOCATION and THIS repo", () => {
   });
 
   it("runs THIS repo's WHOLE suite for a change to the selector's own unit suite", () => {
-    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { families, unresolved } = realRepo();
     const result = selectFamilies({
       changedFiles: ["scripts/ci/__tests__/design-select.test.mjs"],
       families,
@@ -440,7 +471,7 @@ describe("5. THE INVOCATION and THIS repo", () => {
   // rather than the virtual one: a docs-only change reaches no family and
   // starts no Playwright, so the install/build/boot is never paid.
   it("skips THIS repo's suite entirely for an intentional no-impact diff", () => {
-    const { families, unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { families, unresolved } = realRepo();
     const result = selectFamilies({
       changedFiles: ["README.md", "docs/internals/contracts/design-conformance-pin-drift.md"],
       families,
@@ -626,7 +657,7 @@ describe("7. THE SECOND CONVERGENCE ROUND (false negatives)", () => {
     expect(aliases.failed).toBe(null);
     expect(aliases.prefixes.length).toBeGreaterThanOrEqual(1);
     expect(aliases.exact.size).toBeGreaterThan(50);
-    const { unresolved } = buildFamilies({ specFiles: discoverSpecFiles() });
+    const { unresolved } = realRepo();
     expect(unresolved).toEqual([]);
   });
 });
@@ -780,5 +811,23 @@ describe("9. THE PUBLISHED PLAN — the expensive job consumes what the cheap jo
     } finally {
       rmSync(file, { force: true });
     }
+  });
+});
+
+describe("10. THE REAL-REPO WALK ITSELF", () => {
+  // The regression guard for the timeouts this file used to produce: the walk
+  // is what costs the seconds, so the file must perform it exactly once. Both
+  // halves matter — the counter proves the memo holds across the cases that
+  // ran, and the source count proves no case reintroduced a direct walk that
+  // simply did not run in this invocation.
+  it("walks THIS repo's import graph exactly once for the whole file", () => {
+    realRepo();
+    realRepo();
+    expect(realWalks).toBe(1);
+
+    // Built by concatenation so this assertion does not count itself.
+    const walkCall = "buildFamilies({ specFiles: " + "discoverSpecFiles() })";
+    const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+    expect(source.split(walkCall).length - 1).toBe(1);
   });
 });
