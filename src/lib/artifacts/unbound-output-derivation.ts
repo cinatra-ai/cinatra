@@ -14,7 +14,6 @@ import {
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { buildAgentInstancePath } from "@/lib/agent-url";
 import { resolveBoundArtifactTarget } from "./resolve-bound-artifact-type";
 import {
   writeClaimedArtifact,
@@ -609,44 +608,16 @@ async function deriveClaimedRow(
 }
 
 // ---------------------------------------------------------------------------
-// Advisory channel — occurrence-deduped `info` notification (per run).
+// The advisory channel is RETIRED (cinatra#3029, epic #3023 W5).
+//
+// "the response-text derivation and the 'not captured' advisory retire" (plan
+// item 0.17). The default road now files EVERY end-node output at or above the
+// document floor — down to the binary base — so no output is ever dropped, and
+// the notification that used to tell an operator their work had been thrown away
+// has nothing left to report. Nothing new enters this outbox: the terminal path
+// (packages/agents/src/execution.ts) no longer captures the run's response text.
+// The drain below survives only to SETTLE outbox rows written before this slice.
 // ---------------------------------------------------------------------------
-async function emitUnboundOutputAdvisory(
-  row: LeasedOutboxRow,
-  status: "no_match" | "no_produces",
-): Promise<void> {
-  try {
-    const { createNotificationForRecipient } = await import("@/lib/notifications");
-    const { name, packageName } = await readTemplateNameAndPackage(row.templateId);
-    const label = name ?? "An agent run";
-    const href = packageName
-      ? buildAgentInstancePath(packageName, row.runId)
-      : undefined;
-    const body =
-      status === "no_produces"
-        ? `${label} produced an output that was not saved: the agent declares no output types to file it under. Add a \`produces\` declaration (or wire an output binding) to capture outputs automatically.`
-        : `${label} produced an output that could not be matched to any of the agent's declared output types, so it was not saved. The output remains in the run history.`;
-    await createNotificationForRecipient(
-      row.createdBy
-        ? { kind: "user", userId: row.createdBy }
-        : { kind: "admins" },
-      {
-        kind: "info",
-        title: "Agent output not captured",
-        body,
-        href,
-        // Occurrence-deduped per run: a re-drive of the same run collapses to one
-        // flyout row.
-        dedupeKey: `unbound-output:${row.runId}`,
-      },
-    );
-  } catch (err) {
-    console.warn(
-      `[unbound-output] advisory emit failed for run=${row.runId} (derivation already settled):`,
-      err instanceof Error ? err.message : err,
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Public: derive ONE run's captured output.
@@ -728,9 +699,8 @@ export async function deriveUnboundRunOutput(
   // emits the advisory, so a stale driver must not emit a duplicate/contradictory
   // one — and must report `skipped`, not a terminal outcome it did not persist.
   if (!settled) return { outcome: "skipped" };
-  if (verdict.status === "no_match" || verdict.status === "no_produces") {
-    await emitUnboundOutputAdvisory(row, verdict.status);
-  }
+  // No advisory: the "not captured" notification retires with the road that
+  // needed it (cinatra#3029).
   return { outcome: verdict.status };
 }
 

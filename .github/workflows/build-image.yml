@@ -1,3 +1,49 @@
+# CI runner routing is VARIABLE-DRIVEN: every job in every workflow reads
+# `runs-on: ${{ fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') }}` for one of
+# six classes — POOL (the install-heavy invariant jobs pinned to the dedicated
+# six-runner box), HEAVY (a pnpm install plus node work, no `services:`/`container:`),
+# E2E (declares `services:`/`container:` or drives a browser, Playwright or docker),
+# GATE (small gate/lint/aggregator jobs), PIXEL (the two jobs that draw or compare the
+# committed /design-fixtures picture goldens) and SMOKE (a job that LOADS a freshly built
+# image into the runner's own docker daemon and has to find it there in a LATER step) —
+# so routing is changed by setting the repository variable, never by pushing a workflow:
+# each variable holds a JSON string, either a quoted label (`"ubuntu-latest"`) or a label
+# array (`["self-hosted","linux","x64","cinatra-ci"]`), and an unset variable falls back
+# to `ubuntu-latest`. CI_RUNNER_* supersedes the older `vars.CI_BUILD_RUNNER` escape
+# hatch.
+#
+# PIXEL is a class of its own for one reason: the goldens are DRAWN on the hosted
+# class, and a self-hosted machine renders the fixtures page differently, so the
+# picture comparison never passes anywhere else. Its two jobs are the `pixel-diff` job
+# of design-visual-verify.yml and the `refresh` job of design-baselines-refresh.yml.
+# Point PIXEL somewhere else only together with a full goldens re-draw on that same
+# machine, never on its own.
+#
+# SMOKE is a class of its own for a comparable reason, and it is a ROUTING class, never
+# a licence to skip anything: its job loads an image into the runner's docker daemon in
+# one step and runs it in the next, and where the docker engine is shared between
+# concurrently running jobs that tag did not survive the gap (the exec worker image at
+# fc2a44cf). Its member is the `build-and-smoke-worker` job of build-exec-images.yml.
+# Point SMOKE only at a machine whose docker daemon belongs to one job at a time.
+#
+# THE EXCEPTIONS, and each is written beside the job itself: three jobs name
+# `ubuntu-latest` directly instead of a class, because each was MEASURED to fail
+# on the self-hosted pool for a reason that belongs to the pool rather than to
+# the job — the `image` job (the image it builds never reaches the pool's docker
+# daemon, so its prod-boot e2e cannot run it), `chat-hitl-held-turn-e2e` (its web
+# server does not boot there) and the `scale-smoke` job of
+# trusted-read-scale-smoke.yml (it loses its MCP session to a shared stack).
+# Each carries its measured reason and the condition under which it goes back to
+# a class.
+#
+# THE HOST-MUTATION STEPS are a separate matter from routing: the steps that
+# reclaim runner disk or add a swapfile mutate the machine they run on, so each
+# is guarded by `runner.environment == 'github-hosted'` and by nothing else. A
+# throwaway hosted runner may be reshaped; a self-hosted machine shared with
+# other jobs may not. That guard must never be ANDed with a repository variable:
+# an unset variable turns the steps off on the hosted runners too, and the
+# production build then dies mid-compile on a 16 GB machine with only the stock
+# swap.
 name: Build and publish image
 
 on:
@@ -69,7 +115,7 @@ jobs:
   # ---------------------------------------------------------------------------
   detect:
     name: Detect skip — docs-only or draft (build-image)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -112,7 +158,7 @@ jobs:
     name: Actions SHA-pin gate
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -155,7 +201,7 @@ jobs:
     # the `skip` expression has no value and the gate silently no-ops.
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,7 +259,7 @@ jobs:
     name: Skills unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,7 +302,7 @@ jobs:
     name: A2A protocol unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -317,7 +363,7 @@ jobs:
     name: Execution-plane unit tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -376,7 +422,7 @@ jobs:
     name: RBAC authz unit tests
     needs: detect
     if: ${{ always() }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - name: Guard — detect must have succeeded
@@ -427,7 +473,7 @@ jobs:
     name: context-resolve route response shape
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -472,7 +518,7 @@ jobs:
     name: Better Auth schema parity
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -542,7 +588,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -604,7 +650,7 @@ jobs:
     name: Extension-anchor lifecycle DB tests
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 10
     services:
       postgres:
@@ -614,15 +660,24 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
+      # `job.services.*` is unreadable from a job-level `env:` block, so the
+      # database URL every step below reads is built from the RANDOM host
+      # port the runner mapped and exported here first (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
@@ -881,7 +936,7 @@ jobs:
     name: Agents integration — gated set (+ full-tier report)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 20
     services:
       postgres:
@@ -891,7 +946,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -900,7 +959,11 @@ jobs:
       redis:
         image: redis:8
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -911,11 +974,12 @@ jobs:
     # what the provisioning scripts read; CINATRA_TEST_DB_URL is what
     # vitest.integration.config.ts reads (and hard-throws on if absent, so a
     # broken wiring change here fails loudly instead of skipping quietly).
+    # Those two plus REDIS_URL now name the RANDOM host ports the runner
+    # mapped for this job's service containers, which a job-level `env:`
+    # cannot read — the first step exports them to $GITHUB_ENV instead, so
+    # every later step still sees them unconditionally (cinatra#3267).
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      CINATRA_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
       # cinatra#2675 — the registry half of the AC1 preflight proof (see the
       # "Start a disposable Verdaccio" step below for the container itself and
       # why it is not a native `services:` entry above it). REQUIRED=1 turns a
@@ -923,9 +987,23 @@ jobs:
       # of the suite's default loud-but-passing skip — standing up this lane is
       # the whole point of giving it something to require (PR #2678's recorded
       # residual).
-      CINATRA_TEST_VERDACCIO_URL: http://127.0.0.1:4873
+      # CINATRA_TEST_VERDACCIO_URL is NOT set here: the disposable registry
+      # below publishes a RANDOM host port, so the step that starts it reads
+      # the mapping back and exports the URL to $GITHUB_ENV (cinatra#3267).
       CINATRA_TEST_VERDACCIO_REQUIRED: "1"
     steps:
+      # SUPABASE_DB_URL / CINATRA_TEST_DB_URL / REDIS_URL, resolved against
+      # the RANDOM host ports the runner mapped: `job.services.*` is
+      # unreadable from a job-level `env:`, so they are exported here,
+      # before the first step that reads one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "CINATRA_TEST_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
@@ -993,12 +1071,23 @@ jobs:
           # single-tenant, ephemeral GitHub-hosted runner, but free and
           # matches scripts/ci/works-after/verdaccio.sh's identical `-p
           # 127.0.0.1::4873`.
-          docker run -d --name agents-it-verdaccio -p 127.0.0.1:4873:4873 \
+          # An EMPTY host port: Docker picks a free one, so two jobs running
+          # this registry on ONE self-hosted machine never race for 4873
+          # (cinatra#3267). The mapping is read back below and published as
+          # CINATRA_TEST_VERDACCIO_URL for the integration suite further down.
+          docker run -d --name agents-it-verdaccio -p 127.0.0.1::4873 \
             -v "${GITHUB_WORKSPACE}/docker/verdaccio/config.ci.yaml:/verdaccio/conf/config.yaml:ro" \
             "$VERDACCIO_IMAGE" >/dev/null
+          VERDACCIO_PORT="$(docker port agents-it-verdaccio 4873/tcp | head -n 1 | sed 's/.*://')"
+          [ -n "$VERDACCIO_PORT" ] || { echo "::error::could not read back the mapped verdaccio host port"; exit 1; }
+          VERDACCIO_URL="http://127.0.0.1:${VERDACCIO_PORT}"
+          # $GITHUB_ENV reaches the LATER steps (the integration suite reads
+          # process.env.CINATRA_TEST_VERDACCIO_URL); this step's own curl loop
+          # has to use the local variable, which $GITHUB_ENV does not feed.
+          echo "CINATRA_TEST_VERDACCIO_URL=${VERDACCIO_URL}" >> "$GITHUB_ENV"
           for i in $(seq 1 40); do
-            if curl -fsS "${CINATRA_TEST_VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
-              echo "verdaccio is up at ${CINATRA_TEST_VERDACCIO_URL} (attempt ${i}/40)"
+            if curl -fsS "${VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
+              echo "verdaccio is up at ${VERDACCIO_URL} (attempt ${i}/40)"
               exit 0
             fi
             sleep 3
@@ -1230,7 +1319,7 @@ jobs:
     # names). Docs-only and draft PRs (`detect` succeeds with `skip: true`)
     # still skip this job.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1319,7 +1408,7 @@ jobs:
     name: Canonical extension invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1404,7 +1493,7 @@ jobs:
     name: Workspace package unit suites
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     # Setup (checkout + clone-extensions + install) is the whole cost here;
@@ -1521,7 +1610,7 @@ jobs:
     name: Hosted-MCP wire gate
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 12
@@ -1566,7 +1655,7 @@ jobs:
     name: devperf invariants
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1612,7 +1701,7 @@ jobs:
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: [self-hosted, linux, x64, cinatra-ci]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
     # same file already declare. Without it this job inherits the WORKFLOW-level
@@ -2665,7 +2754,7 @@ jobs:
     # runs beside the ratchet gates instead of after them; the REQUIRED context
     # is the `perpetual-loops-invariants` fan-in below, which needs both shards.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 12
@@ -2754,7 +2843,7 @@ jobs:
     name: Perpetual system loops invariants
     needs: [detect, perpetual-core, perpetual-extension-suites]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 5
@@ -2779,7 +2868,7 @@ jobs:
     # build off the 2-vCPU/7GB runner — where `pnpm build` (3GB heap) + the
     # job-level postgres/redis sidecars OOM/swap-thrash and the runner gets
     # RECLAIMED mid-build. Rollback is a variable flip, not a code revert.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # Dev-mode (Turbopack) compiles each route segment cold on first hit (the
     # permissions page alone took ~60s). With route pre-warming below the suite
     # fits comfortably, but keep generous headroom over the default.
@@ -2792,7 +2881,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -2801,16 +2894,22 @@ jobs:
       redis:
         image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      # SUPABASE_DB_URL and REDIS_URL are deliberately NOT here: they name
+      # the RANDOM host ports the runner mapped for this job's service
+      # containers, which a job-level `env:` cannot read. The first step
+      # below exports both to $GITHUB_ENV (cinatra#3267).
       SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
       BETTER_AUTH_SECRET: rbac-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxxxxxxxxxx
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
@@ -2833,6 +2932,17 @@ jobs:
       - name: Docs-only stub
         if: ${{ needs.detect.outputs.skip == 'true' }}
         run: echo "Docs-only or draft PR — reporting RBAC browser e2e as a green stub (the real suite runs on code/mixed PRs)."
+
+      # Carries the same skip guard every real step below does: on a
+      # docs-only run the service images are the empty string, no container
+      # starts, and there is no mapped port to read (cinatra#3267).
+      - name: Export the mapped service ports
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2904,8 +3014,9 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
         # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
         # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
@@ -2924,7 +3035,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3074,11 +3185,16 @@ jobs:
     name: Chat-HITL held-turn dev-runtime e2e
     needs: detect
     if: ${{ always() }}
-    # Same opt-in larger-runner lever the sibling e2e jobs use. Unset keeps
-    # `ubuntu-latest`. This job runs the DEV runtime rather than a production
-    # build, so it never pays `pnpm build`'s memory peak — but Turbopack compiles
-    # each route cold on first hit, which is why the budgets below are generous.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # HOSTED, not the E2E class the sibling e2e jobs take: this flow's web
+    # server does not start on the shared self-hosted pool — its boot log ends on
+    # an extension migration the pool's database role refuses — while it starts
+    # on a GitHub-hosted runner every time. It moves to the E2E class once that
+    # boot is fixed there.
+    #
+    # This job runs the DEV runtime rather than a production build, so it never
+    # pays `pnpm build`'s memory peak — but Turbopack compiles each route cold on
+    # first hit, which is why the budgets below are generous.
+    runs-on: ubuntu-latest
     # The flow drives two full held turns. The FIRST `POST /api/chat` compiles the
     # chat route graph cold before the pre-router dispatches at all — minutes on a
     # contended runner, with nothing in `agent_runs` while it happens. 50 minutes
@@ -3095,7 +3211,11 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-          - 5432:5432
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -3104,7 +3224,11 @@ jobs:
       redis:
         image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
         ports:
-          - 6379:6379
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -3117,9 +3241,11 @@ jobs:
       # sibling e2e job's dev-instance switches. `probes.ts` REFUSES to default the
       # first three: this suite counts runs and queue jobs and will not measure a
       # database or a queue it does not own.
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      # `SUPABASE_DB_URL` and `REDIS_URL` are set by the job's first step,
+      # not here: they name the RANDOM host ports the runner mapped for this
+      # job's service containers, and a job-level `env:` cannot read
+      # `job.services.*` (cinatra#3267).
       SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
       # A queue of this job's own, so "exactly one job names this run" is measured
       # on a queue nothing else writes to.
       BULLMQ_QUEUE_NAME: cinatra-chat-hitl-s9k-jobs
@@ -3162,6 +3288,17 @@ jobs:
       - name: Docs-only stub
         if: ${{ needs.detect.outputs.skip == 'true' }}
         run: echo "Docs-only or draft PR — reporting the chat-HITL held-turn e2e as a green stub (the real flow runs on code/mixed PRs)."
+
+      # Carries the same skip guard every real step below does: on a
+      # docs-only run the service images are the empty string, no container
+      # starts, and there is no mapped port to read (cinatra#3267).
+      - name: Export the mapped service ports
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -3252,7 +3389,7 @@ jobs:
       # Headroom is what this job can give, so it gives it — the wp-drupal-uat
       # recipe, unchanged in intent. Nothing here touches what the flow asserts.
       - name: Reclaim runner disk (so the swapfile below has room)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Same reclaim the UAT gate does before enlarging swap. Disk was never
         # this job's constraint; this exists only so the 16G file below fits with
         # room to spare.
@@ -3261,7 +3398,7 @@ jobs:
           df -h /
 
       - name: Enlarge swap + record the memory baseline
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
         # Turns the cliff into a slowdown the suite can still finish and REPORT
         # THROUGH, which is the part that matters for a required gate: a slow red
         # names a failing test, a reclaimed runner names nothing. The baseline is
@@ -3443,13 +3580,14 @@ jobs:
       # still run and report on their own, and the job is red for whichever
       # failed. The docs-only skip is unchanged.
       #
-      # `shell: bash` IS LOAD-BEARING. This job's `runs-on:` is an expression
-      # (`${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}`), and an expression can
-      # resolve to anything — so a static reader cannot know the default shell is
-      # `bash -e` and must refuse to credit a step that leaves it implicit.
-      # `scripts/audit/ci-pinned-tests-exist.mjs` is exactly such a reader, and
-      # its direction 4 is what keeps these four steps from being quietly
-      # deleted; without this line it reports the tiers as run by nobody.
+      # `shell: bash` IS LOAD-BEARING and stays even though this job now names
+      # `ubuntu-latest` directly rather than a routing class. A static reader has
+      # to be able to see the shell these steps run under, and an expression can
+      # resolve to anything — so the reader refuses to credit a step that leaves
+      # the shell implicit. `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
+      # such a reader, and its direction 4 is what keeps these four steps from
+      # being quietly deleted; without this line it reports the tiers as run by
+      # nobody the moment the job goes back to a class.
       # Explicit `bash` is `bash -eo pipefail`, which is STRICTER than the
       # implicit `bash -e` the steps around them get — and identical for these,
       # which run one command each and contain no pipeline.
@@ -3582,9 +3720,9 @@ jobs:
       # under `set -e` it can only add a red, never mask one.
       #
       # `shell: bash` and `!cancelled()` are the siblings' and load-bearing for
-      # the same two reasons stated at the tiers above: this job's `runs-on:` is
-      # an expression, so a static reader must refuse a step that leaves the
-      # shell implicit — and `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
+      # the same two reasons stated at the tiers above: the shell stays explicit
+      # so a static reader can credit the step whatever this job's `runs-on:`
+      # resolves to — and `scripts/audit/ci-pinned-tests-exist.mjs` is exactly
       # such a reader, its direction 5 being what keeps THIS step from being
       # quietly deleted — and a red e2e above must not hide a red gate.
       - name: One-card gate — every lifecycle card kind drawn by a named owner (cinatra#2936, W6)
@@ -3606,16 +3744,15 @@ jobs:
     # new cost is a discarded image build on a push whose unit tier fails.
     needs: [detect]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    # The `build` job (docker buildx build + next build) is the workflow's long
-    # pole (~10-11 min, mostly `next build` on a 2-vCPU runner). To accelerate it,
-    # set the org/repo variable CI_BUILD_RUNNER to a larger label (e.g.
-    # `ubuntu-latest-4-cores`) AFTER confirming availability with the manual
-    # `runner-probe.yml` workflow. Unset (the default) keeps `ubuntu-latest`, so
-    # this is a zero-risk no-op until the variable is set, and rollback is a
-    # variable flip — not a code revert. There is no in-job fallback for an
-    # unavailable runner label (runner selection precedes all steps), hence the
-    # probe-first discipline.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # HOSTED, not the E2E class: the prod-boot e2e step below RUNS the image this
+    # job builds a step earlier. The build step already asks for `load: true`,
+    # and on the self-hosted pool's docker-container buildx driver the image
+    # still did not arrive in the daemon the e2e then reaches — it answered
+    # `Unable to find image 'cinatra-prod-boot-e2e:ci' locally` — while a
+    # GitHub-hosted runner's docker driver puts it there every time. This job
+    # moves to the E2E class once that hand-off works on the pool; the
+    # self-hosted cache arms below are kept ready for exactly that.
+    runs-on: ubuntu-latest
     # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
     # for the image build (next build is the dominant pole) plus ~3-5 min for
     # the prod-boot e2e (image load + fresh-DB setup + boot + probes); we've
@@ -3660,7 +3797,9 @@ jobs:
         # DROP the swapfile and instead reclaim the ~25-30G of preinstalled
         # toolchains this job never uses (plus the preloaded docker images)
         # BEFORE the build. Best-effort -- a prune hiccup never fails the job.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY: it deletes shared toolchains and prunes all
+        # docker state, which must never run on a self-hosted runner.
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           set +e
@@ -3691,9 +3830,10 @@ jobs:
         # ENOSPC structurally cannot recur — while 15.8G RAM + 20G swap (~35.8G)
         # clears the ~33G cold peak. Byte-identical best-effort/fail-open script
         # to the four memory-bound jobs' swap step (subshell-guarded, partial-
-        # file cleanup on failure, swapon --show/df -h diagnostics); skipped when
-        # CI_BUILD_RUNNER moves this job to a larger runner.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # file cleanup on failure, swapon --show/df -h diagnostics); GitHub-hosted
+        # runners ONLY (a self-hosted runner brings its own memory and cleanup,
+        # and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3731,13 +3871,47 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
+      # behind `type=gha` is only served to GitHub-hosted runners: on the
+      # self-hosted class this job was routed to, buildx died inside the build at
+      # "importing cache manifest from gha" with an HTML error page where a
+      # cache manifest belongs, and the image build failed outright. So on a
+      # self-hosted runner the build caches to a directory the runner user owns
+      # under its OWN home, which persists between jobs on the same machine;
+      # GitHub-hosted runs keep `type=gha` byte-for-byte (the two-armed
+      # cache-from/cache-to expressions on the build step below).
+      # The directory is named for the gha scope it replaces — `buildkit`, the
+      # gha exporter's default when no `scope=` is given — so the two backends
+      # stay legible as the same cache.
+      # A local cache is PER MACHINE: a job landing on a different self-hosted
+      # runner than the one that populated it finds an empty directory, warns,
+      # and rebuilds — slower on a cold machine, never wrong.
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/buildx/buildkit"
+          # ONE cleanup line, self-hosted only, and BEFORE the build rather than
+          # after: buildx writes this cache with mode=max, so it grows without
+          # bound across jobs on this machine. Past 10 GiB, drop the directory
+          # and let this build repopulate it — one cold build costs far less
+          # than a full runner disk, and deleting AFTER the build would throw
+          # away exactly the cache the downstream re-export jobs read.
+          size_mb="$(du -sm "$dir" 2>/dev/null | cut -f1 || true)"
+          if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
       # the local docker daemon, then booted by the prod-boot e2e below. This
       # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
       # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
       # to prove the boots-without-private-extensions path before merge, and its
-      # `cache-to: type=gha,mode=max` below populates the shared gha cache so the
-      # downstream publish jobs re-export from cache instead of rebuilding. The
+      # `cache-to` below populates the shared build cache (`type=gha` on a
+      # GitHub-hosted runner, the runner-local `type=local` directory on a
+      # self-hosted one) so the downstream publish jobs re-export from cache
+      # instead of rebuilding. The
       # GHCR push and the prod-deploy dispatch moved OUT of this job (the
       # build-image e2e-split) — see the `publish-nonrelease-image`,
       # `publish-release-image`, and `release-dispatch` jobs below. Keeping
@@ -3756,8 +3930,8 @@ jobs:
           # MUST stay identical on the push step below so its cache hit is total.
           build-args: |
             CI=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       # Boot the image WITHOUT private extensions cloned (the checkout above
       # has no extensions/ tree at all): fresh Postgres + Redis on an isolated
@@ -3791,8 +3965,11 @@ jobs:
   #     the cross-repo `cinatra-release-published` repository_dispatch to ops
   #     that triggers the prod deploy. The real outward release action — paused.
   #
-  # All three re-export from the gha cache that `build` populated
-  # (cache-to: type=gha,mode=max), so none of them rebuilds the image; they are
+  # All three re-export from the build cache that `build` populated
+  # (`cache-to: type=gha,mode=max` on a GitHub-hosted runner; the runner-local
+  # `type=local` directory on a self-hosted one, which is per machine — a
+  # re-export landing on a different self-hosted runner rebuilds instead), so
+  # none of them normally rebuilds the image; they are
   # pure cache re-exports gated on `needs: build` (so the boot-e2e still gates
   # every publish). None is a REQUIRED status check — the required checks
   # (detect/test/e2e-rbac) are untouched, so a PR's mergeability is unaffected;
@@ -3825,7 +4002,7 @@ jobs:
   build:
     needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 5
@@ -3846,7 +4023,7 @@ jobs:
     # tags (handled by the gated release job). A non-tag push to main, a
     # non-v* tag push, or a manual workflow_dispatch publishes here, ungated.
     if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -3854,6 +4031,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -3887,7 +4082,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # ---------------------------------------------------------------------------
   # upgrade-proof — the release recurrence barrier for the prod schema-sync
@@ -3930,7 +4125,7 @@ jobs:
     name: Upgrade proof (previous releases to candidate)
     needs: build
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -3964,6 +4159,24 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         if: ${{ steps.guard.outputs.release == 'true' }}
+
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ steps.guard.outputs.release == 'true' && runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
       - name: Login to GHCR
         if: ${{ steps.guard.outputs.release == 'true' }}
@@ -4006,7 +4219,7 @@ jobs:
           tags: cinatra-upgrade-proof:candidate
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       - name: Upgrade proof from each previous-release base
         if: ${{ steps.guard.outputs.release == 'true' }}
@@ -4038,7 +4251,7 @@ jobs:
     # existing database. On non-tag events the `if:` below is false anyway.
     needs: [build, upgrade-proof]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 30
     environment: release-approval
     permissions:
@@ -4090,6 +4303,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
+      # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
+      # self-hosted runner it reads the local directory the writing job wrote,
+      # which exists only if that job ran on THIS machine; otherwise the
+      # directory is empty and this job rebuilds instead of re-exporting —
+      # accepted and named. GitHub-hosted runs are unchanged (`type=gha`).
+      - name: Prepare the runner-local buildx cache directory (self-hosted only)
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No ceiling check here: this job only imports the cache, and deleting
+          # the directory it is about to read would force the very rebuild the
+          # cache exists to prevent. The writing job owns the ceiling.
+          dir="$HOME/.cache/buildx/buildkit"
+          mkdir -p "$dir"
+          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -4122,7 +4353,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
-          cache-from: type=gha
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
   # release image is pushed AND the v-prefixed tag is confirmed resolvable in
@@ -4147,7 +4378,7 @@ jobs:
     # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
     # lands there.
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 10
     environment: release-approval
     permissions:
@@ -4251,7 +4482,7 @@ jobs:
     name: Presence-degraded build (required-only universe)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     # Same long-pole budget rationale as `build` (next build dominates).
     timeout-minutes: 30
     steps:
@@ -4320,7 +4551,9 @@ jobs:
         # (entry-66 CI-memory investigation, 2026-07-17): this job runs the same
         # memory-heavy `pnpm build` directly on the runner and was reclaimed
         # mid-build on the held PRs with no swap at all.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        # GitHub-hosted runners ONLY (a self-hosted runner brings its own memory
+        # and cleanup, and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
@@ -4384,7 +4617,7 @@ jobs:
     name: Create GitHub Release
     needs: publish-release-image
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Gate the public GitHub Release publish behind the org-wide
     # `release-approval` Environment. Creating the Release is a real publish
     # surface, so it must pause for an owner approval before it runs. The

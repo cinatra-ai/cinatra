@@ -51,6 +51,7 @@ import {
   BROKER_HOST_PORT,
   BROKER_SERVICE,
   GATEWAY_SERVICE,
+  INTERNAL_NETWORK,
   L0_IMAGE,
   WORKER_SERVICE,
   bringUpExecStack,
@@ -1366,7 +1367,7 @@ describe("7. isolation: the topology's own invariants, checked on the running st
       "inspect",
       "--format",
       "{{.Internal}}",
-      "cinatra-exec-internal",
+      INTERNAL_NETWORK,
     ]);
     expect(internal.stdout.trim()).toBe("true");
   });
