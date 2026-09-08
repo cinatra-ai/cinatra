@@ -2073,21 +2073,6 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     read: slotReader,
   });
 
-  // IS THERE AN UNDECIDED REVIEW ON THIS RUN'S OUTPUT RIGHT NOW (cinatra#3149,
-  // item 1)? Derived here, from the ONE slot answer this panel holds, and used
-  // by BOTH the header plate's pill and the terminal branch's card, so the two
-  // are answers to the same question rather than two independent guesses.
-  //
-  // AN OPEN GATE, NOT A GATE THAT MIGHT ARRIVE. `mayStillOpen` is deliberately
-  // NOT part of this. It is true on the FIRST paint of every completed run that
-  // was not handed a slot answer — including the ordinary run that will never
-  // have a gate at all — so folding it in would flash "Awaiting your decision"
-  // over the common finished run for one probe. The card beneath already draws
-  // that window honestly (the placeholder, never the completion notice), and
-  // the header's job here is narrower: do not call a run settled while a
-  // review that EXISTS is undecided.
-  const runDetailOutputGateOpen = status === "completed" && reviewSlot.ref !== null;
-
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
@@ -2283,22 +2268,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
               the SAME header AgenticRunPanel draws on the other run-detail
               branch, so it takes the same shared mapping — two run-detail hosts
               can never drift into two pill families again. */}
-          {/* AND THE WORD IS TRUE OF THE DETAIL BENEATH IT (cinatra#3149,
-              item 1). This plate is drawn ABOVE `stageCard`, and on a
-              `completed` run that card is the gate's own review screen
-              whenever the sweeper opened one. `runDetailOutputGateOpen` is
-              that same fact — the one the ternary below already branches on —
-              so the header and the card it sits over can never say two
-              different things about one run. */}
-          <StatusPill
-            status={runStatusPillStatus(status, runDetailOutputGateOpen)}
-            glyph="dot"
-          >
-            {runStatusBadgeLabel(
-              status,
-              effectiveInterruptContext,
-              runDetailOutputGateOpen,
-            )}
+          <StatusPill status={runStatusPillStatus(status)} glyph="dot">
+            {runStatusBadgeLabel(status, effectiveInterruptContext)}
           </StatusPill>
         </div>
         {status === "pending_approval" && effectiveInterruptContext !== null && (

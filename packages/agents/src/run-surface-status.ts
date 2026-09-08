@@ -64,35 +64,7 @@ export function resolveStreamFirst<T>(
  */
 export function runStatusPillStatus(
   status: string,
-  outputGateOpen: boolean = false,
-): "running" | "approved" | "hold" | "needs-review" | "queued" | "failed" {
-  // A FINISHED RUN OVER AN UNDECIDED REVIEW IS NOT A SETTLED RUN
-  // (cinatra#3149, item 1).
-  //
-  // The ratified drawing carries TWO readings of a run whose work is done, and
-  // they are two drawings, not one drawing with a variable word:
-  //
-  //   the finished run nobody has to decide anything about — example
-  //   `run-schedule-step-fired` — is a `pill approved` reading `completed`,
-  //   over the completion card;
-  //
-  //   the run whose work is waiting on a person is a `pill hold` reading
-  //   "Awaiting your decision", over the gate's own card.
-  //
-  // A run reaches `completed` and the shipped sweeper opens the review on what
-  // it produced — `orchestrator-stepper-panel.tsx` says exactly that at its
-  // terminal branch. In that instant the detail column correctly swaps to the
-  // gate's card, and the header above it kept reading the FIRST drawing's
-  // settled word: a run announcing itself finished over a review nobody has
-  // decided. That is the one reading the drawing does not draw.
-  //
-  // The flag is a statement about a TERMINAL run only. A run that is still
-  // working is already drawn by its own status, and a slot answer that arrives
-  // early must not re-label it — hence the `completed` guard, not a bare
-  // branch. Failed and stopped keep `failed` for the same reason: a gate left
-  // open over a run that did not finish is not a wait on a person, it is the
-  // wreckage of a run, and red never reads as a request.
-  if (status === "completed" && outputGateOpen) return "hold";
+): "running" | "approved" | "needs-review" | "queued" | "failed" {
   if (status === "completed") return "approved";
   if (status === "failed" || status === "stopped") return "failed";
   // `waiting_trigger` IS A RUNNING RUN (convergence round, 2026-09-04). It is
@@ -309,13 +281,6 @@ export function waitNotificationLandsInConversation(
 export const AWAITING_INPUT_BADGE_LABEL = "Awaiting input";
 
 /**
- * Badge copy for a TERMINAL run whose output still carries an undecided review
- * (cinatra#3149, item 1) — the ratified drawing's own words beside the `hold`
- * pill of the run detail's review reading.
- */
-export const AWAITING_DECISION_BADGE_LABEL = "Awaiting your decision";
-
-/**
  * Status → badge LABEL for both run surfaces. Every status keeps its previous
  * humanized rendering (`pending_approval` → "pending approval", …); ONLY a
  * `pending_approval` that the discriminator reads as an input pause changes,
@@ -324,15 +289,7 @@ export const AWAITING_DECISION_BADGE_LABEL = "Awaiting your decision";
 export function runStatusBadgeLabel(
   status: string,
   interrupt?: RunWaitInterruptDescriptor | null,
-  outputGateOpen: boolean = false,
 ): string {
-  // The word that goes with the `hold` pill above — see `runStatusPillStatus`.
-  // Colour and copy are decided from the SAME fact at the same call site, so
-  // the pill can never read one of the two drawings while its word reads the
-  // other.
-  if (status === "completed" && outputGateOpen) {
-    return AWAITING_DECISION_BADGE_LABEL;
-  }
   if (
     status === "pending_approval" &&
     classifyRunWaitInterrupt(interrupt) === "input"
