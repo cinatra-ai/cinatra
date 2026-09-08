@@ -135,7 +135,7 @@ function finalTranscriptRow(): SerializedAgentRunMessage {
 function runPageProps(overrides: Partial<WatcherProps> = {}): WatcherProps {
   return {
     runId: "run-3149",
-    agentId: "cinatra-ai/blog-writer-agent",
+    agentId: "cinatra-ai/blog-draft-writer-agent",
     instanceId: "run-3149",
     initialStatus: "completed",
     initialError: null,
