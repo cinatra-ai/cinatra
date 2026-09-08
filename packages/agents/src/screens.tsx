@@ -47,7 +47,7 @@ import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-de
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { ImportAgentForm } from "./import-form";
-import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
+import { ImportPackageFromGitHubForm } from "./import-skill-from-github-form";
 // InstallScopeDialog + server-side picker target builder (shared with the
 // extension marketplace screen — see install-target-picker.ts).
 import { InstallScopeDialog } from "./components/install-scope-dialog";
@@ -842,28 +842,39 @@ async function withResolvedProps<T>(
 // ---------------------------------------------------------------------------
 
 export async function AgentBuilderImportScreen() {
-  // Resolve availableScopes server-side so the GitHub upload form's
-  // PermissionsFormDraft (collapsed by default) has the org / team / project
-  // tree to render its access combobox without a separate client roundtrip.
-  // Mirrors the agent-run /permissions and skill-package page-data patterns.
-  const session = await requireAuthSession();
-  const actorUserId = session.user?.id ?? null;
-  const isAdmin = isPlatformAdmin(session);
-  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
-  const activeOrgId = session.session?.activeOrganizationId ?? null;
-  const projects =
-    actorUserId && activeOrgId
-      ? await readProjectsForUser(actorUserId, activeOrgId)
-      : [];
-  const orgRole = actorUserId
-    ? await resolveOrgRoleForSession({
-        user: { id: actorUserId },
-        session: session.session,
-      })
-    : undefined;
-  const canGrantWorkspace =
-    isAdmin || orgRole === "org_owner" || orgRole === "org_admin";
-  const uploadScopes = { orgs, projects, canGrantWorkspace };
+  // cinatra#3204 leg 3 — the Upload screen resolves the STORE's own install
+  // picker context, server-side, once, and hands the same values to both tabs.
+  // The rows, their enabled state and their tooltips are the marketplace's, not
+  // a second set built for this screen: `buildInstallTargetPickerContext` and
+  // `resolveInstallPanelAvailability` are the same two calls the marketplace
+  // screen makes, with the same `includeWorkspaceScopes` and the same
+  // `Workspace: All` preselection.
+  const session = await requireAdminSession();
+  const { buildInstallTargetPickerContext } = await import("./install-target-picker");
+  const { resolveInstallPanelAvailability } = await import(
+    "@cinatra-ai/extensions/screens/install-panel-availability"
+  );
+  const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
+  const { orgRole } = await buildCanDoOptsFromSession(session);
+  const activeOrgId = session.session?.activeOrganizationId ?? "";
+  const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
+    await buildInstallTargetPickerContext({
+      session,
+      orgRole,
+      includeWorkspaceScopes: true,
+    });
+  const availability = resolveInstallPanelAvailability({
+    activeOrgId,
+    installTargets,
+    fallbackDefaultValue: pickerFallbackValue,
+  });
+  const installScope = { installTargets, ownerEntityNames, activeOrgId, availability };
+
+  // The repository road's precondition, resolved for the first paint. The tab
+  // re-reads it on mount, so a connector activated in another tab is picked up
+  // without a reload.
+  const { readGitHubUploadPreconditionAction } = await import("./supplied-install-actions");
+  const precondition = await readGitHubUploadPreconditionAction();
 
   return (
     <Main className="min-h-screen">
@@ -878,19 +889,22 @@ export async function AgentBuilderImportScreen() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <Tabs defaultValue="agent" className="max-w-2xl">
+        <Tabs defaultValue="file" className="max-w-2xl">
           <TabsListRow>
-            <TabsTrigger value="agent">File</TabsTrigger>
-            <TabsTrigger value="skill">GitHub</TabsTrigger>
+            <TabsTrigger value="file">File</TabsTrigger>
+            <TabsTrigger value="github">GitHub</TabsTrigger>
           </TabsListRow>
-          <TabsContent value="agent">
+          <TabsContent value="file">
             <div className="soft-panel rounded-card px-6 py-5 max-w-xl">
-              <ImportAgentForm availableScopes={uploadScopes} />
+              <ImportAgentForm installScope={installScope} />
             </div>
           </TabsContent>
-          <TabsContent value="skill">
+          <TabsContent value="github">
             <div className="soft-panel rounded-card px-6 py-5">
-              <ImportSkillFromGitHubForm availableScopes={uploadScopes} />
+              <ImportPackageFromGitHubForm
+                installScope={installScope}
+                precondition={precondition}
+              />
             </div>
           </TabsContent>
         </Tabs>

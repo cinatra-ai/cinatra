@@ -341,7 +341,22 @@ export interface ExtensionTypeHandler {
   install(
     ref: PackageRef,
     actor: Actor,
-    options?: { destination?: "private" | "public" },
+    options?: {
+      destination?: "private" | "public";
+      /**
+       * The PLANNED canonical row anchor (cinatra#2696) the dispatcher already
+       * threads. Declared here (cinatra#3204 criterion 16) so a handler may
+       * anchor its OWN native row at the scope the operator chose, instead of
+       * deriving a second, disagreeing anchor from the actor's active
+       * organization. Structural on purpose: this leaf carries no dependency on
+       * the canonical-types package that names the tuple.
+       */
+      rowOwnership?: {
+        ownerLevel: string;
+        ownerId: string | null;
+        organizationId: string | null;
+      };
+    },
   ): Promise<void>;
   update(ref: PackageRef, actor: Actor): Promise<void>;
   uninstall(ref: PackageRef, actor: Actor): Promise<void>;

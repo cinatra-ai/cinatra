@@ -732,6 +732,73 @@ export function resolveInstallRowAnchor(
  * an org-NULL row through the org-pinned lifecycle resolver (that is S4 #2698)
  * and takes the row-scoped inverse instead.
  */
+/**
+ * The NATIVE owner fields a kind's own row takes for a planned canonical anchor
+ * (cinatra#3204 criterion 16).
+ *
+ * THE GAP THIS CLOSES: the dispatcher threads the planned row anchor
+ * (`options.rowOwnership`, cinatra#2696) and writes the canonical
+ * `installed_extension` row at it, while a kind's native handler derived its own
+ * payload anchor from `actor.orgId`. An install the operator scoped to
+ * `Workspace: All` therefore produced a workspace-anchored canonical row beside
+ * an org-anchored native row — two rows disagreeing about who owns the thing,
+ * with the kind's own listing reading the second one.
+ *
+ * The rule is not re-invented: `resolveInstallRowAnchor` above is the same
+ * function the dispatcher uses, so the native row and the canonical row are
+ * anchored by ONE decision. This only translates that tuple into the fields a
+ * native row takes.
+ *
+ *  - NO planned anchor → the org alone, byte-identical to the derivation the
+ *    handlers had before. A caller that never asked a scope question keeps
+ *    exactly what it had.
+ *  - A planned anchor whose level a native row understands → that level, its
+ *    owner id, and the anchor's own organization.
+ *  - The PLATFORM anchor → no owner tier at all: a native store has no platform
+ *    tier, and a platform-anchored install is an org-null row, which is what
+ *    omitting the tier already produces. The platform owner SENTINEL is never
+ *    written into a native `ownerId` — it is a canonical-row convention, and
+ *    leaking it into a native row would invent a principal that does not exist.
+ */
+export type NativeInstallOwnerLevel =
+  | "user"
+  | "team"
+  | "organization"
+  | "workspace"
+  | "project";
+
+export type NativeInstallOwnership = {
+  /** The org the native row is anchored at — null means platform scope. */
+  anchorOrgId: string | null;
+  ownerLevel?: NativeInstallOwnerLevel;
+  ownerId?: string;
+};
+
+const NATIVE_INSTALL_OWNER_LEVELS: ReadonlySet<string> = new Set([
+  "user",
+  "team",
+  "organization",
+  "workspace",
+  "project",
+]);
+
+export function resolveNativeInstallOwnership(
+  actorOrgId: string | null,
+  planned?: InstallRowOwnership | null,
+): NativeInstallOwnership {
+  const anchor = resolveInstallRowAnchor(actorOrgId ?? null, planned ?? null);
+  const anchorOrgId = anchor.organizationId ?? null;
+  if (!planned) return { anchorOrgId };
+  if (!NATIVE_INSTALL_OWNER_LEVELS.has(anchor.ownerLevel)) return { anchorOrgId };
+  const ownerId =
+    anchor.ownerId && anchor.ownerId !== PLATFORM_OWNER_SENTINEL ? anchor.ownerId : undefined;
+  return {
+    anchorOrgId,
+    ownerLevel: anchor.ownerLevel as NativeInstallOwnerLevel,
+    ...(ownerId ? { ownerId } : {}),
+  };
+}
+
 export function isWorkspaceRowAnchor(anchor: InstallRowOwnership): boolean {
   return anchor.ownerLevel === "workspace" && (anchor.organizationId ?? null) === null;
 }
