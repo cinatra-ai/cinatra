@@ -109,6 +109,27 @@ type AuditRecordDetail = {
 
 export type ExecutionBrokerOptions = {
   worker: SandboxWorker;
+  /**
+   * THE L0 IMAGE THIS BROKER STAGES SKILL SNAPSHOTS FROM.
+   *
+   * Staging populates the per-job read-only skills volume through a transient
+   * helper container (`docker create` + `docker cp` in `staging.ts`), and that
+   * container needs an image. The broker used to resolve one on its own, with
+   * no argument — so it always took `CINATRA_SANDBOX_L0_IMAGE` or the local-dev
+   * default tag, whatever image its WORKER had actually been given. The two
+   * agree in production (both read the same environment variable) and they used
+   * to agree in the batteries too, because the battery built the bare default
+   * tag. They stopped agreeing the moment a battery started building its L0
+   * image under a tag derived from the job it runs in — a tag no environment
+   * variable names — and every staged-skills open then failed closed against an
+   * image that job never built (cinatra#3327).
+   *
+   * Absent ⇒ `resolveL0ImageRef()` exactly as before, so the environment
+   * variable and the local-dev default keep deciding and the production road is
+   * byte-identical. Present ⇒ this ref, validated the same way. A caller that
+   * builds its L0 image under a name of its own passes that same name here.
+   */
+  imageRef?: string;
   auditSink: ExecutionAuditSink;
   /**
    * The DURABLE PRE-DISPATCH RESERVATION seam (cinatra#2266 G1). Present ⇒ the
@@ -829,7 +850,7 @@ export class ExecutionBroker {
           skillsVolume = await this.volumeOps.stageSkills(
             jobId,
             openOpts.stagedSkills,
-            resolveL0ImageRef(),
+            resolveL0ImageRef(this.opts.imageRef),
           );
         } catch (err) {
           return {
