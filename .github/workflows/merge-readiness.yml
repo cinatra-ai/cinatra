@@ -1,0 +1,35 @@
+name: merge-readiness
+
+# engineering#658 item 3 — the stable required context
+# `merge-readiness / merge-readiness`.
+#
+# The context name is the "<caller job> / <called job>" pair GitHub reports for
+# a reusable-workflow call, so the caller job below and the called job in
+# merge-readiness-reusable.yml are BOTH named `merge-readiness` (the same
+# same-repo LOCAL call shape toast-banner-gate.yml uses: the reusable
+# workflow, the script and the tree under test all come from one commit, so
+# there is no pin to bump).
+#
+# Runs on BOTH events. Approval stays bound to the pull request's head; CI is
+# judged on the event's candidate sha — `github.sha` for the pull-request test
+# merge, `merge_group.head_sha` for the queue candidate (the script resolves
+# this from the event payload, so nothing here is event-specific).
+#
+# There is deliberately NO `push` trigger: the check gates candidates, and a
+# push arm would put the context into its own derived inventory.
+#
+# The ruleset change that makes this context REQUIRED is the owner's step
+# (engineering#658 item 5): the repository-level ruleset `main-merge-queue`.
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+jobs:
+  merge-readiness:
+    uses: ./.github/workflows/merge-readiness-reusable.yml
