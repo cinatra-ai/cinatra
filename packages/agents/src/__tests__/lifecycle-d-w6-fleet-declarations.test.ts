@@ -27,7 +27,7 @@
  *
  *   - media-transcript-agent: its head declares a preferred model outside the
  *     host provider policy allowlist, which the L1 service-description check
- *     refuses (OAS-LLM-002). The model arrived in a later, unrelated change in
+ *     refuses. The model arrived in a later, unrelated change in
  *     that repository, not in the declaration itself.
  *   - company-discovery-agent: its head drops the domain field from `hidden`
  *     without adding it to `required`, so the field is neither shown nor
