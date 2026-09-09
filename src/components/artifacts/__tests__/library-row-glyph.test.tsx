@@ -216,14 +216,14 @@ describe("G2 cutover matrix — the library-glyph arm (semantic-renderer @ listR
           // different/absent extension) — generic claimed glyph.
           semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
           const html = await renderGlyph(summaryOf({ effectiveIdentity: winner("@fixture/other-ext") }));
-          return { outcome: html.includes('data-glyph-source="generic"') ? "generic-floor" : "extension" };
+          return { outcome: html.includes('data-glyph-source="recorded-exception"') ? "generic-floor" : "extension" };
         }
         case "uninstalled": {
           // Teardown (archive/uninstall) retired the package's registrations.
           semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
           semanticRendererRegistry.removeByPackage("@fixture/row-ext");
           const html = await renderGlyph(summaryOf());
-          return { outcome: html.includes('data-glyph-source="generic"') ? "generic-floor" : "extension" };
+          return { outcome: html.includes('data-glyph-source="recorded-exception"') ? "generic-floor" : "extension" };
         }
         case "incompatible": {
           // Registered claimant ABSENT from this build → requires-rebuild at
@@ -231,7 +231,7 @@ describe("G2 cutover matrix — the library-glyph arm (semantic-renderer @ listR
           semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/unbuilt-ext", slot: "listRow" });
           const resolved = resolveSemanticListRowDispatch(TYPE, winner("@fixture/unbuilt-ext"));
           const html = await renderGlyph(summaryOf({ effectiveIdentity: winner("@fixture/unbuilt-ext") }));
-          const floored = html.includes('data-glyph-source="generic"');
+          const floored = html.includes('data-glyph-source="recorded-exception"');
           return {
             outcome: resolved && !resolved.built && floored ? "requires-rebuild" : "none",
           };
@@ -241,12 +241,12 @@ describe("G2 cutover matrix — the library-glyph arm (semantic-renderer @ listR
           // generic claimed glyph — never blank, never a crash.
           semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/bad-export", slot: "listRow" });
           const html = await renderGlyph(summaryOf({ effectiveIdentity: winner("@fixture/bad-export") }));
-          return { outcome: html.includes('data-glyph-source="generic"') ? "generic-floor" : "none" };
+          return { outcome: html.includes('data-glyph-source="recorded-exception"') ? "generic-floor" : "none" };
         }
         case "floor-recovery": {
           // The host floor split stays: no claimant anywhere → generic tier.
           const html = await renderGlyph(summaryOf({ effectiveIdentity: plainIdentity }));
-          return { outcome: html.includes('data-glyph-source="generic"') ? "generic-floor" : "none" };
+          return { outcome: html.includes('data-glyph-source="recorded-exception"') ? "generic-floor" : "none" };
         }
         case "single-module-executes": {
           semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
@@ -325,7 +325,7 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
     const html = await renderGlyph(
       summaryOf({ objectType: "@cinatra-ai/artifact:object" }),
     );
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(execCounts().row).toBe(0);
     expect(execCounts().losing).toBe(0);
   });
@@ -346,14 +346,14 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
   it("a claimant with ONLY a detail renderer floors the glyph (no listRow capability)", async () => {
     semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext" });
     const html = await renderGlyph(summaryOf());
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(execCounts().row).toBe(0);
   });
 
   it("an ABI-mismatched listRow renderer degrades to the generic claimed glyph before render", async () => {
     semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/abi-mismatch", slot: "listRow" });
     const html = await renderGlyph(summaryOf({ effectiveIdentity: winner("@fixture/abi-mismatch") }));
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(html).not.toContain("data-fixture-glyph");
   });
 
@@ -361,20 +361,20 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
     const html = await renderGlyph(
       summaryOf({ effectiveIdentity: floorIdentity, mime: "application/pdf" }),
     );
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(html).toContain("text-warning");
   });
 
   it("the host file-vs-structured floor split stays: structured tier", async () => {
     const html = await renderGlyph(summaryOf({ effectiveIdentity: plainIdentity }));
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(html).toContain("text-muted-foreground");
   });
 
   it("a claimed row keeps the claimed tint even when the glyph floors (identity styling is host-side)", async () => {
     const html = await renderGlyph(summaryOf());
     expect(html).toContain("text-primary");
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
   });
 });
 
@@ -406,7 +406,7 @@ describe("glyph presents the PRESENTATION identity (A6)", () => {
         presentationIdentity: { kind: "no-primary" },
       }),
     );
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
     expect(execCounts().row).toBe(0); // the extension listRow module never executes
   });
 });
@@ -465,6 +465,6 @@ describe("a declared listRow slot draws the row (cinatra#3095)", () => {
         presentationIdentity: winner(EMAIL_PACK),
       }),
     );
-    expect(html).toContain('data-glyph-source="generic"');
+    expect(html).toContain('data-glyph-source="recorded-exception"');
   });
 });

@@ -152,9 +152,7 @@ export type ReviewProvenanceConformanceId = "review-target-floor";
  * on any other surface this display is drawn". The lifecycle-cards drawing §III
  * is the same sentence in its own words.
  *
- * A build-map mount and a runtime mount therefore carry no region, exactly as
- * the form rung already did (cinatra#2931 W4, for its own reason: there was no
- * package to name and the work did render).
+ * A build-map mount and a runtime mount therefore carry no region.
  *
  * ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor, and
  * only because a reader must be told a render failed." */
@@ -163,7 +161,6 @@ export function reviewProvenanceConformanceId(
 ): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":
@@ -173,9 +170,8 @@ export function reviewProvenanceConformanceId(
 
 /** The label the one surviving region prints (§V) — a floor reads "Floor" over
  * the generic read-only reading of the representation. `null` for every mount
- * that draws no region: the two renderer tiers, which the drawing forbids from
- * naming themselves, and the form rung, which never had one. Pure copy — no
- * type keying. */
+ * that draws no region: the two display tiers, which the drawing forbids from
+ * naming themselves. Pure copy — no type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   kind: "floor";
   slot: string;
@@ -183,7 +179,6 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 } | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":

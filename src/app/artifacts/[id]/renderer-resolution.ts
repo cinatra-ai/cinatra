@@ -19,12 +19,17 @@ import {
   type SerializedRuntimeRendererDescriptor,
 } from "@/lib/artifacts/runtime-renderer-descriptor";
 
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
+
 import { pickHandler } from "./pick-handler";
+import { pickArtifactRenderer } from "./renderer-dispatch";
 import type {
+  ArtifactRenderDispatch,
   ArtifactRenderDispatchInput,
   SemanticRendererResolution,
   RepresentationRendererResolution,
 } from "./renderer-dispatch";
+import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
 
 // ---------------------------------------------------------------------------
 // The TWO-PATH predicate (epic #1620 M1 Slice A — cinatra#1630, plan §2.4):
@@ -150,8 +155,7 @@ export function resolveSemanticListRowDispatch(
 }
 
 /** Resolve the REPRESENTATION viewer for a row via the org-scoped
- * representation-provider registry (extension provider or the always-effective
- * first-party host default) + the generated build map, at the given `slot`
+ * representation-provider registry (an installed extension provider)
  * (the detail page resolves at `detail`; the neutral reuse seam at `preview`).
  *
  * Before resolving, the system bases are reconciled into the org (Slice B boot
@@ -179,13 +183,17 @@ export function resolveRepresentationDispatch(
       built: isLoadableKey(res.generatedKey),
     };
   }
-  // First-party default (or no registry entry): the concrete host HandlerKind is
-  // ALWAYS derived from the allowlist via `pickHandler` — never the registry's
-  // opaque `ref` (which is untyped). This makes the dispatch handler provably a
-  // valid non-fallback HandlerKind and guarantees the representation tier can
-  // never regress below `pickHandler`, whatever the registry's seed/ref state.
-  const handler = pickHandler(mime);
-  return handler === "fallback" ? null : { tier: "first-party", handler };
+  // NO HOST VIEWER UNDER THE PROVIDER TIER any more. The core text, markdown and
+  // metadata-card arms retired, so a representation no installed package covers
+  // resolves to NOTHING here and the pure leaf lands the row on the terminal
+  // floor — a host diagnostic, never core artifact content.
+  //
+  // The first-party seed above is NOT the display floor and stays: it is the
+  // host's safe-TRANSPORT floor, the thing `isInlineTransportEligible` reads to
+  // decide which media types the capped preview byte route may serve inline.
+  // The markdown base's own display fetches that route, so dropping the seed
+  // would take the bytes away from the very display that replaced the handler.
+  return null;
 }
 
 /**
@@ -301,4 +309,240 @@ export function resolveRuntimeRendererDescriptor(
 /** @internal test-only reset of the per-module seed guard. */
 export function _resetFirstPartySeedForTests(): void {
   firstPartyDefaultsSeeded = false;
+}
+
+// ---------------------------------------------------------------------------
+// THE CANONICAL REPRESENTATION MIME, resolved ONCE and upstream of dispatch.
+//
+// A representation can arrive under a legacy synonym of the media type it
+// really is. `text/x-markdown` is the one the fleet meets: it is the pre-IANA
+// spelling of `text/markdown`, and a row carrying it names the same document a
+// row carrying the registered spelling names. Left alone it resolves against no
+// display at all, because a pack declares the registered spelling and the
+// registries match a representation pattern literally.
+//
+// The alias is resolved HERE, in one place, before the resolver reads the
+// registries — never by asking a pack to declare a spelling that is not its own.
+// That is the border drawn for it: the canonicalisation is the host's, the
+// declaration is the pack's.
+// ---------------------------------------------------------------------------
+
+/** Legacy spelling → the registered media type it names. */
+const REPRESENTATION_MIME_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["text/x-markdown", "text/markdown"],
+]);
+
+/** The alias pairs, for a test or an audit that must enumerate them. */
+export const REPRESENTATION_MIME_ALIAS_PAIRS: ReadonlyArray<readonly [string, string]> =
+  Object.freeze([...REPRESENTATION_MIME_ALIASES.entries()].map(([from, to]) => [from, to] as const));
+
+/**
+ * The media type a representation should be resolved under. Total and
+ * idempotent: a type that is already canonical (and any type this host knows no
+ * alias for) comes back unchanged, so the function can sit on every road
+ * without a caller having to know whether it applies.
+ *
+ * Parameters are compared case-insensitively and with surrounding whitespace
+ * dropped, because those are the two ways the same spelling reaches the host
+ * differently; anything else is returned exactly as it was given.
+ */
+export function canonicalRepresentationMime(mime: string): string {
+  if (!mime) return mime;
+  return REPRESENTATION_MIME_ALIASES.get(mime.trim().toLowerCase()) ?? mime;
+}
+
+// ---------------------------------------------------------------------------
+// THE SHARED DISPLAY RESOLUTION — the one the artifact page and the lifecycle
+// review both read. Its other half is the one MOUNT
+// (`./artifact-display-mount`); the two are split along a module-graph line and
+// not a conceptual one — the review binder RESOLVES on a road that four locked
+// routes reach, and it must not drag the mount's React tree in behind it, while
+// the surfaces that draw import both.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ONE RESOLVER AND THE ONE FAILURE POLICY the artifact page and the
+ * lifecycle review both read. Its other half is the one MOUNT
+ * (`./artifact-display-mount`); the two are split along a module-graph line and
+ * not a conceptual one — the review binder RESOLVES on a road that four locked
+ * routes reach, and it must not drag the mount's React tree in behind it, while
+ * the surfaces that draw import both.
+ *
+ * Before this module the two roads were two near-identical switches over the
+ * same three loadable paths: the page resolved its dispatch, mounted it through
+ * its own server component and floored in its own words, while the review
+ * binder resolved the same dispatch, classified the same key and floored in
+ * different words — and the review carried an extra rung the page did not, so
+ * the same artifact could be drawn one way on its page and another way under
+ * review. Both roads now call `resolveArtifactDisplayMount` and mount its answer
+ * through `ArtifactDisplayMountPoint`, so a divergence has nowhere left to live.
+ *
+ * WHAT EACH ROAD STILL DECIDES FOR ITSELF is the REVISION and the words of its
+ * own floor: the page resolves at the artifact's latest revision, the review at
+ * the revision its gate pinned, and each surface draws its own diagnostic. The
+ * resolution, the mount and the failure CLASSIFICATION are here.
+ */
+
+/** Every artifact display this host mounts is the `detail` slot. */
+export const ARTIFACT_DISPLAY_SLOT = "detail" as const satisfies ArtifactUiSlot;
+
+/** Why the mount is a floor rather than a display. `requires-rebuild` is a
+ * claimant this build does not carry; `no-display` is the terminal state where
+ * nothing installed claims the row at all. */
+export type ArtifactDisplayFloorReason = "requires-rebuild" | "no-display";
+
+/**
+ * WHAT A SURFACE HANDS THE MOUNT POINT. Deliberately the loosest shape both
+ * roads already speak: each carries its own floor vocabulary (the page has two
+ * classifications, the review card five, four of which are decided before a
+ * display is ever resolved), so the mount point takes the reason as a string it
+ * hands straight back rather than forcing one surface into the other's words.
+ */
+export type ArtifactDisplayMountDescriptor =
+  | { kind: "build-map"; slot: ArtifactUiSlot; packageName: string; generatedKey: string }
+  | {
+      kind: "runtime";
+      slot: ArtifactUiSlot;
+      packageName: string;
+      descriptor: SerializedRuntimeRendererDescriptor;
+    }
+  | { kind: "floor"; slot: ArtifactUiSlot; packageName: string | null; reason: string };
+
+/** The host-resolved mount for one artifact reading. `dispatch` carries the
+ * precedence rung that produced it, so a surface can report WHICH rung answered
+ * without re-running the resolution. */
+export type ArtifactDisplayMount = {
+  dispatch: ArtifactRenderDispatch["kind"];
+} & (
+  | { kind: "build-map"; slot: "detail"; packageName: string; generatedKey: string; propsApiVersion?: number }
+  | {
+      kind: "runtime";
+      slot: "detail";
+      packageName: string;
+      descriptor: SerializedRuntimeRendererDescriptor;
+      propsApiVersion?: number;
+    }
+  | { kind: "floor"; slot: "detail"; packageName: string | null; reason: ArtifactDisplayFloorReason }
+);
+
+export interface ArtifactDisplayResolutionInput {
+  orgId: string;
+  /** The row's object type. */
+  baseType: string;
+  /** The identity the surface presents the row under. */
+  identity: EffectiveIdentity;
+  /** The representation's media type, in whatever spelling it was recorded. */
+  mime: string;
+  /** The host props-contract version the caller would build a snapshot at. */
+  propsApiVersion: number;
+}
+
+/**
+ * RESOLVE the display for one artifact reading: the precedence ladder, then the
+ * loadable-path classification, then the failure policy. Total — it always
+ * answers a mount, and the terminal answer is a floor, never nothing.
+ *
+ * The media type is CANONICALISED here, once, before any registry is read, so a
+ * legacy spelling resolves the display its registered spelling resolves rather
+ * than falling through to the floor.
+ */
+export async function resolveArtifactDisplayMount(
+  input: ArtifactDisplayResolutionInput,
+): Promise<ArtifactDisplayMount> {
+  // ACTIVATION-COUPLED BINDING: the org-scoped providers of build-bundled
+  // non-system renderer packs are bound/retired from the canonical install rows
+  // before the synchronous resolve below. Both roads did this separately; it
+  // belongs to the resolution, so it lives with it.
+  await ensureActivatedRepresentationProviders(input.orgId);
+
+  const dispatch = pickArtifactRenderer(
+    resolveArtifactDispatchInputs({
+      orgId: input.orgId,
+      baseType: input.baseType,
+      identity: input.identity,
+      mime: canonicalRepresentationMime(input.mime),
+    }),
+  );
+
+  switch (dispatch.kind) {
+    case "semantic":
+    case "representation":
+      return classifyArtifactDisplayMount({
+        dispatch: dispatch.kind,
+        packageName: dispatch.packageName,
+        generatedKey: dispatch.generatedKey,
+        propsApiVersion: input.propsApiVersion,
+      });
+    case "requires-rebuild":
+      return {
+        kind: "floor",
+        slot: ARTIFACT_DISPLAY_SLOT,
+        dispatch: dispatch.kind,
+        packageName: dispatch.packageName,
+        reason: "requires-rebuild",
+      };
+    case "fallback":
+      return {
+        kind: "floor",
+        slot: ARTIFACT_DISPLAY_SLOT,
+        dispatch: dispatch.kind,
+        packageName: null,
+        reason: "no-display",
+      };
+  }
+}
+
+/** Classify a resolved (package, key) pair into the mount that carries it: the
+ * build-map SSR fast path, the main-realm dynamic seam, or the floor when the
+ * binding vanished between the resolve and here. Exported because it is the
+ * MOUNT half of the primitive on its own: the seam that turns a resolved key
+ * into the thing that draws it. */
+export async function classifyArtifactDisplayMount({
+  dispatch,
+  packageName,
+  generatedKey,
+  propsApiVersion,
+}: {
+  dispatch: ArtifactRenderDispatch["kind"];
+  packageName: string;
+  generatedKey: string;
+  propsApiVersion: number;
+}): Promise<ArtifactDisplayMount> {
+  const path = classifyLoadablePath(generatedKey);
+  if (path === "build-map") {
+    return { kind: "build-map", slot: ARTIFACT_DISPLAY_SLOT, dispatch, packageName, generatedKey };
+  }
+  if (path === "runtime") {
+    const descriptor = await resolveRuntimeRendererForRoute(generatedKey, propsApiVersion);
+    if (!descriptor) {
+      return {
+        kind: "floor",
+        slot: ARTIFACT_DISPLAY_SLOT,
+        dispatch,
+        packageName,
+        reason: "requires-rebuild",
+      };
+    }
+    // A descriptor carrying a pre-import reason is passed through: the client
+    // loader draws its floor from the reason without importing. And a descriptor
+    // that WILL mount carries the version the display itself declared, so the
+    // caller builds the snapshot at that version rather than at the host's newest.
+    return descriptor.reason === undefined
+      ? {
+          kind: "runtime",
+          slot: ARTIFACT_DISPLAY_SLOT,
+          dispatch,
+          packageName,
+          descriptor,
+          propsApiVersion: descriptor.tuple.propsApiVersion,
+        }
+      : { kind: "runtime", slot: ARTIFACT_DISPLAY_SLOT, dispatch, packageName, descriptor };
+  }
+  return {
+    kind: "floor",
+    slot: ARTIFACT_DISPLAY_SLOT,
+    dispatch,
+    packageName,
+    reason: "requires-rebuild",
+  };
 }

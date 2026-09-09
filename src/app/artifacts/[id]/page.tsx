@@ -6,18 +6,12 @@
  * latest representation, and renders inside the canonical Main +
  * PageHeader (artifact name) + PageContent shell.
  *
- * Renderer dispatch (spine — cinatra#1629 / #1630):
- *   - `application/pdf`, `image/*`, allowlisted `video/*` + `audio/*` →
- *     the system `-artifact` base's build-bundled renderer, resolved as a
- *     `representation` through the representation-provider registry (the boot
- *     registrar binds the four bases for every org; the preview route still
- *     streams the bytes the extension renderer points `urls.preview` at).
- *   - `text/markdown` / `text/plain` → the core-owned never-blank FLOOR
- *     (MarkdownHandler / PlainTextHandler), a first-party `mime` dispatch.
- *   - everything else → FallbackHandler (generic metadata card).
- *
- * First-party FLOOR selection lives in `./pick-handler.ts`; the precedence leaf
- * in `./renderer-dispatch.ts`; the resolution seam in `./renderer-resolution.ts`.
+ * EVERY ARTIFACT IS DRAWN BY ITS OWN EXTENSION'S DISPLAY. The page resolves the
+ * display through the SHARED primitive the lifecycle review resolves through
+ * (the resolver and failure policy in `./renderer-resolution`, the mount in
+ * `./artifact-display-mount`): the semantic winner's `detail` display, then
+ * an installed representation provider, then the floor. Core draws no artifact
+ * content on any of those roads — the floor is a host diagnostic.
  *
  * `PageHeader.actions` carries the artifact-level actions:
  *   - "Open in source application" — only when `artifact.sourceUrl` is
@@ -68,37 +62,25 @@ import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-sur
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
 
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
+import { NoDisplayNotice } from "./no-display-notice";
 import {
   DashboardPointerDetail,
   DashboardPointerLoading,
   DashboardPointerError,
 } from "./dashboard-pointer-detail";
-import {
-  pickArtifactRenderer,
-  isSelectionPreparing,
-  type ArtifactRenderDispatch,
-} from "./renderer-dispatch";
-import { resolveArtifactDispatchInputs } from "./renderer-resolution";
-import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
-import { ExtensionRendererMount } from "./extension-renderer-mount";
+import { isSelectionPreparing } from "./renderer-dispatch";
+import { ArtifactDisplayMountPoint } from "./artifact-display-mount";
+import { resolveArtifactDisplayMount } from "./renderer-resolution";
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
-import { MarkdownHandler } from "./handlers/markdown-handler";
-import { PlainTextHandler } from "./handlers/plain-text-handler";
-import { FallbackHandler } from "./handlers/fallback-handler";
 
 export const dynamic = "force-dynamic";
 
 type PageProps = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function ArtifactDetailPage({ params, searchParams }: PageProps) {
+export default async function ArtifactDetailPage({ params }: PageProps) {
   const { id } = await params;
-  // `?renderer=generic` forces the generic floor — the recovery link the
-  // route-segment error boundary (error.tsx) points at, and a manual escape
-  // hatch. It never mounts the extension renderer (cinatra#1629 S2, AC-4).
-  const forceGeneric = (await searchParams)?.renderer === "generic";
   const session = await getAuthSession();
   if (!session) redirect("/sign-in");
   const orgId = session.session?.activeOrganizationId;
@@ -183,37 +165,6 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   const downloadHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/content`
     : null;
-
-  // Renderer dispatch spine (cinatra#1629, epic #1620 S2): the pre-spine
-  // always-true `hasTypedRenderer` signal is REPLACED by claimant-keyed
-  // resolution through the two arbitration registries + the generated build map.
-  // Precedence (total): semantic detail renderer (per-org effective-identity
-  // winner) → representation viewer (org-scoped provider / first-party host
-  // default) → generic fallback; a runtime-installed-but-unbuilt claimant
-  // degrades to requires-rebuild. Read authorization is already enforced above —
-  // a row the viewer may not read never reaches here. Unit-tested in
-  // `renderer-dispatch.test.ts`; resolution seam in `renderer-resolution.ts`.
-  // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): reconcile the org's
-  // build-bundled NON-SYSTEM (`guardedOptional`) renderer providers from the
-  // canonical install rows before the SYNC dispatch below, so an org that has
-  // actually INSTALLED such a pack resolves its representation renderer — and an
-  // org that has not (or that uninstalled it) does not. The system bases keep
-  // their own unconditional reconcile inside `resolveRepresentationDispatch`.
-  if (!forceGeneric) await ensureActivatedRepresentationProviders(orgId);
-  const dispatch: ArtifactRenderDispatch = forceGeneric
-    ? { kind: "fallback" }
-    : pickArtifactRenderer(
-        resolveArtifactDispatchInputs({
-          orgId,
-          baseType: artifact.objectType,
-          // Renderer dispatch presents the assertion-aware PRESENTATION identity
-          // (epic #1883 A6) — a row filed as "Marketing strategy" renders as
-          // that. The shared effective identity is untouched (context selection
-          // / replay / Graphiti still read it); they diverge by design.
-          identity: artifact.presentationIdentity,
-          mime,
-        }),
-      );
 
   // Activation barrier (§III): selection (pin / add-to-context) requires a
   // settled binding; a catalog browse-only identity shows "Preparing" until it
@@ -308,24 +259,29 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     edit,
   });
 
-  // The generic floor — reused by every degrade path so the body is never blank.
-  // ITS SIZE IS THE RESOLVED REVISION'S (cinatra#3091, wave 3). This card is the
-  // ratified drawing's V.2 — name, form, size, download — and the size has to
-  // describe the bytes `downloadHref` above hands over, which is the pinned
-  // representation this page already resolved. `artifact.size` is the object
-  // row's creation-time cache that the append-only save road never rewrites; it
-  // is the same split reading cinatra#3026 took out of the header, and it
-  // travels with the size to whichever surface still draws one. NULL where no
-  // representation resolved — the card then draws no download either, so its
-  // last-resort cached reading disagrees with nothing.
-  const genericFloor = (
-    <FallbackHandler
-      artifact={artifact}
-      mime={mime}
-      sizeBytes={resolved?.sizeBytes ?? null}
-      downloadHref={downloadHref}
-    />
-  );
+  // THE NEVER-BLANK FLOOR, and it draws no artifact. It used to be the core
+  // metadata card — the file's name, its media type, its size and its download —
+  // which is the artifact's own content, and content is the display's. A file no
+  // installed display can read belongs to a base of its own, and that base's
+  // display is the download card; here core says only that nothing installed
+  // draws this row.
+  const genericFloor = <NoDisplayNotice />;
+
+  // THE DISPLAY, resolved through the ONE primitive the lifecycle review also
+  // resolves through, at the props version the snapshot above was built at.
+  // Read authorization is already enforced above — a row the viewer may not read
+  // never reaches here.
+  const mount = await resolveArtifactDisplayMount({
+    orgId,
+    baseType: artifact.objectType,
+    // The assertion-aware PRESENTATION identity — a row filed as "Marketing
+    // strategy" draws as that. The shared effective identity is untouched
+    // (context selection / replay / Graphiti still read it); they diverge by
+    // design.
+    identity: artifact.presentationIdentity,
+    mime,
+    propsApiVersion: rendererProps.propsApiVersion,
+  });
 
   return (
     <Main className="min-h-screen">
@@ -377,7 +333,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
       />
       <PageContent
         className="flex flex-col gap-6 pb-8"
-        data-render-dispatch={dispatch.kind}
+        data-render-dispatch={mount.dispatch}
       >
         {/* §III activation barrier: pin / add-to-context is replaced by a
             muted "Preparing" label until the claim's binding lands. */}
@@ -391,77 +347,29 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
             Preparing
           </span>
         ) : null}
-        {(() => {
-          switch (dispatch.kind) {
-            // Extension-shipped semantic detail renderer or representation
-            // viewer — MOUNTED through `ExtensionRendererMount`, which classifies
-            // the loadable path: the build-map SSR fast path (system/first-party
-            // bases) OR the main-realm dynamic client loader (marketplace-
-            // installed, zero host rebuild). Either degrades to the generic floor
-            // + a sanitized notice on any pre-render/pre-import failure.
-            case "semantic":
-            case "representation":
-              return (
-                <ExtensionRendererMount
-                  generatedKey={dispatch.generatedKey}
-                  packageName={dispatch.packageName}
-                  // Both the semantic detail view and the detail-page
-                  // representation viewer mount at slot `detail` (Slice B — the
-                  // representation viewer resolves at `detail`, the neutral
-                  // `preview` capability serves in-core reuse sites only).
-                  slot="detail"
-                  props={rendererProps}
-                  fallback={genericFloor}
+        <ArtifactDisplayMountPoint
+          mount={mount}
+          props={rendererProps}
+          fallback={genericFloor}
+          renderFloor={({ packageName, slot, reason }) =>
+            // A CLAIMANT THIS BUILD DOES NOT CARRY still says so by name, above
+            // the floor. Every other floor is the terminal one, and its whole
+            // reading is the host diagnostic — there is nothing of the artifact
+            // for core to draw underneath it.
+            packageName && reason === "requires-rebuild" ? (
+              <>
+                <RendererDegradedNotice
+                  packageName={packageName}
+                  slot={slot}
+                  failureClass="not-built"
                 />
-              );
-            // A runtime-installed claimant whose module is absent from this
-            // build: generic floor + a "requires rebuild" notice (never blank).
-            case "requires-rebuild":
-              return (
-                <>
-                  <RendererDegradedNotice
-                    packageName={dispatch.packageName}
-                    slot={dispatch.slot}
-                    failureClass="not-built"
-                  />
-                  {genericFloor}
-                </>
-              );
-            // First-party host MIME handler — the core-owned never-blank FLOOR
-            // that survives the G2 cutover: markdown (DEFER) + escaped plain-text
-            // (STAY). pdf / image / audio / video MIGRATED to the system
-            // `-artifact` bases and resolve as `representation` above, never here.
-            case "mime": {
-              if (!previewHref) return genericFloor;
-              switch (dispatch.handler) {
-                case "markdown":
-                  return (
-                    <MarkdownHandler
-                      artifactId={id}
-                      revisionId={revisionId as string}
-                      orgId={orgId}
-                    />
-                  );
-                case "text":
-                  return (
-                    <PlainTextHandler
-                      artifactId={id}
-                      revisionId={revisionId as string}
-                      orgId={orgId}
-                    />
-                  );
-                // Any other handler kind is unreachable post-cutover (pickHandler
-                // only yields markdown/text); the generic floor keeps it
-                // never-blank if a stale build ever produced one.
-                default:
-                  return genericFloor;
-              }
-            }
-            case "fallback":
-            default:
-              return genericFloor;
+                {genericFloor}
+              </>
+            ) : (
+              genericFloor
+            )
           }
-        })()}
+        />
       </PageContent>
     </Main>
   );
