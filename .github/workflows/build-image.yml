@@ -826,6 +826,30 @@ jobs:
           SUPABASE_SCHEMA: cinatra_exec_run_seam
         run: pnpm exec vitest run src/lib/execution/__tests__/run-seam-declared-environment.integration.test.ts
 
+      # cinatra#3271 wires the two row-promotion real-database proofs, whose own
+      # issues are cinatra#1381 (memory) and cinatra#1437 (artifact). Neither
+      # file ran in ANY CI job: both are `*.integration.test.ts`, which the root
+      # vitest tier excludes, and no workflow named either path. So the memory
+      # apply's transactional claim (the CAS assert must RAISE in SQL, and the
+      # co-committed request claim must roll back WITH it — the exact defect that
+      # suite was written for) and the artifact approvals ladder could both
+      # regress without reddening a single check. These two steps close that,
+      # using the same CINATRA_DB_INTEGRATION_TESTS=1 + job-level SUPABASE_DB_URL
+      # pattern as every step above. Naming the paths LITERALLY here also brings
+      # both files under scripts/audit/ci-pinned-tests-exist.mjs direction (1),
+      # so renaming or losing either one now fails that audit instead of leaving
+      # a silent dead pin behind. Own vitest invocation (own process) each, so
+      # their SUPABASE_SCHEMA and pool lifecycles never touch the steps above.
+      - name: Memory promotion atomic-apply DB test (cinatra#1381)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/objects/__tests__/memory-promotion-atomic-apply.integration.test.ts
+
+      - name: Artifact promotion approvals DB test (cinatra#1437)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/objects/__tests__/artifact-promotion-approvals.integration.test.ts
+
       # cinatra#2882. The async notification-delete seam's whole claim is a
       # claim about the EVENT LOOP — that a timer due mid-delete fires on the
       # async path and cannot fire on the synchronous one — plus the settle
@@ -1075,10 +1099,23 @@ jobs:
           # this registry on ONE self-hosted machine never race for 4873
           # (cinatra#3267). The mapping is read back below and published as
           # CINATRA_TEST_VERDACCIO_URL for the integration suite further down.
-          docker run -d --name agents-it-verdaccio -p 127.0.0.1::4873 \
+          # A per-job container NAME, from the one shared derivation
+          # (scripts/ci/job-scoped-name.sh — read its header for the class):
+          # a FIXED name can exist once per MACHINE, so a second job holding
+          # this registry on one self-hosted box died at `docker run` with
+          # `Conflict. The container name "/agents-it-verdaccio" is already
+          # in use` and exit 125, before it reached a single test
+          # (cinatra#3332). $GITHUB_ENV carries the derived name to the
+          # always() "Stop the disposable Verdaccio" step at the end of this
+          # job, so the cleanup removes THIS job's container and can never
+          # reach into a neighbouring job's.
+          VERDACCIO_CONTAINER="$("${GITHUB_WORKSPACE}/scripts/ci/job-scoped-name.sh" agents-it-verdaccio)"
+          echo "AGENTS_IT_VERDACCIO_CONTAINER=${VERDACCIO_CONTAINER}" >> "$GITHUB_ENV"
+          echo "container name: ${VERDACCIO_CONTAINER}"
+          docker run -d --name "$VERDACCIO_CONTAINER" -p 127.0.0.1::4873 \
             -v "${GITHUB_WORKSPACE}/docker/verdaccio/config.ci.yaml:/verdaccio/conf/config.yaml:ro" \
             "$VERDACCIO_IMAGE" >/dev/null
-          VERDACCIO_PORT="$(docker port agents-it-verdaccio 4873/tcp | head -n 1 | sed 's/.*://')"
+          VERDACCIO_PORT="$(docker port "$VERDACCIO_CONTAINER" 4873/tcp | head -n 1 | sed 's/.*://')"
           [ -n "$VERDACCIO_PORT" ] || { echo "::error::could not read back the mapped verdaccio host port"; exit 1; }
           VERDACCIO_URL="http://127.0.0.1:${VERDACCIO_PORT}"
           # $GITHUB_ENV reaches the LATER steps (the integration suite reads
@@ -1093,7 +1130,7 @@ jobs:
             sleep 3
           done
           echo "::error::disposable verdaccio did not answer /-/ping within 120s"
-          docker logs agents-it-verdaccio || true
+          docker logs "$VERDACCIO_CONTAINER" || true
           exit 1
 
       - name: Provision Better Auth tables (public schema)
@@ -1214,9 +1251,19 @@ jobs:
       # The VM is ephemeral and this would cost nothing either way, but a
       # named container left running is a confusing thing to find in a
       # "why is docker unhappy" diagnostic on a shared runner image.
+      #
+      # THIS job's container and no other (cinatra#3332): the name is the
+      # per-job one the start step derived and exported, never a fixed one a
+      # concurrent job on the same self-hosted box could still be using. The
+      # variable is empty only when that step never ran — then there is
+      # nothing to remove.
       - name: Stop the disposable Verdaccio
         if: ${{ always() }}
-        run: docker rm -fv agents-it-verdaccio >/dev/null 2>&1 || true
+        run: |
+          set -euo pipefail
+          if [ -n "${AGENTS_IT_VERDACCIO_CONTAINER:-}" ]; then
+            docker rm -fv "${AGENTS_IT_VERDACCIO_CONTAINER}" >/dev/null 2>&1 || true
+          fi
 
   # Archive-acceptance coverage-completeness gate (cinatra#1943 Decision 1 /
   # the "P1-CI" wiring PR). Wires scripts/audit/archive-acceptance-gate.mjs

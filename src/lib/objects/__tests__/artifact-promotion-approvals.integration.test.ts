@@ -160,6 +160,49 @@ beforeAll(async () => {
       if (!msg.includes("does not exist")) throw err;
     }
   }
+  // SEED ORDER IS FORCED BY REAL FOREIGN KEYS. In CI the lifecycle DB job
+  // provisions `public` from the committed Better Auth seed
+  // (scripts/apply-public-schema.mjs), so these tables ALREADY EXIST carrying
+  // their constraints and every `CREATE TABLE IF NOT EXISTS` below is a no-op
+  // that never gets to relax anything: public."team"."organizationId"
+  // references organization(id) — which is why even the FOREIGN team's org id
+  // has to be a real organization row — and public."teamMember"."userId" and
+  // public."member"."userId" both reference public."user"(id). Seeding a team
+  // before its organization aborts the whole beforeAll on
+  // `team_organizationId_fkey`, so the order here is
+  // organization -> user -> team -> teamMember -> member and must stay that way.
+  //
+  // The org-write kernel's guarded batch also reads the organization's archive
+  // state before it lets any statement of the widen run.
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."organization" (
+       id text PRIMARY KEY, name text, slug text,
+       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
+       "createdAt" timestamptz)`,
+  );
+  await client.query(
+    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt") VALUES
+       ($1, 'Artifact promotion 1437', 'promo-1437', NULL, 0, now()),
+       ('org-OTHER', 'Foreign org 1437', 'foreign-org-1437', NULL, 0, now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ORG],
+  );
+  // The principals as Better Auth users — the teamMember and member rows below
+  // both reference public."user"(id).
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."user" (
+       id text PRIMARY KEY, name text NOT NULL, email text NOT NULL,
+       "emailVerified" boolean NOT NULL DEFAULT false,
+       "createdAt" timestamptz DEFAULT now(), "updatedAt" timestamptz DEFAULT now())`,
+  );
+  await client.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt") VALUES
+       ($1, 'Owner 1437', 'owner-1437@artifact-promotion.test', true, now(), now()),
+       ($2, 'Admin 1437', 'admin-1437@artifact-promotion.test', true, now(), now()),
+       ($3, 'Other 1437', 'other-1437@artifact-promotion.test', true, now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [OWNER, ADMIN, OTHER],
+  );
   // Better Auth team tables (public schema) for the team-target path — the
   // production readTeamInOrgSync joins public."team" + public."teamMember".
   await client.query(
@@ -185,6 +228,23 @@ beforeAll(async () => {
     `INSERT INTO public."teamMember" (id, "teamId", "userId") VALUES
        ('tm-1437-1', 'team-growth-1437', $1)`,
     [OWNER],
+  );
+  // Better Auth membership. The decide ladder re-checks the DECIDER's
+  // organization membership before it rejects (a platform admin who is not a
+  // member of this organization must not decide its requests), and the approve
+  // path's widen mints its org-write authority from the very same row. With no
+  // member row the reject and the approve both refuse and the suite proves
+  // nothing about the ladder it exists for.
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."member" (
+       id text PRIMARY KEY, "organizationId" text NOT NULL, "userId" text NOT NULL,
+       role text, "createdAt" timestamptz)`,
+  );
+  await client.query(`DELETE FROM public."member" WHERE "organizationId" = $1`, [ORG]);
+  await client.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt") VALUES
+       ('m-1437-admin', $1, $2, 'admin', now())`,
+    [ORG, ADMIN],
   );
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
