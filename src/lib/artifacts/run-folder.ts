@@ -97,7 +97,17 @@ export class RunFolderRefusal extends Error {
  * resolution of the name. The traversal above it keeps the blob store's own
  * containment rule, which is what plan §8.1 pins the tools to.
  */
-async function openNoFollow(abs: string, flags: number): Promise<FileHandle> {
+async function openNoFollow(
+  orgId: string,
+  runId: string,
+  relPath: string,
+  flags: number,
+  root: string,
+): Promise<FileHandle> {
+  // THE GATE, in the same breath as the open: the name the kernel is handed is
+  // the one `containedRunOutputFilePath` validated segment by segment and proved
+  // contained, never a string a caller carried in.
+  const abs = containedRunOutputFilePath(orgId, runId, relPath, root);
   try {
     return await fsp.open(abs, flags | fsConstants.O_NOFOLLOW);
   } catch (err) {
@@ -127,34 +137,131 @@ export function decodeUtf8Exact(bytes: Buffer): string | null {
   return Buffer.from(text, "utf8").equals(bytes) ? text : null;
 }
 
-/** One path segment of the folder identity. An organisation or run id that is
- *  not a plain identifier is refused BEFORE any disk access — the same posture
- *  the blob store takes on its own scope segments. */
-function safeSegment(value: string, what: string): string {
+/** The ONE shape a path segment that reaches this module from OUTSIDE the
+ *  process may have — an organisation, a run, a name inside the outputs folder:
+ *  a plain identifier of letters, digits, dot, dash and underscore. An
+ *  identifier and a UUID both have it; a separator, a `..`, a NUL byte and an
+ *  encoded traversal do not. */
+const SAFE_PATH_SEGMENT = /^[A-Za-z0-9._-]{1,200}$/;
+
+/** One path segment of the folder identity. A segment that is not a plain
+ *  identifier is refused BEFORE any disk access — the same posture the blob
+ *  store takes on its own scope segments. */
+function safeSegment(
+  value: string,
+  what: string,
+  reason: RunFolderRefusalReason = "invalid_scope",
+): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 200) {
-    throw new RunFolderRefusal("invalid_scope", `run folder ${what} must be a short non-empty id`);
+    throw new RunFolderRefusal(reason, `run folder ${what} must be a short non-empty id`);
   }
-  if (!/^[A-Za-z0-9._-]+$/.test(value) || value === "." || value === "..") {
+  if (!SAFE_PATH_SEGMENT.test(value)) {
     throw new RunFolderRefusal(
-      "invalid_scope",
+      reason,
+      `run folder ${what} "${value}" is not a plain identifier (letters, digits, dot, dash, underscore)`,
+    );
+  }
+  if (value === "." || value === "..") {
+    throw new RunFolderRefusal(
+      reason,
       `run folder ${what} "${value}" is not a plain identifier (letters, digits, dot, dash, underscore)`,
     );
   }
   return value;
 }
 
+/** A segment on the way to a run-folder path, and the word a refusal calls it
+ *  by. */
+type RunPathSegment = { value: string; what: string; reason?: RunFolderRefusalReason };
+
+/**
+ * THE ONE PATH GATE of the run folder.
+ *
+ * Every segment that originates outside the process — the organisation, the
+ * run, and every component of a name inside the outputs folder — is validated
+ * against `SAFE_PATH_SEGMENT` first, the path is then RESOLVED under the run
+ * data root, and the result is PROVEN to stay inside that root: the path back
+ * to the root may not climb out of it (`path.relative`, which is what an escape
+ * shows as), and the resolved name must carry the resolved root as its prefix.
+ * Anything else is a typed refusal thrown before a name reaches the filesystem.
+ *
+ * EVERY filesystem call in this module takes its path from HERE — the
+ * `O_NOFOLLOW` open, the existing-size `stat` and the parent `mkdir` included —
+ * so the check cannot be kept at two sites and forgotten at the third.
+ */
+function containedRunPath(
+  segments: readonly RunPathSegment[],
+  root: string = resolveRunDataRoot(),
+): string {
+  const checked: string[] = [];
+  for (const segment of segments) {
+    checked.push(safeSegment(segment.value, segment.what, segment.reason));
+  }
+  const resolved = path.resolve(root, ...checked);
+  const back = path.relative(root, resolved);
+  if (back.startsWith("..")) {
+    throw new RunFolderRefusal("path_escape", "the run folder path leaves the run data root");
+  }
+  if (path.isAbsolute(back)) {
+    throw new RunFolderRefusal("path_escape", "the run folder path leaves the run data root");
+  }
+  const insideRoot = resolved === root || resolved.startsWith(root + path.sep);
+  if (!insideRoot) {
+    throw new RunFolderRefusal("path_escape", "the run folder path leaves the run data root");
+  }
+  return resolved;
+}
+
 /** `<root>/<organisation>/<run>/` — the run's own folder. */
-export function runFolderPath(orgId: string, runId: string): string {
-  return path.join(
-    resolveRunDataRoot(),
-    safeSegment(orgId, "organisation"),
-    safeSegment(runId, "run"),
+export function runFolderPath(orgId: string, runId: string, root?: string): string {
+  return containedRunPath(
+    [
+      { value: orgId, what: "organisation" },
+      { value: runId, what: "run" },
+    ],
+    root ?? resolveRunDataRoot(),
   );
 }
 
 /** `<root>/<organisation>/<run>/outputs` — the only place the pickup reads. */
-export function runOutputsPath(orgId: string, runId: string): string {
-  return path.join(runFolderPath(orgId, runId), RUN_OUTPUTS_DIR);
+export function runOutputsPath(orgId: string, runId: string, root?: string): string {
+  return containedRunPath(
+    [
+      { value: orgId, what: "organisation" },
+      { value: runId, what: "run" },
+      { value: RUN_OUTPUTS_DIR, what: "outputs folder" },
+    ],
+    root ?? resolveRunDataRoot(),
+  );
+}
+
+/**
+ * The absolute path of ONE name inside a run's outputs folder, through the gate.
+ *
+ * `relPath` is relative to the outputs folder; "" and "." name the outputs
+ * folder itself, which is what the parent `mkdir` is handed for a file that sits
+ * directly in it.
+ */
+function containedRunOutputFilePath(
+  orgId: string,
+  runId: string,
+  relPath: string,
+  root: string = resolveRunDataRoot(),
+): string {
+  const segments: RunPathSegment[] = [
+    { value: orgId, what: "organisation" },
+    { value: runId, what: "run" },
+    { value: RUN_OUTPUTS_DIR, what: "outputs folder" },
+  ];
+  // "" and "." reach here ONLY from this module's own `path.posix.dirname` of an
+  // already-gated name (the parent of a file that sits directly in the outputs
+  // folder). A caller's own components never arrive in that shape: they are
+  // refused, one by one, in `resolveRunOutputPath` BEFORE any normalization.
+  for (const component of relPath.split(/[\\/]/)) {
+    if (component === "" || component === ".") continue;
+    segments.push({ value: component, what: "file name", reason: "invalid_path" });
+  }
+  return containedRunPath(segments, root);
 }
 
 /** Refuse a symlink ANYWHERE on the path from the RUN DATA ROOT down to (and
@@ -196,12 +303,19 @@ async function refuseSymlinksUnder(base: string, abs: string): Promise<void> {
  * Resolve one caller-supplied relative path INSIDE the run's outputs folder.
  * The containment rule the blob store uses, plus the symlink refusal.
  */
-export async function resolveRunOutputPath(input: {
-  orgId: string;
-  runId: string;
-  relPath: string;
-}): Promise<{ outputsRoot: string; abs: string; relPath: string }> {
-  const outputsRoot = runOutputsPath(input.orgId, input.runId);
+export async function resolveRunOutputPath(
+  input: {
+    orgId: string;
+    runId: string;
+    relPath: string;
+  },
+  // The run data root, resolved ONCE by the operation that owns this call. The
+  // root is configurable at runtime: re-reading it per call would let the path
+  // this function CHECKS and the path a later filesystem call USES resolve under
+  // two different roots (convergence round, fix leg 3).
+  root: string = resolveRunDataRoot(),
+): Promise<{ outputsRoot: string; abs: string; relPath: string }> {
+  const outputsRoot = runOutputsPath(input.orgId, input.runId, root);
   const raw = input.relPath;
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new RunFolderRefusal(
@@ -218,18 +332,34 @@ export async function resolveRunOutputPath(input: {
   if (raw.includes("\0")) {
     throw new RunFolderRefusal("invalid_path", "a run-folder path may not contain a NUL byte");
   }
+  // THE GATE, on the caller's OWN components, BEFORE normalization: a component
+  // that is not a plain identifier must be refused even when normalizing would
+  // make it vanish ("bad name/../report.md" normalizes to "report.md"), and an
+  // empty component — a leading, doubled or trailing separator, a backslash-
+  // rooted name on a POSIX host — is not a name this folder accepts either.
+  for (const component of raw.split(/[\\/]/)) {
+    if (component === "..") {
+      throw new RunFolderRefusal(
+        "path_escape",
+        `run-folder path "${raw}" leaves the outputs folder`,
+      );
+    }
+    safeSegment(component, "file name", "invalid_path");
+  }
   const normalized = path.normalize(raw);
   if (normalized.split(/[\\/]/).some((s) => s === "..")) {
     throw new RunFolderRefusal("path_escape", `run-folder path "${raw}" leaves the outputs folder`);
   }
-  const abs = path.resolve(outputsRoot, normalized);
+  // THE GATE: every component validated, the path resolved, containment proved
+  // against the run data root before any of it reaches the filesystem.
+  const abs = containedRunOutputFilePath(input.orgId, input.runId, normalized, root);
   if (abs !== outputsRoot && !abs.startsWith(outputsRoot + path.sep)) {
     throw new RunFolderRefusal(
       "path_escape",
       `run-folder path "${raw}" escapes the run's outputs folder`,
     );
   }
-  await refuseSymlinksUnder(resolveRunDataRoot(), abs);
+  await refuseSymlinksUnder(root, abs);
   return { outputsRoot, abs, relPath: path.relative(outputsRoot, abs).split(path.sep).join("/") };
 }
 
@@ -308,8 +438,14 @@ export async function writeRunOutputFile(input: {
       `the file is ${input.bytes.byteLength} bytes; the run folder's per-file cap is ${fileCap} bytes`,
     );
   }
-  const resolved = await resolveRunOutputPath(input);
-  const existing = await fsp.stat(resolved.abs).catch(() => null);
+  // ONE root for the whole write: the name that is checked and the name that is
+  // opened cannot resolve under two different roots.
+  const root = resolveRunDataRoot();
+  const resolved = await resolveRunOutputPath(input, root);
+  // The stat, the mkdir and the open below take their path FROM THE GATE, so no
+  // filesystem call here can be reached with a name that skipped it.
+  const target = containedRunOutputFilePath(input.orgId, input.runId, resolved.relPath, root);
+  const existing = await fsp.stat(target).catch(() => null);
   const used = await runFolderUsageBytes(input.orgId, input.runId);
   const after = used - (existing?.size ?? 0) + input.bytes.byteLength;
   const runCap = runFolderRunCapBytes();
@@ -319,10 +455,19 @@ export async function writeRunOutputFile(input: {
       `writing ${input.bytes.byteLength} bytes would put this run at ${after} bytes; the per-run cap is ${runCap} bytes`,
     );
   }
-  await fsp.mkdir(path.dirname(resolved.abs), { recursive: true });
+  const parent = containedRunOutputFilePath(
+    input.orgId,
+    input.runId,
+    path.posix.dirname(resolved.relPath),
+    root,
+  );
+  await fsp.mkdir(parent, { recursive: true });
   const handle = await openNoFollow(
-    resolved.abs,
+    input.orgId,
+    input.runId,
+    resolved.relPath,
     fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+    root,
   );
   try {
     await handle.writeFile(Buffer.from(input.bytes));
@@ -343,10 +488,18 @@ export async function readRunOutputFile(input: {
   relPath: string;
   maxBytes?: number;
 }): Promise<{ relPath: string; byteLength: number; bytes: Buffer }> {
-  const resolved = await resolveRunOutputPath(input);
+  // ONE root for the whole read, as on the write road.
+  const root = resolveRunDataRoot();
+  const resolved = await resolveRunOutputPath(input, root);
   let handle: FileHandle;
   try {
-    handle = await openNoFollow(resolved.abs, fsConstants.O_RDONLY);
+    handle = await openNoFollow(
+      input.orgId,
+      input.runId,
+      resolved.relPath,
+      fsConstants.O_RDONLY,
+      root,
+    );
   } catch (err) {
     if (err instanceof RunFolderRefusal) throw err;
     throw new RunFolderRefusal("not_found", `run-folder file "${input.relPath}" does not exist`);

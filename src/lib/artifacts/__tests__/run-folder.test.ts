@@ -243,3 +243,137 @@ describe("the symlink refusal covers the folder's ANCESTORS (convergence round)"
     await fsp.rm(path.join(ROOT, "org-real"), { recursive: true, force: true });
   });
 });
+
+describe("the ONE path gate every filesystem call in the module goes through", () => {
+  const enc = (text: string) => new TextEncoder().encode(text);
+  const outputsRoot = () => path.join(ROOT, ORG, RUN, "outputs");
+
+  it("the O_NOFOLLOW open takes its path from the gate: an encoded traversal is refused, a plain identifier is accepted, and the name opened stays inside the root", async () => {
+    await folder.writeRunOutputFile({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "report.md",
+      bytes: enc("# Report\n"),
+    });
+    const read = await folder.readRunOutputFile({ orgId: ORG, runId: RUN, relPath: "report.md" });
+    expect(read.bytes.toString("utf8")).toBe("# Report\n");
+
+    // CONTAINMENT: the name the open is handed resolves inside the run data root.
+    const resolved = await folder.resolveRunOutputPath({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "report.md",
+    });
+    expect(path.relative(ROOT, resolved.abs).startsWith("..")).toBe(false);
+    expect(resolved.abs.startsWith(ROOT + path.sep)).toBe(true);
+
+    // A traversal that hides behind an encoding is not a plain identifier, so it
+    // never reaches the open.
+    await expect(
+      folder.readRunOutputFile({ orgId: ORG, runId: RUN, relPath: "..%2f..%2fescape.md" }),
+    ).rejects.toMatchObject({ reason: "invalid_path" });
+  });
+
+  it("the existing-size stat takes its path from the gate: an encoded traversal is refused, an overwrite of a plain identifier is accepted, and the file measured stays inside the outputs folder", async () => {
+    process.env.CINATRA_RUN_FOLDER_RUN_CAP_BYTES = "12";
+    await folder.writeRunOutputFile({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "a.md",
+      bytes: enc("0123456789"),
+    });
+    // The overwrite only fits under the per-run cap because the stat found the
+    // ten bytes already there — the site is really exercised.
+    const again = await folder.writeRunOutputFile({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "a.md",
+      bytes: enc("9876543210"),
+    });
+    expect(again.relPath).toBe("a.md");
+
+    // CONTAINMENT: the file measured is the one inside this run's outputs folder.
+    const files = await folder.listRunOutputFiles({ orgId: ORG, runId: RUN });
+    expect(files.map((f) => f.relPath)).toEqual(["a.md"]);
+    expect(files[0].absPath.startsWith(outputsRoot() + path.sep)).toBe(true);
+    expect(path.relative(ROOT, files[0].absPath).startsWith("..")).toBe(false);
+
+    await expect(
+      folder.writeRunOutputFile({
+        orgId: ORG,
+        runId: RUN,
+        relPath: "a%2e%2e%2fescape.md",
+        bytes: enc("x"),
+      }),
+    ).rejects.toMatchObject({ reason: "invalid_path" });
+  });
+
+  it("the parent mkdir takes its path from the gate: an encoded traversal is refused and creates nothing, a nested plain identifier is accepted, and the directory made stays inside the outputs folder", async () => {
+    const written = await folder.writeRunOutputFile({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "nested/deep/report.md",
+      bytes: enc("x"),
+    });
+    expect(written.relPath).toBe("nested/deep/report.md");
+
+    // CONTAINMENT: the directory the mkdir made is inside this run's outputs folder.
+    const made = path.join(outputsRoot(), "nested", "deep");
+    expect((await fsp.stat(made)).isDirectory()).toBe(true);
+    expect(path.relative(outputsRoot(), made).startsWith("..")).toBe(false);
+
+    await expect(
+      folder.writeRunOutputFile({
+        orgId: ORG,
+        runId: RUN,
+        relPath: "nested%2f..%2fescape/report.md",
+        bytes: enc("x"),
+      }),
+    ).rejects.toMatchObject({ reason: "invalid_path" });
+    await expect(fsp.stat(path.join(outputsRoot(), "nested%2f..%2fescape"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+describe("the gate refuses the caller's OWN components, before normalization (convergence round)", () => {
+  const enc = (text: string) => new TextEncoder().encode(text);
+
+  it.each([
+    ["a name that normalization would make disappear", "bad name/../report.md"],
+    ["a doubled separator", "nested//report.md"],
+    ["a same-folder component", "nested/./report.md"],
+    ["a trailing separator", "report.md/"],
+    ["a backslash-rooted name", "\\outside\\report.md"],
+  ])("refuses %s and writes nothing", async (_what, relPath) => {
+    await expect(
+      folder.writeRunOutputFile({ orgId: ORG, runId: RUN, relPath, bytes: enc("x") }),
+    ).rejects.toMatchObject({ reason: expect.stringMatching(/^(invalid_path|path_escape)$/) });
+    const files = await folder.listRunOutputFiles({ orgId: ORG, runId: RUN });
+    expect(files).toEqual([]);
+  });
+
+  it("still calls a climbing path an escape, and still accepts a plain nested identifier", async () => {
+    await expect(
+      folder.readRunOutputFile({ orgId: ORG, runId: RUN, relPath: "../../elsewhere.md" }),
+    ).rejects.toMatchObject({ reason: "path_escape" });
+    const written = await folder.writeRunOutputFile({
+      orgId: ORG,
+      runId: RUN,
+      relPath: "nested/deep/report.md",
+      bytes: enc("x"),
+    });
+    expect(written.relPath).toBe("nested/deep/report.md");
+  });
+
+  it("resolves under the root it is HANDED, so the root checked and the root used cannot diverge", async () => {
+    const other = path.join(ROOT, "other-root");
+    const resolved = await folder.resolveRunOutputPath(
+      { orgId: ORG, runId: RUN, relPath: "report.md" },
+      other,
+    );
+    expect(resolved.abs.startsWith(other + path.sep)).toBe(true);
+    expect(path.relative(other, resolved.abs).startsWith("..")).toBe(false);
+    expect(resolved.abs).toBe(path.join(other, ORG, RUN, "outputs", "report.md"));
+  });
+});

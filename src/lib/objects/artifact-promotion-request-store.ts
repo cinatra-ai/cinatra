@@ -284,37 +284,92 @@ export function countArtifactPromotionRequests(input: {
 
 /**
  * CAS-guarded decide: pending → approved | rejected. The WHERE pins
- * `status = 'pending'` so exactly one decider wins; the win is the UPDATE's
- * rowCount, returned as a boolean (never a throw). A `false` means the row was
- * already decided / superseded / vanished — the caller maps it to a conflict.
+ * `status = 'pending'` so exactly one decider wins; the win is the UPDATE's own
+ * row count, read OUT of the statement (never a status re-read — two
+ * same-decision racers both re-read the decided status, but only one updated a
+ * row). A loss is a VALUE that names its OWN cause, never a throw.
+ *
+ * MEMBERSHIP RIDES INSIDE THE STATEMENT, exactly as the memory sibling's
+ * `casRejectMemoryPromotionRequest` does. `requireMemberUserId` adds a
+ * `FOR SHARE`-locked membership CTE and an `AND EXISTS` arm to the UPDATE, so a
+ * membership revoked between a caller's pre-check and this write refuses the
+ * decision rather than letting a now-non-member decide the request for good:
+ * one statement is one snapshot, and `FOR SHARE` makes a concurrent revocation
+ * wait for this statement rather than commit underneath it.
+ *
+ * WHY THE STATEMENT ALSO RETURNS THE MEMBERSHIP COUNT. A lost CAS has two
+ * possible causes and one row count, so asking a SECOND time afterwards cannot
+ * say which: the second read sees a newer world and would report "decided
+ * concurrently" for a membership that was restored, or `not_a_member` for a race
+ * that a real member lost. Both counts are measured HERE, at one snapshot.
+ *
+ * The APPROVE caller passes NO `requireMemberUserId` — its membership half is
+ * the membership-grounded org-write authority minted inside the atomic widen —
+ * so the predicate-free branch reports `1 AS member` and this classifier reads
+ * exactly as the plain boolean did.
  */
+export type ArtifactPromotionCasDecideOutcome =
+  | { ok: true }
+  /** The request was not pending: somebody else decided it first. */
+  | { ok: false; reason: "not_pending" }
+  /** The decider held no membership in this organization AT THE WRITE. */
+  | { ok: false; reason: "not_a_member" };
+
 export function casDecideArtifactPromotionRequest(input: {
   id: string;
   orgId: string;
   decidedBy: string;
   decision: "approve" | "reject";
   note?: string | null;
-}): boolean {
+  /** The decider whose org MEMBERSHIP must hold AT THE MOMENT OF THE WRITE.
+   *  Omit only for a caller that carries its membership half elsewhere. */
+  requireMemberUserId?: string;
+}): ArtifactPromotionCasDecideOutcome {
   ensurePostgresSchema();
   const schema = q();
   const nextStatus: ArtifactPromotionRequestStatus =
     input.decision === "approve" ? "approved" : "rejected";
+  const values: unknown[] = [input.id, input.orgId, nextStatus, input.decidedBy, input.note ?? null];
+
+  let text: string;
+  if (input.requireMemberUserId === undefined) {
+    text = `WITH updated AS (
+  UPDATE "${schema}"."artifact_promotion_request"
+  SET status = $3, decided_by = $4, decided_at = now(),
+      decision_note = $5, updated_at = now()
+  WHERE id = $1 AND org_id = $2 AND status = 'pending'
+  RETURNING id
+)
+SELECT (SELECT count(*) FROM updated)::int AS updated, 1 AS member`;
+  } else {
+    values.push(input.requireMemberUserId);
+    text = `WITH member_locked AS (
+  SELECT 1 AS ok FROM public."member" m
+  WHERE m."organizationId" = $2 AND m."userId" = $${values.length}
+  FOR SHARE
+),
+updated AS (
+  UPDATE "${schema}"."artifact_promotion_request"
+  SET status = $3, decided_by = $4, decided_at = now(),
+      decision_note = $5, updated_at = now()
+  WHERE id = $1 AND org_id = $2 AND status = 'pending'
+    AND EXISTS (SELECT 1 FROM member_locked)
+  RETURNING id
+)
+SELECT (SELECT count(*) FROM updated)::int AS updated,
+       (SELECT count(*) FROM member_locked)::int AS member`;
+  }
+
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
-    queries: [
-      {
-        text: `UPDATE "${schema}"."artifact_promotion_request"
-SET status = $3,
-    decided_by = $4,
-    decided_at = now(),
-    decision_note = $5,
-    updated_at = now()
-WHERE id = $1 AND org_id = $2 AND status = 'pending'`,
-        values: [input.id, input.orgId, nextStatus, input.decidedBy, input.note ?? null],
-      },
-    ],
+    queries: [{ text, values }],
   });
-  return (res?.rowCount ?? 0) === 1;
+  const row = (res?.rows?.[0] ?? {}) as { updated?: number; member?: number };
+  if (Number(row.updated ?? 0) === 1) return { ok: true };
+  // Membership first: it is the stronger statement about this caller, and at
+  // this one snapshot it is the reason the UPDATE could not have matched.
+  if (Number(row.member ?? 0) === 0) return { ok: false, reason: "not_a_member" };
+  return { ok: false, reason: "not_pending" };
 }
 
 /** Move a pending request to `superseded` (an edit-after-request invalidated
