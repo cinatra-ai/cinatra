@@ -81,8 +81,25 @@ vi.mock("../materialize-agent-package", () => ({
   withInstallLock: (_pkg: string, fn: () => Promise<unknown>) => fn(),
 }));
 
+// The agents LISTING's own reader: the agent kind's observable is resolved
+// through it (cinatra#3204 leg 4), because `/agents` carries only the templates
+// with a human-in-the-loop signal of their own. The template here declares one,
+// so the agent case below still measures the map it is named for; the
+// conditional half has its own suite
+// (supplied-install-observable-and-precondition.test.ts).
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: vi.fn(async () => ({ id: "tpl-1" })),
+  readInstalledAgentTemplates: vi.fn(async () => [
+    {
+      id: "tpl-1",
+      packageName: "@acme/thing-agent",
+      hitlRequired: true,
+      hitlScreens: ["review"],
+      gatedSteps: null,
+      agentDependencies: null,
+      sourceType: "internal",
+    },
+  ]),
 }));
 
 // The skill kind's consent recorder — server state this suite is not about.
@@ -241,8 +258,17 @@ describe("what a successful install points the operator at (criterion 21)", () =
 // ---------------------------------------------------------------------------
 describe("what a successful install points the operator at, per kind (criterion 21)", () => {
   const CASES = [
+    // The agent case carries a human-in-the-loop signal (see the ../store mock),
+    // which is what puts it on the run picker at all.
     { kind: "agent", packageName: "@acme/thing-agent", href: "/agents" },
-    { kind: "skill", packageName: "@acme/thing-skill", href: "/skills" },
+    // Criterion 21 names the skill's observable as the catalog queried BY
+    // PACKAGE NAME, and the catalog's table pages — so the unfiltered catalog
+    // would land the operator on a page the fresh row need not be on.
+    {
+      kind: "skill",
+      packageName: "@acme/thing-skill",
+      href: `/skills?q=${encodeURIComponent("@acme/thing-skill")}`,
+    },
     { kind: "artifact", packageName: "@acme/thing-artifact", href: "/configuration/extensions" },
     { kind: "connector", packageName: "@acme/thing-connector", href: "/configuration/connectors" },
   ] as const;

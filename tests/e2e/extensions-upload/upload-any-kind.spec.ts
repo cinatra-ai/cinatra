@@ -129,7 +129,14 @@ const OAS = JSON.stringify({
   id: "upload-walk-agent-flow",
   name: "Upload Walk Agent",
   description: "A deterministic flow supplied by the upload walk.",
-  metadata: { cinatra: { type: "leaf" } },
+  // The flow declares a human-in-the-loop screen of its own, because that is
+  // what CELL4's agent cell is named for: `/agents` is the RUN picker and it
+  // carries the installed templates that declare such a step (plus their
+  // sub-agents and external A2A agents). A flow with no gate is installed just
+  // as completely and is simply not on that page — through this road and
+  // through the store road alike — so a fixture without one would measure the
+  // page's run-visibility rule instead of the install this cell is about.
+  metadata: { cinatra: { type: "leaf", hitlScreens: ["review"] } },
   inputs: [FLOW_INPUT],
   outputs: [FLOW_INPUT],
   start_node: { $component_ref: "upload-walk-start" },
@@ -436,6 +443,26 @@ for (const palette of PALETTES) {
       await shot(page, `cell4-connector-refused-${palette}`);
     });
 
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CELL2 — the GITHUB road with a repository actually RESOLVED.
+//
+// Driven under the SECOND session (auth.setup.ts step 6): the GitHub tab reads
+// its precondition per the organization the screen runs in, so the walk's own
+// organization — which holds no connection of its own — is where CELL3 measures
+// the precondition, and the organization that holds the connection is the only
+// place a repository can be resolved. One instance, two organizations, both
+// halves of criteria 9 and 10 measurable.
+// ---------------------------------------------------------------------------
+const GITHUB_STORAGE_STATE = "tests/e2e/extensions-upload/.auth/github-admin-state.json";
+const DEFAULT_WALK_REPOSITORY = "https://github.com/cinatra-ai/contract-matcher-skill";
+
+for (const palette of PALETTES) {
+  test.describe(`upload screen — the GitHub road resolved — ${palette}`, () => {
+    test.use({ storageState: GITHUB_STORAGE_STATE });
+
     test(`CELL2 ${palette}: the GitHub tab shows the pinned commit, the resolved kind and the same panel`, async ({
       page,
     }) => {
@@ -447,12 +474,17 @@ for (const palette of PALETTES) {
         const stated = (await precondition.innerText()).replace(/\s+/g, " ").trim();
         test.skip(
           true,
-          `CELL2 not measurable on this instance — the GitHub tab states: ${stated}`,
+          `CELL2 not measurable — the connected-organization session met a precondition: ${stated}`,
         );
         return;
       }
 
-      const repo = process.env.E2E_UPLOAD_GITHUB_REPO;
+      // A PUBLIC repository whose manifest declares one of the four kinds, so
+      // the cell measures the road rather than the reader's refusal. Named here
+      // as the default because a cell that quietly skips for want of an
+      // environment variable is a cell nobody measured; `E2E_UPLOAD_GITHUB_REPO`
+      // still overrides it, and setting it empty states the skip out loud.
+      const repo = process.env.E2E_UPLOAD_GITHUB_REPO ?? DEFAULT_WALK_REPOSITORY;
       if (!repo) {
         test.skip(
           true,
