@@ -35,7 +35,6 @@ import {
   DropZoneArea,
   DropzoneFileList,
   DropzoneFileListItem,
-  DropzoneFileMessage,
   DropzoneMessage,
   DropzoneRemoveFile,
   DropzoneTrigger,
@@ -246,7 +245,13 @@ export function ImportAgentForm({ installScope }: ImportAgentFormProps) {
                 </div>
               </div>
               <InfiniteProgress status={file.status} />
-              <DropzoneFileMessage className="text-xs text-destructive" />
+              {/* NO inline message here, by the design spec's own rule
+                  (Extensions §I.1: "Errors are a toast, never inline"). The
+                  drop handler has already sent the refusal to the toast
+                  surface; a card that repeats it draws the same sentence twice
+                  and puts one of the two copies exactly where the drawing says
+                  an error never goes. The card carries the file and its
+                  progress — what it IS, not why it failed. */}
             </DropzoneFileListItem>
           ))}
         </DropzoneFileList>

@@ -284,6 +284,57 @@ async function openUpload(page: Page, palette: (typeof PALETTES)[number]): Promi
   await expect(page.getByRole("heading", { name: "Upload Extension" })).toBeVisible();
 }
 
+/**
+ * THE TOAST SURFACE, MEASURED.
+ *
+ * "Errors are a toast" is only kept if the toast can be READ, and a toast is
+ * read only where it is drawn: a message long enough to grow the toast past the
+ * top of the window reports nothing at all, however correct its words. So this
+ * reads the refusal's own words off the toast's title slot and MEASURES the
+ * toast's box against the window rather than asserting it is visible — a node
+ * whose box starts above y=0 is still "visible" to a DOM query.
+ */
+async function readToastSurface(
+  page: Page,
+): Promise<{ text: string; insideViewport: boolean; geometry: string }> {
+  const toast = page.locator("[data-sonner-toast]").first();
+  await expect(toast).toBeVisible({ timeout: 60_000 });
+  const text = (await toast.locator("[data-title]").first().innerText())
+    .replace(/\s+/g, " ")
+    .trim();
+  // The toast surface animates a toast IN from above its resting place, so a box
+  // read the instant it becomes visible is the entrance transform, not where the
+  // admin reads it. Poll until two consecutive reads agree, then measure THAT.
+  let box = await toast.boundingBox();
+  for (let i = 0; i < 25; i++) {
+    await page.waitForTimeout(100);
+    const next = await toast.boundingBox();
+    if (
+      next !== null &&
+      box !== null &&
+      Math.abs(next.y - box.y) < 0.5 &&
+      Math.abs(next.height - box.height) < 0.5
+    ) {
+      box = next;
+      break;
+    }
+    box = next;
+  }
+  const viewport = page.viewportSize();
+  const insideViewport =
+    box !== null &&
+    viewport !== null &&
+    box.x >= 0 &&
+    box.y >= 0 &&
+    box.x + box.width <= viewport.width &&
+    box.y + box.height <= viewport.height;
+  return {
+    text,
+    insideViewport,
+    geometry: `toast=${JSON.stringify(box)} viewport=${JSON.stringify(viewport)}`,
+  };
+}
+
 async function supply(page: Page, zip: Buffer, fileName: string): Promise<void> {
   await page.locator('input[type="file"]').setInputFiles({
     name: fileName,
@@ -337,6 +388,16 @@ for (const palette of PALETTES) {
       // draws, so nothing about the screen's height or state changed.
       await expect(page.getByText(/retired extension kind/i).first()).toBeVisible();
       await expect(page.getByTestId("upload-install-scope")).toHaveCount(0);
+
+      // The toast is where that sentence lives — and the ONLY place it lives.
+      // The file card carries the file and its progress, never the refusal.
+      const refused = await readToastSurface(page);
+      expect(refused.text).toMatch(/retired extension kind/i);
+      expect(refused.insideViewport, refused.geometry).toBe(true);
+      const fileCard = page.locator("li").filter({ hasText: "retired.zip" });
+      await expect(fileCard).toHaveCount(1);
+      await expect(fileCard).not.toContainText(/retired extension kind/i);
+
       await shot(page, `cell5-${palette}`);
     });
 
@@ -440,6 +501,24 @@ for (const palette of PALETTES) {
       await expect(page.getByTestId("extension-install-panel-picker")).toContainText(
         "Workspace: All",
       );
+
+      // THE REFUSAL THE ADMIN ACTUALLY READS. One short sentence in product
+      // words — the install chain's own diagnostics (its failure token, the
+      // internal issue that closed the absence rule, what it did to the
+      // placeholder row) belong in the server log, and a paragraph of them on
+      // this surface is what pushed the toast off the top of the window.
+      const refusal = await readToastSurface(page);
+      expect(refusal.text).not.toMatch(
+        /pipeline-threw|supplied-install-failed|\[connector-access-config\]/,
+      );
+      expect(refusal.text).not.toMatch(/cinatra#\d+/);
+      expect(refusal.text).not.toMatch(/roll(?:ed|s|ing)?[ -]?back/i);
+      expect(refusal.text.length).toBeLessThan(160);
+      // What the package lacks, and what has to be true before it installs.
+      expect(refusal.text).toMatch(/configuration/i);
+      expect(refusal.text).toMatch(/access scope/i);
+      expect(refusal.insideViewport, refusal.geometry).toBe(true);
+
       await shot(page, `cell4-connector-refused-${palette}`);
     });
 
