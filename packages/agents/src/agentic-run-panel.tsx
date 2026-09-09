@@ -376,6 +376,34 @@ function buildLabelAndContent(body: AgentRunMessageBody): {
 }
 
 /**
+ * IS THIS THE RUN'S SENTENCE, OR A STRUCTURED VALUE IT RECORDED? (cinatra#3149,
+ * fix leg 5)
+ *
+ * A run that records a structured result writes it into the same `final`
+ * transcript row a run that answers in prose writes its answer into, and the
+ * third proof round measured one of the first kind being drawn as though it
+ * were one of the second. The question is answered on the content itself and
+ * nowhere else, and the test is deliberately NARROW: content that parses as a
+ * JSON OBJECT or ARRAY is a structured value and is set as code. That is a
+ * FORM test, not a claim about intent — a JSON scalar (`42`, `true`, a quoted
+ * string) stays prose, and a sentence that merely mentions a brace stays prose
+ * because it does not parse. Nothing is rewritten, summarised or hidden; only
+ * the TYPE the row is set in changes. The convergence round asked for the
+ * narrower name and for the parse to happen once per content rather than once
+ * per render; both are here.
+ */
+function contentIsStructuredValue(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One row of the run transcript — and, for the run's `final` message, THE row
  * the completion card's sentence points at (cinatra#3002, fix leg 3).
  *
@@ -387,37 +415,88 @@ function buildLabelAndContent(body: AgentRunMessageBody): {
  * for metadata, tokens, labels and code (specs/app-components.html) while
  * `break-all` snaps a word mid-character.
  *
- * So the `final` row is drawn as an answer, in the row form the ratified
- * drawing gives the run's own work — `border: 1px solid var(--line);
- * border-radius: 8px; background: var(--surface-strong)` with a sans title
- * (specs/app-artifact-review.html, the run's last step). Its label keeps the
- * words it had, "Final response", because that is what the card's sentence
- * sends the reader to find. Every other row is byte-identical to what it was.
+ * So the `final` row is drawn as an answer rather than as a raw mono dump.
+ *
+ * IT IS NOT A PANEL, THOUGH (cinatra#3149, fix leg 5). Drawn with a title and a
+ * card's own border, ground and radius, the row read as a SECOND card stacked
+ * under the completion reading, and the third proof round recorded exactly
+ * that: "a SECOND panel titled 'Final response' is stacked beneath the one
+ * completion card in the same detail — the drawing draws ONE card for the
+ * finished run". The ratified drawing's completed example
+ * (specs/app-artifact-review.html §I, `run-schedule-step-fired`) draws ONE
+ * `.runcard` holding ONE inner box, and the sentence in that box sends the
+ * reader to "the run transcript below" — below the box, inside the same card.
+ * So under the completion card the row keeps its place and its type and gives
+ * up its chrome and its title: it is the transcript the sentence names, not a
+ * second panel. A run that has NOT finished draws no completion card and so
+ * nothing introduces its `final` row — there the row keeps the panel and the
+ * title it has always had (the convergence round's second finding).
+ *
+ * AND A MACHINE PAYLOAD IS NOT PROSE (cinatra#3149, fix leg 5). The same round
+ * measured the graded run's one `final` row and found a JSON array of reviewer
+ * findings drawn as reader-facing prose. The design system reserves mono for
+ * metadata, tokens, labels and code (specs/app-components.html): a run's own
+ * sentence is set in body type, a machine value is set as code. The row asks
+ * which of the two it is holding, and draws it that way.
+ *
+ * Every other row is byte-identical to what it was.
  */
-function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
+function ThreadRow({
+  message,
+  underCompletionCard = false,
+}: {
+  message: SerializedAgentRunMessage;
+  /**
+   * Is this row standing UNDER the completion card, inside the one runcard the
+   * drawing gives a finished run? Only there does the `final` row give up its
+   * own panel and its own title — that is the exact reading the third round
+   * graded ("a SECOND panel titled 'Final response' is stacked beneath the one
+   * completion card in the same detail"). A run that has NOT finished draws no
+   * completion card, so nothing introduces its `final` row: there the row keeps
+   * the panel and the title it has always had (cinatra#3149, fix leg 5,
+   * convergence round).
+   */
+  underCompletionCard?: boolean;
+}) {
   const { label, content } = buildLabelAndContent(message.body);
   const isTool =
     message.messageType === "tool_call" || message.messageType === "tool_result";
   const isFinal = message.messageType === "final";
+  // The run's own sentence, or a structured value it recorded instead. Only the
+  // `final` row asks: every other row's type is already decided by what it
+  // carries. Parsed once per content, not once per render.
+  const finalIsStructuredValue = useMemo(
+    () => isFinal && contentIsStructuredValue(content),
+    [isFinal, content],
+  );
+  const drawsAsProse = isFinal && !finalIsStructuredValue;
+  // NO SECOND PANEL UNDER THE COMPLETION CARD. The transcript the card's
+  // sentence names sits inside the same runcard, under the card's one inner
+  // box, and draws no box of its own.
+  const finalIsTheCardsTranscript = isFinal && underCompletionCard;
   const containerClass = isTool
     ? "rounded-control border border-line bg-surface-muted px-4 py-3"
     : isFinal
-      ? "rounded-card border border-line bg-surface-strong px-4 py-3"
+      ? finalIsTheCardsTranscript
+        ? ""
+        : "rounded-card border border-line bg-surface-strong px-4 py-3"
       : "rounded-control border border-line bg-surface px-4 py-3";
 
   return (
     <div className={containerClass} data-run-transcript-row={message.messageType}>
-      <div
-        data-run-transcript-label=""
-        className={
-          isFinal
-            ? "text-sm font-semibold text-foreground mb-1.5"
-            : "text-xs font-medium text-muted-foreground mb-1"
-        }
-      >
-        {label}
-      </div>
-      {isFinal ? (
+      {finalIsTheCardsTranscript ? null : (
+        <div
+          data-run-transcript-label=""
+          className={
+            isFinal
+              ? "text-sm font-semibold text-foreground mb-1.5"
+              : "text-xs font-medium text-muted-foreground mb-1"
+          }
+        >
+          {label}
+        </div>
+      )}
+      {drawsAsProse ? (
         <p
           data-run-transcript-body=""
           className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto"
@@ -1559,6 +1638,23 @@ export function AgenticRunPanel({
   const showCompletionCard = status === "completed";
   const completionAgentId = agentId;
 
+  /**
+   * IS THIS THE FINISHED RUN'S DETAIL THE DRAWING DRAWS AS ONE RUNCARD?
+   * (cinatra#3149, fix leg 5.)
+   *
+   * The third proof round graded the FINISHED run's detail inside the rail's
+   * frame and read three defects there. The drawing's completed example
+   * (specs/app-artifact-review.html §I, `run-schedule-step-fired`) draws that
+   * reading as ONE `.runcard` opening on a header row with the plate title and
+   * the state pill. Every OTHER rail-framed moment keeps exactly the reading it
+   * had: cinatra#3047 retired this plate's chrome around a gate's own card
+   * ("two cards are never stacked in one detail") and cinatra#3113/#3068
+   * retired the whole header for the run's first step. Neither was graded here,
+   * so neither moves — the frame and the title come back for the finished run
+   * and nowhere else.
+   */
+  const drawsTheFinishedRunsCard = showCompletionCard && !inputStepInRail;
+
   // ONE PLACE FOR A FINISHED RUN'S OUTPUT (cinatra#3002, fix leg 3).
   //
   // The ratified drawing's completed reading is the header pill and ONE card:
@@ -1819,9 +1915,28 @@ export function AgenticRunPanel({
   return (
     <>
     <section
+      // THE FINISHED RUN'S DETAIL IS ONE RUNCARD (cinatra#3149, fix leg 5).
+      //
+      // cinatra#3068 gave this box's card chrome up wherever the rail frames
+      // the detail, on the reading that the rail's own column was the frame.
+      // The third proof round measured the result on the run page and read it
+      // as a defect of STRUCTURE: "the drawn run-progress card is gone — what
+      // renders is the drawing's INNER bordered box alone". The ratified
+      // drawing (specs/app-artifact-review.html §I, example
+      // `run-schedule-step-fired`) draws the rail-framed run detail as ONE
+      // `.runcard` — `border: 1px solid var(--line); border-radius: 12px;
+      // background: var(--surface-strong)` — with the completion reading as the
+      // inner box inside it. So the frame comes back for THAT reading, in the
+      // drawn form rather than the `.soft-panel` ground that is one token light
+      // of it. Every other reading is byte-identical: the plain host keeps its
+      // own plate, and a rail-framed moment that is not the finished run keeps
+      // the bare column cinatra#3047 and cinatra#3068 left it (see
+      // `drawsTheFinishedRunsCard`).
       className={
         railDrawsTheFrame
-          ? "flex flex-col gap-4"
+          ? drawsTheFinishedRunsCard
+            ? "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+            : "flex flex-col gap-4"
           : "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
       }
       // WHICH BOX THIS IS. Passive — it draws nothing and drives nothing — and
@@ -1837,17 +1952,27 @@ export function AgenticRunPanel({
           one reading this surface must not make. Every other host keeps it. */}
       {inputStepInRail ? null : (
       <div className="flex items-center justify-between">
-        {/* THE HEADING RETIRES, THE STATUS DOES NOT (cinatra#3002, convergence
-            round). cinatra#3068 retires the PLATE'S HEADING where the rail
-            frames the detail — and the run page frames it for every run with a
-            recommendation step, an input step or a schedule step
-            (railFramesTheRunDetail, instance-screens.tsx), which is the
-            drawing's own completed reading. Retiring the pill with the heading
-            left the run's status drawn NOWHERE on that page: the rail supplies
-            no replacement, and instance-screens draws no pill of its own. So
-            the heading goes and the pill stays. */}
-        {railDrawsTheFrame ? null : (
-        <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
+        {/* THE STATUS IS DRAWN ON EVERY MOMENT (cinatra#3002, convergence
+            round). cinatra#3068 retired the PLATE'S HEADING where the rail
+            frames the detail. Retiring the pill with it left the run's status
+            drawn NOWHERE on that page: the rail supplies no replacement, and
+            instance-screens draws no pill of its own. So the pill stays on
+            every moment this header is drawn at all; the heading is the part
+            that answers to `drawsTheFinishedRunsCard` below. */}
+        {/* THE PLATE TITLE THE DRAWING DRAWS (cinatra#3149, fix leg 5). The
+            heading was retired here by cinatra#3068 wherever the rail frames
+            the detail. The third proof round graded that reading against the
+            drawing's own completed example and recorded the retirement as a
+            defect: the drawing's `.runcard` carries a header flex row whose
+            first child is the plate title "Agentic Run Progress" and whose
+            second, at `justify-content:space-between`, is the state pill. The
+            title comes back beside the pill it belongs with. The run's FIRST
+            step keeps its own retirement — `inputStepInRail` above takes the
+            whole header away — and every rail-framed moment that is not the
+            finished run keeps cinatra#3068's retirement, because none of them
+            was graded here (`drawsTheFinishedRunsCard`). */}
+        {railDrawsTheFrame && !drawsTheFinishedRunsCard ? null : (
+          <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
         )}
         {/* THE STATUS PILL THE DRAWING DRAWS (cinatra#3002, fix leg 3).
             This header used to carry the generic badge, whose variants are not
@@ -2391,7 +2516,11 @@ export function AgenticRunPanel({
       {inputStepInRail ? null : messages.length > 0 ? (
         <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto">
           {messages.map((msg) => (
-            <ThreadRow key={msg.id} message={msg} />
+            <ThreadRow
+              key={msg.id}
+              message={msg}
+              underCompletionCard={showCompletionCard}
+            />
           ))}
         </div>
       ) : (
