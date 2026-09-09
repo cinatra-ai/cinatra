@@ -311,6 +311,55 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
  * the surface added of its own, which §IV forbids. */
 const ISLAND_HEIGHT = 380;
 
+/**
+ * THE FRAME IS TALL ENOUGH FOR EVERY PINNED TARGET (the tenth proof round's
+ * counted defect 2 on cinatra#3143: "SIX pinned targets, TWO representation
+ * slots ... Four of six pinned targets draw no display at all").
+ *
+ * The card draws one header per pinned target and frames ONE island holding
+ * every target's panel — so a gate carrying six targets drew six headers over a
+ * box that fits two, and the other four panels sat below the frame's own fold
+ * with nothing on the card to say they were there. §IV gives every target a
+ * representation slot ("Beneath the header sits the representation slot"), and a
+ * slot the reader cannot see is not one.
+ *
+ * The height therefore follows the pinned COUNT — the same `ISLAND_HEIGHT` per
+ * target the single-target gate always had, once per target. It is still a fixed
+ * height and still no control: nothing is measured out of the frame and the card
+ * adds no Expand, exactly as §IV requires. A gate that names no header keeps the
+ * one-target height, which is byte-for-byte what every surface drew before.
+ */
+function islandHeightForTargets(targetCount: number): number {
+  return ISLAND_HEIGHT * Math.max(1, targetCount);
+}
+
+/**
+ * The island address WITHOUT the palette it is painted in — the identity of the
+ * DOCUMENT the frame is showing (the tenth proof round's counted defect 1 on
+ * cinatra#3143: "all four dark frames ... draw grey skeleton pulse bars and
+ * nothing else").
+ *
+ * The load-state bag and the iframe's key used to be keyed on the whole `src`.
+ * The palette is a parameter ON that address, so a reader switching the surface
+ * to dark changed the string, which remounted the frame, which reset the bag to
+ * `loading` — and the card painted its skeleton over work it had already drawn.
+ * Every dark proof frame caught exactly that window.
+ *
+ * A palette change is a REPAINT of the same target, not a new one. Keying on
+ * this identity leaves the frame mounted and lets the `src` attribute navigate
+ * it: the painted document stays on screen until the newly-painted one commits,
+ * and the skeleton is drawn only where it was meant to be — the first arrival of
+ * a target that has never painted. §XI: "the display draws the named gap in the
+ * missing thing's place, never a blank plate".
+ */
+function islandTargetIdentity(src: string): string {
+  const query = src.indexOf("?");
+  if (query < 0) return src;
+  const params = new URLSearchParams(src.slice(query + 1));
+  params.delete(REVIEW_ISLAND_COLOR_SCHEME_PARAM);
+  return `${src.slice(0, query)}?${params.toString()}`;
+}
+
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
 // authenticated iframe — its `load` event is a real network round trip (auth
@@ -862,6 +911,11 @@ function renderState(args: {
     focusBinding,
   } = args;
 
+  // §IV — ONE REPRESENTATION SLOT PER PINNED TARGET. The headers are the card's
+  // reading of the pinned set, so their count is the number of slots the one
+  // island below has to have room for.
+  const targetCount = targetHeaders?.length ?? 0;
+
   switch (state.state) {
     case "loading":
       return (
@@ -928,6 +982,7 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
+            targetCount={targetCount}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -977,6 +1032,7 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
+            targetCount={targetCount}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1532,11 +1588,15 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 function ReviewTargetIsland({
   src,
   credentialed,
+  targetCount,
   onRetryResolve,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
+  /** How many targets the gate pinned — one representation slot each, so the
+   * frame is that many target-heights tall. See `islandHeightForTargets`. */
+  targetCount: number;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
 }): ReactElement {
@@ -1544,9 +1604,13 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
-  if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+  // KEYED BY THE TARGET, NOT BY THE PALETTE. `islandTargetIdentity` drops the
+  // scheme parameter, so repainting the surface navigates the frame that is
+  // already up instead of resetting this bag and blanking the work.
+  const identity = islandTargetIdentity(src);
+  const [load, setLoad] = useState({ identity, attempt: 0, loaded: false, timedOut: false });
+  if (load.identity !== identity) {
+    setLoad({ identity, attempt: 0, loaded: false, timedOut: false });
   }
 
   useEffect(() => {
@@ -1555,10 +1619,10 @@ function ReviewTargetIsland({
       setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
     }, ISLAND_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.loaded]);
+  }, [load.identity, load.attempt, load.loaded]);
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = ISLAND_HEIGHT;
+  const height = islandHeightForTargets(targetCount);
 
   return (
     <div
@@ -1570,7 +1634,7 @@ function ReviewTargetIsland({
         // Keyed by src+attempt so a retry (or a genuinely new target) forces a
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
-        key={`${load.src}:${load.attempt}`}
+        key={`${load.identity}:${load.attempt}`}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -1590,7 +1654,9 @@ function ReviewTargetIsland({
         }`}
         style={{ height }}
         onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
+          setLoad((current) =>
+            current.identity === identity ? { ...current, loaded: true } : current,
+          )
         }
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
