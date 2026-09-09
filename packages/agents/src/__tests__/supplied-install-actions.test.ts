@@ -270,7 +270,14 @@ describe("what a successful install points the operator at, per kind (criterion 
       href: `/skills?q=${encodeURIComponent("@acme/thing-skill")}`,
     },
     { kind: "artifact", packageName: "@acme/thing-artifact", href: "/configuration/extensions" },
-    { kind: "connector", packageName: "@acme/thing-connector", href: "/configuration/connectors" },
+    // The connector kind names the connector's OWN configuration surface — its
+    // dispatch route. The address it used to name, /configuration/connectors, is
+    // not a page this product serves.
+    {
+      kind: "connector",
+      packageName: "@acme/thing-connector",
+      href: "/connectors/acme/thing-connector/setup",
+    },
   ] as const;
 
   for (const testCase of CASES) {

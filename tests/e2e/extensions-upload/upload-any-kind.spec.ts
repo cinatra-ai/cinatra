@@ -236,6 +236,17 @@ function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer 
     // product refuses one that declares nothing at every surface. This is the
     // conforming package — the one the issue's headline is about.
     (manifest.cinatra as Record<string, unknown>).serverEntry = "dist/server.js";
+    // The kind's observable is the schema-config connector's configuration
+    // surface, so the fixture IS a schema-config connector: it declares its
+    // setup surface as DATA and the host renders it from its own sdk-ui. A
+    // connector that declares no surface can only ever reach the route's
+    // requires-rebuild state, which is not the surface the cell is named for.
+    (manifest.cinatra as Record<string, unknown>).uiSurface = "schema-config";
+    (manifest.cinatra as Record<string, unknown>).configSchema = {
+      title: "Upload walk connector",
+      description: "Supplied by the upload walk.",
+      fields: [{ kind: "text", key: "endpoint", label: "Endpoint" }],
+    };
     files.push({ name: "dist/server.js", content: "export function register() {}" });
     files.push({
       name: "cinatra/config.json",
@@ -248,10 +259,20 @@ function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer 
     // object, not a bare mime list — a list is refused before anything is
     // written, which is a refusal this cell is not about.
     const accepts = { file: { mimeTypes: ["text/plain"] } };
-    (manifest.cinatra as Record<string, unknown>).artifact = { accepts };
+    // The pack must also DECLARE the object type it owns. Umbrella/derived-type
+    // minting is retired, so a manifest that declares none registers no type at
+    // all — and the installed list is built from each kind's own native
+    // descriptors, so a type-less artifact pack installs and is then visible
+    // nowhere. The claim is self-namespaced (the pack owns the type), which is
+    // why it ships no inline schema: the registrar falls back to a permissive
+    // one for a type its own declarer registers.
+    const objectTypes = [
+      { type: `${packageName("artifact")}:note`, claim: "dedicated" },
+    ];
+    (manifest.cinatra as Record<string, unknown>).artifact = { accepts, objectTypes };
     files.push({
       name: "cinatra/artifact.json",
-      content: JSON.stringify({ accepts }),
+      content: JSON.stringify({ accepts, objectTypes }),
     });
   }
   return storedZip([
@@ -529,10 +550,25 @@ for (const palette of PALETTES) {
       await installAtChosenScope(page);
 
       // The screen's own promise per kind: it goes to where that kind is
-      // configured. Anchored at the END of the path for the same reason the
-      // three cells above are.
-      await page.waitForURL(/\/configuration\/connectors\/?(?:[?#].*)?$/, { timeout: 60_000 });
+      // CONFIGURED — for a connector, its own configuration surface, not a
+      // listing. Anchored at the END of the path for the same reason the three
+      // cells above are.
+      const slug = packageName("connector").split("/")[1] as string;
+      await page.waitForURL(
+        new RegExp(`/connectors/acme/${slug}/setup/?(?:[?#].*)?$`),
+        { timeout: 60_000 },
+      );
       await usePalette(page, palette);
+      // The surface the admin was handed to is the connector's OWN
+      // configuration page, rendered — never the not-found page a wrong address
+      // or a refusing gate produces.
+      await expect(page.getByText("Page not found")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: slug })).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(page.locator('[data-conformance-id="connector-setup"]')).toBeVisible({
+        timeout: 30_000,
+      });
       // Nothing was refused on the way: no toast carries a refusal.
       await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
       await shot(page, `cell4-connector-${palette}`);

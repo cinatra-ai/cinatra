@@ -349,3 +349,55 @@ describe("the skill install points at the catalog queried by package name", () =
     if (result.ok) expect(result.observable.href).toBe("/configuration/extensions");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Criterion 21 — the connector kind's observable
+//
+// The fifth proof round measured the last false promise of the same class on
+// the CONNECTOR kind: the install finished, the road handed the admin on, and
+// the page it handed them to answered 404. The reason is that the connector
+// kind's observable named `/configuration/connectors`, an address this product
+// does not serve — a connector's own configuration surface is its dispatch
+// route `/connectors/<vendor>/<slug>/setup`, which is exactly where a
+// runtime-installed connector with no build-time catalog descriptor resolves.
+// ---------------------------------------------------------------------------
+const CONNECTOR_PACKAGE = "@acme/upload-walk-ok-connector";
+
+function installConnector(packageName = CONNECTOR_PACKAGE) {
+  road.prepareSuppliedArchiveSnapshot.mockResolvedValueOnce({
+    package: {
+      kind: "connector",
+      packageName,
+      version: "1.0.0",
+      contentDigest: "d".repeat(64),
+      provenance: { type: "local", path: "x.tgz", contentDigest: "d".repeat(64) },
+    },
+    tarball: new Uint8Array([1]),
+    provenance: { type: "local", path: "x.tgz", contentDigest: "d".repeat(64) },
+    validatorRan: true,
+  } as never);
+  return installSuppliedArchiveAction({
+    zipBase64: ZIP,
+    accessTarget: { level: "workspace", id: "org-1" },
+  });
+}
+
+describe("the connector install points at a page this product serves", () => {
+  it("names the connector's own configuration surface, never /configuration/connectors", async () => {
+    const result = await installConnector();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.observable.href).toBe(
+        "/connectors/acme/upload-walk-ok-connector/setup",
+      );
+      expect(result.observable.href).not.toBe("/configuration/connectors");
+      expect(result.observable.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("falls back to a listing that exists when the name is not a scoped package", async () => {
+    const result = await installConnector("upload-walk-bare-connector");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.observable.href).toBe("/connectors");
+  });
+});

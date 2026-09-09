@@ -1901,6 +1901,28 @@ export async function upsertRepositoryBackedSkillPackage(input: {
   sourceUrl?: string;
   license?: string;
   authors?: string[];
+  /**
+   * True when the package being registered IS an extension — a `cinatra.kind:
+   * "skill"` package installed from the finalized extension store, whether the
+   * bytes arrived from the registry or were supplied on the upload road
+   * (cinatra#3204).
+   *
+   * It decides the SHAPE of the skill rows written below, and the shape decides
+   * whether an admin can ever pin one of those skills to an agent. Without it a
+   * row is written `isCustom: true` with no recorded provenance, which
+   * `normalizeStoredSkill` derives into `level: "organization"` / `scope: "org"`
+   * — the exact shape the shared assignability predicate refuses as
+   * `not-globally-visible`, so an installed skill extension could never be
+   * offered on an agent's Skills picker. The flag is the SAME one
+   * `registerExtensionSkill` passes for an image-bundled extension's own
+   * skills, and it says the same true thing: an extension wrote this row, not a
+   * user. Its recorded `source.origin` is also the key the catalog rebuild
+   * preserves the row by, so the two facts are written together or not at all.
+   *
+   * A repository-backed install that is NOT an extension (the GitHub
+   * owner/repo road) does not pass it and is unchanged.
+   */
+  extensionRegistered?: boolean;
 }) {
   const existingCatalog = await readSkillsCatalog();
 
@@ -1982,6 +2004,7 @@ export async function upsertRepositoryBackedSkillPackage(input: {
           .join(" ");
     const description = attributes.description || `${name} skill from ${input.name}.`;
 
+    const sourcePath = discoveredSkill.skillFilePath;
     return {
       id: `${catalogIdPrefix}:${discoveredSkill.slug}`,
       name,
@@ -1992,9 +2015,27 @@ export async function upsertRepositoryBackedSkillPackage(input: {
       packageName: input.name,
       packageSlug: input.slug,
       sourceUrl: `${input.repositoryUrl}/tree/main/${discoveredSkill.relativeDirectoryPath}`,
-      sourcePath: discoveredSkill.skillFilePath,
+      sourcePath,
       usedBy: [],
-      isCustom: true,
+      // An extension's row is not user-authored, and it says so in the two
+      // places every reader looks: the flag the assignability predicate reads,
+      // and the RECORDED provenance the rebuild preserves the row by. The
+      // workspace level is the same one `registerExtensionSkill` writes — it is
+      // what makes the row globally visible with no owner scope on it.
+      ...(input.extensionRegistered === true
+        ? {
+            isCustom: false,
+            level: "workspace" as const,
+            source: buildSkillSourceForWrite({
+              packageId: input.packageId,
+              packageName: input.name,
+              packageSlug: input.slug,
+              sourcePath,
+              content,
+              origin: EXTENSION_SKILL_SOURCE_ORIGIN,
+            }),
+          }
+        : { isCustom: true }),
       // Preserve an already admin-set per-skill upload flag across reinstall.
       // Lookup uses the SAME catalogIdPrefix so the preservation finds the
       // existing row even after a backend swap.

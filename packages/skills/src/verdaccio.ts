@@ -141,6 +141,12 @@ export async function installSkillPackageFromVerdaccio(
     repositoryPath: payload.storeDir,
     sourceUrl: detailUrl,
     license: manifest.license,
+    // This IS an extension install — the package declares `cinatra.kind:
+    // "skill"` and the dispatcher finalized its store payload before this
+    // handler ran. Saying so writes catalog rows an admin can actually pin to
+    // an agent; without it the rows come out shaped like user-authored ones and
+    // the assignability predicate refuses them (cinatra#3204).
+    extensionRegistered: true,
   });
 }
 
