@@ -173,6 +173,46 @@ beforeAll(async () => {
       if (!msg.includes("does not exist")) throw err;
     }
   }
+  // SEED ORDER IS FORCED BY REAL FOREIGN KEYS. In CI the lifecycle DB job
+  // provisions `public` from the committed Better Auth seed
+  // (scripts/apply-public-schema.mjs), so these tables ALREADY EXIST carrying
+  // their constraints and every `CREATE TABLE IF NOT EXISTS` below is a no-op
+  // that never gets to relax anything: public."team"."organizationId"
+  // references organization(id), and public."teamMember"."userId" and
+  // public."member"."userId" both reference public."user"(id). Seeding a team
+  // before its organization aborts the whole beforeAll on
+  // `team_organizationId_fkey`, so the order here is
+  // organization -> user -> team -> teamMember -> member and must stay that way.
+  //
+  // The org-write kernel's guarded batch also reads the organization's archive
+  // state before it lets any statement run.
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."organization" (
+       id text PRIMARY KEY, name text, slug text,
+       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
+       "createdAt" timestamptz)`,
+  );
+  await client.query(
+    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
+     VALUES ($1, 'Memory promotion 1381', 'mem-1381', NULL, 0, now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ORG],
+  );
+  // The principals as Better Auth users — the teamMember and member rows below
+  // both reference public."user"(id).
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."user" (
+       id text PRIMARY KEY, name text NOT NULL, email text NOT NULL,
+       "emailVerified" boolean NOT NULL DEFAULT false,
+       "createdAt" timestamptz DEFAULT now(), "updatedAt" timestamptz DEFAULT now())`,
+  );
+  await client.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt") VALUES
+       ($1, 'Admin 1381', 'admin-1381@memory-promotion.test', true, now(), now()),
+       ($2, 'Member 1381', 'member-1381@memory-promotion.test', true, now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ADMIN, REQUESTER],
+  );
   // Better Auth team tables (public schema) for the team-target asserts.
   await client.query(
     `CREATE TABLE IF NOT EXISTS public."team" (
@@ -195,20 +235,6 @@ beforeAll(async () => {
   await client.query(
     `INSERT INTO public."teamMember" (id, "teamId", "userId") VALUES ('tm-1381-1', $1, $2)`,
     [TEAM, REQUESTER],
-  );
-  // The org-write kernel's guarded batch reads the organization's archive state
-  // before it lets any statement run.
-  await client.query(
-    `CREATE TABLE IF NOT EXISTS public."organization" (
-       id text PRIMARY KEY, name text, slug text,
-       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
-       "createdAt" timestamptz)`,
-  );
-  await client.query(
-    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
-     VALUES ($1, 'Memory promotion 1381', 'mem-1381', NULL, 0, now())
-     ON CONFLICT (id) DO NOTHING`,
-    [ORG],
   );
   // Better Auth membership: `verifySessionAuthority` reads it to mint the
   // MEMBERSHIP-grounded org-write authority the apply runs under. Without a
