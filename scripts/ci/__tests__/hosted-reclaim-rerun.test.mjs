@@ -14,10 +14,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALLOWLIST,
+  LEDGER_NAME_PREFIX,
   RECLAIM_MARKER,
   RERUN_REASON,
   SKIP_REASONS,
   decide,
+  ledgerArtifactName,
+  ledgerRecord,
+  parseLedgerArtifactName,
 } from "../hosted-reclaim-rerun.mjs";
 
 const FIXTURES = path.resolve(
@@ -282,5 +286,91 @@ describe("hosted-reclaim-rerun: guard order is fail-closed", () => {
       const out = decide(input);
       expect(Boolean(out.rerun) && Boolean(out.skip)).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ledger (item 3): what a re-run leaves behind, so the weekly count can be
+// computed from this watcher's OWN records instead of a scrape of run logs.
+// ---------------------------------------------------------------------------
+
+describe("hosted-reclaim-rerun: the record a re-run leaves behind", () => {
+  const reclaimed = () => {
+    const job = clone(failedJob(JOBS_DVV));
+    job.labels = ["ubuntu-latest"];
+    return job;
+  };
+
+  it("records the workflow, the job id, the attempt and the runner label", () => {
+    const record = ledgerRecord({
+      outcome: {
+        workflow: "design-visual-verify",
+        job: "/design-fixtures pixel-diff + axe",
+      },
+      run: clone(RUN),
+      job: reclaimed(),
+      at: "2026-09-03T11:00:00.000Z",
+    });
+    expect(record).toEqual({
+      workflow: "design-visual-verify",
+      jobId: "8800000002",
+      attempt: 1,
+      runner: "ubuntu-latest",
+      at: "2026-09-03T11:00:00.000Z",
+      runId: RUN.id,
+    });
+  });
+
+  it("says so rather than guessing when the job carries no runner label", () => {
+    const job = reclaimed();
+    delete job.labels;
+    const record = ledgerRecord({
+      outcome: { workflow: "design-visual-verify", job: "x" },
+      run: clone(RUN),
+      job,
+      at: "2026-09-03T11:00:00.000Z",
+    });
+    expect(record.runner).toBe("unknown");
+  });
+
+  it("names the artifact so the name alone IS the record, and parses back", () => {
+    const record = ledgerRecord({
+      outcome: { workflow: "Build and publish image", job: "image" },
+      run: { ...clone(RUN), run_attempt: 2 },
+      job: { id: 8800000031, labels: ["ubuntu-latest-8-cores"] },
+      at: "2026-09-06T21:45:00.000Z",
+    });
+    const name = ledgerArtifactName(record);
+    expect(name).toBe(
+      "reclaim-record.build-and-publish-image.8800000031.2.ubuntu-latest-8-cores",
+    );
+    expect(name.startsWith(LEDGER_NAME_PREFIX)).toBe(true);
+    expect(parseLedgerArtifactName(name)).toEqual({
+      workflow: "Build and publish image",
+      jobId: "8800000031",
+      attempt: 2,
+      runner: "ubuntu-latest-8-cores",
+    });
+  });
+
+  it("round-trips every allowlisted workflow name", () => {
+    for (const entry of ALLOWLIST) {
+      const name = ledgerArtifactName({
+        workflow: entry.workflow,
+        jobId: "1",
+        attempt: 1,
+        runner: "ubuntu-latest",
+      });
+      expect(parseLedgerArtifactName(name).workflow).toBe(entry.workflow);
+    }
+  });
+
+  it("ignores an artifact that is not one of its records", () => {
+    expect(parseLedgerArtifactName("pixel-diff-report-3310")).toBeNull();
+    expect(parseLedgerArtifactName("reclaim-record.design-visual-verify.1.1")).toBeNull();
+    expect(
+      parseLedgerArtifactName("reclaim-record.design-visual-verify.abc.1.ubuntu-latest"),
+    ).toBeNull();
+    expect(parseLedgerArtifactName(undefined)).toBeNull();
   });
 });
