@@ -80,7 +80,14 @@ export function registerAllObjectTypes(): void {
   // clobber, nor be clobbered by, an extension-owned type. `createObjectsModule()`
   // keeps its own call — the registrar is idempotent, so the MCP path is
   // byte-for-byte unchanged.
-  registerObjectsPackageObjectTypes();
+  // THE SAME EXTENSIONS ROOT THE BRIDGE IS HANDED (cinatra#3251). One
+  // host-registered type — the member LinkedIn post draft — carries
+  // representation forms that are the CLAIMING PACK'S declaration, and this
+  // registrar runs before the bridge scans, so it reads that pack's manifest
+  // itself rather than restating the pair here.
+  registerObjectsPackageObjectTypes({
+    extensionsRoot: path.join(process.cwd(), "extensions"),
+  });
   runExtensionObjectTypeRegistrars();
   registerBlogObjectTypes();
   registerAgentBuilderObjectTypes();

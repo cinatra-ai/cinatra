@@ -1468,9 +1468,10 @@ describe("the generated display map imports through package exports, never a hos
     // specifier. An alias goes when its package joins the required set (or the
     // guarded road gets a resolution of its own).
     //
-    // The four blog displays (lifecycle-c W9) enter here: they are companion,
-    // dev-universe extensions, so they take the guarded-optional road the CMS
-    // snapshot display already takes.
+    // The four blog displays (lifecycle-c W9) enter here, and so do the
+    // screenshot and slide-deck displays this wave advances beside cms-snapshot:
+    // all of them are companion, dev-universe extensions, so they take the
+    // guarded-optional road the CMS snapshot display already takes.
     const buildConfig = buildConfigAliases();
     const aliased = emittedRendererSpecifiers().filter(
       (s) => tsconfigResolves(s) || buildConfig.has(s),
@@ -1489,6 +1490,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
+      "@cinatra-ai/screenshot-artifact/src/renderers/detail",
+      "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
     ]);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
   });
