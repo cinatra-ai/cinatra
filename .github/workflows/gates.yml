@@ -390,3 +390,116 @@ jobs:
           fi
           export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
           node scripts/ci/design-pin-freshness.mjs --github-annotations
+
+  # Design ANCHOR RESOLUTION (cinatra#3144 G4): the third sibling of
+  # design-pin-drift and design-pin-freshness above, on the same trigger rule
+  # and the same shared map. Where design-pin-freshness asks "has the design
+  # source moved past the pin", this job asks "do the anchors this repository
+  # RECORDS resolve in the drawings the pin governs" — the question the anchor
+  # contract's digest cannot ask, because it hashes nothing from the drawings.
+  # It is landed WARN-FIRST: its context is not required until a separate pull
+  # request adds it to .github/branch-protections.json, so the state is visible
+  # without blocking anything. See scripts/ci/design-anchor-resolution.mjs.
+  design-anchor-resolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the trigger rule diffs the touched paths against
+          # the PR base, same as design-pin-drift.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # The drawings are not publicly readable, so this gate reads them either
+      # from a checked-out copy (DESIGN_DRAWINGS_DIR) or through the same
+      # narrowly scoped App credential design-pin-freshness mints — read-only,
+      # scoped to the one repository. continue-on-error for the same reason it
+      # carries there: a missing or refused credential must not abort the job
+      # silently. It falls through to the checker, which fails CLOSED (exit 2,
+      # "the gate could not run honestly") rather than certifying anchors it
+      # never compared.
+      - name: Mint the design-source read token
+        id: design-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CINATRA_AGENT_APP_ID }}
+          private-key: ${{ secrets.CINATRA_AGENT_APP_PRIVATE_KEY }}
+          owner: cinatra-ai
+          repositories: design
+          permission-contents: read
+
+      - name: Design Anchor Resolution
+        env:
+          DESIGN_SOURCE_TOKEN: ${{ steps.design-token.outputs.token }}
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # An unresolvable base means the touched-path set is meaningless, so
+          # it is cleared and every pin is treated as touched — the fail-closed
+          # direction its two siblings above already take.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            echo "::notice::diff base '${base}' did not resolve — treating every pin as touched (fail-closed)"
+            base=""
+          fi
+          export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
+          node scripts/ci/design-anchor-resolution.mjs --github-annotations
+
+  # Design RECORD GRAMMAR (cinatra#3144 G3): every Fix-leg / graded-record
+  # section of this pull request's body must name the pin it was graded
+  # against. NO EXTRA CREDENTIAL — the body is already in the workflow event
+  # payload at GITHUB_EVENT_PATH, the same door the skills-drift
+  # acknowledgement line is read through, so this job mints nothing. Landed
+  # WARN-FIRST beside its two siblings: its context is not required until a
+  # separate pull request adds it. See scripts/ci/design-record-grammar.mjs.
+  design-record-grammar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the trigger rule diffs the touched paths against
+          # the PR base, same as design-pin-drift.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Design Record Grammar
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            # A merge group's baseline is the event's own base_sha, not the
+            # branch ref: origin/main can move under a queued group, which
+            # would make the touched-path set over- or under-report.
+            base="${{ github.event.merge_group.base_sha }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # An unresolvable base means the touched-path set is meaningless, so
+          # it is cleared and every pin is treated as touched — the fail-closed
+          # direction its two siblings above already take.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            echo "::notice::diff base '${base}' did not resolve — treating every pin as touched (fail-closed)"
+            base=""
+          fi
+          export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
+          node scripts/ci/design-record-grammar.mjs --github-annotations
