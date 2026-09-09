@@ -1,0 +1,13 @@
+{
+  "id": 9910000001,
+  "name": "design-visual-verify",
+  "event": "pull_request",
+  "status": "completed",
+  "conclusion": "failure",
+  "run_attempt": 1,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "head_branch": "feat/some-change",
+  "html_url": "https://github.com/cinatra-ai/cinatra/actions/runs/9910000001",
+  "repository": { "full_name": "cinatra-ai/cinatra" },
+  "pull_requests": [{ "number": 3310 }]
+}
