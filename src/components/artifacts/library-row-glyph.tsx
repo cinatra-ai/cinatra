@@ -7,8 +7,11 @@ import "server-only";
  * the claiming extension's registered `listRow` capability (the S1 manifest
  * slot activated by this wave, arbitrated by the winner-bound semantic
  * registry), and every claimed row whose winner ships no built `listRow`
- * renderer falls to the GENERIC claimed glyph. The file-vs-structured floor
- * split (FileText / Braces) is the host-side generic floor and stays.
+ * renderer falls to the GENERIC claimed glyph, WHICH IS ADMITTED ONLY BY THE
+ * RECORDED EXCEPTION (`./list-row-glyph-coverage`): the uniform row shell may
+ * stay core chrome, but the type-specific region inside it never falls to a core
+ * icon with nothing written down to say why. The file-vs-structured floor split
+ * (FileText / Braces) is that host-side glyph.
  *
  * Failure containment mirrors the detail spine (AC-4): pre-render load
  * failures (never-built, absent, invalid export, ABI mismatch, quarantined)
@@ -33,6 +36,8 @@ import {
   classifyLoadablePath,
   resolveSemanticListRowDispatch,
 } from "@/app/artifacts/[id]/renderer-resolution";
+
+import { listRowGlyphCoverage } from "./list-row-glyph-coverage";
 
 /** The file-vs-structured floor split (host-side, stays): a concrete MIME is a
  * file representation; the octet-stream default reads as structured data. */
@@ -123,7 +128,14 @@ export async function LibraryRowGlyph({
     <span
       className={`grid size-[34px] flex-none place-items-center overflow-hidden rounded-lg ${className}`}
       data-testid="artifacts-library-glyph"
-      data-glyph-source={extensionGlyph ? "extension" : "generic"}
+      // WHY A GENERIC GLYPH STANDS HERE, in the cell itself. The row shell is
+      // core chrome; the region inside it speaks the row's type, and core
+      // drawing that region is admitted only under the recorded exception —
+      // never as a silent default. The answer is read from the record.
+      data-glyph-source={listRowGlyphCoverage({
+        objectType: summary.objectType,
+        hasMountableListRowDisplay: extensionGlyph !== null,
+      })}
     >
       {extensionGlyph ? (
         <>

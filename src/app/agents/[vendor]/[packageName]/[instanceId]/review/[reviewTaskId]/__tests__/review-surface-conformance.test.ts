@@ -333,9 +333,10 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
   // takes none of them and is given no fourth one. The strip is therefore
   // OPTIONAL in the panel — rendered only when there is a provenance to state.
   it("every rendered rung renders NO region — the panel gates the whole strip", () => {
-    // build-map, form and runtime share one arm now: the drawing lets none of
-    // the three name what drew the work.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/);
+    // build-map and runtime share one arm: the drawing lets neither name what
+    // drew the work. The host's own form rung retired with the core content
+    // arms, so there is no third rung to gate.
+    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "runtime":\s*\n\s*return null/);
     const panel = stripComments(TARGET_PANEL);
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
@@ -346,8 +347,7 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(panel).toMatch(/structured data/);
   });
 
-  // cinatra#2931 W4 already gave the host's own text rendering no region. It
-  // still has none; it is now one of three rungs with none rather than the only.
+  // Every non-floor rung resolves to no region at all.
   it("every non-floor rung resolves to no region at all", () => {
     expect(MODEL).toMatch(/ReviewProvenanceConformanceId = "review-target-floor"/);
   });
@@ -374,9 +374,13 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(prepare).toMatch(/readOnlyArtifactEdit\("read-only-surface"\)/);
   });
 
-  it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
+  it("the representation slot mounts through the host ReviewTargetMount", () => {
     expect(TARGET_PANEL).toMatch(/ReviewTargetMount/);
-    expect(TARGET_PANEL).toMatch(/orgId=\{orgId\}/);
+    // NO ORGANIZATION SCOPE CROSSES INTO THE MOUNT any more. The scope existed
+    // for one arm only — the host's own text rendering, which read artifact
+    // bytes inside the card. That arm retired with the core content arms, and
+    // every remaining mount draws from the pinned props alone.
+    expect(TARGET_PANEL).not.toMatch(/orgId=\{orgId\}/);
   });
 
   // cinatra#2931 W4 — plan (B) §5: "The fallback face dies with its wrong

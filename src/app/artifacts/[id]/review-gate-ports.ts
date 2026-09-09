@@ -164,11 +164,6 @@ export function provenanceFromResolvedMount(resolved: ResolvedRendererMount): Re
         packageName: resolved.packageName,
         digest: resolved.descriptor.tuple.digest,
       };
-    // The FORM RUNG, re-resolved at submit time like every other kind, so a
-    // rendered text target is recorded as RENDERED. Recording it as a floor
-    // would put a fallback on the audit row of a review the reader read in full.
-    case "form":
-      return { kind: "first-party", packageName: null, digest: null };
     case "floor":
       return { kind: "floor", packageName: resolved.packageName, digest: null };
   }

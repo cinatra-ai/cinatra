@@ -108,7 +108,7 @@ export function ReviewTargetPanel({
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context. */}
       <div className="p-4" data-review-representation-slot="">
-        <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
+        <ReviewTargetMount mount={mount} props={props} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
     </div>

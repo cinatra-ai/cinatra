@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import { usePathname } from "next/navigation";
-import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
@@ -11,12 +9,16 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 /**
- * Route-segment error boundary for `/artifacts/[id]` (cinatra#1629, epic #1620
- * S2, AC-4 render-time half). A render-time throw from an extension-shipped
- * renderer is CONTAINED here — the rest of the app stays up, the detailed error
- * is telemetry-only, and recovery links to the GENERIC view (`?renderer=generic`,
- * which the page honors by forcing the generic floor and never mounting the
- * extension renderer). "Try again" re-renders the segment.
+ * Route-segment error boundary for `/artifacts/[id]`. A render-time throw from an
+ * extension-shipped display is CONTAINED here — the rest of the app stays up and
+ * the detailed error is telemetry-only. "Try again" re-renders the segment.
+ *
+ * THERE IS NO "OPEN THE GENERIC VIEW" ANY MORE. The link it offered forced a
+ * host-drawn rendering of the artifact, which is the one thing the ownership
+ * boundary keeps core out of: core draws the shell and the diagnostics, and the
+ * artifact's bytes and fields belong to its package's display. So recovery is a
+ * re-render, and a display that cannot draw leaves a diagnostic — never a core
+ * copy of the work.
  */
 export default function ArtifactDetailError({
   error,
@@ -31,9 +33,6 @@ export default function ArtifactDetailError({
     console.error("[artifacts] detail render error", error.digest ?? "(no digest)");
   }, [error]);
 
-  const pathname = usePathname();
-  const genericHref = `${pathname}?renderer=generic`;
-
   return (
     <Main className="min-h-screen">
       <PageContent className="flex flex-col gap-6 pb-8 pt-8">
@@ -41,14 +40,11 @@ export default function ArtifactDetailError({
           <AlertTriangle aria-hidden="true" />
           <AlertTitle>This view could not be rendered</AlertTitle>
           <AlertDescription>
-            Something went wrong rendering this artifact. You can open the generic
-            view instead, or try again.
+            Something went wrong drawing this artifact. Try again, or open it in
+            its source application if it has one.
           </AlertDescription>
         </Alert>
         <div className="flex gap-3">
-          <Button asChild variant="outline">
-            <Link href={genericHref}>Open the generic view</Link>
-          </Button>
           <Button variant="outline" onClick={() => reset()}>
             Try again
           </Button>

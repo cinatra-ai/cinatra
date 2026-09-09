@@ -9,11 +9,9 @@
 // WHAT IT COUNTS. Exactly the state the card's metadata floor is for: an artifact
 // TYPE the instance can produce whose review resolves through NO renderer at all
 // — no semantic renderer at the row's base identity, no BOUND representation
-// provider for any form the type declares, and no first-party form arm either. It
-// is deliberately NOT "packages missing a display file": a pack that ships no
-// renderer but declares a text form renders through the form rung and is not
-// counted, and a type covered by a system representation provider is not counted
-// either.
+// provider for any form the type declares. It is deliberately NOT "packages
+// missing a display file": a type covered by a system representation provider is
+// not counted.
 //
 // WHAT IT NEVER COUNTS. Defensive states keep their own honest readings and are
 // not fallbacks (plan §5): a claimant DECLARED for the type but absent from this
@@ -27,9 +25,13 @@
 //
 //   1. semantic        — a semantic detail renderer resolves for (type, winner).
 //   2. representation  — a BOUND representation provider covers a declared form.
-//   3. form rung       — the first-party arm the review binder consumes before
-//                        the fallback, for the declared text forms.
-//   4. FALLBACK        — counted.
+//   3. FALLBACK        — counted.
+//
+// THE FORM RUNG IS GONE (cinatra#3319 acceptance 2). It counted the host's own
+// text and markdown viewers as coverage. Those viewers retired with the core
+// content arms, so counting them would report coverage that exists nowhere in
+// the running application: what a reader meets for a declared form no installed
+// pack provides for is the floor, and that is now what this gate counts.
 //
 // EVERY REACHABLE WINNER, NOT JUST THE UNASSERTED ONE. `pickArtifactRenderer`
 // takes the semantic arm only when the renderer's claimant IS the row's
@@ -113,8 +115,6 @@ const DEFAULT_REPO_ROOT = resolve(__dirname, "..", "..");
 
 export const CANONICAL_SOURCES = Object.freeze({
   mimeAllowlist: "src/lib/artifacts/artifact-read.ts",
-  handlerMap: "src/app/artifacts/[id]/pick-handler.ts",
-  reviewBinder: "src/app/artifacts/[id]/review-target-prepare.ts",
   dashboardMime: "src/lib/dashboards/dashboard-artifact-twin-writer.ts",
   generatedRenderers: "src/lib/generated/artifact-renderers.ts",
 });
@@ -151,66 +151,6 @@ export function readMimeAllowlist(text) {
     );
   }
   return new Set(mimes);
-}
-
-/** The host MIME→handler arms `pickHandler` still owns (markdown / text today). */
-export function readHandlerMap(text) {
-  const fn = stripComments(text).match(
-    /export function pickHandler\(mime: string\): HandlerKind \{([\s\S]*?)\n\}/,
-  );
-  if (!fn) throw new InfraError("could not read pickHandler");
-  const body = fn[1];
-  const map = new Map();
-  // STRUCTURAL, FAIL-CLOSED. `pickHandler` is a flat ladder of
-  // `if (<mime equality>) return "<handler>";` statements over one terminal
-  // `return "<handler>";`. Every statement in the body must be one of those two
-  // shapes: a set-membership test, a switch, a lookup table or a nested block
-  // would make this reader silently derive a NARROWER map than the host's real
-  // behaviour, and a silently narrower map classifies a live form as a fallback.
-  const statements = body
-    .split(";")
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-  for (const stmt of statements) {
-    // The alternation is anchored on an explicit `||` SEPARATOR rather than an
-    // optional one: an optional separator makes the repetition ambiguous, and an
-    // ambiguous repetition backtracks exponentially on a near-miss.
-    const arm = stmt.match(
-      /^if \(\s*(mime === "[^"]*"(?:\s*\|\|\s*mime === "[^"]*")*)\s*\) return "([a-z-]+)"$/,
-    );
-    if (arm) {
-      const handler = arm[2];
-      if (handler !== "fallback") {
-        for (const q of arm[1].matchAll(/"([^"]+)"/g)) map.set(q[1], handler);
-      }
-      continue;
-    }
-    if (/^return "[a-z-]+"$/.test(stmt)) continue;
-    // The allowlist guard the classifier mirrors in its own right: a MIME
-    // outside the host safe-transport set never reaches an arm. Recognized
-    // EXACTLY (by the allowlist constant's own name) rather than as "any guard
-    // returning fallback", so a future guard on some other condition — which
-    // the classifier would NOT model — still refuses to parse.
-    if (/^if \(!PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS\.has\(mime\)\) return "fallback"$/.test(stmt)) continue;
-    throw new InfraError(
-      `pickHandler carries a statement this gate cannot parse (${stmt.replace(/\s+/g, " ").slice(0, 60)}) — it cannot derive the handler map`,
-    );
-  }
-  if (map.size === 0) throw new InfraError("pickHandler parsed no non-fallback arm");
-  return map;
-}
-
-/** The arms the review binder's form rung actually CONSUMES before the fallback. */
-export function readConsumedFormArms(text) {
-  const stripped = stripComments(text);
-  // Anchor on the rung itself: the condition that guards the `form` mount.
-  const rung = stripped.match(
-    /if \(((?:\s*dispatch\.handler === "[a-z-]+"\s*(?:\|\||(?=\))))+)\) \{\s*return \{ kind: "form"/,
-  );
-  if (!rung) throw new InfraError("could not read the review binder's form rung");
-  const arms = [...rung[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
-  if (arms.length === 0) throw new InfraError("the review binder's form rung parsed no arm");
-  return new Set(arms);
 }
 
 /** The dashboard representation form's MIME (the form declares none in a manifest). */
@@ -452,7 +392,7 @@ export function reachableWinners(type, packs) {
 }
 
 export function classifyDeclaredTypes(input) {
-  const { packs, mimeAllowlist, handlerMap, consumedFormArms, generatedEntries, dashboardMime } = input;
+  const { packs, mimeAllowlist, generatedEntries, dashboardMime } = input;
 
   const packsByName = new Map(packs.map((p) => [p.packageName, p]));
   const loadable = new Set(generatedEntries.map((e) => e.key));
@@ -493,11 +433,10 @@ export function classifyDeclaredTypes(input) {
         rows.push({ type: entry.type, package: declaredBy, mime, rung: "representation", via, floor: false });
         continue;
       }
-      const handler = mimeAllowlist.has(mime) ? (handlerMap.get(mime) ?? null) : null;
-      if (handler && consumedFormArms.has(handler)) {
-        rows.push({ type: entry.type, package: declaredBy, mime, rung: `form:${handler}`, floor: false });
-        continue;
-      }
+      // NO HOST FORM RUNG UNDER THE PROVIDER. The rung counted the host's own
+      // text and markdown viewers as coverage; those viewers retired, so a
+      // declared form no installed pack provides for is what a reader would
+      // actually meet — the floor.
       rows.push({ type: entry.type, package: declaredBy, mime, rung: "fallback", winner: bare[0], floor: true });
     }
   }
@@ -631,8 +570,6 @@ export function main(argv = process.argv.slice(2)) {
   let grew = [];
   try {
     const mimeAllowlist = readMimeAllowlist(readSource(repoRoot, CANONICAL_SOURCES.mimeAllowlist));
-    const handlerMap = readHandlerMap(readSource(repoRoot, CANONICAL_SOURCES.handlerMap));
-    const consumedFormArms = readConsumedFormArms(readSource(repoRoot, CANONICAL_SOURCES.reviewBinder));
     const dashboardMime = readDashboardMime(readSource(repoRoot, CANONICAL_SOURCES.dashboardMime));
     const generatedEntries = readGeneratedRendererEntries(
       readSource(repoRoot, CANONICAL_SOURCES.generatedRenderers),
@@ -661,8 +598,6 @@ export function main(argv = process.argv.slice(2)) {
     result = classifyDeclaredTypes({
       packs,
       mimeAllowlist,
-      handlerMap,
-      consumedFormArms,
       generatedEntries,
       dashboardMime,
     });
