@@ -108,6 +108,13 @@ on:
       - "scripts/ci/__tests__/design-select.test.mjs"
       - "scripts/ci/__tests__/design-select-workflow.test.mjs"
       - ".github/workflows/design-visual-verify.yml"
+  # THE QUEUE EVENT CARRIES NO `paths:` FILTER (engineering#658 item 1).
+  # GitHub fires every merge_group-triggered workflow on every candidate,
+  # so the path question is answered INSIDE the workflow, over the
+  # group's own base..head range, by the same selector the pull-request
+  # run uses. The verdict job at the bottom then concludes either way —
+  # a skipped job would leave a required context waiting forever.
+  merge_group:
 
 concurrency:
   group: design-visual-verify-${{ github.ref }}
@@ -192,11 +199,11 @@ jobs:
       # The script FAILS CLOSED when the ref is unresolvable; so does this step.
       - name: conformance coverage ratchet (shrink-only)
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           if [ -z "${BASE_SHA:-}" ]; then
-            echo "conformance ratchet FAILED: this run's event carries no pull_request.base.sha — refusing to run the ratchet against an unknown base" >&2
+            echo "conformance ratchet FAILED: this run's event carries no base commit — refusing to run the ratchet against an unknown base" >&2
             exit 1
           fi
           # The recorded base commit is normally already here (full history);
@@ -245,11 +252,11 @@ jobs:
       - name: select the design spec families
         id: plan
         env:
-          DESIGN_SELECT_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+          DESIGN_SELECT_DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           if [ -z "${DESIGN_SELECT_DIFF_BASE:-}" ]; then
-            echo "design suite selection FAILED: this run's event carries no pull_request.base.sha — refusing to select against an unknown base" >&2
+            echo "design suite selection FAILED: this run's event carries no base commit — refusing to select against an unknown base" >&2
             exit 1
           fi
           node scripts/ci/design-select.mjs --out design-select.json
@@ -632,3 +639,49 @@ jobs:
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+  # -------------------------------------------------------------------------
+  # verdict — ONE always-running conclusion for the whole suite
+  # (engineering#658 item 1).
+  #
+  # The expensive job above is deliberately skipped when the selection is
+  # "none", and a SKIPPED job is exactly what a merge-queue candidate cannot
+  # use: a required context that reports `skipped` never concludes and the
+  # queue entry waits for it until the queue's timeout. So the suite ends on a
+  # job that always runs and always concludes — green when the group (or the
+  # pull request) touches nothing the suite renders, red on every other shape,
+  # including a selection that could not be taken at all.
+  # -------------------------------------------------------------------------
+  verdict:
+    name: design suite verdict
+    needs: [select, pixel-diff]
+    if: ${{ always() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      # A selection that failed is not a "nothing to do": the run does not know
+      # what it would have run, so it cannot report success.
+      - name: Guard — the selection must have been taken
+        if: ${{ needs.select.result != 'success' }}
+        run: |
+          echo "::error::The design suite selection did not succeed (result=${{ needs.select.result }}). Refusing to report the suite as healthy."
+          exit 1
+
+      # `success` is the only acceptable outcome for a selected suite;
+      # `skipped` in particular is what a suite that never ran looks like.
+      - name: Guard — a selected suite must have passed
+        if: ${{ needs.select.outputs.mode != 'none' && needs['pixel-diff'].result != 'success' }}
+        run: |
+          echo "::error::The design suite was selected (mode=${{ needs.select.outputs.mode }}) but did not pass (result=${{ needs['pixel-diff'].result }})."
+          exit 1
+
+      - name: Report
+        # Through `env`, never interpolated into the script: the summary
+        # carries PATHS OUT OF THE DIFF, which an author chooses.
+        env:
+          PLAN_MODE: ${{ needs.select.outputs.mode }}
+          PLAN_SUMMARY: ${{ needs.select.outputs.summary }}
+          SUITE_RESULT: ${{ needs['pixel-diff'].result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          echo "design suite verdict on ${EVENT_NAME}: mode=${PLAN_MODE}, suite=${SUITE_RESULT} — ${PLAN_SUMMARY}" >> "$GITHUB_STEP_SUMMARY"
