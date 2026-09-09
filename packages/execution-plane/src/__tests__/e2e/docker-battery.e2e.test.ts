@@ -106,6 +106,12 @@ function makeLiveBroker(opts: {
   let liveness: "alive" | "archived" | "gone" = "alive";
   const broker = new ExecutionBroker({
     worker: new LocalDevSandboxWorker({ imageRef: IMAGE }),
+    // THE SAME TAG THE WORKER RUNS OVER, for the skill-staging helper
+    // container the broker creates itself. Without it the broker resolves the
+    // bare default L0 tag, which this job never builds since the build above
+    // became job-derived — so every S2 open failed closed on an image that is
+    // not here (cinatra#3327).
+    imageRef: IMAGE,
     auditSink: (record) => {
       audits.push(record);
     },

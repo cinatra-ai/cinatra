@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { createHash } from "node:crypto";
 
 import {
   mintExecutionSession,
@@ -15,6 +17,8 @@ import type {
 } from "../types";
 import type { DockerCli } from "../docker-cli";
 import { workspaceVolumeName } from "../workspace";
+import { DEFAULT_L0_IMAGE_LOCAL_DEV } from "../l0-profile";
+import type { SandboxVolumeOps } from "../volume-ops";
 import {
   EnvironmentMountRefusedError,
   type ResolvedEnvironmentMount,
@@ -870,5 +874,98 @@ describe("openJob — L1 environment mount (exec-plane S3)", () => {
       (a) => a.decision === "refused" && a.reason === "environment_untrusted",
     );
     expect(refusal).toBeTruthy();
+  });
+});
+
+/**
+ * The image the SKILL-STAGING helper container is created from (cinatra#3327).
+ *
+ * Staging places a transient container to copy the snapshot into the per-job
+ * read-only volume. The broker resolved that image with no argument at all, so
+ * it could only ever be the environment variable or the local-dev default —
+ * never the image its own worker had been handed. A caller that builds its L0
+ * image under a name of its own (a battery job deriving a tag from the job it
+ * runs in, so two jobs on one daemon stop moving one mutable tag under each
+ * other) then staged against an image that does not exist there, and every open
+ * carrying staged skills failed closed on it.
+ */
+describe("openJob — the skill-staging image ref follows the broker's configuration", () => {
+  const BODY = "# staged\n";
+  const stagedInput = () => [
+    {
+      slug: "scrape-data",
+      files: [
+        {
+          path: "SKILL.md",
+          content: BODY,
+          digest: createHash("sha256").update(BODY, "utf8").digest("hex"),
+        },
+      ],
+    },
+  ];
+
+  /** Volume ops that record the image ref staging was asked for. */
+  function recordingVolumeOps(): SandboxVolumeOps & { stagedWith: string[] } {
+    const stagedWith: string[] = [];
+    return {
+      stagedWith,
+      ensureWorkspace: async (key: string) => `cinatra-exec-l2-${key}`,
+      removeWorkspace: async () => {},
+      stageSkills: async (jobId, _skills, imageRef) => {
+        stagedWith.push(imageRef);
+        return `cinatra-exec-skills-${jobId}`;
+      },
+      removeSkills: async () => {},
+    };
+  }
+
+  let priorEnvImage: string | undefined;
+  beforeEach(() => {
+    priorEnvImage = process.env.CINATRA_SANDBOX_L0_IMAGE;
+    delete process.env.CINATRA_SANDBOX_L0_IMAGE;
+  });
+  afterEach(() => {
+    if (priorEnvImage === undefined) delete process.env.CINATRA_SANDBOX_L0_IMAGE;
+    else process.env.CINATRA_SANDBOX_L0_IMAGE = priorEnvImage;
+  });
+
+  it("stages from the CONFIGURED image ref, over BOTH fallback sources", async () => {
+    // A conflicting environment variable is set on purpose: the configured ref
+    // has to win over the variable AND over the local-dev default, or a battery
+    // job on a host that carries the variable would stage from the wrong image
+    // all over again.
+    const envRef = "registry.example/cinatra-sandbox-l0:from-the-environment";
+    process.env.CINATRA_SANDBOX_L0_IMAGE = envRef;
+    const volumeOps = recordingVolumeOps();
+    const configured = "cinatra-sandbox-l0:job-4711-2";
+    const { broker } = makeBroker({ volumeOps, imageRef: configured });
+
+    const opened = await openVouched(broker, carrierFor(), { stagedSkills: stagedInput() });
+
+    expect(opened.ok).toBe(true);
+    expect(volumeOps.stagedWith).toEqual([configured]);
+    expect(volumeOps.stagedWith).not.toContain(DEFAULT_L0_IMAGE_LOCAL_DEV);
+    expect(volumeOps.stagedWith).not.toContain(envRef);
+  });
+
+  it("falls back to the resolved default when the broker configures no ref", async () => {
+    const volumeOps = recordingVolumeOps();
+    const { broker } = makeBroker({ volumeOps });
+
+    const opened = await openVouched(broker, carrierFor(), { stagedSkills: stagedInput() });
+
+    expect(opened.ok).toBe(true);
+    expect(volumeOps.stagedWith).toEqual([DEFAULT_L0_IMAGE_LOCAL_DEV]);
+  });
+
+  it("lets the environment variable decide when the broker configures no ref", async () => {
+    process.env.CINATRA_SANDBOX_L0_IMAGE = "registry.example/cinatra-sandbox-l0:pinned";
+    const volumeOps = recordingVolumeOps();
+    const { broker } = makeBroker({ volumeOps });
+
+    const opened = await openVouched(broker, carrierFor(), { stagedSkills: stagedInput() });
+
+    expect(opened.ok).toBe(true);
+    expect(volumeOps.stagedWith).toEqual(["registry.example/cinatra-sandbox-l0:pinned"]);
   });
 });
