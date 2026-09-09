@@ -15,8 +15,10 @@
  *     as a file the screen would not take;
  *   - the TYPED `REQUIRES_REBUILD` state arrives as a named state with the
  *     packageName in it, never as a generic "the install failed";
- *   - the trust-gate refusal arrives in the PIPELINE's own words, so the reason
- *     the operator must act on is not replaced by a summary;
+ *   - a refusal whose own words are addressed to whoever maintains the install
+ *     chain — the execution boundary's, and the access-declaration chain's —
+ *     reaches the admin as ONE short sentence in product words, with the
+ *     diagnostics written to the server log;
  *   - a refused install writes no access policy and rolls nothing back that it
  *     did not create.
  *
@@ -26,6 +28,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { resolveAbsentConnectorAccessConfig } from "@cinatra-ai/sdk-extensions/access-config";
+import { classifyExtensionTrust, UntrustedInstallRefusedError } from "@/lib/extension-trust";
 
 const session = vi.hoisted(() => ({
   user: { id: "u1" },
@@ -130,9 +133,29 @@ const ACCESS_CONFIG_CHAIN_REFUSAL =
   `(supplied-install-failed:${absentAccessConfigMessage("@acme/thing-connector")}) — the package is ` +
   `not anchorable; the placeholder install row was rolled back so a re-install re-runs the pipeline.`;
 
+/**
+ * THE EXECUTION BOUNDARY'S REFUSAL, built from the REAL chain rather than
+ * paraphrased: the classifier's verdict words, composed by the refusal the
+ * pipeline raises, wrapped by the activator's supplied-row reason token and the
+ * dispatcher's non-finalized-row sentence — the shape read off a running
+ * instance's toast surface.
+ */
 const TRUST_REFUSAL =
-  "[extension-install-pipeline] @acme/thing-connector@1.0.0: the install was refused — " +
-  "the origin supplied:operator is not an allow-listed activation host.";
+  `install of @acme/thing-connector did not finalize the real-integrity pipeline ` +
+  `(supplied-install-failed:${new UntrustedInstallRefusedError(
+    "@acme/thing-connector",
+    "1.0.0",
+    classifyExtensionTrust({
+      packageName: "@acme/thing-connector",
+      registryUrl: "supplied:operator",
+      integrityVerified: true,
+      persistedTrustDecision: true,
+      trustedActivationHosts: [],
+      allowMarketplaceBootstrapTrust: false,
+    }).reason,
+    "install",
+  ).message}) — the package is not anchorable; the placeholder install row was rolled back so a ` +
+  `re-install re-runs the pipeline.`;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -168,7 +191,17 @@ describe("a connector is taken at the door and refused where the reason is known
     expect(registry.extensionRegistry.uninstall).not.toHaveBeenCalled();
   });
 
-  it("passes the trust-gate refusal through in the pipeline's own words", async () => {
+  // -------------------------------------------------------------------------
+  // THE EXECUTION BOUNDARY'S REFUSAL IS THE SAME AUDIENCE PROBLEM. Its own words
+  // name the install-op journal, the host-port grant, the materialized bytes,
+  // anchorability and what happened to the placeholder row: every one of them
+  // true, every one of them written for whoever maintains the install chain. On
+  // the toast surface that is a paragraph, so this path is answered in product
+  // words too — and, exactly as on the access-declaration path, the diagnostics
+  // are written to the server log rather than thrown away.
+  // -------------------------------------------------------------------------
+  it("answers the execution boundary's refusal in product words and logs the diagnostics", async () => {
+    const serverLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     road.installSuppliedCandidate.mockRejectedValue(new Error(TRUST_REFUSAL) as never);
 
     const result = await installSuppliedArchiveAction({
@@ -177,9 +210,24 @@ describe("a connector is taken at the door and refused where the reason is known
     });
 
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toBe(TRUST_REFUSAL);
+    const shown = result.ok === false ? result.error : "";
+
+    expect(shown).not.toMatch(/pipeline-threw|supplied-install-failed/);
+    expect(shown).not.toMatch(/install-op journal|host-port grant|materialized bytes/i);
+    expect(shown).not.toMatch(/activation host/i);
+    expect(shown).not.toMatch(/roll(?:ed|s|ing)?[ -]?back/i);
+    expect(shown.length).toBeLessThan(160);
+    expect(shown.match(/[.!?]/g) ?? []).toHaveLength(1);
+
+    // The diagnostics are not lost — they go to the server log.
+    expect(serverLog).toHaveBeenCalled();
+    expect(
+      (serverLog.mock.calls as unknown[][]).flat().map(String).join(" "),
+    ).toContain(TRUST_REFUSAL);
+
     expect(result.ok === false && result.stage).toBeUndefined();
     expect(access.setExtensionInstallAccess).not.toHaveBeenCalled();
+    serverLog.mockRestore();
   });
 
   // -------------------------------------------------------------------------

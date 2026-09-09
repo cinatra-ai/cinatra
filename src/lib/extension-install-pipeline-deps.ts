@@ -387,6 +387,13 @@ async function makeSuppliedProvenanceWriter(): Promise<
               ...(p.provenance.path ? { path: p.provenance.path } : {}),
               contentDigest: p.provenance.contentDigest,
               ...(p.digest ? { activeDigest: p.digest } : {}),
+              // THE ANCHOR EVIDENCE (cinatra#3204). Recorded here, on the row,
+              // because the runtime loader's trust anchor must come from
+              // OUTSIDE the writable store — the same reason the registry road
+              // records its SRI. Computed over the delivered bytes, never
+              // asserted by the supplier.
+              integrity: p.integrity,
+              contentHash: p.contentHash,
             }
           : {
               type: "local" as const,
@@ -399,6 +406,9 @@ async function makeSuppliedProvenanceWriter(): Promise<
                 p.provenance.resolvedCommitOrTreeHash ?? p.provenance.contentDigest,
               contentDigest: p.provenance.contentDigest,
               ...(p.digest ? { activeDigest: p.digest } : {}),
+              // See the github arm above — the same anchor evidence.
+              integrity: p.integrity,
+              contentHash: p.contentHash,
             };
       await sourceSwitchExtension(target.id, source, {
         actor: { source: "runtime-installer" },

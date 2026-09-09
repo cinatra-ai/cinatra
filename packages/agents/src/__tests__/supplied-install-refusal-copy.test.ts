@@ -25,6 +25,7 @@ import {
   parseConnectorAccessConfig,
   resolveAbsentConnectorAccessConfig,
 } from "@cinatra-ai/sdk-extensions/access-config";
+import { classifyExtensionTrust, UntrustedInstallRefusedError } from "@/lib/extension-trust";
 
 import {
   CONNECTOR_REFUSAL_MAX_LENGTH,
@@ -72,11 +73,44 @@ const INVALID_CONFIG_RAW = rawChainMessage(
   ),
 );
 
+/**
+ * THE EXECUTION BOUNDARY'S OWN REFUSAL, built from the REAL chain exactly as the
+ * access-declaration fixture above is: the classifier's verdict words, composed
+ * by the refusal the pipeline raises, wrapped by the activator's supplied-row
+ * reason token and then by the dispatcher's non-finalized-row sentence.
+ *
+ * Everything in it is true, and every word of it is written for whoever
+ * maintains the install chain: an internal failure token, a host phrase, an
+ * install-op journal, a host-port grant, the materialized bytes, anchorability
+ * and what happened to the placeholder row. Handed to an admin it is a paragraph
+ * — the same readability class as the access-declaration refusal, on a different
+ * path.
+ */
+const TRUST_GATE_RAW = rawChainMessage(
+  new UntrustedInstallRefusedError(
+    PACKAGE,
+    "1.0.0",
+    classifyExtensionTrust({
+      packageName: PACKAGE,
+      registryUrl: "supplied:operator",
+      integrityVerified: true,
+      persistedTrustDecision: true,
+      trustedActivationHosts: [],
+      allowMarketplaceBootstrapTrust: false,
+    }).reason,
+    "install",
+  ).message,
+);
+
 /** Developer vocabulary that must never reach the toast surface. */
 const INTERNAL_TOKEN =
   /pipeline-threw|supplied-install-failed|\[connector-access-config\]|cinatra\/config\.json/;
 const ISSUE_REFERENCE = /cinatra#\d+/;
 const ROLLBACK_PROSE = /roll(?:ed|s|ing)?[ -]?back/i;
+/** The journal / grant / materialized-bytes prose of the boundary's own refusal. */
+const INSTALL_JOURNAL_PROSE = /install-op journal|host-port grant|materialized bytes/i;
+/** The classifier's host phrase, which names a host on a configured deployment. */
+const HOST_PROSE = /activation host/i;
 
 describe("the raw install chain really does speak in developer diagnostics", () => {
   it("carries an internal failure token, an internal issue reference and the rollback detail", () => {
@@ -84,6 +118,13 @@ describe("the raw install chain really does speak in developer diagnostics", () 
     expect(ABSENT_CONFIG_RAW).toMatch(ISSUE_REFERENCE);
     expect(ABSENT_CONFIG_RAW).toMatch(ROLLBACK_PROSE);
     expect(ABSENT_CONFIG_RAW.length).toBeGreaterThan(CONNECTOR_REFUSAL_MAX_LENGTH);
+  });
+
+  it("says the same of the execution boundary's refusal — a journal, a grant and the bytes", () => {
+    expect(TRUST_GATE_RAW).toMatch(INTERNAL_TOKEN);
+    expect(TRUST_GATE_RAW).toMatch(INSTALL_JOURNAL_PROSE);
+    expect(TRUST_GATE_RAW).toMatch(ROLLBACK_PROSE);
+    expect(TRUST_GATE_RAW.length).toBeGreaterThan(CONNECTOR_REFUSAL_MAX_LENGTH);
   });
 });
 
@@ -117,6 +158,32 @@ describe("the admin-facing refusal is one short sentence in product words", () =
     expect(message).not.toMatch(ROLLBACK_PROSE);
     expect(message.length).toBeLessThan(CONNECTOR_REFUSAL_MAX_LENGTH);
     expect(message).toMatch(/access scope/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE SAME AUDIENCE PROBLEM, ON THE EXECUTION BOUNDARY'S PATH. A refusal the
+  // classifier raises is as true and as unreadable as the access-declaration
+  // one: it names the journal, the grant, the materialized bytes and the
+  // placeholder row. The admin is owed the one fact they can act on — this
+  // package was not installed and nothing changed — in one short sentence.
+  // -------------------------------------------------------------------------
+  it("answers the execution boundary's refusal without the journal, the grant or a host name", () => {
+    const refusal = adminFacingSuppliedInstallRefusal(TRUST_GATE_RAW);
+    expect(refusal).not.toBeNull();
+    const message = refusal as string;
+
+    expect(message).not.toMatch(INTERNAL_TOKEN);
+    expect(message).not.toMatch(INSTALL_JOURNAL_PROSE);
+    expect(message).not.toMatch(HOST_PROSE);
+    expect(message).not.toMatch(ROLLBACK_PROSE);
+    expect(message.length).toBeLessThan(CONNECTOR_REFUSAL_MAX_LENGTH);
+
+    // ONE sentence: exactly one terminator, and it is the last character.
+    expect(message.match(/[.!?]/g) ?? []).toHaveLength(1);
+    expect(message.trim().endsWith(".")).toBe(true);
+
+    // What the admin is owed: it was not installed, and nothing changed.
+    expect(message).toMatch(/install/i);
   });
 
   it("leaves every other refusal in the words of whatever refused it", () => {
