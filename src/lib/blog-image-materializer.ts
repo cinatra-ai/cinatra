@@ -22,7 +22,11 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
-import { buildFeaturedImageFields } from "@/lib/artifacts/featured-image-fields";
+import {
+  buildFeaturedImageFields,
+  readFeaturedImageFieldContract,
+} from "@/lib/artifacts/featured-image-fields";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 // Target type via the manifest-declared "artifact-blog-image" extension
@@ -145,6 +149,16 @@ export async function materializeBlogImageArtifact(
     );
   }
   const postReference = input.post ?? postReferenceForDraft(input.draft);
+  // THE PICTURE TYPE'S OWN FIELD NAMES (cinatra#3251), off the type this
+  // materialization already resolved. A type whose declaration this cannot be
+  // read from contributes no fields rather than host-named ones.
+  const fieldContract = readFeaturedImageFieldContract(
+    objectTypeRegistry.resolve(resolvedTarget.target.objectTypeId)?.declaredSchema,
+  );
+  const declaredFields =
+    postReference && fieldContract.ok
+      ? buildFeaturedImageFields(fieldContract.contract, { post: postReference })
+      : undefined;
   const bytes = Buffer.from(input.imageBase64, "base64");
   const result = await createSemanticArtifact({
     orgId,
@@ -159,13 +173,16 @@ export async function materializeBlogImageArtifact(
     stream: asImageStream(bytes),
     createdByRunId: input.createdByRunId ?? null,
     skipFallbackClassification: true,
-    // The picture type's own declared fields (W9). Omitted when the caller
-    // names no post: the declared-schema check then refuses the write with the
-    // type's own message, which is the honest outcome — the host does not
-    // invent a post reference to get past a schema.
-    declaredObjectFields: postReference
-      ? buildFeaturedImageFields({ post: postReference })
-      : undefined,
+    // The picture type's own declared fields (W9), written under the names the
+    // TYPE declares (cinatra#3251) — read from the resolved type's own declared
+    // schema, never from a host constant.
+    //
+    // Omitted when the caller names no post, AND omitted when the resolved type
+    // declares no readable field contract: in both cases the declared-schema
+    // check then refuses the write with the type's own message, which is the
+    // honest outcome — the host does not invent a post reference, or a field
+    // name, to get past a schema.
+    declaredObjectFields: declaredFields,
   });
 
   assertSemanticType({

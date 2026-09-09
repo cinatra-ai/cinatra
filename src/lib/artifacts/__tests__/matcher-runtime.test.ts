@@ -48,8 +48,14 @@ const {
   lazyRegisterMock: vi.fn(),
   writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
   ensureSchemaMock: vi.fn(),
+  // Declares the two parameters it is asserted on (`toHaveBeenCalledWith(pkg,
+  // role)`) so the adapter below can pass them through under a real type
+  // rather than a cast.
   resolveMatcherEdgeMock: vi.fn(
-    async (): Promise<{ skillId: string; packageName: string } | null> => null,
+    async (
+      _consumerPackageName: string,
+      _role: string,
+    ): Promise<{ skillId: string; packageName: string } | null> => null,
   ),
   // cinatra#3118 criterion 6 — the AUTHORITATIVE active-assertion read the
   // producer fast path keys on. Default: no active assertion at all, so every
@@ -89,6 +95,17 @@ vi.mock("@cinatra-ai/skills", () => ({
   // matcher edge (the pre-extraction fleet), so every pre-existing case here
   // still exercises the package-owned anchor unchanged.
   resolveDeclaredSkillEdgeForPackage: resolveMatcherEdgeMock,
+  // cinatra#3091 — the runtime now asks for the resolution WITH the reason an
+  // empty one is empty, so it can PRINT which anchor it fell to. The cases
+  // below still stage the RESOLUTION, which is what each of them is about; one
+  // adapter here lifts it into the outcome shape, and a rejection still
+  // rejects (the scan-failure degradation case depends on that).
+  resolveDeclaredSkillEdgeForPackageWithReason: async (pkg: string, role: string) => {
+    const resolution = await resolveMatcherEdgeMock(pkg, role);
+    return resolution
+      ? { resolution, reason: null }
+      : { resolution: null, reason: "no-single-declared-edge-for-role" };
+  },
 }));
 vi.mock("../attachment-resolver-ports", () => ({
   buildAttachmentResolverPorts: buildPortsMock,
@@ -770,6 +787,56 @@ describe("runArtifactMatch", () => {
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(lazyRegisterMock).toHaveBeenCalledWith("@v/pdf-matcher-skill");
     expect(assertSemanticTypeMock).toHaveBeenCalled();
+  });
+
+  it("the arm actually taken is PRINTED, with the named reason the resolution was empty", async () => {
+    // THE OPEN QUESTION FROM THE DIAGNOSIS LEG (cinatra#3091). A booted instance
+    // printed the refusal below and the record could not say which anchor had
+    // even been consulted, because an empty resolution printed nothing at all
+    // and a `null` collapses six distinct non-declarations into one shape. The
+    // line asserted here is what lets the next real boot answer it, so it is
+    // pinned rather than left to survive by luck.
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue(null);
+    listSkillsMock.mockResolvedValue([]);
+    lazyRegisterMock.mockResolvedValue(0);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    const line = infoSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((t) => t.includes("trust arm for"));
+    infoSpy.mockRestore();
+    expect(line).toContain("@v/pdf-artifact");
+    expect(line).toContain("package-owned");
+    expect(line).toContain("no-single-declared-edge-for-role");
+  });
+
+  it("the arm actually taken is PRINTED on the declared-edge road too, naming what the edge resolved to", async () => {
+    // Printed on the road that WORKS as well, not only on the refusal: a line
+    // that appeared only when something went wrong would still leave a healthy
+    // boot unable to say which anchor carried it.
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue({
+      skillId: EXTRACTED_SKILL_ID,
+      packageName: "@v/pdf-matcher-skill",
+    });
+    listSkillsMock.mockResolvedValue([
+      {
+        id: EXTRACTED_SKILL_ID,
+        packageName: "@v/pdf-matcher-skill",
+        packageSlug: "v-pdf-matcher-skill",
+        content: "classifier body",
+      },
+    ]);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    const line = infoSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((t) => t.includes("trust arm for"));
+    infoSpy.mockRestore();
+    expect(line).toContain("declared-edge");
+    expect(line).toContain("@v/pdf-matcher-skill");
+    expect(line).toContain(EXTRACTED_SKILL_ID);
   });
 
   it("declared matcher edge: once it resolves, the pre-extraction anchor is OFF (exclusive, not a widening OR)", async () => {

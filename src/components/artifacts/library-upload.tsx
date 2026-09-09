@@ -66,6 +66,7 @@ import {
   requestTypeInstall,
   type ArtifactMarketplacePack,
 } from "@/app/artifacts/upload-typing-actions";
+import { promotionRefusalNotice } from "@/lib/artifacts/promotion-notice";
 import type { InstalledMeaningType } from "@/lib/artifacts/installed-type-picker";
 
 // ---------------------------------------------------------------------------
@@ -537,6 +538,14 @@ function TypePickerPanel() {
     setBusy(false);
     if (r.ok) {
       toast.success("Meaning set.");
+      // THE ROAD'S REFUSAL IS OWED TO THE PERSON, not only to the caller
+      // (cinatra#3091). The typed promotion road answers a confirmation it
+      // could not run with a NAMED reason; reading only `ok` here turned that
+      // answer back into the silence the wave-3 proof leg measured. The meaning
+      // itself IS set — the note rides on top of the success, it does not
+      // replace it.
+      const notice = promotionRefusalNotice(r.promotion);
+      if (notice) toast.warning(notice);
       closeDialog();
       router.refresh();
     } else {

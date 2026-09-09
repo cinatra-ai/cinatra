@@ -39,6 +39,7 @@ import {
 } from "@/lib/artifacts/installed-type-picker";
 import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
+import { planPromotionEntry } from "@/lib/artifacts/typed-promotion";
 import {
   readArtifactForDetail,
   readArtifactForMeaningWrite,
@@ -386,18 +387,39 @@ async function promoteOnConfirmedMeaning(input: {
     const { matcherManifestRegistry, objectTypeRegistry } = await import(
       "@cinatra-ai/objects/registry"
     );
+    const { semanticRendererRegistry } = await import(
+      "@cinatra-ai/objects/artifact-renderer-registry"
+    );
     // THE EXTENSION'S OWN TYPE: the one artifact type it OWNS — registered by
     // its package, or claimed over a namespace nothing else has provenance for
     // (a host-registered type, which is how `@cinatra-ai/linkedin:post-draft`
-    // reaches its pack). A
-    // package that defines none is a pure matcher pack — the road does not
-    // apply. A package that defines SEVERAL cannot be resolved from a
-    // package-keyed confirmation, so it is left alone rather than guessed at.
+    // reaches its pack).
+    //
+    // The count is not always one, and `planPromotionEntry` names every outcome
+    // rather than folding them into one silence — because two very different
+    // worlds both own zero types:
+    //
+    //   a PURE MATCHER PACK declares none, so the road does not apply; and
+    //   a PACK CARRYING AN UNREACHABLE DISPLAY — it registered a display whose
+    //   target object type no installed package registers — is a broken
+    //   installation whose display can never be reached at all.
+    //
+    // The second condition is read from the registries alone, so it names the
+    // BREAKAGE and not its cause: a refused self-claim (the deck pack's own
+    // shape, its declared id sitting outside its namespace) and an absent
+    // owning package both present this way, and both are owed the same answer.
     const owned = (await extensionOwnedTypeIds(input.extension))
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
-    if (owned.length !== 1) return null;
-    const ownType = owned[0]!;
+    const entryPlan = planPromotionEntry({
+      ownedRegisteredTypes: owned.map((t) => t.typeId),
+      shipsDisplayForUnregisteredType: semanticRendererRegistry
+        .listByPackage(input.extension)
+        .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null),
+    });
+    if (entryPlan.kind === "not-applicable") return null;
+    if (entryPlan.kind === "refuse") return { promoted: false, reason: entryPlan.reason };
+    const ownType = owned.find((t) => t.typeId === entryPlan.typeId)!;
     const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
@@ -415,6 +437,7 @@ async function promoteOnConfirmedMeaning(input: {
     const entry = matcherManifestRegistry
       .list()
       .find((e) => e.packageName === input.extension);
+    const threshold = entry ? entry.matcherConfidenceThreshold : null;
 
     // The org-write kernel authority the canonical objects writer requires,
     // minted HERE from the acting session — the store leaf never mints one.
@@ -428,10 +451,14 @@ async function promoteOnConfirmedMeaning(input: {
       artifactId: input.artifactId,
       extension: input.extension,
       ownType: { typeId: ownType.typeId, acceptsMimes },
-      threshold: entry ? entry.matcherConfidenceThreshold : null,
+      threshold,
       confirmed: true,
       personAsserted: true,
       createdBy: input.principalId,
+      // THE ACTING PRINCIPAL, named for the person's own road: the converging
+      // branch runs beside the per-actor extension-access gate, so the road must
+      // read THIS person's assertion and never another's.
+      principal: input.principalId,
       actor: { userId: input.userId, orgId: input.orgId },
       authority,
     });

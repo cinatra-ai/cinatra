@@ -70,6 +70,7 @@ describe("0.14 — the two authorities, and neither substitutes for the other", 
       ownType: ownType(),
       matcher: { confidence: 0.8, threshold: 0.8 },
       confirmed: true,
+      personAsserted: false,
     });
     expect(plan).toEqual({
       ok: true,
@@ -89,13 +90,14 @@ describe("0.14 — the two authorities, and neither substitutes for the other", 
         ownType: ownType(),
         matcher: { confidence: 0.99, threshold: 0.8 },
         confirmed: false,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "not-confirmed" });
   });
 
   it("refuses a confirmation on a row the matcher never associated", () => {
     expect(
-      planTypedPromotion({ row: row(), ownType: ownType(), matcher: null, confirmed: true }),
+      planTypedPromotion({ row: row(), ownType: ownType(), matcher: null, confirmed: true, personAsserted: false }),
     ).toEqual({ ok: false, reason: "no-matcher-assertion" });
   });
 
@@ -106,6 +108,7 @@ describe("0.14 — the two authorities, and neither substitutes for the other", 
         ownType: ownType(),
         matcher: { confidence: 0.79, threshold: 0.8 },
         confirmed: true,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "below-threshold" });
   });
@@ -116,13 +119,13 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
 
   it("names an absent row before anything else", () => {
     expect(
-      planTypedPromotion({ row: null, ownType: ownType(), matcher: confident, confirmed: true }),
+      planTypedPromotion({ row: null, ownType: ownType(), matcher: confident, confirmed: true, personAsserted: false }),
     ).toEqual({ ok: false, reason: "row-not-found" });
   });
 
   it("names an extension that owns no type of its own", () => {
     expect(
-      planTypedPromotion({ row: row(), ownType: null, matcher: confident, confirmed: true }),
+      planTypedPromotion({ row: row(), ownType: null, matcher: confident, confirmed: true, personAsserted: false }),
     ).toEqual({ ok: false, reason: "extension-owns-no-type" });
   });
 
@@ -133,6 +136,7 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
         ownType: ownType(),
         matcher: confident,
         confirmed: true,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "already-promoted" });
   });
@@ -144,6 +148,7 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
         ownType: ownType(),
         matcher: confident,
         confirmed: true,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "no-content" });
   });
@@ -155,6 +160,7 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
         ownType: ownType({ acceptsMimes: ["application/pdf"] }),
         matcher: confident,
         confirmed: true,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "form-not-accepted" });
   });
@@ -166,6 +172,7 @@ describe("0.14 — every refusal is named, and the first one is the honest one",
         ownType: ownType({ acceptsMimes: [] }),
         matcher: confident,
         confirmed: true,
+        personAsserted: false,
       }),
     ).toEqual({ ok: false, reason: "form-not-accepted" });
   });
@@ -184,6 +191,7 @@ describe("0.14 — the revision that shares the content, and the kept history", 
     ownType: ownType(),
     matcher: { confidence: 0.9, threshold: 0.8 },
     confirmed: true,
+    personAsserted: false,
   });
 
   it("appends a revision SHARING the base revision's resource — no bytes are copied", () => {
