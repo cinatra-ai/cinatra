@@ -154,6 +154,19 @@ describe("the review binder — the content channel reaches the review target", 
  * against the port the page actually takes now. Neither assertion is weakened:
  * the negative claims are unchanged and each positive claim still names a
  * concrete call in the page's source.
+ *
+ * AND THE PORT MOVED ONCE MORE, THE SAME WAY (wave 3 of `PLAN: Agents
+ * Lifecycle (D) - Review`, cinatra#3091). That wave took the channel's read off
+ * the shared preparation path and onto the ROAD a surface hands in, so this
+ * page now names `hostArtifactContentBuilder()`; the road module calls
+ * `buildArtifactContentProjection` with the channel's own pinned-substance
+ * reader, which answers EVERY class rather than the text one alone. Binding the
+ * narrower text-only port back onto the page would un-ship those classes, so
+ * this pin does here exactly what it did at the previous move: it follows the
+ * port the page actually takes, and it proves "through the channel" one step
+ * further along - at the road module itself, which must still call the
+ * channel's own builder. Nothing is weakened: the negative claim is unchanged,
+ * and the read is now pinned end to end rather than by one identifier.
  */
 describe("the artifact page — the second consumer of the same channel", () => {
   it("no longer passes a hard-coded absence, and builds through the channel", async () => {
@@ -162,10 +175,14 @@ describe("the artifact page — the second consumer of the same channel", () => 
     const page = readFileSync(path.resolve(__dirname, "..", "page.tsx"), "utf8");
     const body = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(body).not.toMatch(/content:\s*absentArtifactContent\(/);
-    expect(body).toMatch(/buildArtifactContentProjection/);
-    expect(body).toMatch(/artifactTextChannelPorts/);
-    // The absence that REMAINS is the channel's own NAMED one, for the classes
-    // this port does not carry — never a blanket absence over a text revision.
+    // The page builds through the road it takes now...
+    expect(body).toMatch(/hostArtifactContentBuilder\(\)\(/);
+    // ...and that road is the CHANNEL'S OWN read, not a reader of its own.
+    const road = readFileSync(path.resolve(__dirname, "..", "review-surface-roads.ts"), "utf8");
+    const roadBody = road.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(roadBody).toMatch(/buildArtifactContentProjection\(/);
+    // The absence that REMAINS is the channel's own NAMED one, for a revision
+    // the road is given no form for — never a blanket absence over a text one.
     expect(body).toMatch(/absentArtifactContent\([^)]*"unsupported-form"/);
   });
 
