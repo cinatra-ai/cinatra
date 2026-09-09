@@ -338,19 +338,145 @@ describe("defect 7 — ONE card for the finished run, no second stacked panel", 
 });
 
 describe("defect 8 — a machine payload is never drawn as reader-facing prose", () => {
-  it("sets the run's machine payload in the design system's own type for code", async () => {
+  // WIDENED FOR THE JSON-ARRAY OUTPUT (cinatra#3149, fix leg 6, defect B). Fix
+  // leg 5 stopped this payload being drawn as the run's own sentence and set it
+  // as code instead; the fifth proof round then measured what that reads like
+  // inside the finished run's one card and graded it the same class the branch
+  // was refused over on the rail — the whole array, braces, quotes, field names
+  // and machine codes, laid out under the completion box. So the array of
+  // findings is READ OUT: a titled list of the findings' own sentences, in the
+  // card's own type. A structured value that is NOT a findings list keeps
+  // exactly the reading fix leg 5 gave it.
+  it("reads a findings ARRAY out as a titled list in the card's own type", async () => {
     await renderRunPage({ initialMessages: [finalTranscriptRow(MACHINE_PAYLOAD)] });
+
+    const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+    const list = row.querySelector<HTMLElement>('[data-run-transcript-findings=""]');
+    expect(list, "the findings are read out as a list").not.toBeNull();
+    // Inside the ONE runcard the drawing gives the finished run.
+    expect(plate().contains(list as Node)).toBe(true);
+    // A TITLE over the list, then the findings' own sentences, in order.
+    expect(list!.textContent!.startsWith("Findings")).toBe(true);
+    const items = row.querySelectorAll('[data-run-transcript-finding=""]');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toBe(
+      "oasJson was not valid JSON; cannot review code quality.",
+    );
+    // ...and no card chrome of its own: fix leg 5's ONE card is untouched.
+    const tokens = classTokens(list!);
+    expect(tokens.has("rounded-card")).toBe(false);
+    expect(tokens.has("border")).toBe(false);
+    expect(tokens.has("bg-surface-strong")).toBe(false);
+  });
+
+  it("draws NO raw payload anywhere in that row — no syntax, no field names, no code", async () => {
+    await renderRunPage({ initialMessages: [finalTranscriptRow(MACHINE_PAYLOAD)] });
+
+    const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+    const text = row.textContent ?? "";
+    // The exact string the fifth round photographed beneath the completion card.
+    for (const token of ["{", "}", "[", "]", '"', "unparseable_oas", "severity", "source"]) {
+      expect(text.includes(token), `the row still carries ${token}`).toBe(false);
+    }
+    // And the row draws no mono dump at all on this reading.
+    expect(row.querySelector("pre")).toBeNull();
+  });
+
+  it("still sets a structured value that is NOT a findings list in the type for code", async () => {
+    await renderRunPage({
+      initialMessages: [finalTranscriptRow('{"ok":true,"count":3}')],
+    });
 
     const body = document
       .querySelector<HTMLElement>('[data-run-transcript-row="final"]')
       ?.querySelector<HTMLElement>('[data-run-transcript-body=""]');
     expect(body).not.toBeNull();
-    expect(body!.textContent).toContain("unparseable_oas");
     // The design system reserves mono for metadata, tokens, labels and code
     // (app-components.html). A JSON payload is code; it is never an answer set
     // in body type.
     expect(body!.tagName).toBe("PRE");
     expect(classTokens(body!).has("font-mono")).toBe(true);
+  });
+
+  it("is FORM, not intent — an array without a sentence in every element stays code", async () => {
+    await renderRunPage({
+      initialMessages: [finalTranscriptRow('[{"code":"a"},{"code":"b"}]')],
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+    expect(row.querySelector('[data-run-transcript-findings=""]')).toBeNull();
+    expect(
+      row.querySelector<HTMLElement>('[data-run-transcript-body=""]')!.tagName,
+    ).toBe("PRE");
+  });
+
+  it("reads EVERY finding out, in the order the array carries them", async () => {
+    // THE CONVERGENCE ROUND'S FINDING on defect B: with one positive fixture of
+    // a SINGLE finding, an implementation that read only the first element, or
+    // that silently dropped elements, would pass. Three findings, three
+    // sentences, in order — and the count is pinned so a dropped one is a red.
+    await renderRunPage({
+      initialMessages: [
+        finalTranscriptRow(
+          JSON.stringify([
+            { code: "a", severity: "suggestion", message: "The intro repeats the subject line." },
+            { code: "b", severity: "warning", message: "The second CTA has no link." },
+            { code: "c", severity: "suggestion", message: "The sign-off names no sender." },
+          ]),
+        ),
+      ],
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+    const items = row.querySelectorAll('[data-run-transcript-finding=""]');
+    expect(items).toHaveLength(3);
+    expect([...items].map((node) => node.textContent)).toEqual([
+      "The intro repeats the subject line.",
+      "The second CTA has no link.",
+      "The sign-off names no sender.",
+    ]);
+    // ...and still nothing of the machine's own fields.
+    for (const token of ["severity", "suggestion", "warning", "code", '"']) {
+      expect(row.textContent!.includes(token), `the row still carries ${token}`).toBe(false);
+    }
+  });
+
+  it("a MIXED array is not a findings list — one element without a sentence keeps the whole value as code", async () => {
+    // The narrow question is asked of EVERY element (the convergence round's
+    // finding): a list read out with one of its rows missing would be a partial
+    // reading of a machine value, which is worse than drawing none.
+    await renderRunPage({
+      initialMessages: [
+        finalTranscriptRow(
+          JSON.stringify([
+            { code: "a", message: "The intro repeats the subject line." },
+            { code: "b", severity: "warning" },
+          ]),
+        ),
+      ],
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+    expect(row.querySelector('[data-run-transcript-findings=""]')).toBeNull();
+    expect(
+      row.querySelector<HTMLElement>('[data-run-transcript-body=""]')!.tagName,
+    ).toBe("PRE");
+  });
+
+  it("an EMPTY or blank sentence is no sentence — the value stays code", async () => {
+    for (const payload of [
+      JSON.stringify([{ code: "a", message: "" }]),
+      JSON.stringify([{ code: "a", message: "   " }]),
+      "[]",
+    ]) {
+      await renderRunPage({ initialMessages: [finalTranscriptRow(payload)] });
+      const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
+      expect(
+        row.querySelector('[data-run-transcript-findings=""]'),
+        `${payload} was read out as findings`,
+      ).toBeNull();
+      cleanup();
+    }
   });
 
   it("leaves a JSON SCALAR and a malformed value in prose — the test is form, not intent", async () => {

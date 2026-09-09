@@ -404,6 +404,55 @@ function contentIsStructuredValue(content: string): boolean {
 }
 
 /**
+ * ...AND A LIST OF FINDINGS IS A LIST, NOT A PAYLOAD (cinatra#3149, fix leg 6,
+ * defect B).
+ *
+ * Fix leg 5 stopped a machine value being drawn as the run's own sentence, and
+ * set it as code instead. The fifth proof round then measured what that reads
+ * like inside the finished run's one card: the whole JSON array, braces,
+ * quotes, field names and machine codes, laid out under the completion box as a
+ * raw payload -- the same class of reading this branch was refused over on the
+ * rail, surviving one column to the left.
+ *
+ * The drawing's completed reading is ONE card holding ONE inner box, and what
+ * that box carries is readable. So the row asks a second, still NARROW question
+ * about the same content: is this array a list of findings, each with a
+ * sentence of its own? If it is, the row draws that list -- a title and the
+ * findings' own sentences, in the card's own type. Nothing is summarised,
+ * rewritten or hidden: every finding's message is drawn, in order.
+ *
+ * WHAT IS DELIBERATELY NOT DRAWN is everything beside the sentence -- the
+ * `code`, the `severity`, the `source`. Those are the machine's own fields, and
+ * the drawing gives them no place; drawing them is exactly how "NOT_CLASSIFIABLE"
+ * reached a reader on the rail. The full value stays in the transcript row's own
+ * content, which is where a machine value belongs.
+ *
+ * THE TEST IS FORM, NOT INTENT, exactly as `contentIsStructuredValue`'s is: a
+ * JSON array of objects that EVERY carry a non-empty string `message`. One
+ * element without one, an empty array, an object, a scalar -- none of them are a
+ * findings list, and each keeps the reading fix leg 5 gave it.
+ */
+function findingsFromContent(content: string): string[] | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("[")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  const messages: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const message = (item as { message?: unknown }).message;
+    if (typeof message !== "string" || message.trim() === "") return null;
+    messages.push(message.trim());
+  }
+  return messages;
+}
+
+/**
  * One row of the run transcript — and, for the run's `final` message, THE row
  * the completion card's sentence points at (cinatra#3002, fix leg 3).
  *
@@ -469,6 +518,12 @@ function ThreadRow({
     () => isFinal && contentIsStructuredValue(content),
     [isFinal, content],
   );
+  // A structured value that is a LIST OF FINDINGS is read out as one (fix leg
+  // 6, defect B). Parsed once per content, like the question above it.
+  const findings = useMemo(
+    () => (finalIsStructuredValue ? findingsFromContent(content) : null),
+    [finalIsStructuredValue, content],
+  );
   const drawsAsProse = isFinal && !finalIsStructuredValue;
   // NO SECOND PANEL UNDER THE COMPLETION CARD. The transcript the card's
   // sentence names sits inside the same runcard, under the card's one inner
@@ -496,7 +551,22 @@ function ThreadRow({
           {label}
         </div>
       )}
-      {drawsAsProse ? (
+      {findings !== null ? (
+        // THE LIST THE CARD READS OUT (fix leg 6, defect B): a title and the
+        // findings' own sentences, in the card's own type. No braces, no field
+        // names, no machine codes -- and no box of its own either, because the
+        // drawing draws ONE card for the finished run (fix leg 5).
+        <div data-run-transcript-findings="">
+          <div className="text-sm font-medium text-foreground mb-1.5">Findings</div>
+          <ul className="flex flex-col gap-1 list-disc ps-5 text-sm leading-6 text-foreground">
+            {findings.map((message, index) => (
+              <li key={index} data-run-transcript-finding="">
+                {message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : drawsAsProse ? (
         <p
           data-run-transcript-body=""
           className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto"

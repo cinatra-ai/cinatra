@@ -48,7 +48,7 @@ import { Stepper, StepperItem, StepperNav } from "@/components/reui/stepper";
 
 import type { RunStepRailEntry } from "../run-step-rail";
 import { RunStepRailPanel } from "../run-step-rail-panel";
-import { RailExtraEntry } from "../run-step-rail-extra-entry";
+import { RailExtraEntry, railSettlementWord } from "../run-step-rail-extra-entry";
 
 afterEach(() => {
   cleanup();
@@ -160,9 +160,14 @@ const IDENTIFIER = /[A-Za-z]+_[A-Za-z_]+/;
  * however the rail styles it.
  */
 function settlementWords(entry: RunStepRailEntry): string[] {
-  return [entry.gate?.disposition, entry.verification?.outcome].filter(
-    (w): w is string => typeof w === "string" && w.length > 0,
-  );
+  return [
+    // THE WORD THE ROW ACTUALLY DRAWS, not the engine's own disposition
+    // (cinatra#3149, fix leg 6, defect A). The row stopped printing the raw
+    // value, so reading it off the entry would strip a word the row no longer
+    // carries and leave the drawn one standing in front of the instrument.
+    railSettlementWord(entry.gate?.disposition),
+    entry.verification?.outcome,
+  ].filter((w): w is string => typeof w === "string" && w.length > 0);
 }
 
 /** The visual text with the drawn settlement taken out. */
@@ -288,6 +293,156 @@ describe("every rail entry carries its one label and its drawn state", () => {
     )!;
     expect(row.getAttribute("data-rail-lifecycle-decision")).toBe("not_classifiable");
     expect(row.getAttribute("data-rail-lifecycle-decided-by")).toBe("fail-closed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A SETTLED GATE ENTRY RECORDS ITS SETTLEMENT IN THE DRAWING'S WORD
+// (cinatra#3149, fix leg 6, defect A)
+// ---------------------------------------------------------------------------
+//
+// The fifth proof round read the engine's own decision verb on this row --
+// "APPROVE", the gate row's `disposition` column printed verbatim and shouted
+// by the badge's `uppercase` class. Section I gives a settled entry a word:
+// "records how it was settled (continued, superseded by a regeneration, changes
+// requested)"; section XI: "Continued is the only settled reading a display
+// has"; and the drawing's own settled entry reads "Review the post continued".
+
+/** A resolved gate entry, settled with the engine's own disposition. */
+function settledGateEntry(disposition: string): RunStepRailEntry {
+  return {
+    key: "gate:g1",
+    ordinal: 2,
+    kind: "gate",
+    label: "Review",
+    status: "resolved",
+    sources: ["gate"],
+    gate: {
+      gateId: "g1",
+      reviewTaskId: "task-1",
+      disposition,
+      resolved: true,
+    },
+  } as RunStepRailEntry;
+}
+
+function renderSettledGate(disposition: string) {
+  return render(
+    <Stepper value={1}>
+      <StepperNav>
+        <StepperItem step={1}>
+          <RailExtraEntry
+            entry={settledGateEntry(disposition)}
+            reviewHrefBase={REVIEW_HREF_BASE}
+          />
+        </StepperItem>
+      </StepperNav>
+    </Stepper>,
+  );
+}
+
+function gateRow(container: HTMLElement): HTMLElement {
+  return container.querySelector<HTMLElement>('[data-rail-kind="gate"]')!;
+}
+
+describe("a settled gate entry records its settlement in the drawing's word", () => {
+  it("reads 'continued' for an approve — never the engine's own verb", () => {
+    const { container } = renderSettledGate("approve");
+    const row = gateRow(container);
+
+    // The settlement the row draws, on the drawing's own terms. (The name and
+    // the settlement are two spans set apart by the row's own margin, so the DOM
+    // carries no whitespace between them — the word is read off its own element
+    // and the whole entry is then read as those two pieces and nothing else.)
+    expect(row.querySelector("[data-rail-gate-settlement]")!.textContent).toBe(
+      "continued",
+    );
+    expect(domText(row)).toBe("Reviewcontinued");
+    // And what the READER sees is the same word — the badge no longer shouts it.
+    expect(visualText(row)).toBe("Reviewcontinued");
+    expect(visualText(row)).not.toContain("APPROVE");
+    expect(domText(row).toLowerCase()).not.toContain("approve");
+  });
+
+  it("maps every disposition that can resolve a gate to a drawn word, and to no code", () => {
+    const cases: Array<[string, string]> = [
+      ["approve", "continued"],
+      ["approved", "continued"],
+      ["reject", "superseded by a regeneration"],
+      ["rejected", "superseded by a regeneration"],
+      ["changes_requested", "changes requested"],
+    ];
+    for (const [disposition, word] of cases) {
+      const { container } = renderSettledGate(disposition);
+      const row = gateRow(container);
+      expect(
+        row.querySelector("[data-rail-gate-settlement]")!.textContent,
+        disposition,
+      ).toBe(word);
+      // The entry is its one name and that settlement, and nothing else.
+      expect(domText(row), disposition).toBe(`Review${word}`);
+      // The same two instruments the rest of this suite uses: no shouted code on
+      // the reader's screen, no underscored identifier in the DOM.
+      expect(SHOUTED_CODE.test(visualText(row)), disposition).toBe(false);
+      expect(IDENTIFIER.test(domText(row)), disposition).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("answers the drawing's own word to a row that already carries it", () => {
+    // Not every feed of this rail speaks the engine's vocabulary: a surface
+    // that declares its own rows carries the settlement section I names. A map
+    // that answered null to the drawing's own word would take the settled
+    // reading off the row entirely -- the opposite of what section I asks for.
+    for (const [declared, word] of [
+      ["continued", "continued"],
+      ["superseded by a regeneration", "superseded by a regeneration"],
+      ["changes requested", "changes requested"],
+    ] as Array<[string, string]>) {
+      const { container } = renderSettledGate(declared);
+      const row = gateRow(container);
+      expect(
+        row.querySelector("[data-rail-gate-settlement]")!.textContent,
+        declared,
+      ).toBe(word);
+      expect(domText(row), declared).toBe(`Review${word}`);
+      expect(SHOUTED_CODE.test(visualText(row)), declared).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("draws NO settlement at all for a value it cannot name — never the raw one", () => {
+    const { container } = renderSettledGate("escalated_to_org_route");
+    const row = gateRow(container);
+
+    // The entry keeps its place and its one label, which is what section I gives
+    // it before any settlement is added.
+    expect(domText(row)).toBe("Review");
+    expect(row.querySelector("[data-rail-gate-settlement]")).toBeNull();
+    expect(IDENTIFIER.test(domText(row))).toBe(false);
+  });
+
+  it("keeps the engine's own disposition as passive data a walk can still read", () => {
+    const { container } = renderSettledGate("approve");
+    // Not text the reader is shown — the same treatment fix leg 4 gave the
+    // lattice's own words.
+    expect(gateRow(container).getAttribute("data-rail-gate-disposition")).toBe("approve");
+  });
+
+  it("leaves a PENDING gate exactly as it was — a settlement is for a settled entry", () => {
+    const entry = { ...settledGateEntry("approve"), status: "pending" } as RunStepRailEntry;
+    const { container } = render(
+      <Stepper value={1}>
+        <StepperNav>
+          <StepperItem step={1}>
+            <RailExtraEntry entry={entry} reviewHrefBase={REVIEW_HREF_BASE} />
+          </StepperItem>
+        </StepperNav>
+      </Stepper>,
+    );
+    const row = gateRow(container);
+    expect(domText(row)).toBe("Review");
+    expect(row.querySelector("[data-rail-gate-settlement]")).toBeNull();
   });
 });
 

@@ -146,18 +146,30 @@ const PARKED_ON_A_REVIEW = {
   reviewTaskId: "lg-3149",
 };
 
+/** The run's own reading of itself. The pending gate is the default; the
+ *  decided-gate suite below swaps in the finished run that carries a settled
+ *  review (cinatra#3149, fix leg 6, defect C). */
+const PARKED_STREAM = {
+  status: "pending_approval",
+  error: null,
+  presentationHint: null,
+  isLive: true,
+  messages: [] as unknown[],
+  dataPartFrames: [] as unknown[],
+  lifecycleInterrupt: null,
+  interruptContext: PARKED_ON_A_REVIEW as unknown,
+  streamedText: "",
+};
+const DECIDED_STREAM = {
+  ...PARKED_STREAM,
+  status: "completed",
+  isLive: false,
+  interruptContext: null as unknown,
+};
+let mockRunStream: typeof PARKED_STREAM = PARKED_STREAM;
+
 vi.mock("../use-ag-ui-run-stream", () => ({
-  useAgUiRunStream: () => ({
-    status: "pending_approval",
-    error: null,
-    presentationHint: null,
-    isLive: true,
-    messages: [],
-    dataPartFrames: [],
-    lifecycleInterrupt: null,
-    interruptContext: PARKED_ON_A_REVIEW,
-    streamedText: "",
-  }),
+  useAgUiRunStream: () => mockRunStream,
 }));
 
 const CARD = '[data-conformance-id="review-gate-card"]';
@@ -168,6 +180,7 @@ const FRAME = '[data-run-review-slot="review"]';
 
 beforeEach(() => {
   cleanup();
+  mockRunStream = PARKED_STREAM;
   document.body.innerHTML = "";
   document.body.appendChild(document.createElement("main"));
   vi.stubGlobal(
@@ -270,6 +283,121 @@ describe("the run detail's review reading ends in the prompt window", () => {
   it("still draws exactly ONE window for the one gate", async () => {
     const { container } = await renderRunDetail();
     expect(container.querySelectorAll(WINDOW)).toHaveLength(1);
+    expect(document.querySelectorAll(WINDOW)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND A DECIDED GATE READS THE SAME WAY (cinatra#3149, fix leg 6, defect C)
+// ---------------------------------------------------------------------------
+//
+// The fifth proof round measured the decided gate's reading on this detail and
+// found the window's mount there at zero height: the card drew the read-only
+// decision and stopped, so the detail ended in the card instead of in the
+// window. The drawing withdraws it nowhere — section VI puts it beneath the
+// decision bar, section X draws it under the decision bar on the run detail,
+// and section IX keeps the exchange with the RUN, which outlives the gate's
+// decision.
+
+/** The card's own settled reading — the decision line, where the floor was. */
+const SETTLED = '[data-conformance-id="review-gate-settled"]';
+/** The run detail's own mount for the window. */
+const MOUNT = "[data-run-prompt-window-mount]";
+const SETTLED_REF = "ref-3149-settled";
+
+/** The run detail of a FINISHED run whose own review gate is already decided —
+ *  the `reviewSlot.ref` path, which is how a completed run reaches its review
+ *  screen in place. */
+async function renderDecidedRunDetail() {
+  mockRunStream = DECIDED_STREAM;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.includes("/api/lifecycle-views/resolve")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            kind: "artifact_review_gate",
+            state: {
+              state: "settled",
+              outcome: "approved",
+              decidedByName: "Dana Okonkwo",
+            },
+            body: null,
+          }),
+        };
+      }
+      if (url.includes("/api/agents/runs/")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            reviewGate: { ref: SETTLED_REF, awaiting: false },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "completed", inputParams: {} }),
+      };
+    }),
+  );
+  const { AgenticRunPanel } = await import("../agentic-run-panel");
+  const result = render(
+    <div data-run-detail-column="">
+      <AgenticRunPanel
+        runId="run-3149"
+        initialStatus="completed"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+        templateId="tmpl-3149"
+        canRespondInWindow={true}
+        initialReviewGate={{ ref: SETTLED_REF, awaiting: false }}
+      />
+    </div>,
+  );
+  await waitFor(() => expect(result.container.querySelector(SETTLED)).not.toBeNull());
+  return result;
+}
+
+describe("the run detail's DECIDED review reading ends in the prompt window too", () => {
+  it("draws the window at all — the mount is not left empty on a decided gate", async () => {
+    const { container } = await renderDecidedRunDetail();
+
+    const mount = container.querySelector<HTMLElement>(MOUNT);
+    expect(mount, "the run detail declares the window's mount").not.toBeNull();
+    // THE DEFECT, IN ONE ASSERTION: the mount stood there with nothing in it.
+    expect(mount!.children.length).toBeGreaterThan(0);
+    await waitFor(() => expect(container.querySelectorAll(WINDOW)).toHaveLength(1));
+  });
+
+  it("keeps it OUTSIDE the panel that frames the decided card, exactly as on the pending gate", async () => {
+    const { container } = await renderDecidedRunDetail();
+    await waitFor(() => expect(container.querySelector(WINDOW)).not.toBeNull());
+
+    const frame = container.querySelector<HTMLElement>(FRAME);
+    const win = container.querySelector<HTMLElement>(WINDOW)!;
+    expect(frame).not.toBeNull();
+    expect(frame!.contains(win)).toBe(false);
+    const card = container.querySelector<HTMLElement>(CARD);
+    expect(card).not.toBeNull();
+    expect(card!.contains(win)).toBe(false);
+  });
+
+  it("ENDS the run detail column in it, and draws exactly one", async () => {
+    const { container } = await renderDecidedRunDetail();
+    await waitFor(() => expect(container.querySelector(WINDOW)).not.toBeNull());
+
+    const column = container.querySelector<HTMLElement>("[data-run-detail-column]")!;
+    const win = container.querySelector<HTMLElement>(WINDOW)!;
+    expect(column.contains(win)).toBe(true);
+    const all = column.querySelectorAll("*");
+    const last = all[all.length - 1];
+    expect(win.contains(last) || win === last).toBe(true);
     expect(document.querySelectorAll(WINDOW)).toHaveLength(1);
   });
 });

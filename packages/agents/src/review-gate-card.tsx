@@ -773,11 +773,12 @@ export function ReviewGateCard({
     targetHeaders,
     promptWindow:
       runId != null && runId !== ""
-        ? (canComment: boolean) => (
+        ? (canComment: boolean, conversationOnly?: boolean) => (
             <ReviewGatePromptWindow
               submitAction={promptWindowSubmit}
               onGateMoved={refresh}
               canComment={canComment}
+              conversationOnly={conversationOnly ?? false}
               runId={runId}
               boundCardRef={view.ref}
               // The draft is kept per GATE, which is what the reader is looking
@@ -838,7 +839,11 @@ function renderState(args: {
   /** §VI's conversational prompt window, bound to the run, or `null` on a host
    * that named no run. Taken as a factory so the one permission answer the card
    * already read decides whether it is offered. */
-  promptWindow: ((canComment: boolean) => ReactElement) | null;
+  /** THE SECOND ARGUMENT IS THE SETTLED READING (cinatra#3149, fix leg 6,
+   * defect C, convergence). A window offered on a gate that is already decided
+   * carries the RUN's exchange only (section IX) — it must not offer the gate's
+   * own comment road, because that road is closed and would fail on press. */
+  promptWindow: ((canComment: boolean, conversationOnly?: boolean) => ReactElement) | null;
   islandSrc: string;
   islandCredentialed: boolean;
   submit: SubmitReviewDecisionAction;
@@ -942,6 +947,33 @@ function renderState(args: {
             outcome={state.outcome}
             decidedByName={state.decidedByName}
           />
+          {/* THE DECISION DOES NOT WITHDRAW THE WINDOW (cinatra#3149, fix leg
+              6, defect C). A proof round measured the decided gate's reading on
+              the run detail and found the window's mount there at zero height:
+              the card drew the read-only decision and stopped, so the detail
+              ended in the card instead of in the window.
+
+              The drawing withdraws it nowhere. Section VI puts it "beneath the
+              decision bar", section X draws it under the decision bar on the
+              run detail, and section IX keeps the exchange with the RUN -- which
+              is a run that still exists, and still answers, after its gate is
+              settled. This mount was written on the narrower reading that the
+              window is only a change-request channel, so a settled gate had
+              "nothing left to request changes on"; the exchange with the run is
+              the part that reading missed.
+
+              SO IT IS THE SAME WINDOW, in the same place, drawn by the same
+              factory -- one window per gate, and on a host that declared the run
+              detail's slot it lands in that slot, outside the frame and beneath
+              it, exactly as it does on the pending reading. */}
+          {/* CONVERSATION ONLY on this reading (convergence round, defect C).
+              The gate's comment road is closed once the gate is decided — the
+              decision core refuses a comment on a resolved gate — so a window
+              that still took that road would answer the reader "this review is
+              no longer open" on the very control the drawing just gave them
+              back. Section IX names the road that is still open: the exchange
+              is with the RUN, and the run outlives the decision. */}
+          {promptWindow ? promptWindow(true, true) : null}
         </>
       ) : (
         <>
@@ -1835,6 +1867,7 @@ export function ReviewGatePromptWindow({
   onGateMoved,
   storageKey,
   canComment,
+  conversationOnly = false,
   runId,
   boundCardRef,
 }: {
@@ -1849,6 +1882,15 @@ export function ReviewGatePromptWindow({
   onGateMoved?: () => void;
   storageKey: string;
   canComment: boolean;
+  /**
+   * THE GATE IS ALREADY DECIDED (cinatra#3149, fix leg 6, defect C, convergence
+   * round). The window stays — the drawing withdraws it nowhere — but the only
+   * road left open under it is the RUN's own exchange (section IX). The gate's
+   * comment road is refused by the decision core once the gate is resolved, so
+   * taking it here would put a control on screen that fails on press, which is
+   * the very thing the window's own permission rule below exists to prevent.
+   */
+  conversationOnly?: boolean;
   /** The run this review belongs to — the conversation is kept with it (cinatra#2933).
    * A host that cannot name its run draws no window: the exchange has nowhere to
    * be kept, and a window whose message goes nowhere is a control that fails on
@@ -1913,6 +1955,12 @@ export function ReviewGatePromptWindow({
     // assistant. The direct comment-submit below is today's behaviour, kept
     // until #2934 retires it together with the review page's typed road.
     void runWindow.send(prompt);
+    // ON A DECIDED GATE THAT IS THE ONLY ROAD. The gate's comment path is
+    // closed — the decision core answers a comment on a resolved gate with
+    // "no longer pending" — so submitting it would spend the reader's words on
+    // a refusal notice. The exchange with the run is what section IX keeps, and
+    // it is what this window carries once the decision has landed.
+    if (conversationOnly) return;
     setPromptPending(true);
     let refresh = false;
     try {
