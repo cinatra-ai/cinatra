@@ -826,6 +826,30 @@ jobs:
           SUPABASE_SCHEMA: cinatra_exec_run_seam
         run: pnpm exec vitest run src/lib/execution/__tests__/run-seam-declared-environment.integration.test.ts
 
+      # cinatra#3271 wires the two row-promotion real-database proofs, whose own
+      # issues are cinatra#1381 (memory) and cinatra#1437 (artifact). Neither
+      # file ran in ANY CI job: both are `*.integration.test.ts`, which the root
+      # vitest tier excludes, and no workflow named either path. So the memory
+      # apply's transactional claim (the CAS assert must RAISE in SQL, and the
+      # co-committed request claim must roll back WITH it — the exact defect that
+      # suite was written for) and the artifact approvals ladder could both
+      # regress without reddening a single check. These two steps close that,
+      # using the same CINATRA_DB_INTEGRATION_TESTS=1 + job-level SUPABASE_DB_URL
+      # pattern as every step above. Naming the paths LITERALLY here also brings
+      # both files under scripts/audit/ci-pinned-tests-exist.mjs direction (1),
+      # so renaming or losing either one now fails that audit instead of leaving
+      # a silent dead pin behind. Own vitest invocation (own process) each, so
+      # their SUPABASE_SCHEMA and pool lifecycles never touch the steps above.
+      - name: Memory promotion atomic-apply DB test (cinatra#1381)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/objects/__tests__/memory-promotion-atomic-apply.integration.test.ts
+
+      - name: Artifact promotion approvals DB test (cinatra#1437)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/objects/__tests__/artifact-promotion-approvals.integration.test.ts
+
       # cinatra#2882. The async notification-delete seam's whole claim is a
       # claim about the EVENT LOOP — that a timer due mid-delete fires on the
       # async path and cannot fire on the synchronous one — plus the settle
