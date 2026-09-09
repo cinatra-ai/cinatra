@@ -1,7 +1,7 @@
 name: hosted-reclaim-rerun
 
-# One guarded automatic re-run of a build job the hosted runner reclaimed
-# (cinatra#3316, items 1 and 2).
+# One guarded automatic re-run of a build job the hosted runner reclaimed, and
+# the weekly count of those reclaims (cinatra#3316, items 1 to 3).
 #
 # A hosted runner sometimes takes the machine away mid-build. The build step is
 # reported cancelled, the job concludes failure, and the log carries the line
@@ -15,10 +15,15 @@ name: hosted-reclaim-rerun
 # it never runs code from the head under test. The only checkout it performs is
 # of the default branch, purely to load its own script.
 #
-# It writes NOTHING on the pull request and opens nothing: `actions: write` and
-# `contents: read` are the whole permission set. The weekly reclaim count and
-# the larger-runner trial (items 3 and 4 of that issue) are deliberately NOT
-# here; they stay open.
+# It writes NOTHING on the pull request and opens nothing. Every re-run it
+# issues leaves ONE ledger artifact behind whose name carries the record
+# (workflow, job id, attempt, runner label); the weekly job below counts those
+# records — the watcher's own records, never a scrape of run logs — and appends
+# the week's numbers to the tracking issue.
+#
+# The two jobs take DIFFERENT permissions and neither can do the other's work:
+# the re-run job takes `actions: write` and never `issues: write`; the weekly
+# count takes `issues: write` and never `actions: write`.
 
 on:
   workflow_run:
@@ -27,9 +32,13 @@ on:
       - "dashboard-live-verify"
       - "Build and publish image"
     types: [completed]
+  schedule:
+    # Mondays 06:17 UTC. By then the Monday-00:00 through Sunday-24:00 week
+    # before it is complete and closed, so the window never moves under a
+    # posting and no record is ever counted twice.
+    - cron: "17 6 * * 1"
 
 permissions:
-  actions: write
   contents: read
 
 concurrency:
@@ -42,9 +51,12 @@ jobs:
     # Cheap pre-filter only. The authoritative guards live in the script and
     # are re-evaluated there against FRESH reads, because the event payload is
     # a snapshot from when the event was queued.
-    if: ${{ github.repository == 'cinatra-ai/cinatra' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'failure' }}
+    if: ${{ github.event_name == 'workflow_run' && github.repository == 'cinatra-ai/cinatra' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
     steps:
       - name: Check out the default branch (this watcher's own code, never the head under test)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,6 +65,39 @@ jobs:
           persist-credentials: false
 
       - name: Decide, and re-run the one reclaimed job when every guard holds
+        id: decide
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci/hosted-reclaim-rerun.mjs
+
+      # The record, and only when a re-run actually happened. The artifact NAME
+      # is the ledger entry; the file is the same record in readable form.
+      - name: Keep the reclaim record (the weekly count reads these, not the logs)
+        if: ${{ steps.decide.outputs.ledger_name != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.decide.outputs.ledger_name }}
+          path: reclaim-record.json
+          if-no-files-found: error
+          retention-days: 90
+
+  weekly-count:
+    name: weekly reclaim count — appended to the tracking issue
+    if: ${{ github.event_name == 'schedule' && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the default branch (this watcher's own code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Count last week's reclaims and append them to the tracking issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/reclaim-weekly-count.mjs
