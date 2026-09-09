@@ -72,6 +72,12 @@ function harness(cfg: {
   /** readTeamInOrg returns null (unknown/foreign team or non-member). */
   teamMissing?: boolean;
   casWins?: boolean;
+  /** Which arm the decide CAS lost on, when it loses. */
+  casLostBecause?: "not_pending" | "not_a_member";
+  /** The DECIDER holds the platform-admin bit but no membership in this org. */
+  deciderIsNotAMember?: boolean;
+  /** The membership read itself fails (infra), which is NOT an authz answer. */
+  membershipReadThrows?: boolean;
   supersedeWins?: boolean;
   compensateWins?: boolean;
 } = {}) {
@@ -83,7 +89,11 @@ function harness(cfg: {
     ),
     listRequests: vi.fn(() => requests),
     countRequests: vi.fn(() => requests.length),
-    casDecideRequest: vi.fn(() => cfg.casWins ?? true),
+    casDecideRequest: vi.fn(() =>
+      (cfg.casWins ?? true)
+        ? ({ ok: true } as const)
+        : ({ ok: false, reason: cfg.casLostBecause ?? "not_pending" } as const),
+    ),
     markSuperseded: vi.fn(() => cfg.supersedeWins ?? true),
     compensateApproved: vi.fn(() => cfg.compensateWins ?? true),
     createRequest: vi.fn((input: Parameters<ArtifactPromotionDeps["createRequest"]>[0]) =>
@@ -100,6 +110,11 @@ function harness(cfg: {
     scanContent: vi.fn((content: unknown) => {
       if (cfg.scanThrows) throw new Error("scanner boom");
       return cfg.scan ?? scanArtifactContentForSecrets(content);
+    }),
+    isDeciderAMember: vi.fn(async () => {
+      // Infra failures THROW; "not a member" is a VALUE.
+      if (cfg.membershipReadThrows) throw new Error("membership read boom");
+      return !cfg.deciderIsNotAMember;
     }),
   };
   const deps = spies as unknown as ArtifactPromotionDeps;
@@ -198,6 +213,102 @@ describe("decideArtifactPromotion — reject leaves the row untouched", () => {
       deps,
     );
     expect(res).toMatchObject({ ok: false, code: "conflict" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3272 — the reject path re-checks the decider's MEMBERSHIP, the way the
+// memory sibling does. `viewer.isAdmin` at step 1 is the PLATFORM role, which
+// says nothing about this organization. The approve path already has a
+// membership-grounded second half (the org-write authority minted inside the
+// atomic widen, which refuses a platform administrator who is not a member); the
+// reject path writes no object row, so it had no second half at all — and a
+// rejection is PERMANENT for the request.
+// ---------------------------------------------------------------------------
+
+describe("decideArtifactPromotion — reject re-checks the decider's membership", () => {
+  it("REFUSES a platform administrator who is not a member of this organization, and rejects NOTHING", async () => {
+    const { deps, spies } = harness({ deciderIsNotAMember: true });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "reject", reason: "no", viewer: admin },
+      deps,
+    );
+    expect(res).toMatchObject({
+      ok: false,
+      code: "not_authorized",
+      message: expect.stringContaining("not a member of this organization"),
+    });
+    // The request's decision fields and the artifact row are BOTH untouched:
+    // the CAS never fired and the object was never read, let alone widened.
+    expect(spies.casDecideRequest).not.toHaveBeenCalled();
+    expect(spies.readObject).not.toHaveBeenCalled();
+    expect(spies.widenAndReproject).not.toHaveBeenCalled();
+    expect(spies.markSuperseded).not.toHaveBeenCalled();
+    expect(spies.compensateApproved).not.toHaveBeenCalled();
+  });
+
+  it("reports a lost reject CAS as not_authorized when the MEMBERSHIP arm is what lost", async () => {
+    // A membership revoked BETWEEN the pre-check and the write: the pre-check
+    // answers "member", the statement's own snapshot answers "not a member", and
+    // the predicate riding inside the CAS is what refuses the write.
+    const { deps, spies } = harness({ casWins: false, casLostBecause: "not_a_member" });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "reject", reason: "no", viewer: admin },
+      deps,
+    );
+    expect(res).toMatchObject({
+      ok: false,
+      code: "not_authorized",
+      message: expect.stringContaining("not a member of this organization"),
+    });
+    // No second membership read: one call, the pre-check. The statement reported
+    // its own cause at its own snapshot.
+    expect(spies.isDeciderAMember).toHaveBeenCalledTimes(1);
+    expect(spies.widenAndReproject).not.toHaveBeenCalled();
+  });
+
+  it("takes the SAME membership mint the approve path takes, and carries it INSIDE the CAS", async () => {
+    const { deps, spies } = harness();
+    await decideArtifactPromotion(
+      { requestId: "req-1", action: "reject", reason: "duplicate", viewer: admin },
+      deps,
+    );
+    expect(spies.isDeciderAMember).toHaveBeenCalledWith(admin);
+    expect(spies.casDecideRequest).toHaveBeenCalledWith({
+      id: "req-1",
+      orgId: "org-1",
+      decidedBy: "u-admin",
+      decision: "reject",
+      note: "duplicate",
+      requireMemberUserId: "u-admin",
+    });
+  });
+
+  it("reports an INFRA failure in the membership read as transient, never not_authorized", async () => {
+    const { deps, spies } = harness({ membershipReadThrows: true });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "reject", reason: "no", viewer: admin },
+      deps,
+    );
+    expect(res).toMatchObject({ ok: false, code: "transient" });
+    expect(spies.casDecideRequest).not.toHaveBeenCalled();
+  });
+
+  it("leaves the APPROVE path alone: no membership pre-check, no predicate in its claim", async () => {
+    const { deps, spies } = harness();
+    await decideArtifactPromotion(
+      { requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin },
+      deps,
+    );
+    expect(spies.isDeciderAMember).not.toHaveBeenCalled();
+    // EXACT equality — an added `requireMemberUserId` key would fail here.
+    expect(spies.casDecideRequest).toHaveBeenCalledWith({
+      id: "req-1",
+      orgId: "org-1",
+      decidedBy: "u-admin",
+      decision: "approve",
+      note: null,
+    });
   });
 });
 
