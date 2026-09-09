@@ -137,6 +137,56 @@ async function openOverlay(
   return panel;
 }
 
+/**
+ * Open one accordion row through its own trigger and hand back the panel that
+ * row controls, not before that row is actually open.
+ *
+ * WHY THE READING BELOW CANNOT BE TAKEN ON THE ROW THAT IS OPEN AT FIRST PAINT
+ * (cinatra#3349). The fixture's first row is open by default, and Radix's
+ * collapsible deliberately suppresses the animation of a row that is already
+ * open when it mounts: its layout effect writes `animation-name: none` INLINE
+ * to measure the panel, and restores the original only when the mount is not
+ * the one being prevented (`isMountAnimationPreventedRef`, seeded from the
+ * open state and cleared one animation frame later). For a default-open row
+ * that ref is true on the only pass that runs, so the inline `none` is never
+ * lifted. Measured on the standalone fixtures boot: the panel reads
+ * `accordion-down` from the server-rendered markup, and about half a second in
+ * — when hydration lands — it flips to `none` and STAYS there for the life of
+ * the page. A reading that wins the race sees the rule; one that arrives after
+ * hydration polls a value that will never change again, which is exactly the
+ * ten-second expiry with `animation-name: none` this case was reported for.
+ *
+ * Driving a row open is therefore not a convenience: it is the only state in
+ * which the clause it grades ("the panel OPENS on a 200ms animation") is even
+ * expressed. A row opened by interaction mounts after the prevention window
+ * has closed, so the inline override is restored to empty and the cascade's
+ * value is what a browser computes — stably, for the rest of the page's life.
+ *
+ * The click is retried the same way `openOverlay` retries its own, and for the
+ * same reason: this file navigates on `domcontentloaded`, and a pointer event
+ * delivered before the trigger has a handler is swallowed. Each attempt clicks
+ * ONLY while the row is still collapsed, so a click that did land is never
+ * doubled back into a close, and the retry settles on the row's own published
+ * state rather than on the value under test.
+ */
+async function openAccordionRow(page: Page, index: number): Promise<Locator> {
+  const trigger = page
+    .locator(`${seam("accordion")} [data-slot="accordion-trigger"]`)
+    .nth(index);
+  await expect(trigger).toBeVisible();
+  await expect(async () => {
+    if ((await trigger.getAttribute("data-state")) !== "open") {
+      await trigger.click();
+    }
+    await expect(trigger).toHaveAttribute("data-state", "open", { timeout: 1_000 });
+  }).toPass({ timeout: 15_000, intervals: [100, 250, 500, 1_000] });
+  const panel = page
+    .locator(`${seam("accordion")} [data-slot="accordion-content"][data-state="open"]`)
+    .first();
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
 async function open(page: Page, theme: string, path = HARNESS) {
   await page.addInitScript((value) => {
     try {
@@ -182,10 +232,6 @@ for (const { name: palette, theme } of PALETTES) {
       page,
     }) => {
       await open(page, theme);
-      const content = page
-        .locator(`${seam("accordion")} [data-slot="accordion-content"][data-state="open"]`)
-        .first();
-      await expect(content).toBeVisible();
       // THE FIXED CLAUSE, and the reading that found it. The panel asked for its
       // animation through `data-open:`, which compiles to `[data-open]` — an
       // attribute nothing writes; the primitive publishes `data-state="open"`.
@@ -194,25 +240,28 @@ for (const { name: palette, theme } of PALETTES) {
       // whole time, which is exactly why this reading has to be taken in a
       // browser rather than off the source.
       //
-      // DETERMINISM (leg 2). This reading, and this one alone in the file,
-      // failed once at `--workers=2`: `animation-name` read "none" on the dark
-      // run, while the same reading passed at one worker and on a targeted
-      // repeat. Nothing about the clause is a race in the product — the rule is
-      // static, and the animation it names is not one this reading has to catch
-      // mid-flight. The race is with the stylesheet: two workers share one
-      // boot, this file opens the page on `domcontentloaded` so a reading is
-      // taken as early as the palette assertion allows, and a read that lands
-      // before the route's CSS has applied sees every animation property at its
-      // INITIAL value — "none" and "0s" — which is exactly the pair that was
-      // reported.
+      // DETERMINISM (leg 3, cinatra#3349). Leg 2 read this off the row that is
+      // open at first paint and gave the read a ten-second budget, on the
+      // reading that the value it wanted was on its way. It is not: on that row
+      // the value goes the OTHER way. Measured on the standalone fixtures boot
+      // and confirmed against the collapsible's own source — see
+      // `openAccordionRow` above — a default-open row keeps an INLINE
+      // `animation-name: none` that Radix writes to measure it and never lifts,
+      // so the panel reads `accordion-down` from the server-rendered markup and
+      // flips to `none` about half a second later, permanently. Polling only
+      // widened the window in which hydration could take the value away; the
+      // ten-second expiry with `none` reported on the self-hosted runner is that
+      // race lost, not a stylesheet that never applied.
       //
-      // The repair states the reading as the settled condition it always meant
-      // ("the rule has applied") and lets it settle, rather than serialising
-      // the file. Serialising would hide the race behind slower runs and would
-      // slow every other primitive's reading in the same block with it, and it
-      // would leave the identical exposure on every other single-shot computed
-      // read here. A genuinely unapplied rule still fails, with the same
-      // message, after the budget instead of instantly.
+      // The settle takes the reading where the clause is actually expressed: on
+      // a row this test OPENS, which mounts after the mount-animation window has
+      // closed and therefore carries the cascade's value with no inline
+      // override. The assertion is unchanged and the budget is unchanged — the
+      // poll now waits on a value that converges instead of one that decays, and
+      // the two single-shot readings are taken once that condition holds. A
+      // primitive that stops asking for the animation still fails here, with the
+      // same message.
+      const content = await openAccordionRow(page, 1);
       await expect
         .poll(() => style(content, "animation-name"), { timeout: 10_000 })
         .toContain("accordion-down");
