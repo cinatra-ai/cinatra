@@ -1,0 +1,27 @@
+[
+  {
+    "id": 8800000001,
+    "run_id": 9910000001,
+    "name": "design suite selection",
+    "conclusion": "success",
+    "steps": [
+      { "number": 1, "name": "Set up job", "conclusion": "success" },
+      { "number": 2, "name": "select the design spec families", "conclusion": "success" }
+    ]
+  },
+  {
+    "id": 8800000002,
+    "run_id": 9910000001,
+    "name": "/design-fixtures pixel-diff + axe",
+    "conclusion": "failure",
+    "steps": [
+      { "number": 1, "name": "Set up job", "conclusion": "success" },
+      { "number": 2, "name": "Export the mapped service ports", "conclusion": "success" },
+      { "number": 3, "name": "install deps", "conclusion": "success" },
+      { "number": 4, "name": "Add CI build swap (default-runner only)", "conclusion": "success" },
+      { "number": 5, "name": "Build (standalone production server)", "conclusion": "cancelled" },
+      { "number": 6, "name": "Start standalone server", "conclusion": "skipped" },
+      { "number": 7, "name": "run functional acceptance + pixel-diff + axe", "conclusion": "skipped" }
+    ]
+  }
+]
