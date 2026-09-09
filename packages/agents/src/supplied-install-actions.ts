@@ -134,6 +134,85 @@ const KIND_OBSERVABLE: Record<SuppliedPackageKind, SuppliedInstallObservable> = 
   connector: { label: "Open its configuration", href: "/configuration/connectors" },
 };
 
+/** Where an install of ANY kind is listed as an install — the surface the
+ *  artifact kind already names, and the truthful fallback for an agent the run
+ *  picker does not carry. */
+const INSTALLED_EXTENSIONS_OBSERVABLE: SuppliedInstallObservable = {
+  label: "See it in installed extensions",
+  href: "/configuration/extensions",
+};
+
+/**
+ * The AGENT kind's observable, resolved from the installed template rather than
+ * asserted (cinatra#3204 criterion 21).
+ *
+ * `/agents` is the run picker: it lists the installed templates that carry a
+ * human-in-the-loop signal of their own, plus their sub-agents and external A2A
+ * agents (`selectHitlRunVisibleTemplates`). An installed agent without such a
+ * signal is absent from it — through THIS road and through the store road
+ * alike, because the filter reads the template, not the road it arrived on. So
+ * pointing every agent install at `/agents` promises a listing that cannot
+ * carry it, which is exactly what the proof round measured: the toast named the
+ * agents list, the search there reported no match, and the install was fine.
+ *
+ * Resolved through the LISTING'S OWN reader and the LISTING'S OWN predicate —
+ * never a second rule that could drift from the page — so the answer is the
+ * page's answer. An agent the picker carries keeps the agents list; any other
+ * agent is pointed at the installed-extensions listing, where every kind's
+ * install is visible. A read failure degrades to that same listing: it is true
+ * for every install, so it can never become the false half of this choice.
+ */
+async function resolveAgentObservable(packageName: string): Promise<SuppliedInstallObservable> {
+  try {
+    const { readInstalledAgentTemplates } = await import("./store");
+    const { selectHitlRunVisibleTemplates } = await import("./hitl-run-filter");
+    const installed = await readInstalledAgentTemplates();
+    const visible = selectHitlRunVisibleTemplates(installed);
+    if (visible.some((t) => t.packageName === packageName)) return KIND_OBSERVABLE.agent;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[supplied-install-actions] could not read the agents listing for the install observable:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return INSTALLED_EXTENSIONS_OBSERVABLE;
+}
+
+/**
+ * The SKILL kind's observable, narrowed to the package (cinatra#3204
+ * criterion 21).
+ *
+ * The criterion names this observable in its own words: the skill is "queryable
+ * in the catalog by package name". The unfiltered catalog is not that: it is a
+ * paged table of every installed skill, so on any instance carrying more skills
+ * than one page the freshly installed one is present but NOT on the surface the
+ * operator lands on — the proof round measured exactly that, the row in the
+ * document and hidden behind the pager. Naming the catalog QUERY as the
+ * destination makes the promise true on the first screen, and it is the very
+ * link the catalog renders beside each row (`/skills?q=<package name>`), so the
+ * operator arrives where the product itself would have sent them.
+ *
+ * The name is percent-encoded: a scoped package carries `@` and `/`, and an
+ * unencoded `/` would turn the query into a second path segment.
+ */
+function resolveSkillObservable(packageName: string): SuppliedInstallObservable {
+  return {
+    ...KIND_OBSERVABLE.skill,
+    href: `${KIND_OBSERVABLE.skill.href}?q=${encodeURIComponent(packageName)}`,
+  };
+}
+
+/** The observable a completed install points the operator at, per kind. */
+async function resolveInstallObservable(
+  kind: SuppliedPackageKind,
+  packageName: string,
+): Promise<SuppliedInstallObservable> {
+  if (kind === "agent") return resolveAgentObservable(packageName);
+  if (kind === "skill") return resolveSkillObservable(packageName);
+  return KIND_OBSERVABLE[kind];
+}
+
 // ---------------------------------------------------------------------------
 // Scope: validate, authorize, resolve the contract. Runs BEFORE any mutation.
 // ---------------------------------------------------------------------------
@@ -500,7 +579,7 @@ async function installAtScope(
       kind: candidate.kind,
       packageName: candidate.packageName,
       version: candidate.version,
-      observable: KIND_OBSERVABLE[candidate.kind],
+      observable: await resolveInstallObservable(candidate.kind, candidate.packageName),
       ...(uploadConsent ? { uploadConsent } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     };
@@ -636,13 +715,51 @@ export async function installSuppliedArchiveAction(input: {
 // THE REPOSITORY ROAD
 // ---------------------------------------------------------------------------
 
+/** The connector key the GitHub connection identity rows are written under —
+ *  host vocabulary (a `NangoConnectorKey`), never a package literal. */
+const GITHUB_CONNECTOR_KEY = "github";
+
+/**
+ * Does THIS organization hold a GitHub connection it may use?
+ *
+ * The connector client's `getStatus()` answers for the instance: its contract
+ * takes no scoping argument at all, so a second admin session in another
+ * organization read the first organization's connection as its own and both
+ * precondition states below became unreachable for it (measured on the real
+ * screen). The connection rows themselves are org-stamped at write time, and
+ * the identity store is the sanctioned org-scoped read of them — the same rows
+ * the connection resolver picks the actual token from — so the precondition is
+ * read there.
+ *
+ * FAIL-CLOSED on the null-org legacy rows the store returns alongside the
+ * organization's own: those are owner-only by construction, so they count only
+ * for the admin who owns them and never as this organization's connection.
+ */
+async function organizationHasGitHubConnection(input: {
+  organizationId: string | null;
+  userId: string | null;
+}): Promise<boolean> {
+  const { listNangoConnectionsByConnector } = await import(
+    "@cinatra-ai/extensions/connection-identity-store"
+  );
+  const rows = await listNangoConnectionsByConnector(
+    input.organizationId,
+    GITHUB_CONNECTOR_KEY,
+  );
+  return rows.some((row) =>
+    row.organizationId === null
+      ? input.userId != null && row.ownerUserId === input.userId
+      : input.organizationId != null && row.organizationId === input.organizationId,
+  );
+}
+
 /**
  * The precondition probe (criteria 9, 10). Distinguishes "no owning connector"
  * from "an installed connector with no usable connection", and names where each
  * is fixed.
  */
 export async function readGitHubUploadPreconditionAction(): Promise<GitHubUploadPrecondition> {
-  await requireAdminSession();
+  const session = await requireAdminSession();
   const { resolveGitHubConnectionClient } = await import("@/lib/connector-client-providers");
   const client = resolveGitHubConnectionClient();
   if (!client) {
@@ -654,16 +771,23 @@ export async function readGitHubUploadPreconditionAction(): Promise<GitHubUpload
       fixLabel: "Open the marketplace",
     };
   }
+  const noConnection: GitHubUploadPrecondition = {
+    state: "no-connection",
+    message:
+      "The GitHub connector is installed, but this organization has no usable GitHub connection yet. Connect an account in the connector's settings, then come back.",
+    fixHref: "/configuration/connectors",
+    fixLabel: "Open connector settings",
+  };
   try {
     const status = await client.getStatus();
-    if (status.status === "connected") return { state: "ready" };
-    return {
-      state: "no-connection",
-      message:
-        "The GitHub connector is installed, but this instance has no usable GitHub connection yet. Connect an account in the connector's settings, then come back.",
-      fixHref: "/configuration/connectors",
-      fixLabel: "Open connector settings",
-    };
+    if (status.status !== "connected") return noConnection;
+    // Connected SOMEWHERE on this instance is not connected HERE: the tab
+    // installs on behalf of the organization the screen runs in.
+    const usableHere = await organizationHasGitHubConnection({
+      organizationId: session.session?.activeOrganizationId ?? null,
+      userId: session.user?.id ?? null,
+    });
+    return usableHere ? { state: "ready" } : noConnection;
   } catch {
     return {
       state: "no-connection",

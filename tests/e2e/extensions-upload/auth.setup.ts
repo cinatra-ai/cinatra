@@ -11,7 +11,7 @@
  * applied after sign-in is invisible to the cached session), same direct-pg
  * seeding, same `.env.local` DB resolution.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { Client } from "pg";
 import { test as setup, expect } from "@playwright/test";
@@ -39,6 +39,22 @@ const ENV_LOCAL = readEnvLocal();
 const EMAIL = process.env.E2E_UPLOAD_USER_EMAIL ?? "extensions-upload-uat@local.test";
 const PASSWORD = process.env.E2E_UPLOAD_USER_PASSWORD ?? "ExtensionsUploadUAT!2026";
 const STORAGE_PATH = "tests/e2e/extensions-upload/.auth/admin-state.json";
+/**
+ * A SECOND session, in the organization that actually holds a usable GitHub
+ * connection (cinatra#3204 criteria 9, 10).
+ *
+ * The GitHub tab reads its precondition per the organization the screen runs
+ * in, so one session can no longer show both halves of the road: the walk's own
+ * organization has no connection of its own and therefore states the
+ * precondition (CELL3), while a repository can only be resolved by an admin
+ * whose active organization holds the connection (CELL2). Two organizations,
+ * two sessions, so both cells are measurable on one instance.
+ *
+ * When the instance holds no GitHub connection at all this is the SAME state as
+ * above: CELL2 then states, in its own skip line, the precondition it met — it
+ * never silently measures the wrong organization.
+ */
+const GITHUB_STORAGE_PATH = "tests/e2e/extensions-upload/.auth/github-admin-state.json";
 const DATABASE_URL =
   process.env.SUPABASE_DB_URL ?? ENV_LOCAL.SUPABASE_DB_URL ?? "postgresql://postgres:postgres@127.0.0.1:5434/postgres";
 
@@ -88,6 +104,49 @@ async function ensureMemberOrg(c: Client, userId: string): Promise<string> {
   return orgId;
 }
 
+/** The schema the app's own tables live in (the connection rows are not in `public`). */
+function appSchema(): string {
+  const raw = process.env.SUPABASE_SCHEMA?.trim() || ENV_LOCAL.SUPABASE_SCHEMA?.trim() || "cinatra";
+  return `"${raw.replaceAll('"', '""')}"`;
+}
+
+/**
+ * The organization that owns a GitHub connection identity row — the one an
+ * admin can actually resolve a repository in. Read from the rows themselves so
+ * the walk follows whatever the instance holds rather than a hard-coded id, and
+ * a soft-deleted row is skipped exactly as the precondition's own reader skips
+ * it — so the session the walk switches into is a session the screen calls
+ * ready.
+ */
+async function organizationWithGitHubConnection(c: Client): Promise<string | null> {
+  try {
+    const r = await c.query<{ organization_id: string }>(
+      `SELECT n.organization_id
+         FROM ${appSchema()}.nango_connection n
+         JOIN public."organization" o ON o.id = n.organization_id
+        WHERE n.connector_key = 'github' AND n.organization_id IS NOT NULL
+          AND n.deleted_at IS NULL
+        LIMIT 1`,
+    );
+    return r.rowCount && r.rowCount > 0 ? r.rows[0]!.organization_id : null;
+  } catch {
+    // No connection table on this instance yet — the same answer as no row.
+    return null;
+  }
+}
+
+/** Membership is what `set-active` requires before it will switch the session. */
+async function ensureMembership(c: Client, userId: string, orgId: string): Promise<void> {
+  await c.query(
+    `INSERT INTO public."member" (id, "userId", "organizationId", role, "createdAt")
+     SELECT $1, $2, $3, 'member', now()
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public."member" WHERE "userId" = $2 AND "organizationId" = $3
+      )`,
+    [`upload-member-github-${orgId}`, userId, orgId],
+  );
+}
+
 setup("create platform-admin user + save session", async ({ request, baseURL }) => {
   const origin = baseURL ?? "http://localhost:3000";
   const headers = { Origin: origin } as const;
@@ -111,9 +170,11 @@ setup("create platform-admin user + save session", async ({ request, baseURL }) 
   const c = newClient();
   await c.connect();
   let orgId: string;
+  let adminUserId: string;
   try {
     const userId = await userIdByEmail(c, EMAIL);
     if (!userId) throw new Error(`extensions-upload user not found: ${EMAIL}`);
+    adminUserId = userId;
     await promoteToPlatformAdmin(c, userId);
     orgId = await ensureMemberOrg(c, userId);
   } finally {
@@ -137,4 +198,36 @@ setup("create platform-admin user + save session", async ({ request, baseURL }) 
   // 5. Persist the cookie state for the chromium project.
   mkdirSync(dirname(STORAGE_PATH), { recursive: true });
   await request.storageState({ path: STORAGE_PATH });
+
+  // 6. The SECOND session: the same admin, made a member of the organization
+  //    that holds a GitHub connection, with that organization active. The state
+  //    file is always written — when there is no such organization it is a copy
+  //    of the state above, so the GitHub cell loads a session either way and
+  //    states the precondition it met instead of failing to start.
+  const c2 = newClient();
+  await c2.connect();
+  let githubOrgId: string | null = null;
+  try {
+    githubOrgId = await organizationWithGitHubConnection(c2);
+    if (githubOrgId) await ensureMembership(c2, adminUserId, githubOrgId);
+  } finally {
+    await c2.end();
+  }
+
+  if (githubOrgId) {
+    const secondSignIn = await request.post("/api/auth/sign-in/email", {
+      data: { email: EMAIL, password: PASSWORD },
+      headers,
+    });
+    expect(secondSignIn.ok()).toBeTruthy();
+    const setActive = await request.post("/api/auth/organization/set-active", {
+      data: { organizationId: githubOrgId },
+      headers,
+      failOnStatusCode: false,
+    });
+    expect(setActive.ok()).toBeTruthy();
+    await request.storageState({ path: GITHUB_STORAGE_PATH });
+  } else {
+    copyFileSync(STORAGE_PATH, GITHUB_STORAGE_PATH);
+  }
 });
