@@ -159,19 +159,57 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     }
   });
 
-  it("the audit names the two blog-pipeline writes as unowned, with the reason", () => {
-    // The campaigns context type IS owned by an installed extension, so the only
-    // unowned shaper saves left are the two the plan names on the blog
-    // pipeline's road.
+  it("the audit names a still-tombstoned blog-pipeline write as unowned, with the reason", () => {
+    // The campaigns context type IS owned by an installed extension, and
+    // cinatra#2960 moved the SELECTED-IDEA save onto a host-owned static type,
+    // so the only unowned shaper save left is the draft projection — still on
+    // the tombstoned `@dynamic/types:*` namespace, still named with its reason.
     const findings = auditPassthroughShaperDeclarations(
-      ports({ writable: ["@cinatra-ai/campaigns:context"] }),
+      ports({
+        writable: [
+          "@cinatra-ai/campaigns:context",
+          "@cinatra-ai/blog-pipeline:selected-idea",
+        ],
+      }),
     );
     const unowned = findings.filter((f) => f.kind === "unowned-type");
     expect(unowned.map((f) => f.shaperId).sort()).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
     for (const f of unowned) expect(f.reason).toBe("dynamic-namespace");
+  });
+
+  it("the selected-idea save names a host-owned type, not a tombstoned one (cinatra#2960)", () => {
+    // ACCEPTANCE ITEM 2, VERBATIM: "A test pins the resolution rule for
+    // `@dynamic/types:*` on the passthrough save path so the refusal class
+    // cannot silently return." The declaration is what the audit reads, so the
+    // pin belongs on it as well as on the shaper.
+    const declaration = PASSTHROUGH_SHAPER_DECLARATIONS.find(
+      (d) => d.shaperId === "blog-pipeline-seam:blog_pipeline_selected_idea",
+    );
+    expect(declaration).toBeDefined();
+    for (const type of declaration!.savesTypes) {
+      expect(type.startsWith("@dynamic/types:")).toBe(false);
+      expect(type.startsWith("@cinatra-ai/dynamic:")).toBe(false);
+    }
+    expect(declaration!.savesTypes).toEqual(["@cinatra-ai/blog-pipeline:selected-idea"]);
+    // With that type registered, the save the declaration describes raises NO
+    // unowned finding at all — the refusal cinatra#2960 recorded is gone.
+    const findings = auditPassthroughShaperDeclarations(
+      ports({
+        writable: [
+          "@cinatra-ai/campaigns:context",
+          "@cinatra-ai/blog-pipeline:selected-idea",
+        ],
+      }),
+    );
+    expect(
+      findings.some(
+        (f) =>
+          f.kind === "unowned-type" &&
+          f.shaperId === "blog-pipeline-seam:blog_pipeline_selected_idea",
+      ),
+    ).toBe(false);
   });
 
   it("the audit names a shaper that persists a transform of a run value", () => {

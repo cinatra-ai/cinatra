@@ -220,6 +220,61 @@ function registerCampaignBundleTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
+// The blog pipeline's SELECTED IDEA (cinatra#2960).
+//
+// The passthrough seam that saves the idea chosen at the idea-selection gate
+// named `@dynamic/types:blog-pipeline-selected-idea`. That id sits under a
+// PERMANENTLY tombstoned namespace (`isTombstonedObjectTypeId`, cinatra#1789 /
+// epic #1785): the ownership classifier answers `owned:false` with reason
+// `dynamic-namespace` BEFORE the registry is ever consulted, whatever is
+// installed, so the save could never be admitted and the run failed one frame
+// after its gate. The tombstone is CORRECT and stays exactly as it is — what was
+// wrong is that a host write named an id under it.
+//
+// So the selection gets a HOST-OWNED STATIC type, the same promotion the email
+// draft / followup / send-attempt bundles took off `@cinatra-ai/dynamic:*`
+// above: a run-scoped transient product bundle (one per pipeline run), keyed by
+// the agent run id so a retry within the same run updates in place rather than
+// duplicating, with the generic renderers because no surface renders this row
+// specially. The row is a record of the selection, not an input any later step
+// reads back: nothing resolves this type id, and the pipeline carries the
+// chosen idea forward as a run value. It is registered so the write has an
+// owner, which is what the save boundary requires.
+//
+// Registered HERE and not host-side: unlike the `@cinatra-ai/assets:blog-*`
+// canonical blog objects, this type needs nothing from the host `src/lib` graph
+// (no `@/lib/blog-project-store` import), so there is no package -> host layer
+// inversion to avoid.
+// ---------------------------------------------------------------------------
+
+/** The host-owned static type the blog pipeline's selected idea saves under.
+ *  Replaces the tombstoned `@dynamic/types:blog-pipeline-selected-idea`. */
+export const BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID =
+  "@cinatra-ai/blog-pipeline:selected-idea";
+
+function registerBlogPipelineSelectedIdeaType(): void {
+  objectTypeRegistry.register({
+    type: BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID,
+    category: "report",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+    identityKey: (data) => {
+      const d = data as Record<string, unknown>;
+      const runId = d.cinatra_agent_run_id;
+      return typeof runId === "string" && runId.length > 0 ? runId : null;
+    },
+    // Run-scoped: the gate can be re-submitted within a run, and the retry must
+    // update the same row instead of minting a second selection for the run.
+    crudPolicy: RUN_SCOPED_CAMPAIGN_POLICY,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Email transport + work-product object types.
 //
 // Provider-neutral object types backing the @cinatra-ai/email-connector facade
@@ -1156,6 +1211,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignContextType();
   registerCampaignRecipientsType();
   registerCampaignBundleTypes();
+  registerBlogPipelineSelectedIdeaType();
   registerEmailObjectTypes();
   registerLinkedinObjectTypes();
   registerDrupalObjectTypes();
