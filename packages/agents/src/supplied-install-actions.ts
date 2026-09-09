@@ -132,7 +132,7 @@ const KIND_OBSERVABLE: Record<SuppliedPackageKind, SuppliedInstallObservable> = 
   agent: { label: "See it in the agents list", href: "/agents" },
   skill: { label: "See it in the skills catalog", href: "/skills" },
   artifact: { label: "See it in installed extensions", href: "/configuration/extensions" },
-  connector: { label: "Open its configuration", href: "/configuration/connectors" },
+  connector: { label: "Open its configuration", href: "/connectors" },
 };
 
 /** Where an install of ANY kind is listed as an install — the surface the
@@ -204,6 +204,35 @@ function resolveSkillObservable(packageName: string): SuppliedInstallObservable 
   };
 }
 
+/**
+ * The CONNECTOR kind's observable, resolved to the connector's OWN configuration
+ * surface (cinatra#3204 criterion 21).
+ *
+ * The kind's observable used to name `/configuration/connectors`, an address
+ * this product does not serve — so a completed connector install handed the
+ * admin to a 404, which is what the proof round measured. A connector's
+ * configuration surface is its dispatch route, and a supplied connector never
+ * has a build-time catalog descriptor, so it resolves through that route's
+ * RUNTIME-ONLY branch: the branch reads the package name back as
+ * `@<vendor>/<slug>` and serves the `setup` subroute for it. This resolver
+ * writes the address that branch resolves, and nothing else.
+ *
+ * A package name that is not a scoped `@vendor/slug` cannot address that route
+ * at all, so it keeps the connectors listing — a page that exists and does carry
+ * the install — rather than a fabricated deep link.
+ */
+function resolveConnectorObservable(packageName: string): SuppliedInstallObservable {
+  const scoped = /^@([^/]+)\/([^/]+)$/.exec(packageName);
+  if (!scoped) return KIND_OBSERVABLE.connector;
+  const [, vendor, slug] = scoped;
+  return {
+    ...KIND_OBSERVABLE.connector,
+    href: `/connectors/${encodeURIComponent(vendor as string)}/${encodeURIComponent(
+      slug as string,
+    )}/setup`,
+  };
+}
+
 /** The observable a completed install points the operator at, per kind. */
 async function resolveInstallObservable(
   kind: SuppliedPackageKind,
@@ -211,6 +240,7 @@ async function resolveInstallObservable(
 ): Promise<SuppliedInstallObservable> {
   if (kind === "agent") return resolveAgentObservable(packageName);
   if (kind === "skill") return resolveSkillObservable(packageName);
+  if (kind === "connector") return resolveConnectorObservable(packageName);
   return KIND_OBSERVABLE[kind];
 }
 

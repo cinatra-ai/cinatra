@@ -1009,6 +1009,197 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
 // unchanged.
 
 /**
+ * THE ARTIFACT KIND'S POST-INSTALL PROJECTION — shared by BOTH install roads
+ * (cinatra#3204).
+ *
+ * An artifact package is metadata-only, so the pipeline's in-process activation
+ * half is inert by construction and a finalized install registers NOTHING in
+ * this process on its own. Everything that makes the install observable — the
+ * store rescan that registers the object type, the runtime renderer admission,
+ * the activation-coupled representation binding and the objectTypes claim
+ * activation — lives here.
+ *
+ * It used to live inline on the REGISTRY road only, so an artifact installed
+ * through the SUPPLIED road finalized correctly and then rendered no object of
+ * its type, and its own settings address answered 404 (the installed list reads
+ * the object-type registry this rescan writes). Both roads call the SAME
+ * projection now, so neither can drift from the other.
+ *
+ * Every step is best-effort and non-throwing: a projection failure never
+ * un-finalizes a committed install (the boot rescan is the durable path).
+ */
+async function projectFinalizedArtifactInstall(input: {
+  packageName: string;
+  row: {
+    id: string;
+    kind: string;
+    status: string;
+    version?: string | null;
+    organizationId: string | null;
+  };
+  result: {
+    installed?: boolean;
+    rolledBack?: boolean;
+    storeDir: string;
+    version: string;
+  };
+}): Promise<void> {
+  const { packageName, row, result } = input;
+  if (!(result.installed === true && row.kind === "artifact")) return;
+  // ARTIFACT-BRIDGE RESCAN (cinatra#661): an artifact package is metadata-only
+  // (no serverEntry), so the in-process activation half returns
+  // `no-server-entry` and never registers the object type. After a finalized
+  // artifact install, rescan the store scoped to THIS package so its type
+  // registers in-process WITHOUT a restart (the runtime parallel to the
+  // server-entry activator). Best-effort: a rescan failure never un-finalizes a
+  // committed install (the boot rescan is the durable path). Reads
+  // `package.json` only — never imports/executes package code.
+  let bridgeRegistered = false;
+  try {
+    const { rescanArtifactBridgeFromStore } = await import(
+      "@/lib/extension-artifact-bridge-rescan"
+    );
+    const rescan = await rescanArtifactBridgeFromStore({ onlyPackage: packageName });
+    bridgeRegistered = rescan.registered.includes(packageName);
+  } catch (err) {
+    console.warn(
+      `[extension-runtime-activate] artifact-bridge rescan threw for "${packageName}" (non-fatal):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  // RUNTIME RENDERER ADMISSION (epic #1620 M1 Slice B, cinatra#1630): a
+  // metadata-only artifact package may ALSO ship a dynamically-loaded client
+  // renderer bundle. Drive each published client-bundle manifest through the
+  // full atomic admission chain (integrity + exact-tuple digest + Ed25519
+  // signature re-verification, fail-closed) so an installed runtime renderer
+  // becomes `loadable` WITHOUT a host rebuild. Runs only after the bridge
+  // registered THIS active package; best-effort — never un-finalizes the
+  // committed install.
+  if (bridgeRegistered && result.rolledBack !== true && typeof result.storeDir === "string") {
+    try {
+      const { admitRuntimeArtifactRenderersForStoreDir } = await import(
+        "@/lib/artifacts/admit-runtime-artifact-renderers"
+      );
+      const admitted = await admitRuntimeArtifactRenderersForStoreDir({
+        packageName,
+        storeDir: result.storeDir,
+      });
+      const ok = admitted.filter((a) => a.ok);
+      if (admitted.length) {
+        console.info(
+          `[extension-runtime-activate] runtime renderer admission for "${packageName}": ` +
+            `${ok.length}/${admitted.length} slot(s) admitted` +
+            (ok.length < admitted.length
+              ? ` — refused: ${admitted.filter((a) => !a.ok).map((a) => `${a.slot}(${a.reason})`).join(", ")}`
+              : ""),
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[extension-runtime-activate] runtime renderer admission threw for "${packageName}" (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // ACTIVATION-COUPLED REPRESENTATION BINDING (cinatra#2044 S6 L-A3): a
+  // build-bundled NON-SYSTEM (`resolution: "guardedOptional"`) artifact
+  // renderer is deliberately NOT projected by the system registrar — that
+  // filter is the ratified cinatra#1630 isolation guardrail (no auto-bind for
+  // every org, no teardown exemption). Its org-scoped representation providers
+  // therefore bind HERE: at the install/activation transaction, for THIS
+  // install's org only, under a generation that a later reinstall/restore
+  // strictly supersedes. Uninstall retires them through the SAME
+  // `invalidateArtifactRenderersForPackage` chokepoint the semantic renderers
+  // use (the system-package early-return does not apply to a guardedOptional
+  // pack), and every resolve surface re-reconciles from the canonical rows —
+  // so this is the FAST path, not the only one. Best-effort + non-throwing:
+  // it never un-finalizes a committed install.
+  if (bridgeRegistered && result.rolledBack !== true) {
+    try {
+      const { bindActivatedRepresentationProvidersForInstall } = await import(
+        "@/lib/artifacts/system-artifact-renderer-registrar"
+      );
+      const boundCount = bindActivatedRepresentationProvidersForInstall({
+        packageName,
+        row: {
+          id: row.id,
+          kind: row.kind,
+          status: row.status,
+          version: result.version ?? row.version ?? null,
+          organizationId: row.organizationId,
+          updatedAt: new Date(),
+        },
+      });
+      if (boundCount > 0) {
+        console.info(
+          `[extension-runtime-activate] activation-coupled representation binding for ` +
+            `"${packageName}": ${boundCount} provider(s) bound for org ${row.organizationId}`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[extension-runtime-activate] activation-coupled representation binding threw for ` +
+          `"${packageName}" (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // INSTALL-ANCHOR CLAIM ACTIVATION (cinatra#1493, epic #1424): tie the
+  // finalized artifact install's manifest `objectTypes` claims to the
+  // durable claim registry. Runs ONLY after the rescan actually registered
+  // THIS package (so the per-claim validators the activation gate resolves
+  // are in the registry, and a fail-closed rescan skip also skips claim
+  // activation), and never for a durably rolled-back update. The hook is
+  // idempotent against its own prior run (re-fires diff live claims vs the
+  // manifest) and NON-THROWING — a claim conflict is a warning outcome,
+  // never a pipeline throw that would roll back the finalized install. A
+  // 'failed' outcome is not terminal: the boot claim-activation backstop
+  // (`runInstallAnchorClaimBackstop`, fired from the artifact-bridge boot
+  // phase) re-drives the idempotent hook at the next boot — the durable
+  // path, parallel to the bridge rescan's own boot pass.
+  if (bridgeRegistered && result.rolledBack !== true) {
+    try {
+      const { readInstallAnchorManifestClaims, runInstallAnchorClaimActivation } =
+        await import("@/lib/objects/artifact-claim-install-anchor");
+      const claims = await readInstallAnchorManifestClaims(result.storeDir);
+      if (claims) {
+        const activation = runInstallAnchorClaimActivation({
+          scope: row.organizationId ? `org:${row.organizationId}` : "platform",
+          extensionPackage: packageName,
+          // The pipeline's RESOLVED concrete version — the requested
+          // `version` may be a dist-tag (e.g. "latest") and must never be
+          // recorded as claim provenance.
+          extensionVersion: result.version,
+          installId: row.id,
+          claims,
+        });
+        if (activation.outcome === "failed") {
+          console.warn(
+            `[extension-runtime-activate] claim activation failed for "${packageName}" ` +
+              `(non-fatal — the install stays finalized; ${
+                activation.conflict ? "claim conflict" : "lifecycle error"
+              }): ${activation.reason}`,
+          );
+        } else {
+          console.info(
+            `[extension-runtime-activate] claim activation for "${packageName}": ` +
+              JSON.stringify(activation),
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[extension-runtime-activate] claim activation threw for "${packageName}" (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
+/**
  * Drive a SUPPLIED canonical row (cinatra#3204 D1) through the supplied pipeline
  * entry — the same finalize gate the registry road reports on.
  *
@@ -1024,7 +1215,14 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
  * before that on any refusal.
  */
 async function runSuppliedInstallAndActivate(
-  row: { kind: string; source: unknown },
+  row: {
+    id: string;
+    kind: string;
+    status: string;
+    version?: string | null;
+    organizationId: string | null;
+    source: unknown;
+  },
   packageName: string,
   orgId: string | null,
   passedVersion?: string,
@@ -1093,6 +1291,11 @@ async function runSuppliedInstallAndActivate(
       },
       deps,
     );
+    // The artifact kind's post-install projection — the SAME one the registry
+    // road runs. Without it a supplied artifact finalized and then registered no
+    // object type in this process, so nothing rendered an object of its type and
+    // its own settings address answered 404.
+    await projectFinalizedArtifactInstall({ packageName, row, result });
     return {
       finalized: result.installed === true,
       activated: result.activated,
@@ -1239,159 +1442,9 @@ export async function runHostExtensionInstallAndActivate(
       deps,
     );
 
-    // ARTIFACT-BRIDGE RESCAN (cinatra#661): an artifact package is metadata-only
-    // (no serverEntry), so the in-process activation half returns
-    // `no-server-entry` and never registers the object type. After a finalized
-    // artifact install, rescan the store scoped to THIS package so its type
-    // registers in-process WITHOUT a restart (the runtime parallel to the
-    // server-entry activator). Best-effort: a rescan failure never un-finalizes a
-    // committed install (the boot rescan is the durable path). Reads
-    // `package.json` only — never imports/executes package code.
-    if (result.installed === true && row.kind === "artifact") {
-      let bridgeRegistered = false;
-      try {
-        const { rescanArtifactBridgeFromStore } = await import(
-          "@/lib/extension-artifact-bridge-rescan"
-        );
-        const rescan = await rescanArtifactBridgeFromStore({ onlyPackage: packageName });
-        bridgeRegistered = rescan.registered.includes(packageName);
-      } catch (err) {
-        console.warn(
-          `[extension-runtime-activate] artifact-bridge rescan threw for "${packageName}" (non-fatal):`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-
-      // RUNTIME RENDERER ADMISSION (epic #1620 M1 Slice B, cinatra#1630): a
-      // metadata-only artifact package may ALSO ship a dynamically-loaded client
-      // renderer bundle. Drive each published client-bundle manifest through the
-      // full atomic admission chain (integrity + exact-tuple digest + Ed25519
-      // signature re-verification, fail-closed) so an installed runtime renderer
-      // becomes `loadable` WITHOUT a host rebuild. Runs only after the bridge
-      // registered THIS active package; best-effort — never un-finalizes the
-      // committed install.
-      if (bridgeRegistered && result.rolledBack !== true && typeof result.storeDir === "string") {
-        try {
-          const { admitRuntimeArtifactRenderersForStoreDir } = await import(
-            "@/lib/artifacts/admit-runtime-artifact-renderers"
-          );
-          const admitted = await admitRuntimeArtifactRenderersForStoreDir({
-            packageName,
-            storeDir: result.storeDir,
-          });
-          const ok = admitted.filter((a) => a.ok);
-          if (admitted.length) {
-            console.info(
-              `[extension-runtime-activate] runtime renderer admission for "${packageName}": ` +
-                `${ok.length}/${admitted.length} slot(s) admitted` +
-                (ok.length < admitted.length
-                  ? ` — refused: ${admitted.filter((a) => !a.ok).map((a) => `${a.slot}(${a.reason})`).join(", ")}`
-                  : ""),
-            );
-          }
-        } catch (err) {
-          console.warn(
-            `[extension-runtime-activate] runtime renderer admission threw for "${packageName}" (non-fatal):`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      // ACTIVATION-COUPLED REPRESENTATION BINDING (cinatra#2044 S6 L-A3): a
-      // build-bundled NON-SYSTEM (`resolution: "guardedOptional"`) artifact
-      // renderer is deliberately NOT projected by the system registrar — that
-      // filter is the ratified cinatra#1630 isolation guardrail (no auto-bind for
-      // every org, no teardown exemption). Its org-scoped representation providers
-      // therefore bind HERE: at the install/activation transaction, for THIS
-      // install's org only, under a generation that a later reinstall/restore
-      // strictly supersedes. Uninstall retires them through the SAME
-      // `invalidateArtifactRenderersForPackage` chokepoint the semantic renderers
-      // use (the system-package early-return does not apply to a guardedOptional
-      // pack), and every resolve surface re-reconciles from the canonical rows —
-      // so this is the FAST path, not the only one. Best-effort + non-throwing:
-      // it never un-finalizes a committed install.
-      if (bridgeRegistered && result.rolledBack !== true) {
-        try {
-          const { bindActivatedRepresentationProvidersForInstall } = await import(
-            "@/lib/artifacts/system-artifact-renderer-registrar"
-          );
-          const boundCount = bindActivatedRepresentationProvidersForInstall({
-            packageName,
-            row: {
-              id: row.id,
-              kind: row.kind,
-              status: row.status,
-              version: result.version ?? row.version ?? null,
-              organizationId: row.organizationId,
-              updatedAt: new Date(),
-            },
-          });
-          if (boundCount > 0) {
-            console.info(
-              `[extension-runtime-activate] activation-coupled representation binding for ` +
-                `"${packageName}": ${boundCount} provider(s) bound for org ${row.organizationId}`,
-            );
-          }
-        } catch (err) {
-          console.warn(
-            `[extension-runtime-activate] activation-coupled representation binding threw for ` +
-              `"${packageName}" (non-fatal):`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      // INSTALL-ANCHOR CLAIM ACTIVATION (cinatra#1493, epic #1424): tie the
-      // finalized artifact install's manifest `objectTypes` claims to the
-      // durable claim registry. Runs ONLY after the rescan actually registered
-      // THIS package (so the per-claim validators the activation gate resolves
-      // are in the registry, and a fail-closed rescan skip also skips claim
-      // activation), and never for a durably rolled-back update. The hook is
-      // idempotent against its own prior run (re-fires diff live claims vs the
-      // manifest) and NON-THROWING — a claim conflict is a warning outcome,
-      // never a pipeline throw that would roll back the finalized install. A
-      // 'failed' outcome is not terminal: the boot claim-activation backstop
-      // (`runInstallAnchorClaimBackstop`, fired from the artifact-bridge boot
-      // phase) re-drives the idempotent hook at the next boot — the durable
-      // path, parallel to the bridge rescan's own boot pass.
-      if (bridgeRegistered && result.rolledBack !== true) {
-        try {
-          const { readInstallAnchorManifestClaims, runInstallAnchorClaimActivation } =
-            await import("@/lib/objects/artifact-claim-install-anchor");
-          const claims = await readInstallAnchorManifestClaims(result.storeDir);
-          if (claims) {
-            const activation = runInstallAnchorClaimActivation({
-              scope: row.organizationId ? `org:${row.organizationId}` : "platform",
-              extensionPackage: packageName,
-              // The pipeline's RESOLVED concrete version — the requested
-              // `version` may be a dist-tag (e.g. "latest") and must never be
-              // recorded as claim provenance.
-              extensionVersion: result.version,
-              installId: row.id,
-              claims,
-            });
-            if (activation.outcome === "failed") {
-              console.warn(
-                `[extension-runtime-activate] claim activation failed for "${packageName}" ` +
-                  `(non-fatal — the install stays finalized; ${
-                    activation.conflict ? "claim conflict" : "lifecycle error"
-                  }): ${activation.reason}`,
-              );
-            } else {
-              console.info(
-                `[extension-runtime-activate] claim activation for "${packageName}": ` +
-                  JSON.stringify(activation),
-              );
-            }
-          }
-        } catch (err) {
-          console.warn(
-            `[extension-runtime-activate] claim activation threw for "${packageName}" (non-fatal):`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-    }
+    // The artifact kind's post-install projection — the SAME one the supplied
+    // road runs, so an artifact is observable whichever road installed it.
+    await projectFinalizedArtifactInstall({ packageName, row, result });
 
     return {
       finalized: result.installed === true,
