@@ -1,0 +1,58 @@
+name: hosted-reclaim-rerun
+
+# One guarded automatic re-run of a build job the hosted runner reclaimed
+# (cinatra#3316, items 1 and 2).
+#
+# A hosted runner sometimes takes the machine away mid-build. The build step is
+# reported cancelled, the job concludes failure, and the log carries the line
+# "The runner has received a shutdown signal". A manual re-run of that one job
+# passes. This watcher does that re-run itself, once, under the guard list in
+# scripts/ci/hosted-reclaim-rerun.mjs — and refuses in every other case.
+#
+# Why a separate `workflow_run` watcher and not a step inside the three builds:
+# a run cannot re-run itself, and a run cannot annotate another run. This one
+# always executes from the DEFAULT branch with the repository's own token, so
+# it never runs code from the head under test. The only checkout it performs is
+# of the default branch, purely to load its own script.
+#
+# It writes NOTHING on the pull request and opens nothing: `actions: write` and
+# `contents: read` are the whole permission set. The weekly reclaim count and
+# the larger-runner trial (items 3 and 4 of that issue) are deliberately NOT
+# here; they stay open.
+
+on:
+  workflow_run:
+    workflows:
+      - "design-visual-verify"
+      - "dashboard-live-verify"
+      - "Build and publish image"
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: hosted-reclaim-rerun-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  reclaim-rerun:
+    name: hosted-runner reclaim — at most one guarded re-run
+    # Cheap pre-filter only. The authoritative guards live in the script and
+    # are re-evaluated there against FRESH reads, because the event payload is
+    # a snapshot from when the event was queued.
+    if: ${{ github.repository == 'cinatra-ai/cinatra' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the default branch (this watcher's own code, never the head under test)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Decide, and re-run the one reclaimed job when every guard holds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/hosted-reclaim-rerun.mjs
