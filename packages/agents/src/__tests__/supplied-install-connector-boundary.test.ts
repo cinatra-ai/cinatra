@@ -25,6 +25,7 @@
  * for the same package name is never read and never uninstalled.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { resolveAbsentConnectorAccessConfig } from "@cinatra-ai/sdk-extensions/access-config";
 
 const session = vi.hoisted(() => ({
   user: { id: "u1" },
@@ -106,6 +107,29 @@ import {
 const ZIP = Buffer.from("zip").toString("base64");
 const TARGET = { level: "workspace", id: "org-1" };
 
+/**
+ * THE ACCESS-DECLARATION REFUSAL, exactly as it reaches this boundary: the SDK
+ * validator's own words, wrapped by `extension-runtime-activate`'s SUPPLIED-row
+ * reason token and then by the dispatcher's non-finalized-row sentence — the
+ * shape measured on a running instance. Built from the REAL SDK refusal rather
+ * than pasted, so a reword
+ * upstream fails this suite instead of leaving it testing a message nobody
+ * throws.
+ */
+function absentAccessConfigMessage(packageName: string): string {
+  try {
+    resolveAbsentConnectorAccessConfig({ packageName, surface: "install" });
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error("expected the absence rule to refuse, but it returned");
+}
+
+const ACCESS_CONFIG_CHAIN_REFUSAL =
+  `install of @acme/thing-connector did not finalize the real-integrity pipeline ` +
+  `(supplied-install-failed:${absentAccessConfigMessage("@acme/thing-connector")}) — the package is ` +
+  `not anchorable; the placeholder install row was rolled back so a re-install re-runs the pipeline.`;
+
 const TRUST_REFUSAL =
   "[extension-install-pipeline] @acme/thing-connector@1.0.0: the install was refused — " +
   "the origin supplied:operator is not an allow-listed activation host.";
@@ -156,6 +180,56 @@ describe("a connector is taken at the door and refused where the reason is known
     expect(result.ok === false && result.error).toBe(TRUST_REFUSAL);
     expect(result.ok === false && result.stage).toBeUndefined();
     expect(access.setExtensionInstallAccess).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE ONE REFUSAL WHOSE OWN WORDS ARE NOT THE OPERATOR'S.
+  //
+  // "In the words of whatever refused it" is the right rule while those words
+  // are addressed to whoever can act on them. The access-declaration chain is
+  // addressed to whoever maintains the install chain: it names the config file,
+  // the internal issue that closed the absence rule, the activator's failure
+  // token and what the dispatcher did to the placeholder row. Composed, that is
+  // a paragraph — and a paragraph on the toast surface is not a refusal the
+  // admin can read, it is a refusal that pushes itself off the screen.
+  //
+  // So this ONE refusal is answered in product words, and the diagnostics are
+  // written to the server log instead of being thrown away.
+  // -------------------------------------------------------------------------
+  it("answers the access-declaration refusal in product words and logs the diagnostics", async () => {
+    const serverLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    road.installSuppliedCandidate.mockRejectedValue(
+      new Error(ACCESS_CONFIG_CHAIN_REFUSAL) as never,
+    );
+
+    const result = await installSuppliedArchiveAction({
+      zipBase64: ZIP,
+      accessTarget: TARGET,
+    });
+
+    expect(result.ok).toBe(false);
+    const shown = result.ok === false ? result.error : "";
+
+    // No internal token, no issue reference, no rollback prose, one short
+    // sentence — and it says what the package lacks and what it must declare.
+    expect(shown).not.toMatch(
+      /pipeline-threw|supplied-install-failed|\[connector-access-config\]|cinatra\/config\.json/,
+    );
+    expect(shown).not.toMatch(/cinatra#\d+/);
+    expect(shown).not.toMatch(/roll(?:ed|s|ing)?[ -]?back/i);
+    expect(shown.length).toBeLessThan(160);
+    expect(shown.match(/[.!?]/g) ?? []).toHaveLength(1);
+    expect(shown).toMatch(/configuration/i);
+    expect(shown).toMatch(/access scope/i);
+
+    // The diagnostics are not lost — they go to the server log.
+    expect(serverLog).toHaveBeenCalled();
+    expect(
+      (serverLog.mock.calls as unknown[][]).flat().map(String).join(" "),
+    ).toContain(ACCESS_CONFIG_CHAIN_REFUSAL);
+
+    expect(access.setExtensionInstallAccess).not.toHaveBeenCalled();
+    serverLog.mockRestore();
   });
 });
 

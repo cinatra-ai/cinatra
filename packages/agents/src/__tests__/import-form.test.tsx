@@ -172,6 +172,32 @@ describe("the File tab takes any kind and asks for its scope", () => {
     expect(actions.installSuppliedArchiveAction).not.toHaveBeenCalled();
   });
 
+  // -------------------------------------------------------------------------
+  // "Errors are a toast, never inline" is a rule about WHERE, and a refusal
+  // drawn in two places breaks it just as surely as one drawn in the wrong
+  // place. The drop handler already sends the refusal to the toast surface; the
+  // file card must not repeat it, so the assertion is made on the card AND on
+  // the whole document: exactly one copy of that sentence exists on the screen,
+  // and it is not in the card.
+  // -------------------------------------------------------------------------
+  it("draws the refusal on the toast surface ONLY — the file card never repeats it", async () => {
+    render(<ImportAgentForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(fileInput(), { target: { files: [workflowZip()] } });
+
+    await waitFor(() => {
+      expect(toastState.error).toHaveBeenCalled();
+    });
+    const refusal = String(toastState.error.mock.calls[0]?.[0]);
+    expect(refusal).toMatch(/retired extension kind/);
+
+    // The card is still there (the file was selected and it failed) — it just
+    // says nothing about why.
+    const card = screen.getByText("retired.zip").closest("li");
+    expect(card).toBeTruthy();
+    expect(card?.textContent ?? "").not.toContain("retired extension kind");
+    expect(document.body.textContent ?? "").not.toContain(refusal);
+  });
+
   it("asks the scope question ONCE — the run-visibility picker is gone (criterion 17)", async () => {
     render(<ImportAgentForm installScope={INSTALL_SCOPE} />);
     fireEvent.change(fileInput(), { target: { files: [artifactZip()] } });

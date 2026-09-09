@@ -37,6 +37,7 @@ import {
   resolveSuppliedInstallAccessResource,
 } from "@cinatra-ai/extensions/supplied-install-access";
 import type { SuppliedPackageKind } from "@cinatra-ai/extension-types";
+import { adminFacingSuppliedInstallRefusal } from "./supplied-install-refusal-copy";
 
 // ---------------------------------------------------------------------------
 // Result shapes. Deliberately serializable and message-only: a thrown message is
@@ -637,6 +638,25 @@ function isRequiresRebuild(err: unknown): boolean {
 }
 
 function failure(err: unknown): { ok: false; error: string } {
+  // Every refusal travels in the words of whatever refused it — that is the
+  // rule, and it is right while those words are addressed to the operator.
+  // The connector access-declaration chain is not: it composes the SDK
+  // validator's file-and-issue sentence, the activator's failure token and the
+  // dispatcher's placeholder-row detail into a paragraph of diagnostics, and a
+  // paragraph on the toast surface is a refusal the admin cannot read. That ONE
+  // refusal is answered in product words; the diagnostics go to the server log,
+  // where whoever maintains the install chain can still read every word of them.
+  const raw = err instanceof Error ? err.message : String(err);
+  const adminFacing = adminFacingSuppliedInstallRefusal(raw);
+  if (adminFacing) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[supplied-install-actions] supplied install refused by the connector " +
+        "access-declaration contract — diagnostics:",
+      raw,
+    );
+    return { ok: false, error: adminFacing };
+  }
   return { ok: false, error: err instanceof Error ? err.message : "The install failed." };
 }
 
