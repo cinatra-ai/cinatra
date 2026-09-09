@@ -171,6 +171,30 @@ jobs:
       # failure and costs an hour to diagnose. Best-effort — a prune hiccup
       # never fails the job (identical shape to build-image.yml's `build` job).
       - name: Free runner disk for the image builds
+        # GitHub-hosted runners ONLY, and this guard is the whole of the
+        # cinatra#3327 fix. The step deletes shared toolchains and prunes ALL
+        # docker state. On a hosted runner that is free: the machine is this
+        # job's own and is thrown away after it. On a self-hosted runner the
+        # matrix legs of this very job run CONCURRENTLY against ONE docker
+        # daemon, and unguarded the prune of whichever leg reached this step
+        # last removed the images another job had just BUILT — the worker
+        # image, the L0 sandbox image and the broker bundle, all built by the
+        # harness before `compose up`. Compose then found the tags gone, fell
+        # back to a registry pull of a bare name, and all four legs died with
+        # "pull access denied for cinatra-exec-worker, repository does not
+        # exist" — the same four batteries that had been green one at a time
+        # on the same machine.
+        #
+        # Narrowing the prune does not close it: dangling images, stopped
+        # containers, unused networks and unused volumes all describe a
+        # sibling leg's live work mid-run, and a label filter would still be
+        # a race against a leg that has not tagged its build yet. Skipping is
+        # the provably safe change because the step then touches nothing at
+        # all, and it costs the self-hosted road nothing: that machine keeps
+        # its disk across jobs and never carried the hosted image's ~25-30 GB
+        # of preinstalled toolchains to reclaim in the first place. Identical
+        # clause, and identical reason, to build-image.yml's own reclaim step.
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           set +e
