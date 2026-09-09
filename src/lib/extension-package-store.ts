@@ -155,6 +155,14 @@ export type InstallTrustAnchor = {
   /** A persisted host trust decision; undefined = not yet decided. */
   trustDecision?: boolean;
   /**
+   * Whether the row this anchor resolved from records an OPERATOR-SUPPLIED
+   * origin — an uploaded archive or a repository this instance resolved and
+   * pinned (cinatra#3204). Threaded into the trust classifier as the ORIGIN
+   * factor, in place of the registry host allowlist and in place of nothing
+   * else. Absent on a registry anchor (fail-closed by omission).
+   */
+  operatorSuppliedOrigin?: boolean;
+  /**
    * The admin-APPROVED host-port subset (from the grant store). The loader grants
    * the extension ONLY these ports, NOT the raw manifest's requestedHostPorts.
    */

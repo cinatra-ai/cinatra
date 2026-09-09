@@ -10,8 +10,11 @@
 // written here would replace it with something vaguer. That rule holds for
 // every refusal the operator can DO something about in the product's own terms.
 //
-// The connector access-declaration refusal is the exception, and it is an
-// exception of AUDIENCE, not of correctness. A connector package that ships no
+// Two refusals are the exception, and both are exceptions of AUDIENCE, not of
+// correctness.
+//
+// THE FIRST is the connector access-declaration refusal. A connector package
+// that ships no
 // `cinatra/config.json` is refused by the SDK validator, whose message names
 // the file and the internal issue that closed the absence rule; the runtime
 // activator wraps that in its own failure token; the dispatcher appends what it
@@ -20,6 +23,16 @@
 // to an admin on the upload screen they compose a paragraph of diagnostics —
 // and the paragraph's LENGTH, not its content, is what pushed the toast off the
 // top of the viewport, so the admin was told nothing at all.
+//
+// THE SECOND is the refusal the install road's execution boundary raises when
+// the trust classifier does not admit a package. Its own words are the honest
+// end of an install — the verdict that refused, and then, so nobody hunts for
+// state that was never written, the install-op journal, the host-port grant, the
+// provenance, the materialized bytes and the version still in service. Composed
+// with the activator's failure token and the dispatcher's placeholder-row
+// sentence it is the same paragraph on the same surface, and the admin's own
+// question has exactly one answer in it: the package was not installed and
+// nothing on this instance changed.
 //
 // So this module keeps the diagnostics where they belong (the server log) and
 // answers the admin with ONE short sentence in product words: what the package
@@ -43,6 +56,15 @@ const CONNECTOR_ACCESS_CONFIG_MARKER = "[connector-access-config]";
 const ABSENT_CONFIG_MARKER = "ships no cinatra/config.json";
 
 /**
+ * The phrase every `UntrustedInstallRefusedError` composes, whatever verdict
+ * refused: the install road's execution boundary saying it stopped before it
+ * changed anything. Matching the SENTENCE rather than a code keeps the
+ * recognizer working across the dynamic-import boundary the refusal crosses,
+ * where only the message survives.
+ */
+const NOT_ADMITTED_MARKER = "was refused before anything was ";
+
+/**
  * The ceiling a refusal on the toast surface has to stay under to be readable
  * without growing the toast past the viewport. Exported so the suite asserts
  * against the same number the copy was written to.
@@ -58,13 +80,25 @@ export const CONNECTOR_INVALID_CONFIG_REFUSAL =
   "This connector package's configuration is not valid, so it cannot be installed until it declares a valid access scope.";
 
 /**
+ * The execution boundary did not admit the package. The admin is owed the two
+ * facts they can act on — it was not installed, and the instance is as it was —
+ * in the product's own words; which condition the classifier failed on is a
+ * question for whoever maintains the install chain, and it is in the server log.
+ */
+export const INSTALL_NOT_ADMITTED_REFUSAL =
+  "This package did not pass the install checks, so it was not installed and nothing on this instance changed.";
+
+/**
  * The admin-facing sentence for a refusal whose own words are diagnostics, or
  * `null` when the refusal already speaks to the operator — in which case the
  * caller passes it through untouched, exactly as before.
  */
 export function adminFacingSuppliedInstallRefusal(rawMessage: string): string | null {
-  if (!rawMessage.includes(CONNECTOR_ACCESS_CONFIG_MARKER)) return null;
-  return rawMessage.includes(ABSENT_CONFIG_MARKER)
-    ? CONNECTOR_SHIPS_NO_CONFIG_REFUSAL
-    : CONNECTOR_INVALID_CONFIG_REFUSAL;
+  if (rawMessage.includes(CONNECTOR_ACCESS_CONFIG_MARKER)) {
+    return rawMessage.includes(ABSENT_CONFIG_MARKER)
+      ? CONNECTOR_SHIPS_NO_CONFIG_REFUSAL
+      : CONNECTOR_INVALID_CONFIG_REFUSAL;
+  }
+  if (rawMessage.includes(NOT_ADMITTED_MARKER)) return INSTALL_NOT_ADMITTED_REFUSAL;
+  return null;
 }

@@ -152,6 +152,23 @@ export type ExtensionSourceVerdaccio = {
  * NEVER presented as registry-attested. The digest proves byte integrity between
  * preview and install; it authenticates no publisher.
  */
+/**
+ * `integrity` / `contentHash` on a SUPPLIED source (cinatra#3204) — the anchor
+ * evidence, recorded exactly as `verdaccio.integrity` + the registry road's
+ * content hash are recorded, and by the SAME pipeline seam.
+ *
+ * They are NOT a registry attestation and never become one: `integrity` is the
+ * sha512 SRI the pipeline COMPUTED over the delivered tarball, and `contentHash`
+ * the hash over the tree it materialized. What they buy is the one thing a
+ * supplied install could not have without them — a trust anchor sourced OUTSIDE
+ * the writable package store, so the runtime loader can re-verify the bytes on
+ * disk against a value the DB holds, the way it does for a store install.
+ * Without them a supplied row could never anchor, so its kind could never
+ * activate in process.
+ *
+ * OPTIONAL, and they must stay optional: rows written before this leg carry
+ * none, and such a row keeps exactly its previous behaviour (no anchor).
+ */
 export type ExtensionSourceGithub = {
   type: "github";
   repo: string;
@@ -169,6 +186,10 @@ export type ExtensionSourceGithub = {
    * registry install. Absent on rows written before cinatra#3204.
    */
   activeDigest?: string;
+  /** See the `integrity` / `contentHash` contract above. */
+  integrity?: string;
+  /** See the `integrity` / `contentHash` contract above. */
+  contentHash?: string;
 };
 
 export type ExtensionSourceLocal = {
@@ -179,6 +200,10 @@ export type ExtensionSourceLocal = {
   contentDigest?: string;
   /** See `ExtensionSourceGithub.activeDigest`. */
   activeDigest?: string;
+  /** See the `integrity` / `contentHash` contract above. */
+  integrity?: string;
+  /** See the `integrity` / `contentHash` contract above. */
+  contentHash?: string;
 };
 
 /**

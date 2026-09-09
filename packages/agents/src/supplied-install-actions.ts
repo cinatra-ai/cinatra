@@ -639,20 +639,22 @@ function isRequiresRebuild(err: unknown): boolean {
 
 function failure(err: unknown): { ok: false; error: string } {
   // Every refusal travels in the words of whatever refused it — that is the
-  // rule, and it is right while those words are addressed to the operator.
-  // The connector access-declaration chain is not: it composes the SDK
-  // validator's file-and-issue sentence, the activator's failure token and the
-  // dispatcher's placeholder-row detail into a paragraph of diagnostics, and a
-  // paragraph on the toast surface is a refusal the admin cannot read. That ONE
-  // refusal is answered in product words; the diagnostics go to the server log,
-  // where whoever maintains the install chain can still read every word of them.
+  // rule, and it is right while those words are addressed to the operator. Two
+  // are not: the connector access-declaration chain composes the SDK validator's
+  // file-and-issue sentence with the activator's failure token and the
+  // dispatcher's placeholder-row detail, and the install road's execution
+  // boundary composes the classifier's verdict with the journal, the grant and
+  // the materialized bytes it did NOT write. Both are paragraphs of diagnostics,
+  // and a paragraph on the toast surface is a refusal the admin cannot read.
+  // Those refusals are answered in product words; the diagnostics go to the
+  // server log, where whoever maintains the install chain reads every word.
   const raw = err instanceof Error ? err.message : String(err);
   const adminFacing = adminFacingSuppliedInstallRefusal(raw);
   if (adminFacing) {
     // eslint-disable-next-line no-console
     console.error(
-      "[supplied-install-actions] supplied install refused by the connector " +
-        "access-declaration contract — diagnostics:",
+      "[supplied-install-actions] supplied install refused — the admin was answered " +
+        "in product words; the diagnostics are:",
       raw,
     );
     return { ok: false, error: adminFacing };

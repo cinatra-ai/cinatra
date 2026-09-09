@@ -43,7 +43,37 @@ const toastState = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/cinatra-toast", () => ({ toast: toastState }));
 
+import { classifyExtensionTrust, UntrustedInstallRefusedError } from "@/lib/extension-trust";
+
+import { adminFacingSuppliedInstallRefusal } from "../supplied-install-refusal-copy";
 import { ImportAgentForm } from "../import-form";
+
+/**
+ * The execution boundary's refusal as it reaches the screen: the classifier's
+ * verdict words, composed by the refusal the pipeline raises, wrapped by the
+ * activator's supplied-row reason token and the dispatcher's non-finalized-row
+ * sentence — built from the real chain so a reword upstream fails this suite
+ * instead of leaving it testing a message nobody throws.
+ */
+function trustGateRefusalAsTheServerAnswersIt(packageName: string): string {
+  const raw =
+    `install of ${packageName} did not finalize the real-integrity pipeline ` +
+    `(supplied-install-failed:${new UntrustedInstallRefusedError(
+      packageName,
+      "1.0.0",
+      classifyExtensionTrust({
+        packageName,
+        registryUrl: "supplied:operator",
+        integrityVerified: true,
+        persistedTrustDecision: true,
+        trustedActivationHosts: [],
+        allowMarketplaceBootstrapTrust: false,
+      }).reason,
+      "install",
+    ).message}) — the package is not anchorable; the placeholder install row was ` +
+    `rolled back so a re-install re-runs the pipeline.`;
+  return adminFacingSuppliedInstallRefusal(raw) ?? raw;
+}
 
 const INSTALL_SCOPE = {
   installTargets: [
@@ -279,6 +309,41 @@ describe("a completed install navigates to where the kind lives", () => {
       expect(toastState.error).not.toHaveBeenCalled();
     });
   }
+
+  // -------------------------------------------------------------------------
+  // A REFUSAL OF THE EXECUTION BOUNDARY'S PATH, AS THE SCREEN DRAWS IT. The
+  // toast is the only surface it appears on, and what appears there is one short
+  // sentence: a paragraph of install-chain diagnostics grows the toast until the
+  // admin reads nothing at all.
+  // -------------------------------------------------------------------------
+  it("draws the execution boundary's refusal as ONE short sentence, and only on the toast", async () => {
+    actions.installSuppliedArchiveAction.mockResolvedValueOnce({
+      ok: false,
+      error: trustGateRefusalAsTheServerAnswersIt("@acme/thing-agent"),
+    } as never);
+    render(<ImportAgentForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(fileInput(), { target: { files: [agentZip()] } });
+    await waitFor(() => {
+      expect(screen.getByTestId("extension-install-panel-submit")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("extension-install-panel-submit"));
+
+    await waitFor(() => {
+      expect(toastState.error).toHaveBeenCalled();
+    });
+    const shown = String(toastState.error.mock.calls[0]?.[0]);
+    expect(shown.length).toBeLessThan(160);
+    expect(shown).not.toMatch(/supplied-install-failed/);
+    expect(shown).not.toMatch(/install-op journal|host-port grant|materialized bytes/i);
+    expect(shown).not.toMatch(/activation host/i);
+    expect(shown.match(/[.!?]/g) ?? []).toHaveLength(1);
+
+    // The toast surface and nowhere else: the card never repeats it, and the
+    // panel is exactly as the admin left it.
+    expect(document.body.textContent ?? "").not.toContain(shown);
+    expect(routerState.push).not.toHaveBeenCalled();
+    expect(screen.getByTestId("extension-install-panel-picker")).toBeTruthy();
+  });
 
   it("a refusal toasts and never navigates — the panel keeps the selection", async () => {
     actions.installSuppliedArchiveAction.mockResolvedValueOnce({

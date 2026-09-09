@@ -19,11 +19,12 @@
  *   usable connection exists, a repository is resolved to ONE immutable commit
  *   which is displayed, beside the resolved kind and the same install panel.
  *
- *   THE COMPLETED INSTALL — an agent, a skill and an artifact package are
- *   installed through the screen at a chosen scope and then OBSERVED on the
- *   surface that kind lives on. A supplied connector is refused by name, with
- *   the panel unchanged: that refusal is the per-kind execution boundary seen
- *   from the screen, not a gap in the walk.
+ *   THE COMPLETED INSTALL — an agent, a skill, an artifact and a connector
+ *   package are installed through the screen at a chosen scope and then OBSERVED
+ *   on the surface that kind lives on. A connector that declares NO access scope
+ *   is refused by name, with the panel unchanged and the refusal readable on the
+ *   toast surface: that refusal is the kind's own contract seen from the screen,
+ *   not a gap in the walk.
  *
  * Both palettes are walked: the page is rendered once in light and once in dark,
  * and the assertions are made in each.
@@ -231,8 +232,15 @@ function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer 
       content: "---\nname: one\ndescription: A skill supplied by the upload walk.\n---\nbody",
     });
   if (kind === "connector") {
+    // A connector declares its access scope in `cinatra/config.json`, and the
+    // product refuses one that declares nothing at every surface. This is the
+    // conforming package — the one the issue's headline is about.
     (manifest.cinatra as Record<string, unknown>).serverEntry = "dist/server.js";
     files.push({ name: "dist/server.js", content: "export function register() {}" });
+    files.push({
+      name: "cinatra/config.json",
+      content: JSON.stringify({ formatVersion: 1, access: { scope: { default: "admin" } } }),
+    });
   }
   if (kind === "artifact") {
     // The artifact validator reads the descriptor off package.json (a sidecar
@@ -249,6 +257,26 @@ function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer 
   return storedZip([
     { name: "package.json", content: JSON.stringify(manifest) },
     ...files,
+  ]);
+}
+
+// THE CONNECTOR THAT DECLARES NOTHING. Same kind, same shape, one file short —
+// the package the refusal cell is named for. It carries its own name so it never
+// meets the row the install cell wrote, and the name still ends in the kind, as
+// the product requires on every road.
+const UNDECLARED_CONNECTOR_NAME = `@acme/upload-walk-${RUN_TAG}-undeclared-connector`;
+
+function undeclaredConnectorZip(): Buffer {
+  return storedZip([
+    {
+      name: "package.json",
+      content: JSON.stringify({
+        name: UNDECLARED_CONNECTOR_NAME,
+        version: "1.0.0",
+        cinatra: { kind: "connector", serverEntry: "dist/server.js" },
+      }),
+    },
+    { name: "dist/server.js", content: "export function register() {}" },
   ]);
 }
 
@@ -483,7 +511,15 @@ for (const palette of PALETTES) {
       });
     }
 
-    test(`CELL4 ${palette}: a supplied connector is refused by name and the panel keeps the selection`, async ({
+    // -----------------------------------------------------------------------
+    // THE FOURTH KIND, INSTALLED. The issue's headline is that each of the four
+    // kinds installs from a file archive or a resolved repository exactly as the
+    // store installs it, and the connector is the kind whose install exists to
+    // run `register(ctx)` in this process. A connector that passes the kind gate
+    // and declares its access scope installs, and the screen takes the admin to
+    // the surface that kind is configured on.
+    // -----------------------------------------------------------------------
+    test(`CELL4 ${palette}: a supplied CONNECTOR that declares its access scope installs`, async ({
       page,
     }) => {
       await openUpload(page, palette);
@@ -492,9 +528,28 @@ for (const palette of PALETTES) {
 
       await installAtChosenScope(page);
 
+      // The screen's own promise per kind: it goes to where that kind is
+      // configured. Anchored at the END of the path for the same reason the
+      // three cells above are.
+      await page.waitForURL(/\/configuration\/connectors\/?(?:[?#].*)?$/, { timeout: 60_000 });
+      await usePalette(page, palette);
+      // Nothing was refused on the way: no toast carries a refusal.
+      await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+      await shot(page, `cell4-connector-${palette}`);
+    });
+
+    test(`CELL4 ${palette}: a connector that declares no access scope is refused by name and the panel keeps the selection`, async ({
+      page,
+    }) => {
+      await openUpload(page, palette);
+      await supply(page, undeclaredConnectorZip(), "connector-undeclared.zip");
+      await expect(page.getByTestId("upload-resolved-kind")).toHaveText("Connector");
+
+      await installAtChosenScope(page);
+
       // A toast, never an inline error state, and the panel is exactly as the
       // admin left it — the selection is never lost (design spec §I.1).
-      await expect(page.getByText(packageName("connector")).first()).toBeVisible({
+      await expect(page.getByText(UNDECLARED_CONNECTOR_NAME).first()).toBeVisible({
         timeout: 60_000,
       });
       await expect(page.getByTestId("extension-install-panel-picker")).toBeVisible();
