@@ -13,7 +13,9 @@
 // workflows, it re-runs EXACTLY ONE job through the job-specific re-run
 // endpoint, and only when every guard below holds. It never calls the
 // run-level re-run-all-failed-jobs endpoint, never re-runs a second attempt,
-// and writes nothing anywhere except its own step summary.
+// and writes nothing anywhere except its own step summary and ONE ledger
+// artifact per re-run (see THE LEDGER below) — the record the weekly count is
+// computed from.
 //
 // THE GUARDS (all of them, in this order — the first that does not hold ends
 // the run with a reason code and no re-run):
@@ -267,6 +269,100 @@ export function decide({
 }
 
 // ---------------------------------------------------------------------------
+// THE LEDGER (cinatra#3316, item 3).
+//
+// The weekly count must come from this watcher's OWN records, never from a
+// scrape of run logs. Every re-run this watcher issues therefore uploads one
+// artifact whose NAME carries the whole record:
+//
+//   reclaim-record.<workflow slug>.<job id>.<attempt>.<runner label slug>
+//
+// The name is the ledger. A count then needs the artifacts LISTING alone — no
+// download, no unzip, and no dependence on the artifact's bytes still being
+// retained. The uploaded file carries the same record in readable form for a
+// person who opens it.
+//
+// Slugs hold `[a-z0-9-]` only, so the dot separator can never appear inside a
+// field and the name parses back unambiguously.
+// ---------------------------------------------------------------------------
+
+/** Every ledger artifact name starts with this. */
+export const LEDGER_NAME_PREFIX = "reclaim-record.";
+
+/** The file the watcher writes next to the name, for a human reader. */
+export const LEDGER_FILE = "reclaim-record.json";
+
+/** `Build and publish image` -> `build-and-publish-image`. */
+export function slug(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * The record a re-run leaves behind.
+ *
+ * @param {object} input
+ * @param {{workflow: string, job: string}} input.outcome the decide() result.
+ * @param {object} input.run   the fresh read of the triggering run.
+ * @param {object} input.job   the reclaimed job, as the jobs API returned it.
+ * @param {string} [input.at]  the instant, ISO-8601 (defaults to now).
+ * @returns {{workflow: string, jobId: string, attempt: number, runner: string,
+ *            at: string, runId: number}}
+ */
+export function ledgerRecord({ outcome, run, job, at }) {
+  const labels = Array.isArray(job && job.labels) ? job.labels : [];
+  return {
+    workflow: outcome.workflow,
+    jobId: String(job.id),
+    // The attempt the RECLAIM happened on. A second attempt that is reclaimed
+    // again is a record of its own, which is what "counted separately" means.
+    attempt: Number(run.run_attempt) || 1,
+    runner: labels.length > 0 ? String(labels[0]) : "unknown",
+    at: at ?? new Date().toISOString(),
+    runId: Number(run.id),
+  };
+}
+
+/** The artifact name that IS the record. */
+export function ledgerArtifactName(record) {
+  return [
+    "reclaim-record",
+    slug(record.workflow),
+    slug(record.jobId),
+    slug(String(record.attempt)),
+    slug(record.runner),
+  ].join(".");
+}
+
+/**
+ * The inverse. Returns null for any artifact that is not a ledger record, so a
+ * listing of the whole repository's artifacts can be handed in as-is.
+ *
+ * @param {string} name
+ * @returns {{workflow: string, jobId: string, attempt: number, runner: string} | null}
+ */
+export function parseLedgerArtifactName(name) {
+  if (typeof name !== "string" || !name.startsWith(LEDGER_NAME_PREFIX)) return null;
+  const parts = name.split(".");
+  if (parts.length !== 5) return null;
+  const [, workflowSlug, jobId, attempt, runner] = parts;
+  if (!/^[0-9]+$/.test(jobId) || !/^[0-9]+$/.test(attempt)) return null;
+  if (workflowSlug.length === 0 || runner.length === 0) return null;
+  // Report the workflow under its real name where the allowlist knows the slug;
+  // an unknown slug is reported as itself rather than dropped, so a stale
+  // allowlist can never make a real reclaim disappear from the count.
+  const known = ALLOWLIST.find((e) => slug(e.workflow) === workflowSlug);
+  return {
+    workflow: known ? known.workflow : workflowSlug,
+    jobId,
+    attempt: Number(attempt),
+    runner,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The thin runner. Reads the event, performs the fresh reads, calls decide,
 // and records the outcome in this run's OWN step summary. It posts nothing on
 // the pull request and opens nothing.
@@ -401,12 +497,31 @@ export async function run() {
     );
   }
 
+  // The record this re-run leaves behind. The artifact NAME is the ledger
+  // entry; the file carries the same record in readable form. Written only
+  // here — a refusal leaves no record, because nothing was reclaimed.
+  const ledger = ledgerRecord({
+    outcome,
+    run: runNow,
+    job: jobs.find((j) => j.id === outcome.rerun),
+  });
+  const ledgerName = ledgerArtifactName(ledger);
+  fs.writeFileSync(
+    path.join(process.env.GITHUB_WORKSPACE || process.cwd(), LEDGER_FILE),
+    `${JSON.stringify({ ...ledger, runUrl }, null, 2)}\n`,
+  );
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `ledger_name=${ledgerName}\n`);
+  }
+
   record([
     "## Hosted-runner reclaim: one job re-run",
     "",
     `- job: \`${outcome.job}\` (${outcome.workflow})`,
     `- reason: \`${outcome.reason}\` — '${outcome.step}' concluded cancelled with the reclaim marker in its log, every earlier step green`,
     `- source run: ${runUrl}`,
+    "",
+    `- record: \`${ledgerName}\` (the weekly count reads these records, never the run logs)`,
     "",
     "Only this one job was re-run, and only once: attempt 2 fires this watcher again and the attempt guard stops it. If the second attempt fails, the pull request stays red.",
   ]);
