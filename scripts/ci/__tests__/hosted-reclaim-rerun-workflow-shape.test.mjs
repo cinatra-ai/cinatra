@@ -71,6 +71,11 @@ describe("hosted-reclaim-rerun.yml: what it listens to", () => {
     );
   });
 
+  it("also runs on a weekly schedule, so the count posts on a fixed cadence", () => {
+    expect(workflow).toMatch(/^ {2}schedule:\s*$/m);
+    expect(workflow).toMatch(/^ {4}- cron: "\d+ \d+ \* \* 1"\s*$/m);
+  });
+
   it("never watches itself (a re-run would otherwise feed the watcher its own runs)", () => {
     const nameLine = workflow.match(/^name: (.+)$/m);
     expect(nameLine).not.toBeNull();
@@ -78,24 +83,54 @@ describe("hosted-reclaim-rerun.yml: what it listens to", () => {
   });
 });
 
+const jobBlock = (id) => {
+  const from = workflow.indexOf(`\n  ${id}:\n`);
+  expect(from).toBeGreaterThan(-1);
+  const rest = workflow.slice(from + 1);
+  const next = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\n/);
+  return next === -1 ? rest : rest.slice(0, next + 1);
+};
+
+// Resolved LAZILY, inside each test. A job that is missing must fail the one
+// assertion that asks for it, not the whole file at collection time — that is
+// what makes each criterion below red on its own before the job exists.
+const RERUN_JOB = () => jobBlock("reclaim-rerun");
+const WEEKLY_JOB = () => jobBlock("weekly-count");
+
 describe("hosted-reclaim-rerun.yml: what it is permitted to do", () => {
-  it("takes actions: write and contents: read, and nothing else", () => {
+  it("grants nothing but contents: read at the top, so each job asks for its own", () => {
     const block = workflow.slice(
       workflow.indexOf("\npermissions:"),
       workflow.indexOf("\nconcurrency:"),
     );
-    expect(block).toMatch(/^ {2}actions: write$/m);
-    expect(block).toMatch(/^ {2}contents: read$/m);
     const scopes = block
       .split("\n")
       .filter((l) => /^ {2}\S+: \S+$/.test(l))
       .map((l) => l.trim().split(":")[0]);
-    expect(scopes.sort()).toEqual(["actions", "contents"]);
+    expect(scopes).toEqual(["contents"]);
+    expect(block).toMatch(/^ {2}contents: read$/m);
   });
 
-  it("never asks for pull-requests: write or issues: write (it posts nothing on the pull request and opens no issue)", () => {
+  it("gives the re-run job actions: write and contents: read, and nothing else", () => {
+    const scopes = RERUN_JOB().split("\n")
+      .filter((l) => /^ {6}\S+: \S+$/.test(l))
+      .map((l) => l.trim().split(":")[0]);
+    expect(scopes.sort()).toEqual(["actions", "contents"]);
+    expect(RERUN_JOB()).not.toMatch(/issues:\s*write/);
+  });
+
+  it("gives the weekly count issues: write and never actions: write", () => {
+    const scopes = WEEKLY_JOB().split("\n")
+      .filter((l) => /^ {6}\S+: \S+$/.test(l))
+      .map((l) => l.trim().split(":")[0]);
+    expect(scopes.sort()).toEqual(["actions", "contents", "issues"]);
+    expect(WEEKLY_JOB()).toMatch(/^ {6}issues: write$/m);
+    expect(WEEKLY_JOB()).toMatch(/^ {6}actions: read$/m);
+    expect(WEEKLY_JOB()).not.toMatch(/actions:\s*write/);
+  });
+
+  it("never asks for pull-requests: write, and the watcher module writes nothing on an issue", () => {
     expect(workflow).not.toMatch(/pull-requests:\s*write/);
-    expect(workflow).not.toMatch(/issues:\s*write/);
     expect(moduleText).not.toMatch(/\/issues/);
     expect(moduleText).not.toMatch(/\/comments/);
   });
@@ -142,5 +177,72 @@ describe("hosted-reclaim-rerun.mjs: dependency-free", () => {
     );
     expect(imports.length).toBeGreaterThan(0);
     for (const spec of imports) expect(spec.startsWith("node:")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The weekly count (item 3) is a JOB OF THIS WORKFLOW, not a workflow of its
+// own, and it can neither re-run anything nor open an issue.
+// ---------------------------------------------------------------------------
+
+const WEEKLY_MODULE_PATH = path.join(
+  REPO_ROOT,
+  "scripts",
+  "ci",
+  "reclaim-weekly-count.mjs",
+);
+// Read LAZILY, for the same reason as the job blocks above: a missing module
+// must redden the assertion that asks for it, not the whole file.
+const weeklyModuleText = () => fs.readFileSync(WEEKLY_MODULE_PATH, "utf8");
+
+describe("hosted-reclaim-rerun.yml: the weekly reclaim count", () => {
+  it("is a scheduled job of THIS workflow", () => {
+    expect(workflow).toContain("\n  weekly-count:\n");
+    expect(WEEKLY_JOB()).toContain("github.event_name == 'schedule'");
+    expect(WEEKLY_JOB()).toContain("node scripts/ci/reclaim-weekly-count.mjs");
+  });
+
+  it("runs only for this repository and is bounded", () => {
+    expect(WEEKLY_JOB()).toContain("github.repository == 'cinatra-ai/cinatra'");
+    expect(WEEKLY_JOB()).toMatch(/^ {4}timeout-minutes: 5$/m);
+  });
+
+  it("never re-runs a job from the scheduled side", () => {
+    expect(WEEKLY_JOB()).not.toContain("hosted-reclaim-rerun.mjs");
+    expect(weeklyModuleText()).not.toContain("/rerun");
+    expect(weeklyModuleText()).not.toContain("rerun-failed-jobs");
+  });
+
+  it("appends a comment to the tracking issue and opens none", () => {
+    expect(weeklyModuleText()).toContain("/issues/${TRACKING_ISSUE}/comments");
+    expect(weeklyModuleText()).not.toMatch(/POST \$\{API\}\/repos\/\$\{REPOSITORY\}\/issues"/);
+    const posts = [...weeklyModuleText().matchAll(/method: "POST"/g)];
+    expect(posts).toHaveLength(1);
+  });
+
+  it("imports node builtins and its own siblings only (it runs before any install)", () => {
+    const imports = [
+      ...weeklyModuleText().matchAll(/from "([^"]+)";/g),
+    ].map((m) => m[1]);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const spec of imports) {
+      expect(spec.startsWith("node:") || spec.startsWith("./")).toBe(true);
+    }
+  });
+});
+
+describe("the re-run job keeps the record the count is computed from", () => {
+  it("uploads exactly one ledger artifact, sha-pinned, and only when a re-run happened", () => {
+    expect(RERUN_JOB()).toMatch(
+      /uses: actions\/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+/,
+    );
+    expect(RERUN_JOB()).toContain("steps.decide.outputs.ledger_name != ''");
+    expect(RERUN_JOB()).toContain("name: ${{ steps.decide.outputs.ledger_name }}");
+    expect(RERUN_JOB()).toContain("if-no-files-found: error");
+  });
+
+  it("the watcher writes that name as a step output", () => {
+    expect(moduleText).toContain("ledger_name=");
+    expect(moduleText).toContain("GITHUB_OUTPUT");
   });
 });
