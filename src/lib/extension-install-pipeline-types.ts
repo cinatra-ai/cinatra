@@ -60,6 +60,18 @@ export type InstallPipelineDeps = {
    */
   readDeclaredCompat: (storeDir: string) => Promise<{ sdkAbiRange: string | null }>;
   /**
+   * Read the materialized package's COMPOSED agent document (its
+   * `cinatra/oas.json`), the basis of the PARENT-SATISFIED CONTEXT-SLOT GATE
+   * (cinatra#3032, plan (C) item 0.29: "The declaration is static and checked at
+   * install against the children's slots [...] a conflict refuses the install").
+   * `null` for a package that carries none — every non-agent extension, and
+   * every agent that declares no composition. Same trust basis as
+   * `readDeclaredCompat` (the SRI-verified materialized bytes). Optional so
+   * existing unit tests can omit it (then no install-time slot gate runs); the
+   * default factory always wires it.
+   */
+  readComposedAgentOas?: (storeDir: string) => Promise<unknown | null>;
+  /**
    * Persist the REAL provenance on the canonical install row — the sha512
    * integrity + content hash (+ the additive sha256 attestation). The default
    * routes through `sourceSwitchExtension` (the only sanctioned provenance
