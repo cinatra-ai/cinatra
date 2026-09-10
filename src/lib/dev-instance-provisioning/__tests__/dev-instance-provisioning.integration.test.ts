@@ -21,12 +21,10 @@
  */
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-// The repository's placeholder DSN marker — a connection string carrying it
-// names no database at all, so it counts as "no live Postgres".
-const PLACEHOLDER_DSN_MARKER = "unused:unused";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes(PLACEHOLDER_DSN_MARKER);
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const IN_DEDICATED_LANE = process.env.CINATRA_DEV_PROVISIONING_REALDB === "1";
 
 if (IN_DEDICATED_LANE && !HAS_DB) {

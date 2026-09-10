@@ -238,7 +238,10 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
-    expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
+    // The withheld terminal write carries no derivation outbox: cinatra#3029
+    // (PR 3311) retired the response-text derivation on the path that produced
+    // this payload, so a replayed verdict must not claim one either.
+    expect(calls[0][3]?.derivationOutbox).toBeUndefined();
   });
 
   it("a recovery that still cannot record the hold queues the NEXT delivery of the SAME chain", async () => {

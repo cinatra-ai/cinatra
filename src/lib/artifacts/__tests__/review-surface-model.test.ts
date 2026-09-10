@@ -21,7 +21,6 @@ import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
-  reviewTypeLabel,
   reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
@@ -96,11 +95,9 @@ describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
 });
 
 describe("§II — the immutable header projections", () => {
-  it("prettifies an object-type id into a short type label", () => {
-    expect(reviewTypeLabel("@cinatra-ai/email:draft")).toBe("Email");
-    expect(reviewTypeLabel("@acme/support-desk:case")).toBe("Support Desk");
-    expect(reviewTypeLabel("plain")).toBe("Plain");
-  });
+  // The header's type tag is no longer this model's own projection: it reads
+  // the ONE declared-first kind label (`artifact-kind-label.test.ts`), so the
+  // review line and the artifact page header word a pack identically.
 
   it("truncates a long revision id for display, preserving the exact id", () => {
     const m = reviewRevisionMarker("rev_0123456789abcdef");

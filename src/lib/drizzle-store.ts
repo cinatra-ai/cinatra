@@ -23,6 +23,7 @@ import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSch
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
+  artifactMaterializationLedgerSchemaQueries,
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
@@ -1632,6 +1633,7 @@ END $$`,
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS delegated_actor_snapshot text` }, ...agentRunAssignmentScopeSchemaQueries(schemaName), // delegated_actor_snapshot: the requesting user's ActorContext, captured at instantiate and replayed at run-start re-authz + mid-run authz checks (nullable JSON text; legacy rows fall back to live-session derivation). assignment_scope_snapshot (cinatra#2813 S1, epic #2812): the IMMUTABLE scopes a run was created under, decided ONCE at creation because the scope a run's assignments come from must not be able to move under it; absent / malformed / unknown-version resolves to workspace plus the durable org and nothing else. Its statement moved into src/lib/assignment-scope.ts — the leaf that already owns this slice's SQL and that this composition already reaches — because THIS module is at its file-size ceiling, which may only ever shrink; the spread rides this line for the same reason as the import, and the leaf carries the reasoning in full. Operator-upgrade twin = migrations/core/core__0100.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS launch_scope_anchor jsonb` }, // launch_scope_anchor (cinatra#2809, epic #2806): the IMMUTABLE vantage the run was LAUNCHED from, which decides its ONE canonical address; absent / malformed resolves to unanchored and the flat bare route, with no backfill and no inference from another column. Written INLINE rather than in a shared builder beside the rule: a new leaf module would enter four LOCKED route graphs (every route reaches this DDL owner) whose module counts may only ever shrink. It takes a LINE OF ITS OWN rather than riding the composition line above, because extending a line that already carries an ADD COLUMN reads to the schema-migration gate as a column REMOVED from the idempotent DDL, and this change removes nothing; the file's line ceiling is paid instead by the stray second blank line dropped further down. The parity suite pins this statement against its assistant_threads twin and the migration. Operator-upgrade twin = migrations/core/core__0102.
     // Per-scope role_grant store. Subject
     // is always a user. Scope is one of user/team/organization/
     // workspace/project. Idempotent CREATE TABLE — no legacy rows exist
@@ -1985,41 +1987,13 @@ $body$` },
     // trigger. Existing deployments also converge via migration core__0036.
     ...semanticAssertionSchemaQueries(schemaName),
     // ---- artifact_materializations idempotency ledger (cinatra#923) ----
-
-    // Claim-then-write-then-finalize journal for declarative artifact
-    // materialization (the install-op-journal shape). One row per attempted
-    // materialization; the 4-part unique key is the RETRY-idempotency
-    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
-    // hits the same key, reads the finalized row's refs and returns them
-    // instead of writing a second artifact. `phase` transitions
-    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
-    // artifact write — no window in which a committed artifact is invisible
-    // to the ledger). An unfinalized (crashed) claim is re-used by the next
-    // re-drive.
-    //
-    // `output_id` identity per path: the EndNode output name for
-    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
-    // the authoring step id for `llm_emit` provenance rows (unique per emit,
-    // so legitimately distinct same-byte emits never collide on the key).
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
-  id                          text PRIMARY KEY,
-  org_id                      text NOT NULL,
-  run_id                      text NOT NULL,
-  output_id                   text NOT NULL,
-  node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
-  extension                   text NOT NULL,
-  content_hash                text NOT NULL,
-  artifact_id                 text,
-  representation_revision_id  text,
-  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
-  created_at                  timestamptz NOT NULL DEFAULT now()
-)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
-    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
-    // declarative rows of one run by extension + content hash.
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
+    // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#3029;
+    // the same extract-leaf pattern as run_context_selections and
+    // object_content_snapshots below -- an EXISTING drizzle-store import, so the
+    // locked route graphs gain no module). The statements are unchanged and are
+    // spread in at the position they were written in; the reasoning, and why the
+    // detection ladder's four columns are what moved it, live in the leaf.
+    ...artifactMaterializationLedgerSchemaQueries(schemaName),
     // ---- run_context_selections audit table ----
     // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#1430
     // vertical slice; extract-leaf pattern — an EXISTING drizzle-store import,
@@ -2287,7 +2261,6 @@ $body$` },
     // idempotent — once SET NOT NULL succeeds, the WHERE filter on the UPDATE matches
     // zero rows on subsequent runs, and the ALTER is a no-op when the column is already
     // NOT NULL.
-
 
     // Lowercase + slugify the creator_id and id segments so
     // the backfilled package_name matches the strict resolveWayflowUrl regex

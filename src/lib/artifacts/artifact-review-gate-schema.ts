@@ -227,8 +227,10 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   -- The closed emitter set. object_snapshot_mint is the object-backed
   -- contract's mint (enabler 0.13 of PLAN: Agents Lifecycle (C),
   -- cinatra#3028); the operator-upgrade twin of this widen is core__0099.
+  -- artifact_revision_append is the same-artifact revision (enabler 0.30,
+  -- cinatra#3030); the operator-upgrade twin of ITS widen is core__0104.
   emitter                    text NOT NULL
-                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint')),
+                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint','artifact_revision_append')),
   producer_run_id            text,
   producer_agent_id          text,
   origin_kind                text NOT NULL CHECK (origin_kind IN ('agent_produced','user_provided','intermediate')),
@@ -246,6 +248,36 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_status_idx
   ON "${q}"."artifact_produced_outbox" (status, created_at)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // THE REVISION GATE SATISFACTION RULE (enabler 0.30, cinatra#3030).
+    //
+    //   "the caller's own declared gate is recorded as the review of those
+    //    revisions, and the produced-output road, when it fires, resolves to
+    //    that gate instead of opening a second — a satisfaction rule keyed on
+    //    the artifact revision and the run."
+    //
+    // ONE revision names exactly ONE satisfying gate: the primary key IS the
+    // rule. `run_id` is carried so a reader can see WHOSE gate satisfied it —
+    // a caller can only ever record the gate of its own run, which is what
+    // keeps one organisation's gate from satisfying another's revision.
+    // The operator-upgrade twin is core__0104.
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_revision_review_satisfaction" (
+  org_id                     text NOT NULL,
+  artifact_id                text NOT NULL,
+  representation_revision_id text NOT NULL,
+  run_id                     text NOT NULL,
+  review_task_id             text NOT NULL,
+  created_at                 timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, artifact_id, representation_revision_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS artifact_revision_review_satisfaction_gate_idx
+  ON "${q}"."artifact_revision_review_satisfaction" (org_id, run_id, review_task_id)`,
     },
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_org_idx

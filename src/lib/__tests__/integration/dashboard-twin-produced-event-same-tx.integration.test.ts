@@ -36,11 +36,12 @@ import { connect, createTestSchema, dropSchema } from "./_fixture";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { producedEventId } from "@/lib/lifecycle/lifecycle-produced-event";
 import { buildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const HAS_DB =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   !!process.env.SUPABASE_DB_URL &&
-  !process.env.SUPABASE_DB_URL.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(process.env.SUPABASE_DB_URL);
 
 let client: Client;
 let schema: string;

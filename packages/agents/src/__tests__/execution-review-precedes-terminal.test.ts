@@ -231,9 +231,11 @@ describe("cinatra#3007 — the review question precedes the terminal write", () 
     expect(input.fromStatus).toBe("running");
     expect(input.withheld.status).toBe("completed");
     expect(input.withheld.error).toBeUndefined();
-    // The derivation-outbox capture rides with it: it is committed with the
-    // terminal CAS, so the decision has to be able to perform that same write.
-    expect(input.withheld.derivationOutbox?.contentHash).toEqual(expect.any(String));
+    // THE WITHHELD WRITE IS THE TERMINAL WRITE, WHOLE. cinatra#3029 (PR 3311)
+    // retired the response-text derivation outbox on this path, so there is no
+    // outbox left to ride with the hold — and the payload must say so rather
+    // than carry a key the terminal write below no longer writes.
+    expect(input.withheld.derivationOutbox).toBeUndefined();
     // ...and the payload is the terminal one, materialization outcomes included.
     expect(input.stepResults[0]?.kind).toBe("wayflow_response");
     expect(input.stepResults[0]?.artifact_materializations).toHaveLength(1);
@@ -273,7 +275,8 @@ describe("cinatra#3007 — the review question precedes the terminal write", () 
     const [runId, from, to, meta] = calls[0];
     expect([runId, from, to]).toEqual(["run-3007", "running", "completed"]);
     expect(meta?.completedAt).toBeInstanceOf(Date);
-    expect(meta?.derivationOutbox).toBeDefined();
+    // No derivation outbox on this edge since cinatra#3029 (PR 3311) retired it.
+    expect(meta?.derivationOutbox).toBeUndefined();
     expect(agUiEventTypes()).toContain("RUN_FINISHED");
   });
 
@@ -789,10 +792,11 @@ describe("cinatra#3007 — the unrecordable-hold recovery leg", () => {
 
     expect(err).toBeInstanceOf(ProducedReviewHoldUnpersistedError);
     expect(err.recovery.withheld.status).toBe("completed");
-    // The payload and the derivation capture ride with it: the run's row never
-    // received them, so the re-delivered attempt is the only thing that has them.
+    // The payload rides with it: the run's row never received it, so the
+    // re-delivered attempt is the only thing that has it. The derivation capture
+    // is no longer part of that payload — cinatra#3029 (PR 3311) retired it.
     expect(err.recovery.stepResults?.[0]).toMatchObject({ kind: "wayflow_response" });
-    expect(err.recovery.withheld.derivationOutbox?.contentHash).toEqual(expect.any(String));
+    expect(err.recovery.withheld.derivationOutbox).toBeUndefined();
     expect(err.delayMs).toBeGreaterThan(0);
   });
 

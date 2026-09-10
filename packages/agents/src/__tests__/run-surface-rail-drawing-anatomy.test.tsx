@@ -189,8 +189,12 @@ describe("a separator stands between adjacent entries (item 2)", () => {
   it("puts one separator between every pair of adjacent rows, and none at the ends", () => {
     const { container } = renderRail();
     const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
-    const kinds = Array.from(column.children).map((child) =>
-      child.matches(SEP_SEL) ? "sep" : child.matches(ROW_SEL) ? "row" : "other",
+    // A row and the mark beneath it share ONE box (cinatra#3225 items 2 and 3,
+    // fix leg 9) — the box the mark is centred in — so the column's own reading
+    // is taken over the rows and marks it contains rather than over its direct
+    // children. The order down the rail is what is pinned, and it is unchanged.
+    const kinds = Array.from(column.querySelectorAll<HTMLElement>(`${SEP_SEL}, ${ROW_SEL}`)).map(
+      (child) => (child.matches(SEP_SEL) ? "sep" : "row"),
     );
 
     expect(kinds).toEqual(["row", "sep", "row", "sep", "row"]);
@@ -207,8 +211,16 @@ describe("a separator stands between adjacent entries (item 2)", () => {
     expect(sep.className).toContain("h-2");
     expect(sep.className).toContain("rounded-[1px]");
     expect(sep.className).toContain("bg-line");
-    expect(sep.className).toContain("my-1");
-    expect(sep.className).toContain("ml-[11px]");
+    // The 4px above and below is measured against the ROW BOXES either side, on
+    // a mark that is a sibling in normal flow — the drawing's own
+    // "margin: 4px 0 4px 11px" (cinatra#3225 items 2 and 3, fix leg 10). Leg 9
+    // stated the same gap as a rule about the span between two circles and took
+    // the mark out of the flow to hold it; on a wrapped row that put the mark
+    // inside the row's own box, which the sixth proof round measured.
+    expect(sep.className).toContain("!my-1");
+    expect(sep.className).toContain("!ml-[11px]");
+    expect(sep.className).not.toContain("absolute");
+    expect(sep.className).not.toContain("!my-auto");
     // It is a mark, not a row: nothing to read out and nothing to press.
     expect(sep.getAttribute("aria-hidden")).toBe("true");
     expect(sep.textContent).toBe("");
@@ -217,9 +229,12 @@ describe("a separator stands between adjacent entries (item 2)", () => {
   it("separates the gate rows from the page's own rail below them", () => {
     const { container } = renderRail(<div data-testid="page-rail">steps</div>);
     const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
-    const children = Array.from(column.children);
     const pageRail = container.querySelector<HTMLElement>('[data-testid="page-rail"]')!;
-    const before = children[children.indexOf(pageRail) - 1]!;
+    // The mark at the join is a SIBLING of the rows either side of it (fix leg
+    // 10), so it is the column's own child immediately before the page's rail.
+    const before = Array.from(column.children)[
+      Array.from(column.children).indexOf(pageRail) - 1
+    ]!;
 
     expect(before.matches(SEP_SEL)).toBe(true);
   });

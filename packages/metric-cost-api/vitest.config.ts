@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "../../vitest.placeholder-db-url";
 
 const serverOnlyStub = path.join(__dirname, "tests/__stubs__/server-only.ts");
 // cinatra#2582: the breakdown's pure row formatters are exported from the table
@@ -23,10 +24,16 @@ export default defineConfig({
     },
   },
   test: {
+    // The wholesale package suite runs on the same constrained self-hosted
+    // runner as the root suite and hits the same starvation under load —
+    // imports and hooks alone can cross vitest's 5s/10s defaults. Give
+    // tests and hooks the same 30s headroom as the root suite.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     environment: "node",
     include: ["tests/**/*.test.ts"],
     env: {
-      SUPABASE_DB_URL: "postgres://unused:unused@localhost:5432/unused",
+      SUPABASE_DB_URL: ROOT_SUITE_PLACEHOLDER_DB_URL,
     },
   },
 });

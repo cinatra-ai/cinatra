@@ -265,7 +265,10 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
-    expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
+    // The withheld terminal write carries no derivation outbox: cinatra#3029
+    // (PR 3311) retired the response-text derivation on the path that produced
+    // this payload, so a replayed verdict must not claim one either.
+    expect(calls[0][3]?.derivationOutbox).toBeUndefined();
   });
 
   it("the queued delivery is what the execution job consumes — carrier and consumer agree", async () => {
@@ -290,7 +293,10 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     >;
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
-    expect(calls[0][3]?.derivationOutbox).toMatchObject({ contentHash: expect.any(String) });
+    // The withheld terminal write carries no derivation outbox: cinatra#3029
+    // (PR 3311) retired the response-text derivation on the path that produced
+    // this payload, so a replayed verdict must not claim one either.
+    expect(calls[0][3]?.derivationOutbox).toBeUndefined();
   });
 
   it("a leg redelivered at the same ordinal collapses onto the one queued recovery", async () => {

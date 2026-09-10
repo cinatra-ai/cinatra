@@ -76,6 +76,7 @@ function runPageRail(params: {
   steps: ReturnType<typeof buildRunInputSteps>;
   inputStepIsOpen: boolean;
   inputStepsInRail: boolean;
+  gateStepInRail?: boolean;
   hasExecution: boolean;
   gateRows?: RunSurfaceRailStep[];
 }): RunSurfaceRailStep[] {
@@ -87,6 +88,7 @@ function runPageRail(params: {
     drawUpcoming: railDrawsUpcomingRunSteps({
       inputStepIsOpen: params.inputStepIsOpen,
       inputStepsInRail: params.inputStepsInRail,
+      gateStepInRail: params.gateStepInRail ?? false,
       hasExecution: params.hasExecution,
     }),
     drawnKeys: railSteps.map((step) => step.key),
@@ -197,6 +199,7 @@ describe("railDrawsUpcomingRunSteps -- when the still-to-come rows ride", () => 
       railDrawsUpcomingRunSteps({
         inputStepIsOpen: true,
         inputStepsInRail: true,
+        gateStepInRail: false,
         hasExecution: false,
       }),
     ).toBe(true);
@@ -204,6 +207,7 @@ describe("railDrawsUpcomingRunSteps -- when the still-to-come rows ride", () => 
       railDrawsUpcomingRunSteps({
         inputStepIsOpen: false,
         inputStepsInRail: true,
+        gateStepInRail: false,
         hasExecution: false,
       }),
     ).toBe(true);
@@ -214,16 +218,24 @@ describe("railDrawsUpcomingRunSteps -- when the still-to-come rows ride", () => 
       railDrawsUpcomingRunSteps({
         inputStepIsOpen: false,
         inputStepsInRail: true,
+        gateStepInRail: false,
         hasExecution: true,
       }),
     ).toBe(false);
   });
 
-  it("draws none for a run whose rail carries no input step at all", () => {
+  // AND THE GATE IS THE SECOND FACT THEY RIDE ON (cinatra#3184 item 1). "No
+  // input step" was read as "no rows" until the convergence round measured a
+  // run held at its skills question on a template that asks no visible required
+  // input: the rail was the gate row alone. The rows are absent only when
+  // NEITHER an input step nor the gate step is on the rail; the gate's own case
+  // is pinned in `skills-step-rail-is-never-one-entry.test.tsx`.
+  it("draws none for a rail with neither an input step nor the gate step", () => {
     expect(
       railDrawsUpcomingRunSteps({
         inputStepIsOpen: false,
         inputStepsInRail: false,
+        gateStepInRail: false,
         hasExecution: false,
       }),
     ).toBe(false);
@@ -251,7 +263,7 @@ describe("the screen JSX composes the rail through those two answers", () => {
     // nested would stay green if the screen handed the predicate a constant, or
     // the wrong run's execution reading, so the arguments are pinned too.
     expect(SCREEN_SRC).toMatch(
-      /railDrawsUpcomingRunSteps\(\{\s*\n\s*inputStepIsOpen,\s*\n\s*inputStepsInRail,\s*\n\s*hasExecution: runHasExecution,\s*\n\s*\}\),\s*\n\s*drawnKeys: railSteps\.map\(\(step\) => step\.key\),/,
+      /railDrawsUpcomingRunSteps\(\{\s*\n\s*inputStepIsOpen,\s*\n\s*inputStepsInRail,\s*\n\s*gateStepInRail: hasRecommendationStep,\s*\n\s*hasExecution: runHasExecution,\s*\n\s*\}\),\s*\n\s*drawnKeys: railSteps\.map\(\(step\) => step\.key\),/,
     );
     // The leg-2 gate, which took the rows away the moment the form was answered.
     expect(SCREEN_SRC).not.toContain("if (inputStepIsOpen) {");

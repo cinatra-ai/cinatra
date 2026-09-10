@@ -159,7 +159,12 @@ export {
   // rather than falling back to live.
   resolvePinnedRunSnapshot,
   PinnedRunSnapshotUnreachableError,
+  // THE DEFAULT ROAD's runner-slot registrar (cinatra#3029). Boot-only: the
+  // system-loops seed phase registers the pickup core into the slot the terminal
+  // path reads, so the pickup core never enters a locked route's graph.
+  registerDefaultRoadPickupRunner,
 } from "./execution";
+export type { DefaultRoadPickupRunner } from "./execution";
 export type { PinnedRunSnapshotFields, PinnedVersionRow } from "./execution";
 // #1193 run-token carrier — the ONE place a first-party WayFlow dispatch or
 // resume mints + persists a per-run credential and puts the RAW token on the
