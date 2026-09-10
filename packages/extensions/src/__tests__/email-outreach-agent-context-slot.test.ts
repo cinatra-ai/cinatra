@@ -81,14 +81,12 @@ describe("email-outreach-agent additive-conversion invariant", () => {
     // Pin the EXACT occurrence count, not just ">0". Any partial strip
     // (for example, removing a DataFlowEdge but leaving one prompt
     // mention) must consciously update this assertion so we never
-    // silently break production wiring. Current count is 23
-    // (21 lines; two lines have both source_output + destination_input
-    // references) at the pin this host carries, whose start-node
-    // declaration names the three inputs a person sets. When the
-    // strip-when-live path is implemented, update this to expect(0) and
-    // remove the comment block.
+    // silently break production wiring. Current count is 15
+    // (14 lines; one line has both source_output + destination_input
+    // references). When the strip-when-live path is implemented, update
+    // this to expect(0) and remove the comment block.
     const raw = readFileSync(OAS_PATH, "utf-8");
     const count = (raw.match(/offeringCompanyWebsite/g) ?? []).length;
-    expect(count).toBe(23);
+    expect(count).toBe(15);
   });
 });
