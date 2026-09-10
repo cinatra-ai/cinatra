@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 
-import { validateInstanceNamespace, canonicalizeInstanceNamespace } from "../validator";
+import {
+  validateInstanceNamespace,
+  canonicalizeInstanceNamespace,
+  NAMESPACE_FORMAT_REGEX_SOURCE,
+} from "../validator";
+// The barrel is the path every consumer imports; pinning it to the same string
+// keeps "one export, two consumers" true at the surface the consumers see.
+import { NAMESPACE_FORMAT_REGEX_SOURCE as BARREL_NAMESPACE_FORMAT_REGEX_SOURCE } from "..";
 import { RESERVED_SUBSTRINGS } from "../reserved-patterns";
 
 describe("canonicalizeInstanceNamespace", () => {
@@ -137,5 +144,66 @@ describe("validateInstanceNamespace", () => {
       expect(result.error.code).toBe("required");
       expect((result.error as { canonical?: string }).canonical).toBeUndefined();
     }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// cinatra#3207 — the exported source string is consumed as an HTML `pattern`
+// attribute, and a browser compiles a `pattern` value as a regular expression
+// with the `v` flag. Under `v` a bare hyphen is a syntax character inside a
+// character class, so an unescaped `[a-z0-9-]` is a SyntaxError there and the
+// element ends up with no compiled pattern at all — the constraint is silently
+// not applied and the browser reports the failure to the console.
+//
+// Nothing compiled the exported string as a regular expression before this
+// block: `validateInstanceNamespace` runs against the flagless literal below
+// it, so the two forms could drift without a single test noticing.
+// -----------------------------------------------------------------------------
+describe("NAMESPACE_FORMAT_REGEX_SOURCE as an HTML pattern attribute", () => {
+  it("compiles under the `v` flag a browser applies to a pattern attribute", () => {
+    expect(() => new RegExp(NAMESPACE_FORMAT_REGEX_SOURCE, "v")).not.toThrow();
+  });
+
+  it("still compiles under `u` and with no flags", () => {
+    expect(() => new RegExp(NAMESPACE_FORMAT_REGEX_SOURCE, "u")).not.toThrow();
+    expect(() => new RegExp(NAMESPACE_FORMAT_REGEX_SOURCE)).not.toThrow();
+  });
+
+  it("is the same string the barrel re-exports (one export, two consumers)", () => {
+    expect(BARREL_NAMESPACE_FORMAT_REGEX_SOURCE).toBe(NAMESPACE_FORMAT_REGEX_SOURCE);
+  });
+
+  // ALREADY-CANONICAL inputs only: `validateInstanceNamespace` trims and
+  // lowercases before it tests, while the attribute tests the raw field value,
+  // so casing/whitespace are deliberately out of this parity set (uppercase is
+  // asserted against the exported pattern alone, below). None of these inputs
+  // carries a reserved substring, so a `false` here is always the FORMAT stage.
+  const CANONICAL_FIXTURES = [
+    { input: "acme-group", accepted: true },
+    { input: "acme", accepted: true },
+    { input: "a", accepted: false },
+    { input: "a".repeat(40), accepted: false },
+    { input: "-acme", accepted: false },
+    { input: "acme_group", accepted: false },
+  ] as const;
+
+  it.each(CANONICAL_FIXTURES)(
+    "the `v`-flag pattern and the server validator agree on $input (accepted: $accepted)",
+    ({ input, accepted }) => {
+      const compiledUnderV = new RegExp(NAMESPACE_FORMAT_REGEX_SOURCE, "v");
+      expect(compiledUnderV.test(input)).toBe(accepted);
+
+      const result = validateInstanceNamespace(input);
+      const serverPassesFormat = result.ok || result.error.code !== "format";
+      expect(serverPassesFormat).toBe(accepted);
+    },
+  );
+
+  it("rejects uppercase — the attribute never canonicalizes, the validator does", () => {
+    const compiledUnderV = new RegExp(NAMESPACE_FORMAT_REGEX_SOURCE, "v");
+    expect(compiledUnderV.test("Acme-Group")).toBe(false);
+    // The FUNCTION lowercases first, so it accepts the same input. The two are
+    // deliberately different here and are not compared.
+    expect(validateInstanceNamespace("Acme-Group").ok).toBe(true);
   });
 });

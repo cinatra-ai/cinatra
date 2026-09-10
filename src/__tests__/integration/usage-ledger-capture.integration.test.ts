@@ -80,7 +80,7 @@ const SHARED_SCHEMAS = new Set([
 ]);
 const HAS_REAL_DB =
   DB_URL !== "" &&
-  !DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
@@ -229,6 +229,7 @@ import {
   setKnowledgeGraphIndexingProbe,
 } from "../../../packages/objects/src/graphiti-client";
 import { POST as keyValidationPOST } from "@/app/configuration/mcp/llm-access/test/route";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // Fixture

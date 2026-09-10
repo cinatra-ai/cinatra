@@ -25,6 +25,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -41,7 +42,7 @@ vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} })
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () => {} }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 // THE LOUD FAILURE HAS TO BE HERE, AT MODULE SCOPE, AND NOT IN A HOOK.
 //

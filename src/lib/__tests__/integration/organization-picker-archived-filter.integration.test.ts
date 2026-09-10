@@ -24,12 +24,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   dbUrl !== "" &&
-  !dbUrl.includes("unused:unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const PUBLIC_SCHEMA_SQL = path.join(REPO_ROOT, "tests/e2e/rbac/fixtures/public-schema.sql");

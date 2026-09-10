@@ -97,7 +97,7 @@ concurrency:
 jobs:
   validate-shape:
     name: Validate agent.json shape (legacy schema check)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
     steps:
       - name: Checkout
@@ -116,7 +116,7 @@ jobs:
 
   validate-runtime-invariants:
     name: Validate OAS runtime invariants
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     steps:
       - name: Checkout
@@ -144,7 +144,7 @@ jobs:
 
   validate-wayflow-mount:
     name: WayFlow mount guard (standalone + orchestrated, pinned tree)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:
     # the only place `docker/wayflow/tests/test_repo_agents_load.py` ran was the
     # `works-after proof` workflow, which (a) fires only on upgrade paths — the
@@ -187,7 +187,12 @@ jobs:
           # `assert_mount_health.py` (mounted + failed == oas.json on disk)
           # turns a regression of that into a RED job rather than a vacuous
           # green.
-          docker run -d --name wayflow-mount-guard -p 127.0.0.1:3010:3010 \
+          # An EMPTY host port: Docker picks a free one, so two jobs running
+          # this runtime on ONE self-hosted machine never race for 3010
+          # (cinatra#3267). Every later consumer in this job is a `docker
+          # exec` on the container network, so the mapping is only needed by
+          # the health curls below and stays a local shell variable.
+          docker run -d --name wayflow-mount-guard -p 127.0.0.1::3010 \
             -e PORT=3010 \
             -e CINATRA_AGENTS_DIR=/agents \
             -e CINATRA_BASE_URL=http://host.docker.internal:3000 \
@@ -195,15 +200,18 @@ jobs:
             -e CINATRA_CONTEXT_ATTEST_KEY="mount-guard-$(openssl rand -hex 16)" \
             -v "$PWD/extensions:/agents:ro" \
             cinatra-wayflow:mount-guard
+          GUARD_PORT="$(docker port wayflow-mount-guard 3010/tcp | head -n 1 | sed 's/.*://')"
+          [ -n "$GUARD_PORT" ] || { echo "::error::could not read back the mapped wayflow host port"; exit 1; }
+          GUARD_URL="http://127.0.0.1:${GUARD_PORT}"
           for i in $(seq 1 40); do
-            if curl -fsS http://127.0.0.1:3010/.health >/dev/null 2>&1; then break; fi
+            if curl -fsS "${GUARD_URL}/.health" >/dev/null 2>&1; then break; fi
             if [ "$(docker inspect -f '{{.State.Running}}' wayflow-mount-guard)" != "true" ]; then
               echo "::error::wayflow runtime exited before becoming healthy."; exit 1
             fi
             if [ "$i" -eq 40 ]; then echo "::error::/.health did not answer within 120s."; exit 1; fi
             sleep 3
           done
-          echo "health: $(curl -fsS http://127.0.0.1:3010/.health)"
+          echo "health: $(curl -fsS "${GUARD_URL}/.health")"
 
       - name: Assert the boot is complete and non-vacuous
         run: |

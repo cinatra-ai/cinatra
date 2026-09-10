@@ -61,6 +61,15 @@ const STAGED = {
     manifestSha256: "983fd9fdaa49f4d0749c4637c2ede51ce0b0cd1dc858a92e4d7e63080a4e6af3",
     contentHash: "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
   },
+  // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
+  // display wave). First-time adoption: the drawing has never been committed
+  // here, so there is no earlier record to move. Eleven of its forty surfaces are
+  // driven by that wave; it joins the pin gate when every one of them is covered.
+  "app-artifact-review.json": {
+    spec: "specs/app-artifact-review.html",
+    manifestSha256: "605745f5f670628d1bbaeb6e5e868e3d4401d653666cdf450ab149120ce94113",
+    contentHash: "sha256:eed1cc2d55f1aa561b77e637d382bef271340c87239a189c117d12baa51c44b1",
+  },
 };
 
 const pins = readJson(path.join(CONF_DIR, "..", "conformance-pins.json"));

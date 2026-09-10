@@ -64,15 +64,30 @@ describe("a step crumb is appended after the run's own crumb", () => {
     ]);
   });
 
-  it("keeps naming the schedule step exactly as it did", () => {
+  // THE SCHEDULE STEP STOPPED BEING NAMED AT ALL (cinatra#3223, fix leg 2).
+  // This test used to pin the third crumb the sub-route position drew,
+  // "Schedule". The ratified drawing's Breadcrumb section rules it out: the
+  // trail is "the route the page sits on, not the thing the page happens to be
+  // about", and a step of a run is a reading inside that run, not a level of
+  // the hierarchy — so the schedule step's trail is the run's own trail,
+  // whatever path the step answers at.
+  it("names no step at the schedule sub-route, so the trail is the run's own", () => {
     const crumbs = buildBreadcrumbTrail(`${RUN_PATH}/trigger`, {
       contributions: [{ prefix: RUN_PATH, label: "Blog Draft Writer Agent (1)" }],
     });
     expect(crumbs.map((c) => c.label)).toEqual([
       "Agents",
       "Blog Draft Writer Agent (1)",
-      "Schedule",
     ]);
+    expect(JSON.stringify(crumbs)).toBe(
+      JSON.stringify(
+        buildBreadcrumbTrail(RUN_PATH, {
+          contributions: [
+            { prefix: RUN_PATH, label: "Blog Draft Writer Agent (1)" },
+          ],
+        }),
+      ),
+    );
   });
 
   it("skips an append whose target crumb is not on this trail", () => {

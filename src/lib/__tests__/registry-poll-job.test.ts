@@ -469,8 +469,9 @@ describe("runRegistryPollJob — 5xx / network failure", () => {
 
   it("doubles the backoff on consecutive 5xx responses (60s after a prior 30s window)", async () => {
     // Simulate "second 5xx attempt" by pre-populating lastPolledAt 30s before nextPollAt.
-    const lastPolledAt = new Date(Date.now() - 60_000).toISOString();
-    const nextPollAt = new Date(Date.now() - 30_000).toISOString();
+    const now = Date.now();
+    const lastPolledAt = new Date(now - 60_000).toISOString();
+    const nextPollAt = new Date(now - 30_000).toISOString();
     vi.mocked(readInstanceIdentity).mockReturnValue(
       makeIdentityWithRemote({ lastPolledAt, nextPollAt }) as never,
     );
@@ -482,8 +483,9 @@ describe("runRegistryPollJob — 5xx / network failure", () => {
   });
 
   it("caps the backoff at BACKOFF_CAP_MS (5min) when previous delta was already at the cap", async () => {
-    const lastPolledAt = new Date(Date.now() - 600_000).toISOString();
-    const nextPollAt = new Date(Date.now() - 300_000).toISOString(); // delta = 5min
+    const now = Date.now();
+    const lastPolledAt = new Date(now - 600_000).toISOString();
+    const nextPollAt = new Date(now - 300_000).toISOString(); // delta = 5min
     vi.mocked(readInstanceIdentity).mockReturnValue(
       makeIdentityWithRemote({ lastPolledAt, nextPollAt }) as never,
     );

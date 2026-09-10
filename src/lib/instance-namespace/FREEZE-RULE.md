@@ -6,7 +6,7 @@
 
 `validateInstanceNamespace` is the only place in the codebase that owns:
 
-1. The format regex `^[a-z0-9][a-z0-9-]{1,38}$` (lowercase alphanumeric + hyphens, must start with alphanumeric, 2–39 chars)
+1. The format regex `^[a-z0-9][a-z0-9\-]{1,38}$` (lowercase alphanumeric + hyphens, must start with alphanumeric, 2–39 chars). The hyphen is escaped so the very same source string also compiles as an HTML `pattern` attribute, which a browser reads with the `v` flag — the escape changes the spelling, never the set of names the rule admits (cinatra#3207). The string form carries a doubled backslash, the regex-literal form a single one; they are the same pattern.
 2. The reserved-substring policy (currently `["cinatra"]`, see `reserved-patterns.ts`)
 3. The canonicalization rule (`trim → lowercase`)
 4. The error-ordering contract (`required → format → reserved → uniqueness/provisioning [reserved slot]`)

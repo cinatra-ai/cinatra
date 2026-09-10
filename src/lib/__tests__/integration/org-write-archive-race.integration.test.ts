@@ -106,12 +106,13 @@ import { betterAuthPool } from "@/lib/better-auth-db";
 // seeded key is invisible to them.
 // ---------------------------------------------------------------------------
 import { writeConnectorConfigToDatabase as writeConnectorConfigSeam } from "@/lib/database";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   dbUrl !== "" &&
-  !dbUrl.includes("unused:unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const PUBLIC_SCHEMA_SQL = path.join(REPO_ROOT, "tests/e2e/rbac/fixtures/public-schema.sql");

@@ -38,12 +38,13 @@ import {
   type ExecutionServiceState,
   type ResolveRunExecutionMountInput,
 } from "@/lib/execution/register-execution-environment-service";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const fakeExecutor: SandboxExecutor = async () => [];
 const fakeMount: SandboxEnvironmentMount = { imageRef: "cinatra-sandbox-l1:test", provenance: {} };

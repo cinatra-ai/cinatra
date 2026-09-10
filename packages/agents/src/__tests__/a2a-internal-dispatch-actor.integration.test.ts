@@ -21,13 +21,14 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 const q = (s: string) => s.replaceAll('"', '""');
 
 // Ids unique to THIS file (never shared with a sibling integration suite).

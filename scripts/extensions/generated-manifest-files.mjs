@@ -53,6 +53,12 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // to a key here; a runtime-installed claimant whose key is absent is the
   // "requires rebuild" degrade. Empty until an artifact declares `ui` (S3+/M1).
   "src/lib/generated/artifact-renderers.ts",
+  // Declared artifact-kind labels (cinatra#2926 / #3023 — the core/extension
+  // border): the import-free map from a kind:"artifact" package to the label
+  // the PACK declares for its own kind (`cinatra.displayName`). Carried
+  // DECLARATION, never a host roster — a package absent here is one that has
+  // not spoken, and the host's package-id derivation floors it.
+  "src/lib/generated/artifact-kind-labels.ts",
   // Field-renderer component dispatch spine (cinatra#1625, epic #1620 S8 — M3):
   // the CLIENT-safe literal-import BUILD table of extension-shipped HITL
   // field-renderer modules, keyed by field-renderer BINDING id (own keyspace,
