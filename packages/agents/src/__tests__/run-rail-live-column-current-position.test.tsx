@@ -31,10 +31,15 @@
  * stands at none. The column already takes that number as its `activeStep`. So
  * the marker is that number written into the DOM, and nothing else moves.
  *
- * ONE AT A TIME MEANS THE WHOLE COLUMN. Where the page's own rail frames the
- * run detail it draws the rows the reader is standing on and marks one of them
- * itself (`run-surface-rail.tsx`); the live column stands down there, exactly
- * as the page-level rail does, so the surface carries one marker and never two.
+ * ONE AT A TIME MEANS THE WHOLE SURFACE. This column stands down where the
+ * frame beside it has ELECTED a row of its own — not merely where a frame is
+ * drawn, which is the question this suite asked at fix leg 9 and which the
+ * live boot then contradicted: the frame drew a generic row for a pause the
+ * column already carried, marked that one, and both of the column's own rows
+ * came back with nothing. The whole-surface reading is
+ * `run-surface-merged-rail-one-current-entry` (fix leg 10), which composes the
+ * frame and this column together the way the screen composes them; what stays
+ * here is this column's own half, driven by the frame's answer as a prop.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -279,11 +284,10 @@ describe("the live rail column marks the one entry the run is paused on (cinatra
     expect(markedRows().length).toBe(0);
   });
 
-  it("stands down where the page's own rail frames the run detail — one marker on the surface, never two", async () => {
-    // The page's own rail draws the rows the reader is standing on there and
-    // marks one of them itself. Measured on the live boot: a blog-pipeline run
-    // parked at its context gate carries the marker on that rail's own row, and
-    // a second marker written here would be two places to stand.
+  it("stands down where the frame beside it has ELECTED a row — one marker on the surface, never two", async () => {
+    // The frame elects a row of its own for the gates it draws — a held Skills
+    // question, a schedule the run is stopped at — and a second marker written
+    // here would be two places to stand.
     streamState.status = "pending_approval";
     streamState.interruptContext = {
       xRenderer: "@cinatra-ai/context-selection-agent:context-selector",
@@ -295,9 +299,42 @@ describe("the live rail column marks the one entry the run is paused on (cinatra
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(
       <OrchestratorStepperPanel
-        {...baseProps({ initialStatus: "pending_approval", railDrawsTheFrame: true })}
+        {...baseProps({
+          initialStatus: "pending_approval",
+          railDrawsTheFrame: true,
+          frameElectsTheCurrentEntry: true,
+        })}
       />,
     );
     expect(markedRows().length).toBe(0);
+  });
+
+  it("goes on marking its own entry where a frame is drawn but elects NOTHING", async () => {
+    // A frame is drawn for a Skills entry the run already answered, and such a
+    // run is paused at a work step the frame carries no row for. Leg 9 stood
+    // this column down on the frame's mere presence, which left the surface
+    // with no marker at all; the frame's own election is the fact, and it is
+    // false here.
+    streamState.status = "pending_approval";
+    streamState.interruptContext = {
+      xRenderer: "@cinatra-ai/blog-pipeline-agent:idea-selection",
+      reviewTaskId: "wayflow-pick",
+      fieldName: null,
+      values: { stepNumber: 0 },
+      schema: {},
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps({
+          initialStatus: "pending_approval",
+          railDrawsTheFrame: true,
+          frameElectsTheCurrentEntry: false,
+        })}
+      />,
+    );
+    const marked = markedRows();
+    expect(marked.length).toBe(1);
+    expect(titleOf(marked[0]!)).toBe("Select blog idea");
   });
 });

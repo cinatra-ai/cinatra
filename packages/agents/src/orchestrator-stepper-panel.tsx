@@ -265,6 +265,38 @@ export type OrchestratorStepperPanelProps = {
    * this states — the same handover `embedMode` makes, for the same reason.
    */
   railDrawsTheFrame?: boolean;
+  /**
+   * DOES THE FRAME BESIDE THIS COLUMN STAND THE READER AT ONE OF ITS OWN ROWS?
+   * (cinatra#3149 item 3, fix leg 10.)
+   *
+   * The ratified drawing, section I.3: "The run waits at each -- one entry is
+   * highlighted at a time". One rail, one place to stand: this column marks its
+   * own active entry unless the frame has already marked a row of its own.
+   *
+   * IT IS NOT THE SAME QUESTION AS `railDrawsTheFrame`, and leg 9 asked that one
+   * instead. A frame is drawn for a Skills entry the run already answered, and
+   * such a run is paused at a WORK step the frame carries no row for: the frame
+   * elects nothing there, and a column standing down on the frame's mere
+   * presence left the whole surface with no marker at all. The screen reads the
+   * frame's own election once and states it here.
+   */
+  frameElectsTheCurrentEntry?: boolean;
+  /**
+   * THE STEP THE SERVER READ OFF THE GATE THE RUN IS PARKED AT, where the frame
+   * beside this column has stood its own row for that gate down (cinatra#3149
+   * item 3, fix leg 10).
+   *
+   * This column's stream opens with `interruptContext` null and fills in when
+   * the first frame arrives, so until then the rail's election has no step
+   * number and falls back to the FIRST row. That was harmless while the frame
+   * carried the marker for this class of run; now that the marker is this
+   * column's, a spine whose policy numbers start above 1 would stand the reader
+   * at the wrong entry for as long as the stream takes.
+   *
+   * It is read by the RAIL'S ELECTION and by nothing else — no card, no spinner
+   * and no gate reading takes a step from it. Null on every other run.
+   */
+  initialGateStepNumber?: number | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -1624,6 +1656,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    frameElectsTheCurrentEntry = false,
+    initialGateStepNumber = null,
   } = props;
 
   const router = useRouter();
@@ -1858,11 +1892,19 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // soon as the next SSE frame or poll arrives. Future enhancement: persist
   // lastStepNumber in run.metadata so it survives refreshes.
   const highestStepNumberRef = useRef(0);
+  // HAS THE STREAM EVER DELIVERED A GATE ON THIS MOUNT? (cinatra#3149 item 3,
+  // fix leg 10.) The one thing that retires the server's seed above; written
+  // during render beside the ref below, which is this file's own idiom for a
+  // fact read out of the frame that just arrived.
+  const streamHasDeliveredAGateRef = useRef(false);
   const currentStepNumber =
     typeof (effectiveInterruptContext?.values as { stepNumber?: number } | undefined)
       ?.stepNumber === "number"
       ? (effectiveInterruptContext!.values as { stepNumber: number }).stepNumber
       : null;
+  if (effectiveInterruptContext !== null) {
+    streamHasDeliveredAGateRef.current = true;
+  }
   if (
     currentStepNumber !== null &&
     currentStepNumber > highestStepNumberRef.current
@@ -1912,9 +1954,22 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // THE SERVER'S ANSWER UNTIL THE STREAM HAS ONE (cinatra#3149 item 3, fix
+    // leg 10) — see `initialGateStepNumber`. It is a SEED, and a seed is spent:
+    // once the stream has delivered any interrupt at all the gate on screen is
+    // the stream's, and the number the server read before it is stale for the
+    // rest of this mount. "No interrupt right now" is not the same question —
+    // a RESUME frame clears the interrupt WITHOUT leaving `pending_approval`,
+    // so a seed retired only for as long as one is present would come back and
+    // move the marker to a step the run has passed.
+    const railStepNumber =
+      currentStepNumber ??
+      (status === "pending_approval" && !streamHasDeliveredAGateRef.current
+        ? initialGateStepNumber
+        : null);
     return electRunRailActiveStep({
       status,
-      currentStepNumber,
+      currentStepNumber: railStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
@@ -2371,11 +2426,13 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         onActiveStepClick={replayStepIndex !== null ? () => setReplayStepIndex(null) : undefined}
         railExtras={railExtras}
         reviewHrefBase={reviewHrefBase}
-        // ONE PLACE TO STAND ON THE WHOLE SURFACE (cinatra#3149, item 3). Where
-        // the page's own rail frames the run detail it draws the rows the
-        // reader is standing on and marks one of them itself; this column marks
-        // one only where it is the rail that draws them.
-        electsCurrentEntry={!railDrawsTheFrame}
+        // ONE PLACE TO STAND ON THE WHOLE SURFACE (cinatra#3149, item 3; the
+        // rule corrected by fix leg 10). This column marks its own active entry
+        // unless the frame beside it has already marked a row of ITS own -- not
+        // merely whenever a frame is drawn, which is the question leg 9 asked
+        // and which left a run paused at a work step under a settled Skills
+        // entry with no marker anywhere on the surface.
+        electsCurrentEntry={!frameElectsTheCurrentEntry}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>
     </div>
