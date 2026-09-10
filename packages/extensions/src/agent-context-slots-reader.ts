@@ -130,6 +130,137 @@ export function readAgentContextSlotsFromOas(
   }
 }
 
+// ---------------------------------------------------------------------------
+// PARENT-SATISFIED CONTEXT SLOTS (plan (C) item 0.29, cinatra#3032).
+//
+//   item 0.29: "a composite agent declares in its manifest which of its own
+//   context slots satisfy which slots of the agents it embeds, one line per
+//   child slot; the runtime resolves the parent's pick once and hands it down,
+//   and the child's pause never fires."
+//
+// The declaration lives beside `contextSlots` on the composite agent's OWN
+// metadata, as `metadata.cinatra.parentSatisfiedContextSlots`. It is static: it
+// names ids, never values, so nothing a caller sends can reach it — the
+// selection is still made through the context-selection road and finalized
+// server-side, which is why the conformance rule forbidding the inert top-level
+// slot-bindings bypass stays exactly as it is.
+//
+// RUNTIME CONSUMER: the same WayFlow loader that injects the context subflow
+// (docker/wayflow/context_subflow_injection.py) reads this declaration at mount
+// time and, for every child slot a line names, injects NO subflow into the
+// child and wires the parent's resolved selection into the child instead. The
+// loader validates it STRICTLY (a present-but-malformed declaration fails the
+// agent's mount); this reader keeps its fail-quiet [] posture for read-only
+// discovery, exactly as the slot reader above does. The two schemas must stay
+// field-mirrored — see the loader's _validate_parent_satisfied_slots.
+//
+// INSTALL-TIME CONSUMER: src/lib/extension-host-compat.ts,
+// which checks each line against the child's own slot declaration and refuses
+// the install on a conflict.
+// ---------------------------------------------------------------------------
+
+/** One line: which slot of the parent satisfies which slot of which child. */
+export type ParentSatisfiedContextSlot = {
+  /** A slot the parent itself declares in `contextSlots`. */
+  parentSlotId: string;
+  /** The embedded agent's package name. */
+  childPackage: string;
+  /** A slot that embedded agent declares in ITS `contextSlots`. */
+  childSlotId: string;
+};
+
+const parentSatisfiedSlotSchema: z.ZodType<ParentSatisfiedContextSlot> = z
+  .object({
+    parentSlotId: z.string().min(1),
+    childPackage: z.string().min(1),
+    childSlotId: z.string().min(1),
+  })
+  .strict() as z.ZodType<ParentSatisfiedContextSlot>;
+
+const parentSatisfiedSlotsArraySchema = z.array(parentSatisfiedSlotSchema);
+
+/**
+ * Parse a composite agent's OAS and return its declared
+ * `parentSatisfiedContextSlots` lines. Returns `[]` for legacy / absent /
+ * malformed declarations — quietly empty, never throws (the same fail-quiet
+ * posture, and the same reasons, as the slot reader above).
+ *
+ * ONE LINE PER CHILD SLOT is the declaration's own shape and is enforced by the
+ * consumers, not here: a duplicate line is a CONFLICT the install refuses with a
+ * named reason, which is more useful than a silently emptied declaration.
+ */
+export function readParentSatisfiedContextSlotsFromOas(
+  oas: unknown,
+): ParentSatisfiedContextSlot[] {
+  try {
+    if (!oas || typeof oas !== "object") return [];
+    const metadata = (oas as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== "object") return [];
+    const cinatra = (metadata as { cinatra?: unknown }).cinatra;
+    if (!cinatra || typeof cinatra !== "object") return [];
+    const lines = (cinatra as { parentSatisfiedContextSlots?: unknown })
+      .parentSatisfiedContextSlots;
+    if (lines === undefined || lines === null) return [];
+    const parsed = parentSatisfiedSlotsArraySchema.safeParse(lines);
+    if (!parsed.success) return [];
+    return parsed.data.map((l) => ({
+      parentSlotId: l.parentSlotId,
+      childPackage: l.childPackage,
+      childSlotId: l.childSlotId,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The INSTALL-TIME read of the same declaration: strict, and it says WHY.
+ *
+ * The fail-quiet reader above empties the WHOLE declaration on a single
+ * malformed line, which at the install gate reads as "this package declares
+ * nothing to check" — so an incompatible declaration carrying one stray key
+ * would be INSTALLED and fail later at mount. The install gate must be able to
+ * tell an ABSENT declaration from an INVALID one, so it reads through this.
+ */
+export function readParentSatisfiedContextSlotsStrictFromOas(
+  oas: unknown,
+):
+  | { ok: true; lines: ParentSatisfiedContextSlot[] }
+  | { ok: false; error: string } {
+  try {
+    if (!oas || typeof oas !== "object") return { ok: true, lines: [] };
+    const metadata = (oas as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== "object") return { ok: true, lines: [] };
+    const cinatra = (metadata as { cinatra?: unknown }).cinatra;
+    if (!cinatra || typeof cinatra !== "object") return { ok: true, lines: [] };
+    const lines = (cinatra as { parentSatisfiedContextSlots?: unknown })
+      .parentSatisfiedContextSlots;
+    if (lines === undefined || lines === null) return { ok: true, lines: [] };
+    const parsed = parentSatisfiedSlotsArraySchema.safeParse(lines);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: `parentSatisfiedContextSlots is malformed: ${parsed.error.message}`,
+      };
+    }
+    return {
+      ok: true,
+      lines: parsed.data.map((l) => ({
+        parentSlotId: l.parentSlotId,
+        childPackage: l.childPackage,
+        childSlotId: l.childSlotId,
+      })),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `parentSatisfiedContextSlots could not be read: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+}
+
 /**
  * Test-only export of the inner schema for byte-mirror tests against any
  * future canonical schema location. When the resolver wires the schema as a
@@ -139,4 +270,6 @@ export function readAgentContextSlotsFromOas(
 export const __test = {
   contextSlotSchema,
   contextSlotsArraySchema,
+  parentSatisfiedSlotSchema,
+  parentSatisfiedSlotsArraySchema,
 };
