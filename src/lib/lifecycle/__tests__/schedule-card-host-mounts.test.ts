@@ -72,14 +72,23 @@ const MOUNTS = {
  * THE REVIEW PAGE PLACES IT ITSELF (cinatra#2788 rework). The step is the two
  * COLUMNS of the run surface, not a row inside the rail — plan (A) §7.2 step 5,
  * "it opens to the right of the steps, never directly under a step" — so it is
- * placed where both columns are composed. On the review page that is the route
- * component, which hands it the rail on one side and the gate region on the
- * other; the rail component itself no longer places anything.
+ * placed where both columns are composed. On the review page that is the route's
+ * own run-surface module, which hands the frame the rail on one side and the
+ * gate region on the other; the rail component itself places nothing.
+ *
+ * AND IT MOVED ONE FILE (cinatra#3047). The review page grew a SECOND gate step
+ * — the Skills question, at the head of its rail, where the drawing puts it and
+ * where the change request's "one page per gate" requires it — so it composes
+ * the shared frame with both steps' rows and surfaces, exactly as the run page
+ * does. That composition is `review-run-surface.tsx`, beside the route: which
+ * steps a run has, which numeral each carries and which can be opened are the
+ * rail's own rules, and a route component restating them is the second place
+ * for them to drift. The ROUTE still reads the run's facts and mints the refs.
  */
 const RAIL_PLACEMENTS = {
   run_card: "packages/agents/src/instance-screens.tsx",
   page_gate_region:
-    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
 } as const;
 
 /**
@@ -92,7 +101,11 @@ const RAIL_PLACEMENTS = {
  */
 const RAIL_STEP_TAGS = {
   run_card: [/<\s*ScheduleRailStepRow\b/, /<\s*ScheduleStepSurface\b/],
-  page_gate_region: [/<\s*ScheduleRailStep\b/],
+  // BOTH PAGES COMPOSE THE SHARED FRAME NOW (cinatra#3047): the review page
+  // carries the Skills step as well as the schedule, so it places the
+  // schedule's own row and surface in that frame rather than the one-step
+  // component. Same two pieces, same module, one rail.
+  page_gate_region: [/<\s*ScheduleRailStepRow\b/, /<\s*ScheduleStepSurface\b/],
 } as const;
 
 const REVIEW_PAGE =
@@ -219,7 +232,10 @@ describe("the four mounts exist and are host-declared", () => {
     }
     // The client is never handed a run id to name; the ref is the whole binding.
     expect(screens).toMatch(/cardRef=\{scheduleRailRef\}/);
-    expect(reviewPage).toMatch(/cardRef=\{scheduleCardRef\}/);
+    // The ref is minted by the ROUTE and handed to the composition beside it,
+    // which is the module that gives it to the card (cinatra#3047).
+    expect(reviewPage).toMatch(/scheduleCardRef=\{scheduleCardRef\}/);
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/cardRef=\{scheduleCardRef\}/);
     // A run with no schedule row mints no ref, and neither page draws a step:
     // each falls back to the two columns it composed before the step existed.
     // Since cinatra#3004 the run screen asks the picker for that answer, so the
@@ -234,7 +250,8 @@ describe("the four mounts exist and are host-declared", () => {
       /runScheduleAdapterFor\(\{ screen: "schedule_tab", trigger \}\) === "schedule_tab"[\s\S]{0,60}encodeScheduleRunRef/,
     );
     expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
-    expect(reviewPage).toMatch(/if \(scheduleCardRef\) \{/);
+    // "No schedule row, no step" is asked once, where the steps are built.
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/if \(scheduleCardRef\)/);
     expect(screens).toMatch(/if \(scheduleRailRef\) \{/);
   });
 

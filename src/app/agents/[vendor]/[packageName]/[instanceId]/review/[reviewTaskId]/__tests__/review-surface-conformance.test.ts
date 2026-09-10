@@ -2,7 +2,7 @@
  * Source-text conformance for the generic artifact-review surface — the host
  * decision chrome (cinatra#1795, epic #1620 S12 item 4), pinned to the RATIFIED
  * design spec `specs/app-artifact-review.html`
- * @ design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f (owner-approved). Every conformance id the
+ * @ design@0c484154b069c6369a33c1375056126289888997 (owner-approved). Every conformance id the
  * spec annotates is mapped BIDIRECTIONALLY: spec→render (every spec anchor is
  * rendered by the route) and render→spec (every anchor the route renders is in
  * the spec's closed set — no invented affordance).
@@ -17,7 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SPEC_COMMIT = "design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f"; // specs/app-artifact-review.html (ratified)
+const SPEC_COMMIT = "design@0c484154b069c6369a33c1375056126289888997"; // specs/app-artifact-review.html (ratified)
 
 // The chrome now lives under the agent-run route
 // `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]`
@@ -44,7 +44,10 @@ const RUN_SURFACE = readRepo("packages/agents/src/instance-screens.tsx");
 const RUN_STEP_RAIL = readRepo("packages/agents/src/run-step-rail-panel.tsx");
 const RUN_CHIP_ROW = readRepo("packages/agents/src/run-recommendation-chip-row.tsx");
 const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts");
-const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
+// THE WINDOW IS PART OF THE GATE NOW (cinatra#3141 item 1) — the drawing draws
+// it inside the gate's frame, so it is drawn by the one card every surface
+// mounts rather than by this route. The anchor and its action travelled with it.
+const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
 // gate-region COMPOSITION (header + target stack + one floor) moved out of this
@@ -53,6 +56,8 @@ const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
 // route-local files are now re-export shims, so this suite follows the source to
 // its new home rather than asserting against a two-line re-export.
 const REVIEW_GATE_CARD = readRepo("packages/agents/src/review-gate-card.tsx");
+/** The artifact-side binder that builds the card's display props. */
+const PREPARE = read(path.join(SRC_ROOT, "app", "artifacts", "[id]", "review-target-prepare.ts"));
 const DECISION_BAR = readRepo("packages/agents/src/review-decision-bar.tsx");
 const GATE_STATES = readRepo("packages/agents/src/review-gate-states.tsx");
 const TARGET_ISLAND = read(
@@ -78,7 +83,7 @@ function stripComments(src: string): string {
 const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
 
 /**
- * The CLOSED set of conformance ids the spec annotates at design@458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f, with
+ * The CLOSED set of conformance ids the spec annotates at design@0c484154b069c6369a33c1375056126289888997, with
  * the state axes it declares. Extracted from the ratified `data-conformance-id` /
  * `data-state` annotations (§II review-target; §III provenance × floor; §IV
  * decision bar; §V disabled / loading / blocked). This is the map every id is
@@ -86,8 +91,12 @@ const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
  */
 const SPEC_CONFORMANCE = {
   "review-target": ["loading", "error"],
-  "review-provenance-native": ["loading", "error"],
-  "review-provenance-marketplace": ["loading", "error"],
+  // THE TWO RENDERER-PROVENANCE ANCHORS ARE GONE. The ratified drawing removed
+  // the provenance chrome from every surface an artifact display is drawn on —
+  // no renderer name, no package identity, no "build-time"/"runtime" line above
+  // the reviewed work — so the surface annotates neither anchor and neither may
+  // reappear. The floor's own anchor is not provenance and stays: it says that
+  // NOTHING rendered this target, which the reviewer has to be told.
   "review-target-floor": ["error"],
   "review-decision-bar": [],
   "review-decision-disabled": ["loading"],
@@ -112,6 +121,19 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
+  // cinatra#3141 item 7 — §IV's target HEADER, drawn by the card. The header is
+  // the older spec's own ("Every target opens with a header that names what is
+  // under review and fixes it in place"), and it used to be part of
+  // `review-target` inside the island document; it is anchored separately now
+  // because it has to be drawn in the states where that document has not
+  // painted at all — the loading skeleton and the preview-recovery panel — and
+  // an anchor is what makes "exactly one header per pinned target" checkable.
+  "review-target-header",
+  // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
+  // it is the SAME `review-prompt-window` the run-embedded closed set below
+  // already carries, and it appears in this list only because the window moved
+  // out of this route and into the card, which this scan reads as chrome.
+  "review-prompt-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
   // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are
@@ -232,10 +254,30 @@ describe("§I–VI — render→spec: the route invents no anchor outside the cl
 
 describe("§I — one type-agnostic surface (G1-clean: no concrete type / renderer id)", () => {
   it("the model + panel key on the OPAQUE mount kind, never a concrete type/binding/renderer id", () => {
-    // The provenance/floor anchor is derived from the mount kind union only.
-    expect(MODEL).toMatch(/case "build-map":/);
-    expect(MODEL).toMatch(/case "runtime":/);
-    expect(MODEL).toMatch(/case "floor":/);
+    // The floor anchor is derived from the mount kind union only — the model
+    // switches on the mount KIND, and on nothing narrower. (The default branch
+    // spells that switch exhaustively, so a new mount kind is a type error
+    // rather than a silent `null`; this arm reads that form.)
+    expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+    const model = stripComments(MODEL);
+    // The equality form is only the CHEAPEST way to spell the thing the rule
+    // forbids. A switch, a guard or any other comparison on a concrete field
+    // narrows the surface just as surely, so none of those is allowed either.
+    // Reading such a field is not narrowing on it — the floor descriptor still
+    // carries `mount.packageName` through — so this bans the branch, not the read.
+    expect(model).not.toMatch(/mount\.(objectType|renderer|packageName)\s*(===|!==|==|!=)/);
+    expect(model).not.toMatch(/switch\s*\(\s*mount\.(objectType|renderer|packageName)/);
+    expect(model).not.toMatch(/(if|while)\s*\(\s*!?mount\.(objectType|renderer|packageName)\s*[)&|]/);
+    // And every switch the model makes ON THE MOUNT discriminates on its KIND.
+    // (The file holds other switches — over refusal reasons, over outcomes —
+    // that have nothing to do with the mount; this reads the mount's own.)
+    const mountSwitches = [...model.matchAll(/switch\s*\(\s*(mount[^)]*)\)/g)].map((m) =>
+      m[1].trim(),
+    );
+    expect(mountSwitches.length).toBeGreaterThan(0);
+    expect(mountSwitches.every((d) => d === "mount.kind")).toBe(true);
+    // The region resolution reads the mount kind and nothing about the artifact.
+    expect(MODEL).toMatch(/mount: ReviewTargetMount,?\s*\n?\s*\): ReviewProvenanceConformanceId \| null/);
     // No renderer-id / concrete-type prop is threaded through the surface.
     expect(stripComments(TARGET_PANEL)).not.toMatch(/rendererId|generatedKey=|packageName=/);
     expect(stripComments(PAGE)).not.toMatch(/rendererId/);
@@ -264,15 +306,24 @@ describe("§II — the immutable target header is inert (no edit control, no rev
   });
 });
 
-describe("§III — renderer provenance is host-derived; the floor is never blank", () => {
-  it("maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor", () => {
-    expect(MODEL).toMatch(/"review-provenance-native"/);
-    expect(MODEL).toMatch(/"review-provenance-marketplace"/);
+describe("§V — a display says nothing about itself; only the floor speaks", () => {
+  it("names no provenance anchor but the floor's", () => {
+    expect(MODEL).not.toMatch(/review-provenance-native/);
+    expect(MODEL).not.toMatch(/review-provenance-marketplace/);
     expect(MODEL).toMatch(/"review-target-floor"/);
-    // build-map → native, runtime → marketplace, floor → floor.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
-    expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+  });
+
+  // §V, read at the ratified drawings' default branch: "It is not put on screen:
+  // a display shows the work and nothing about itself — no renderer name, no
+  // package identity, no provenance line". The panel drew a type chip, a package
+  // chip and a `build-time · <slot>` mono line above every rendered target.
+  it("the target panel prints no renderer name, no package identity, no provenance line", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/build-time/);
+    expect(panel).not.toMatch(/runtime ·/);
+    expect(panel).not.toMatch(/provenance\.packageName/);
+    expect(panel).not.toMatch(/reviewTypeLabel/);
   });
 
   // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
@@ -281,16 +332,46 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
   // tiers a PACKAGE supplies and to the floor; the host's own text rendering
   // takes none of them and is given no fourth one. The strip is therefore
   // OPTIONAL in the panel — rendered only when there is a provenance to state.
-  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
-    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+  it("every rendered rung renders NO region — the panel gates the whole strip", () => {
+    // build-map, form and runtime share one arm now: the drawing lets none of
+    // the three name what drew the work.
+    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/);
     const panel = stripComments(TARGET_PANEL);
-    // The strip exists only behind a null check on the resolved region id.
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
-  it("a runtime provenance additionally shows its package identity (§III)", () => {
-    expect(TARGET_PANEL).toMatch(/provenance\.kind === "runtime"/);
-    expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
+  it("the floor's region carries the Floor pill over its structured-data reading", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).toMatch(/Floor/);
+    expect(panel).toMatch(/structured data/);
+  });
+
+  // cinatra#2931 W4 already gave the host's own text rendering no region. It
+  // still has none; it is now one of three rungs with none rather than the only.
+  it("every non-floor rung resolves to no region at all", () => {
+    expect(MODEL).toMatch(/ReviewProvenanceConformanceId = "review-target-floor"/);
+  });
+
+  // THE CARD IS WIRED TO THE CONTENT CHANNEL. A display draws from its props and
+  // never fetches, so a card handed an ABSENT projection draws its named floor
+  // over a document whose text is in the store — which is what a reviewer saw.
+  // The binder reads the PINNED revision on the server and carries it.
+  it("the binder projects the PINNED revision's content — never a hardcoded absence", () => {
+    const prepare = stripComments(PREPARE);
+    expect(prepare).toMatch(/buildArtifactContentProjection/);
+    expect(prepare).toMatch(/createPinnedSubstanceReader/);
+    // Read at the revision the gate froze, never at a latest.
+    expect(prepare).toMatch(/representationRevisionId,/);
+    // THE CONTENT FIELD IS THE PROJECTION, never an unconditional absence. The
+    // named absence still appears once — as the DEGRADE for a read that fails,
+    // so one target's store fault cannot blank a card that carries several (the
+    // binder suite pins that behaviour) — but it may never be what the field is
+    // built from.
+    expect(prepare).not.toMatch(/content: absentArtifactContent/);
+    expect(prepare.match(/absentArtifactContent\(/g) ?? []).toHaveLength(1);
+    expect(prepare).toMatch(/catch[\s\S]{0,400}absentArtifactContent\(/);
+    // And the card stays read-only by construction while carrying that content.
+    expect(prepare).toMatch(/readOnlyArtifactEdit\("read-only-surface"\)/);
   });
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {

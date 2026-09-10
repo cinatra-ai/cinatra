@@ -358,7 +358,7 @@ describe("one renderer, four first-party hosts", () => {
 // ---------------------------------------------------------------------------
 
 describe("§III the target island", () => {
-  it("is a same-origin frame with the documented sandbox tokens, clamped with an expand", async () => {
+  it("is a same-origin frame with the documented sandbox tokens, clamped, and control-free", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
@@ -367,11 +367,13 @@ describe("§III the target island", () => {
     // The src is a RELATIVE first-party path — the island is never fetched from
     // another origin, and the ref is the only thing in the query.
     expect(frame.getAttribute("src")?.startsWith("/")).toBe(true);
-    const clamped = frame.style.height;
-    fireEvent.click(screen.getByRole("button", { name: /expand/i }));
-    await waitFor(() =>
-      expect(container.querySelector("iframe")!.style.height).not.toBe(clamped),
-    );
+    // ONE HEIGHT, and the frame scrolls inside it. §III of the ratified drawing:
+    // "a wide representation scrolls inside its own container rather than
+    // widening the page" — and §IV: "the review surface adds no per-type controls
+    // of its own around it", which is why the Expand toggle that used to sit
+    // under the frame is gone.
+    expect(frame.style.height).toBe("380px");
+    expect(screen.queryByRole("button", { name: /expand|collapse/i })).toBeNull();
   });
 
   it("carries NO decision chrome inside the frame — the floor is the card's", async () => {

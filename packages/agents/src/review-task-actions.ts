@@ -1,4 +1,5 @@
 import "server-only";
+import { GateNotPendingError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -271,9 +272,15 @@ export async function approveReviewTaskInternal(
 
     // Guard: run must be pending_approval. Stale or mis-targeted approvals are rejected.
     if (run.status !== "pending_approval") {
-      throw new Error(
-        `Setup approval rejected: run ${runId} is not pending_approval (current status: ${run.status})`,
-      );
+      // cinatra#3219 — TYPED, so the run surface can draw its blocked state.
+      // The message is unchanged for logs and for the A2A resume route; the
+      // Server Action boundary reads `code`, which a production build cannot
+      // mask away.
+      throw new GateNotPendingError({
+        runId,
+        currentStatus: run.status,
+        message: `Setup approval rejected: run ${runId} is not pending_approval (current status: ${run.status})`,
+      });
     }
 
     // cinatra#2485 C — the install-scope run gate, asserted HERE because this
@@ -530,9 +537,12 @@ export async function approveReviewTaskInternal(
       throw new Error(`[approveReviewTaskInternal] no agent_run found for a2aTaskId=${taskId}`);
     }
     if (run.status !== "pending_approval") {
-      throw new Error(
-        `WayFlow approval rejected: run ${run.id} is not pending_approval (status: ${run.status})`,
-      );
+      // cinatra#3219 — same typed refusal as the setup guard above.
+      throw new GateNotPendingError({
+        runId: run.id,
+        currentStatus: run.status,
+        message: `WayFlow approval rejected: run ${run.id} is not pending_approval (status: ${run.status})`,
+      });
     }
     // cinatra#2485 C — same install-scope gate as the setup- branch above, and
     // needed for the same reason: clearing this gate resumes the paused flow via

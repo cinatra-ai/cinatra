@@ -7,6 +7,14 @@
 // the step rail". One source, so the setup rail and the schedule step cannot
 // drift into two vocabularies for the same row.
 //
+// THE RECOMMENDATION ROW IS NAMED "SKILLS" (cinatra#3047, review point A). The
+// step is a list of the run's skills with a checkbox each, and the rail names
+// what the step SHOWS rather than the machinery that produced the list. It is
+// changed HERE, which is now the only place the word is authored:
+// RECOMMENDATION_RAIL_STEP_LABEL reads it from this object, so the run page's
+// own row and the setup page's generic row cannot say two different things. The
+// other two rows are untouched.
+//
 // WHY THEY LIVE HERE RATHER THAN IN `run-surface-rail.tsx` (cinatra#2970).
 // They were declared in that module, which is `"use client"`, and the setup run
 // page's screen — `instance-screens.tsx`, a SERVER component — read them from
@@ -36,6 +44,6 @@
 
 export const RUN_SURFACE_RAIL_LABELS = {
   schedule: "Schedule",
-  recommendation: "Recommendation",
+  recommendation: "Skills",
   review: "Review",
 } as const;

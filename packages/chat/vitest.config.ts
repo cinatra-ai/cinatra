@@ -126,6 +126,14 @@ export default defineConfig({
         root,
         "packages/agents/src/llm-provider-policy.ts",
       ),
+      // cinatra#3044 — the zero-dependency run-status leaf: the message list
+      // reads the ONE wording a start answers with from it, so the turn's
+      // sentence and the card beneath it cannot disagree. Subpath key, so it
+      // stays above the bare entry.
+      "@cinatra-ai/agents/run-status": path.join(
+        root,
+        "packages/agents/src/run-status.ts",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",
@@ -183,6 +191,12 @@ export default defineConfig({
     },
   },
   test: {
+    // The wholesale package suite runs on the same constrained self-hosted
+    // runner as the root suite and hits the same starvation under load —
+    // imports and hooks alone can cross vitest's 5s/10s defaults. Give
+    // tests and hooks the same 30s headroom as the root suite.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     environment: "node",
     include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"],
     // @ts-ignore — environmentMatchGlobs is a valid vitest option but missing from InlineConfig types

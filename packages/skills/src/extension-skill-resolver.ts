@@ -38,6 +38,8 @@ import "server-only";
 
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
+
+import { resolveInstalledVendorName } from "@cinatra-ai/registries";
 import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { replaceSkillCatalogInDatabase } from "@/lib/database";
@@ -455,6 +457,45 @@ export function buildSkillIdDisplayNames(
     }
   }
   return names;
+}
+
+/**
+ * skillId → the owning skill extension's RESOLVED VENDOR BYLINE (cinatra#3047).
+ *
+ * WHY IT EXISTS. The run page's Skills step prints one pill per skill reading
+ * "<Skill name> by <vendor>", and the vendor half is the same question the
+ * Installed page, the marketplace card and the assignable-skills picker all ask
+ * — so it is answered by the SAME function they call,
+ * `resolveInstalledVendorName`, over the SAME two manifest declarations the
+ * scan already retains (`cinatra.vendor.name`, then the npm `author`). No
+ * format is invented here and the npm scope segment is never pressed into
+ * service as a name: a package that declares neither tier gets NO entry, and
+ * the pill then prints the skill's name alone.
+ *
+ * The sibling of `buildSkillIdDisplayNames` in every other respect — the same
+ * `deriveSkillRegistration` id derivation, the same skip-don't-throw handling
+ * of a package that impersonates the reserved chat namespace, and the same
+ * first-declaration-wins collision rule — so the two halves of one pill's label
+ * can never be joined from two different packages.
+ */
+export function buildSkillIdVendorNames(
+  descriptors: readonly SkillExtensionDescriptor[],
+): Map<string, string> {
+  const vendors = new Map<string, string>();
+  for (const ext of descriptors) {
+    if (ext.kind !== "skill") continue;
+    const vendor = resolveInstalledVendorName({
+      manifestVendorName: ext.vendorName ?? null,
+      author: ext.author ?? null,
+    });
+    if (vendor === null) continue;
+    for (const slug of ext.slugs) {
+      const registration = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug);
+      if (!registration) continue;
+      if (!vendors.has(registration.skillId)) vendors.set(registration.skillId, vendor);
+    }
+  }
+  return vendors;
 }
 
 /**

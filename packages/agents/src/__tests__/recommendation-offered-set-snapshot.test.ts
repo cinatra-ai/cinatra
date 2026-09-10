@@ -29,6 +29,19 @@ import path from "node:path";
 const recommendSkillsForAgentTask = vi.fn();
 const buildRecommendationCandidatesForAgent = vi.fn();
 const resolveOrgPolicyRule = vi.fn();
+/**
+ * THE HOLD-BOUND CONFIRM'S ONE WRITE (cinatra#3047). The offered-set path writes
+ * through the guarded REPLACE now — one transaction, scoped to this hold's own
+ * offer, refused outright on a run that has already started — so the arms below
+ * read what was written off THAT writer. Every claim they make is unchanged; the
+ * only thing that moved is which function carries it.
+ */
+type ReplaceInput = {
+  runId: string;
+  scopeSkillIds: readonly string[];
+  selections: Array<{ skillId: string; skillRevisionId: string; selectionSource: string }>;
+};
+const replaceRunSelectedSkillRevisionsBeforeStart = vi.fn((_input: ReplaceInput) => true);
 const writeRunSelectedSkillRevisions = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
 const readRunRecommendationOfferedSet = vi.fn();
@@ -43,6 +56,13 @@ vi.mock("../lifecycle-policy-store", () => ({
   POLICY_ARTIFACT_TYPE_WILDCARD: "*",
 }));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
+  // The pre-start selection clear (cinatra#3047) — a no-op for these arms,
+  // which is exactly what it is on a run that has nothing to clear.
+  clearRunSelectedSkillRevisionsBeforeStart: vi.fn(() => 0),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: (input: ReplaceInput) =>
+    replaceRunSelectedSkillRevisionsBeforeStart(input),
   writeRunSelectedSkillRevisions: (...a: unknown[]) => writeRunSelectedSkillRevisions(...a),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
   readRunRecommendationOfferedSet: (...a: unknown[]) => readRunRecommendationOfferedSet(...a),
@@ -91,6 +111,8 @@ beforeEach(() => {
   buildRecommendationCandidatesForAgent.mockReset();
   resolveOrgPolicyRule.mockReset();
   writeRunSelectedSkillRevisions.mockReset();
+  replaceRunSelectedSkillRevisionsBeforeStart.mockReset();
+  replaceRunSelectedSkillRevisionsBeforeStart.mockReturnValue(true);
   writeRunRejectedRecommendations.mockReset();
   readRunRecommendationOfferedSet.mockReset();
 });
@@ -116,8 +138,9 @@ describe("AC-1 — revision drift does not re-pin", () => {
     expect(out.selection).toEqual([
       { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },
     ]);
-    expect(writeRunSelectedSkillRevisions).toHaveBeenCalledWith({
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).toHaveBeenCalledWith({
       runId: "run1",
+      scopeSkillIds: ["a"],
       selections: [
         { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },
       ],
@@ -192,6 +215,7 @@ describe("AC-2 — membership drift does not silently drop", () => {
     if (out.ok) return;
     expect(out.refusal.reason).toBe("offered_set_stale");
     expect(out.refusal.staleSkillIds).toEqual(["a"]);
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).not.toHaveBeenCalled();
     expect(writeRunSelectedSkillRevisions).not.toHaveBeenCalled();
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
   });
@@ -221,6 +245,7 @@ describe("AC-3 — a total drop never becomes a silent fallback", () => {
     // Nothing at all is written — so the run cannot end up with an EMPTY
     // selected set, which delivery would read as "no set" and silently replace
     // with the agent's computed assignment.
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).not.toHaveBeenCalled();
     expect(writeRunSelectedSkillRevisions).not.toHaveBeenCalled();
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
   });
@@ -246,6 +271,7 @@ describe("AC-3 — an offer that cannot be READ is not an offer of nothing", () 
     // The whole point: a failed read must NOT be flattened into "this hold
     // offered nothing", which would walk onto the pre-#2906 re-scoring path.
     expect(recommendSkillsForAgentTask).not.toHaveBeenCalled();
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).not.toHaveBeenCalled();
     expect(writeRunSelectedSkillRevisions).not.toHaveBeenCalled();
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
   });
@@ -317,8 +343,9 @@ describe("the settled mark records the PRESS, not the score (cinatra#2824 §V)",
     });
 
     expect(out.ok).toBe(true);
-    expect(writeRunSelectedSkillRevisions).toHaveBeenCalledWith({
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).toHaveBeenCalledWith({
       runId: "run1",
+      scopeSkillIds: ["a"],
       selections: [
         { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },
       ],
@@ -344,8 +371,9 @@ describe("the settled mark records the PRESS, not the score (cinatra#2824 §V)",
     });
 
     expect(out.ok).toBe(true);
-    expect(writeRunSelectedSkillRevisions).toHaveBeenCalledWith({
+    expect(replaceRunSelectedSkillRevisionsBeforeStart).toHaveBeenCalledWith({
       runId: "run1",
+      scopeSkillIds: ["a"],
       selections: [{ skillId: "a", skillRevisionId: "a@1", selectionSource: "user_adjusted" }],
     });
   });
@@ -392,9 +420,8 @@ describe("AC-6 — a retry cannot assemble a mixed set", () => {
     // The union of everything the two presses handed the writer is EXACTLY the
     // offered set — never an accumulation across the live-state change.
     const union = new Map<string, string>();
-    for (const call of writeRunSelectedSkillRevisions.mock.calls) {
-      for (const s of (call[0] as { selections: { skillId: string; skillRevisionId: string }[] })
-        .selections) {
+    for (const call of replaceRunSelectedSkillRevisionsBeforeStart.mock.calls) {
+      for (const s of call[0].selections) {
         union.set(s.skillId, s.skillRevisionId);
       }
     }

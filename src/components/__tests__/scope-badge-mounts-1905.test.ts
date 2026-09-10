@@ -13,9 +13,8 @@ import { describe, it, expect } from "vitest";
 const read = (p: string) => readFileSync(p, "utf-8");
 
 describe("ScopeBadge owner-name wiring (#1905)", () => {
-  it("project detail, project settings and dashboard detail pass ownerName", () => {
+  it("project settings and dashboard detail pass ownerName", () => {
     for (const path of [
-      "src/app/projects/[projectId]/page.tsx",
       "src/app/projects/[projectId]/settings/page.tsx",
       "src/app/dashboards/[id]/dashboard-detail-screen.tsx",
     ]) {
@@ -24,6 +23,15 @@ describe("ScopeBadge owner-name wiring (#1905)", () => {
       // Accessible text carries the name too (codex round: aria alignment).
       expect(source, path).toMatch(/Ownership: \$\{[^}]+\} — \$\{/);
     }
+  });
+
+  it("the project LANDING mounts no ScopeBadge — the tab draws no header chip", () => {
+    // NARROWED by cinatra#2807 fix leg 3. The project landing IS the Dashboards
+    // tab, and the ratified drawing's Dashboards-tab section draws no ownership
+    // chip in that page header; the third proof round graded the chip as an
+    // element with no drawn basis. Ownership still answers on the Settings pane
+    // and on the dashboard's own surface, which the loop above still pins.
+    expect(read("src/app/projects/[projectId]/page.tsx")).not.toContain("<ScopeBadge");
   });
 
   it("excluded mounts stay level-only: grant principals and skills", () => {

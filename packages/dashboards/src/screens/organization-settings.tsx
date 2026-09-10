@@ -197,6 +197,10 @@ export async function OrganizationSettingsPage({
             scope's BARE landing route — not a `/dashboards` sibling. */}
         <EntityScopeTabs
           dashboardsHref={`/organizations/${encodeURIComponent(id)}`}
+          assistantsHref={`/organizations/${encodeURIComponent(id)}/assistants`}
+          agentsHref={`/organizations/${encodeURIComponent(id)}/agents`}
+          artifactsHref={`/organizations/${encodeURIComponent(id)}/artifacts`}
+          skillsHref={`/organizations/${encodeURIComponent(id)}/skills`}
           settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
           active="settings"
         />

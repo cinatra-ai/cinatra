@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app.html",
-  "contentHash": "sha256:3d63418e9c8cef191a1a7a4c1ef43b842fe2ec5ef4db288fb616e4e436d5eb13",
+  "contentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168",
   "surfaces": [
     {
       "id": "status-pills",
@@ -25,6 +25,45 @@
         }
       ],
       "states": []
+    },
+    {
+      "id": "sidebar-workspace-entry",
+      "fields": [
+        {
+          "field": "title",
+          "source": "nav.title"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-workspace",
+          "outcome": "workspace"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "workspace-scope-page",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "workspace-scope-empty-tab",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
     }
   ]
 }

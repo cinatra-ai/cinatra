@@ -71,7 +71,15 @@ const CANDIDATES = [
   { skillId: "@x/blog-writing-skill:blog-writing", name: "Blog Writing Skill" },
   { skillId: "@x/brand-voice-matcher-skill:brand-voice-matcher", name: "Brand Voice Matcher Skill" },
   { skillId: "@x/web-research-skill:web-research", name: "Web Research Skill" },
-];
+].map((c, index) => ({
+  // The offer's own presentation and decisive fields (cinatra#3047). This suite
+  // measures the settled CHIPS on the widget, which read neither — they are
+  // carried because the offer carries them, for the run page's own reading.
+  ...c,
+  vendorName: null,
+  skillRevisionId: `${c.skillId}@1`,
+  recommended: index !== 2,
+}));
 /** The SKIPPED one — the skill the card used to lose. */
 const SKIPPED = CANDIDATES[2]!;
 const DECISION_ROWS = [

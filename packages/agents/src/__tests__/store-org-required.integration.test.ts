@@ -19,6 +19,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import type { CreateAgentRunInput } from "../store";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_ORG_ID = "org-test";
 
@@ -26,7 +27,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string"
   && dbUrl.length > 0
-  && !dbUrl.includes("unused:unused@localhost:5432/unused");
+  && !isPlaceholderDbUrl(dbUrl);
 
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
 // and REQUIRES a host-minted authority; the guard also reads the org's

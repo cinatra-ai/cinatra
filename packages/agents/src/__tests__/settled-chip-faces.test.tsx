@@ -28,6 +28,27 @@
  * the skill name, the `data-chip-mark` and the element structure are kept for
  * the same reason.
  *
+ * THE HOST THIS IS TAKEN ON MOVED TWICE (cinatra#3047), and the baseline did
+ * NOT — which is the whole point of the file. The faces below are §V's per-chip
+ * settled faces. Review point C made the RUN PAGE draw the Skills step instead
+ * of them, so they were re-aimed at `page_gate_region`; the re-shoot then found
+ * the REVIEW PAGE still drawing them above its review card, and the review page
+ * is the run's own second page rather than a transcript, so it draws the Skills
+ * step too now. The faces are therefore rendered where they still live — the
+ * CONVERSATION — and they must still match the recorded bytes exactly: the
+ * reading that changed is the run's two pages', and these faces are the two
+ * transcript hosts', which review point E leaves untouched.
+ *
+ * TWO NORMALIZATIONS, both on the ROOT and both about the MOUNT rather than the
+ * face, each named at its own line below. The root declares the host that
+ * mounted it and the baseline was recorded on `run_card`; and the conversation's
+ * mount adds its own evidence anchor to that same root, host-conditionally
+ * (`data-chat-thread-recommendation-hold`, cinatra#2794), which no other host
+ * carries. Both are properties of WHERE the card is mounted. The FACES — the
+ * three cells this file exists for — are compared with no normalization at all
+ * and match the recorded bytes exactly, and the root's other seven attributes
+ * are compared as recorded.
+ *
  * Run:
  *   cd packages/agents && npx vitest run src/__tests__/settled-chip-faces.test.tsx
  */
@@ -87,7 +108,7 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   render(
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host="chat_thread">
       <RunRecommendationChipRow
         runId="run-2893"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -115,7 +136,17 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   // carries, so a root that moved would break every settled capture on file.
   const root = document.querySelector("[data-run-recommendation-chip-row]");
   if (!root) throw new Error("no card root");
-  out["settled-card-root"] = normalizeFace(root).replace(/>[\s\S]*<\//, "></");
+  out["settled-card-root"] = normalizeFace(root)
+    .replace(/>[\s\S]*<\//, "></")
+    // THE ONE NORMALIZATION (cinatra#3047). The root declares the host that
+    // mounted it, and the baseline was recorded on `run_card` — one of the two
+    // hosts whose reading this change moved. Nothing else about the root may
+    // move, and the comparison below is what proves it did not.
+    .replace('data-lifecycle-card-host="chat_thread"', 'data-lifecycle-card-host="run_card"')
+    // AND THE CONVERSATION'S OWN EVIDENCE ANCHOR (cinatra#2794), added to this
+    // same root by the chat mount alone. It is what the transcript's suites
+    // measure the turn by; it is not part of any face.
+    .replace(' data-chat-thread-recommendation-hold=""', "");
   return out;
 }
 

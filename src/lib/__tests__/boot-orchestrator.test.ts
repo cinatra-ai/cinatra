@@ -146,6 +146,7 @@ describe("runBoot orchestration", () => {
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
+      "run-data-root-guard", // cinatra#3030 — the run folder is the THIRD data root, guarded the same way
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
@@ -188,6 +189,7 @@ describe("runBoot orchestration", () => {
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
+      "run-data-root-guard", // cinatra#3030 — the run folder is the THIRD data root, guarded the same way
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)

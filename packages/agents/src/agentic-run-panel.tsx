@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
 import {
   linkifyErrorText,
@@ -28,14 +27,10 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
+import { StatusPill } from "@/components/ui/status-pill";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
-import {
-  AlertCircle,
-  ArrowRight,
-  CalendarClock,
-  Clock,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
@@ -49,9 +44,11 @@ import {
   type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
-// The review screen's PLACEHOLDER (cinatra#2997) — one of the review screen's
-// own states, so it lives with them rather than in this panel.
-import { ReviewGatePlaceholder } from "./review-gate-states";
+// The review screen's PLACEHOLDER (cinatra#2997) and the gate-level BLOCKED
+// state (cinatra#3219) — both are the review screen's own states, so they live
+// with them rather than in this panel, and this panel restates neither the
+// markup nor the copy.
+import { ReviewGateBlocked, ReviewGatePlaceholder } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -75,7 +72,7 @@ import {
   mapInterruptToHitlContext,
   resolveStreamFirst,
   runStatusBadgeLabel,
-  statusBadgeVariant,
+  runStatusPillStatus,
   type HitlGateContext as HitlContext,
   type RunWaitInterruptDescriptor,
 } from "./run-surface-status";
@@ -101,12 +98,6 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
-import {
-  RECOMMENDATION_UNRESOLVED,
-  RecommendationHoldCard,
-  recommendationWasDecided,
-  type RunRecommendationHoldResolution,
-} from "./run-recommendation-chip-row";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
@@ -122,7 +113,7 @@ export type SerializedAgentRunMessage = {
   createdAt: string;
 };
 
-type AgenticRunPanelProps = {
+export type AgenticRunPanelProps = {
   runId: string;
   taskId?: string; // present for runs created via A2A sendMessage
   initialStatus: string;
@@ -201,6 +192,38 @@ type AgenticRunPanelProps = {
    */
   initialHitlContext?: HitlContext | null;
   /**
+   * DOES THE PAGE'S RAIL ALREADY CARRY THE RUN'S INPUT STEP? (cinatra#3068)
+   *
+   * The run page drew this panel's "Agentic Run Progress" heading, with its
+   * "Awaiting input" badge, over the agent's own input form — the first thing a
+   * person meets, before anything has run — while every later moment of the
+   * same run read as a step: an entry in the rail, the step's own screen in the
+   * detail column. When the screen has given that moment its own rail entry,
+   * the heading retires: the rail names the step, and this panel draws the form
+   * it has always drawn.
+   *
+   * Absent ⇒ the heading and its badge are drawn exactly as before, which keeps
+   * the chat thread's run card — a host with no rail beside it — unchanged.
+   */
+  inputStepInRail?: boolean;
+  /**
+   * THE RAIL BESIDE THIS COLUMN ALREADY DRAWS THE FRAME (cinatra#3047 fix leg
+   * 8).
+   *
+   * The ratified drawing: "One page per gate — the step's own card, and
+   * nothing else ... two cards are never stacked in one detail." This panel's
+   * own `soft-panel rounded-card` plate is a card, and inside the run frame it
+   * wraps the gate's own card — the doubled wrapper the eighth proof round
+   * photographed. cinatra#3068 retired the HEADING inside the plate for one
+   * moment; the plate itself stayed, on every moment.
+   *
+   * So inside the frame the box keeps its job — it is still the flow container
+   * for the failure block, the trace link, the streamed output and the message
+   * list — and gives up its CARD chrome and its heading, leaving the step's own
+   * card alone in the detail. Every other host is untouched.
+   */
+  railDrawsTheFrame?: boolean;
+  /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
    *
@@ -211,11 +234,14 @@ type AgenticRunPanelProps = {
    * every assigned skill reads as a live choice that disagrees with the one that
    * was taken.
    *
-   * IT IS A PROP because of WHERE the panel is. Inside a conversation the
-   * transcript owns the recommendation card and this panel mounts none, so the
-   * conversation's single resolve is passed down. On the run page there is no
-   * conversation host, the panel mounts the card itself, and it reads the answer
-   * off that mount instead — same authority, resolved once either way.
+   * IT IS A PROP ON EVERY HOST, and it is the panel's ONLY reading of the
+   * question (cinatra#3047). This panel used to mount the recommendation card
+   * itself on the run page and read the answer off that mount; the mount is gone
+   * — the row has one owner and one place, the run page's own rail step — so the
+   * host that DOES own the card is the one that answers here. Inside a
+   * conversation that is the transcript's card; on the run page it is the run
+   * screen, which reads the run's own park row server-side and passes the answer
+   * down before the first paint.
    */
   recommendationDecided?: boolean;
   /**
@@ -314,21 +340,11 @@ type RunPollResponse = {
 };
 
 
-// statusBadgeVariant is shared with the orchestrator stepper — see
-// ./run-surface-status.
-
-// Render an inline lucide icon next to the status word for trigger-related
-// and failure states. Icons are aria-hidden; the badge retains its visible
-// text label for accessibility.
-function statusIcon(status: string): ReactNode {
-  if (status === "pending_trigger")
-    return <Clock aria-hidden="true" size={12} />;
-  if (status === "armed")
-    return <CalendarClock aria-hidden="true" size={12} />;
-  if (status === "failed")
-    return <AlertCircle aria-hidden="true" size={12} />;
-  return null;
-}
+// runStatusPillStatus and runStatusBadgeLabel are shared with the orchestrator
+// stepper — see ./run-surface-status. The per-status lucide glyph this header
+// used to draw beside the status word left with the badge (cinatra#3002, fix
+// leg 3): the ratified drawing's run-detail pill carries a dot, not an icon,
+// and the pill's own family supplies it.
 
 function buildLabelAndContent(body: AgentRunMessageBody): {
   label: string;
@@ -358,20 +374,63 @@ function buildLabelAndContent(body: AgentRunMessageBody): {
   }
 }
 
+/**
+ * One row of the run transcript — and, for the run's `final` message, THE row
+ * the completion card's sentence points at (cinatra#3002, fix leg 3).
+ *
+ * Every row used to be drawn the same way: a small muted label over a mono
+ * `<pre>` with `break-all`. For a tool call or a tool result that is right —
+ * those carry JSON, and the design system sets code in mono. For the run's
+ * `final` message it is not: that row carries the run's ANSWER, prose the third
+ * proof round measured at 2773 characters, and the design system reserves mono
+ * for metadata, tokens, labels and code (specs/app-components.html) while
+ * `break-all` snaps a word mid-character.
+ *
+ * So the `final` row is drawn as an answer, in the row form the ratified
+ * drawing gives the run's own work — `border: 1px solid var(--line);
+ * border-radius: 8px; background: var(--surface-strong)` with a sans title
+ * (specs/app-artifact-review.html, the run's last step). Its label keeps the
+ * words it had, "Final response", because that is what the card's sentence
+ * sends the reader to find. Every other row is byte-identical to what it was.
+ */
 function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
   const { label, content } = buildLabelAndContent(message.body);
   const isTool =
     message.messageType === "tool_call" || message.messageType === "tool_result";
+  const isFinal = message.messageType === "final";
   const containerClass = isTool
     ? "rounded-control border border-line bg-surface-muted px-4 py-3"
-    : "rounded-control border border-line bg-surface px-4 py-3";
+    : isFinal
+      ? "rounded-card border border-line bg-surface-strong px-4 py-3"
+      : "rounded-control border border-line bg-surface px-4 py-3";
 
   return (
-    <div className={containerClass}>
-      <div className="text-xs font-medium text-muted-foreground mb-1">{label}</div>
-      <pre className="text-xs text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto font-mono">
-        {content}
-      </pre>
+    <div className={containerClass} data-run-transcript-row={message.messageType}>
+      <div
+        data-run-transcript-label=""
+        className={
+          isFinal
+            ? "text-sm font-semibold text-foreground mb-1.5"
+            : "text-xs font-medium text-muted-foreground mb-1"
+        }
+      >
+        {label}
+      </div>
+      {isFinal ? (
+        <p
+          data-run-transcript-body=""
+          className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto"
+        >
+          {content}
+        </p>
+      ) : (
+        <pre
+          data-run-transcript-body=""
+          className="text-xs text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto font-mono"
+        >
+          {content}
+        </pre>
+      )}
     </div>
   );
 }
@@ -411,6 +470,8 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  inputStepInRail = false,
+  railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -422,7 +483,7 @@ export function AgenticRunPanel({
   // THE AMBIENT HOST, read BEFORE this panel declares its own. When an outer
   // conversation provider (`chat_thread` or `site_widget`) is already in scope,
   // this panel is being drawn INSIDE a conversation transcript that mounts the
-  // recommendation card itself — see the mount below for what that decides.
+  // HITL screen card itself — see that mount below for what it decides.
   const ambientLifecycleHost = useLifecycleCardHost();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
@@ -453,6 +514,12 @@ export function AgenticRunPanel({
   const [isRechecking, setIsRechecking] = useState(false);
 
   const [isApproving, setIsApproving] = useState(false);
+
+  // The drawn blocked state for the active gate (cinatra#3219). Set from the
+  // typed outcome `approveReviewTask` returns; the reason is one of the review
+  // surface's closed blocked set, so this panel names a state instead of
+  // authoring a message.
+  const [gateBlocked, setGateBlocked] = useState<"no-longer-pending" | null>(null);
   // cinatra#2444 — bare-gate inline Reject. Tracks WHICH decision is in
   // flight so the Approve button doesn't flip to its pending label while a
   // Reject submit (which also drives isApproving via trackApproving) runs.
@@ -492,8 +559,7 @@ export function AgenticRunPanel({
   // Accumulates renderer-produced values (e.g. campaignId from recipients renderer)
   // so the Continue button can include them in the resume payload.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
-  // Sticky bottom-of-page AI-assist prompt state.
-  // portalTarget is set in an effect because document.querySelector is browser-only.
+  // The AI-assist prompt window's state.
   // aiSuggestions is the stable suggestion payload threaded into renderers — it
   // changes only when the user submits a prompt, NOT on every poll tick (unlike
   // `value` which is rebuilt as an inline literal on each render).
@@ -516,9 +582,6 @@ export function AgenticRunPanel({
   // take the fill away before its replacement exists.
   const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
   const convIdRef = useRef(0);
-  useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
-  }, []);
   // Parent-side apply handler — merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
   // suggestion values override matching user edits intentionally —
@@ -564,36 +627,26 @@ export function AgenticRunPanel({
   // isPendingApproval is derived below from status; we compute a local guard from
   // initialStatus here so the effect dependency is stable across re-renders.
   const [hitlSkills, setHitlSkills] = useState<SkillForChip[]>([]);
-  // THE RUN'S RECOMMENDATION, as this panel's own card resolved it. Read only on
-  // the run page, where this panel mounts the card (see the mount below); inside
-  // a conversation the transcript owns that card and tells this panel through
-  // `recommendationDecided` instead. Either way ONE resolve answers it.
-  const [ownRecommendation, setOwnRecommendation] =
-    useState<RunRecommendationHoldResolution>(RECOMMENDATION_UNRESOLVED);
-  // Does this panel mount the recommendation card itself? The same condition the
-  // mount below uses, read once so the skill-picker rule can ask whether an
-  // answer is even coming.
-  const panelMountsRecommendationCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
   // ONE HITL SCREEN CARD PER RUN PER TURN (cinatra#2930, lifecycle-b W3).
   //
-  // The same rule the recommendation card is held to, for the same reason:
-  // inside a conversation this panel is a SIBLING of the conversation's own
+  // Inside a conversation this panel is a SIBLING of the conversation's own
   // mount of the SAME card for the SAME run, so an unconditional mount here
   // would show the person two screens for one question. The conversation's
   // card owns it inside `chat_thread` and `site_widget`; the run page keeps
   // its own because no conversation host is in scope there.
   const panelMountsHitlScreenCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
   // Was this run's skill set settled on the recommendation card? If it was,
-  // nothing inside this card offers a skill to press. While the panel's own read
-  // is still in flight the picker also stays away — it is a run's OWN skills
-  // being offered, and offering them and then withdrawing them is the flicker
-  // the ruling exists to prevent. A read that gives up (or a host that never
-  // reads) leaves the picker exactly as it was.
-  const skillsDecidedOnCard =
-    recommendationDecided === true || recommendationWasDecided(ownRecommendation);
-  const recommendationStillResolving =
-    panelMountsRecommendationCard && ownRecommendation.phase === "resolving";
-  const drawSkillPicker = !skillsDecidedOnCard && !recommendationStillResolving;
+  // nothing inside this card offers a skill to press.
+  //
+  // THE HOST THAT DRAWS THE CARD IS THE ONE THAT ANSWERS (cinatra#3047). This
+  // panel no longer mounts the recommendation card anywhere, so it no longer
+  // resolves the question itself: the answer arrives as a prop from whichever
+  // host owns the row — the transcript's card in a conversation, the run
+  // screen's server-side park read on the run page. That also retires the
+  // flicker window the panel's own in-flight read opened: there is no "not
+  // answered yet" state here to draw a pressable skill list in and withdraw.
+  const skillsDecidedOnCard = recommendationDecided === true;
+  const drawSkillPicker = !skillsDecidedOnCard;
   const isPendingApprovalForEffect = pollStatus === "pending_approval" || initialStatus === "pending_approval";
   useEffect(() => {
     if (!isPendingApprovalForEffect || !agentPackageName) return;
@@ -602,19 +655,24 @@ export function AgenticRunPanel({
       .catch(() => setHitlSkills([]));
   }, [isPendingApprovalForEffect, agentPackageName]);
 
-  // Run-start recommendation hold: THE POLL IS GONE (cinatra#2568 AC-1).
+  // Run-start recommendation hold: THE POLL WENT FIRST, THE MOUNT WENT AFTER IT
+  // (cinatra#2568 AC-1, then cinatra#3047).
   //
   // This panel used to own a 4-second timer over the hold-state server action
   // plus a hand-rolled stop condition, and S4 layered a wire-driven refetch on
   // top of it because the timer alone missed a hold that appeared after its
-  // first tick. Both are replaced by `RecommendationHoldCard` (mounted below),
-  // which resolves the SAME authoritative action on mount, on a change in the
-  // typed hold interrupt, on focus, and on its own decision — and never on a
-  // schedule. The issue ordered the retirement "LAST, after replay + routing
-  // exist": the reconnect-authoritative snapshot (the SSE route synthesizes the
-  // run's CURRENT hold, or an explicit retirement, on every connect) and the
-  // confirm/skip routing both landed with S4, so a late joiner and a re-parked
-  // run are covered by the wire rather than by re-asking every four seconds.
+  // first tick. Both were replaced by `RecommendationHoldCard`, which resolves
+  // the SAME authoritative action on mount, on a change in the typed hold
+  // interrupt, on focus, and on its own decision — and never on a schedule.
+  //
+  // The CARD then left this panel too: the row has one owner and one place on
+  // the run page (the rail step the run screen draws), so neither the state nor
+  // the wire signal is read here any more. Nothing is lost with the signal. The
+  // run page's own mount takes `wireRef={null}` and always has — it resolves on
+  // mount, on focus and on its own decision — and this panel renders only for a
+  // run that is past `pending_input`, i.e. one whose hold is already settled: a
+  // decided summary does not move, and a dispatched run cannot acquire a new
+  // hold.
 
   // No audit affordance is mounted here, and there is no auditor-agent flow gate
   // driving one any more: the auditor agent is retired, and audit output now
@@ -629,32 +687,6 @@ export function AgenticRunPanel({
     initialStatus,
     initialStreamedText, // hydrate from DB on page load for external runs
   });
-
-  // THE HOLD ON THE WIRE DRIVES THE CARD (cinatra#2568). The typed hold
-  // interrupt and its paired RESUME are exactly the events that change the
-  // answer, so the card takes this ref as its CHANGE SIGNAL and re-reads the
-  // authoritative, actor-scoped state when it moves. Nothing is read OUT of the
-  // ref here — the wire only ever says "something changed"; what this viewer may
-  // see is the server action's call, on every resolve.
-  //
-  // Guarded by `kind` rather than by "there is an interrupt": the slot is typed
-  // for every lifecycle interrupt kind, and only `recommendation_hold` addresses
-  // this card. A future kind landing in the slot must not move this card's ref.
-  //
-  // A RUN THAT CAN BE HELD ALWAYS HAS THE WIRE, so retiring the timer does not
-  // strand a streamless surface. `agUiEnabled` is the SSE-vs-legacy-poll
-  // discriminator, and every path that inserts a run sets it TRUE — the two
-  // `createAgentRun` inserts and the pending-input insert alike (the last one
-  // says so in its own comment: without it "a setup → run transition would
-  // appear as legacy to the panel"). `null` marks rows that predate the
-  // discriminator, and those cannot acquire a NEW hold: a hold is minted at
-  // trigger time by the same current code that sets the flag. So the case
-  // "a hold appears after mount on a run with no stream" is unreachable, and the
-  // card's mount/focus resolves cover a legacy row that was already parked.
-  const holdWireRef =
-    streamResult.lifecycleInterrupt?.kind === "recommendation_hold"
-      ? streamResult.lifecycleInterrupt.ref
-      : null;
 
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
@@ -780,7 +812,22 @@ export function AgenticRunPanel({
       if (args.trackApproving) setIsApproving(true);
       if (args.suppressGate) justSubmittedXRendererRef.current = args.xRenderer;
       try {
-        await approveReviewTask(args.reviewTaskId, args.payload, args.payloadFieldName);
+        const outcome = await approveReviewTask(
+          args.reviewTaskId,
+          args.payload,
+          args.payloadFieldName,
+        );
+        if (!outcome.ok) {
+          // cinatra#3219 — the gate moved on under this submit. It is a
+          // RETURNED outcome, so it is handled here and never becomes a throw:
+          // the `rethrow` caller is the setup-field submit, whose rethrow is
+          // what put the masked framework string into SchemaFieldRenderer's
+          // submitError line. Nothing is submitted, so the suppression is
+          // released and the surface draws the blocked state instead.
+          if (args.suppressGate) justSubmittedXRendererRef.current = null;
+          setGateBlocked(outcome.blocked);
+          return;
+        }
         if (args.clearAttachmentsOnSuccess) pendingAttachmentsRef.current = [];
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
@@ -1031,6 +1078,19 @@ export function AgenticRunPanel({
   ) {
     setPrevBufferedHitlValueKey(bufferedHitlValueKey);
     setBufferedHitlValue({});
+  }
+
+  // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
+  // review-task id — not on the buffer key above (cinatra#3219 convergence).
+  // `xRenderer::fieldName` is not gate identity: a mid-run gate carries no
+  // fieldName and can reuse the same renderer, so a block keyed that way would
+  // survive onto a gate that is genuinely open and hide it behind a panel that
+  // says the review is closed.
+  const blockedGateTaskId = effectiveHitlContext?.reviewTaskId ?? null;
+  const [prevBlockedGateTaskId, setPrevBlockedGateTaskId] = useState<string | null>(null);
+  if (blockedGateTaskId !== null && blockedGateTaskId !== prevBlockedGateTaskId) {
+    setPrevBlockedGateTaskId(blockedGateTaskId);
+    if (gateBlocked !== null) setGateBlocked(null);
   }
 
   // THE derived-context refetch. Lifted out of the interval so
@@ -1483,23 +1543,74 @@ export function AgenticRunPanel({
   // output linked to its artifact page, or a plain statement that the run
   // produced none.
   //
-  // What stays surface-bound is "Start new run": it navigates out of the
-  // conversation, so the chat mount withholds the template slug the button
-  // needs and the card leaves it out (its documented behaviour for callers
-  // without a slug). The rest of the card is identical on both surfaces.
+  // AND "START NEW RUN" IS NOT SURFACE-BOUND EITHER (cinatra#3002, fix leg 4).
+  // This panel used to zero the slug on the chat mount on the reasoning that
+  // the button navigates out of the conversation, and the fourth proof round
+  // read the control missing there on all four of its frames. The ratified
+  // drawing does not leave that to a host: "A host supplies the frame and the
+  // measure a card is laid out at; it never drops a region, a state or an
+  // affordance the card's own section draws, and never adds one" — and the
+  // card's own section draws "Run complete", the sentence, and "Start new run"
+  // (the completion-card example, after a one-off schedule fires). So the slug
+  // rides on both surfaces, and the card is now identical on both. A caller
+  // that genuinely has no slug still passes none, and the card still leaves the
+  // button out rather than mount one that routes nowhere.
   const showCompletionCard = status === "completed";
-  const completionAgentId = surface === "chat" ? undefined : agentId;
+  const completionAgentId = agentId;
+
+  // ONE PLACE FOR A FINISHED RUN'S OUTPUT (cinatra#3002, fix leg 3).
+  //
+  // The ratified drawing's completed reading is the header pill and ONE card:
+  // "Run complete", the sentence, and "Start new run"
+  // (specs/app-artifact-review.html, example `run-schedule-step-fired`). The
+  // card's own sentence then names exactly one place the output lives — "Its
+  // output is in the run transcript below." The third proof round read a raw
+  // "Agent output" dump sitting ABOVE that card in every frame: a second panel
+  // the drawing does not give, carrying the same text the sentence had just
+  // pointed somewhere else. That is the "undrawn second panel" it recorded.
+  //
+  // So the raw stream panels are a LIVE-RUN reading. They stand down once the
+  // run is over AND the transcript below is actually carrying rows — and only
+  // then: an external run that finished with nothing but its stream has no
+  // transcript to be pointed at, and hiding its one panel would delete the
+  // output instead of drawing it once. That is the same rule the card's own
+  // sentence already follows, so the two can never disagree about where a
+  // finished run's output is.
+  // WHICH ROWS COUNT (convergence round, 2026-09-04). The test is not "the
+  // transcript has rows" but "the transcript carries the run's own produced
+  // output". A run window accepts turns from the reader (cinatra#2933), so a
+  // completed external run whose answer lives only in the accumulated stream
+  // can hold a transcript made of nothing but the reader's own text row with
+  // role "user" — and keying the stand-down on messages.length alone would
+  // hide that run's only copy of its answer behind a transcript that never
+  // carried it. The rows that DO carry produced output are the run's final
+  // message and any non-user text row; a tool call or a tool result is the
+  // run's working, not its answer.
+  const transcriptCarriesTheRunsOutput = messages.some(
+    (m) =>
+      m.body.messageType === "final" ||
+      (m.body.messageType === "text" && m.body.role !== "user"),
+  );
+  const showRawOutputPanels = !(
+    status === "completed" && transcriptCarriesTheRunsOutput
+  );
 
   // The sticky field-assist panel is the SAME mount on every reading of this
   // card, so it is built once here and rendered by whichever return runs. Its
   // own `visible` rule is untouched: it is off in a conversation, off for a
   // marked review gate, and off unless a gate with fields is open — which is
   // why the two readings above render it without ever showing it.
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses. A ref callback rather than an
+  // effect, so the mount is known in the commit that draws it.
   const hitlConversationPanelNode: ReactNode = (
-    <>
-    {/* Sticky bottom-of-page AI-assist
-        conversation panel. Rendered via createPortal into <main> by the shared
-        component HitlConversationPanel. resetSignal={currentXRenderer}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
+    {/* The AI-assist conversation panel, drawn into the mount above — under the
+        step's own work, in the same column. resetSignal={currentXRenderer}
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
@@ -1530,19 +1641,14 @@ export function AgenticRunPanel({
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
       onSubmit={handlePromptSubmit}
       resetSignal={currentXRenderer}
-      // Opt in to paperclip uploads. The panel captures uploads, calls our
-      // onSubmit with the 2nd arg, we persist into pendingAttachmentsRef, and
-      // the active-gate submit paths wrap the `userResponse` text with the
-      // WayFlow envelope at Continue time. Setup gates intentionally omit
-      // `userResponse` because the setup-loop server path doesn't read it, so
-      // the paperclip is hidden for those gates to prevent attaching files that
-      // would never reach the flow.
-      enableAttachments={
-        !!effectiveHitlContext &&
-        !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
-      }
+      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
+      // drawing's §X names the window's parts — the panel, the field, the send
+      // control, the placement, the access rule — and a leading control is not
+      // among them: "Nothing else about the window changes from one reading to
+      // the next." This mount used to opt the field into the paperclip on the
+      // gate reading alone; no reading does now.
     />
-    </>
+    </div>
   );
 
   // -------------------------------------------------------------------------
@@ -1559,10 +1665,11 @@ export function AgenticRunPanel({
   //
   //   WORKING     — the agent is doing the work and nothing is waiting on the
   //                 reader. The card is the placeholder: the frame, the spinner,
-  //                 the empty review screen. No heading, no status word, no
-  //                 progress list, no transcript — the words describe a card
-  //                 that says nothing, and everything it used to say is a claim
-  //                 about progress the reader did not ask for.
+  //                 the empty review screen, under the card's own fixed name.
+  //                 No status word, no progress list, no transcript — the words
+  //                 describe a card that says nothing ABOUT THE RUN, and
+  //                 everything it used to say beyond its name is a claim about
+  //                 progress the reader did not ask for.
   //
   //   REVIEW      — the work opened a review. The SAME box now holds the
   //                 'Review requested' screen — the shipped `ReviewGateCard`,
@@ -1632,21 +1739,24 @@ export function AgenticRunPanel({
       status === "running" ||
       (reviewMayStillOpen && !widgetHostedPanel));
 
-  // The recommendation card's ONE mount, lifted to a value so the slot's three
-  // readings share it instead of each carrying a copy (the one-card rule is
-  // about instances, and this is how there stays exactly one).
-  const recommendationCardNode: ReactNode = panelMountsRecommendationCard ? (
-    <LifecycleCardSurfaceProvider host="run_card">
-      <RecommendationHoldCard
-        runId={runId}
-        agentPackageName={agentPackageName ?? ""}
-        wireRef={holdWireRef}
-        onStateChange={setOwnRecommendation}
-      />
-    </LifecycleCardSurfaceProvider>
-  ) : null;
+  // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
+  //
+  // This panel used to mount one wherever no conversation host was in scope —
+  // the run page — and that mount was the second placement of the skills row on
+  // that page: the row sat BESIDE the rail at the schedule moment, drawn by the
+  // run screen, and INSIDE this panel at the HITL, working and review moments,
+  // drawn here. The same row moved between two placements as the run advanced.
+  //
+  // The ratified drawing fixes one placement — "the trigger-gate entry at the
+  // head of the rail … its chip-row filling the run detail while the rail
+  // carries the run's steps beside it" — so the row has one owner: the run
+  // screen's own rail step (`instance-screens.tsx`), on every branch of
+  // `runDetailPanelKind`, including this one. Nothing here draws it and nothing
+  // here is gated to draw it later; what this panel still needs from that
+  // interaction is the ANSWER, and it takes it as a prop
+  // (`recommendationDecided`).
 
-  // The review screen's ONE mount, for the same reason. cinatra#2566's account
+  // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
@@ -1660,6 +1770,9 @@ export function AgenticRunPanel({
           schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
           ref: inPlaceReviewRef,
         }}
+        // §VI — the gate's conversational prompt window keeps its exchange with
+        // the RUN (cinatra#3141 item 1).
+        runId={runId}
       />
     </LifecycleCardSurfaceProvider>
   ) : null;
@@ -1668,14 +1781,26 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
+          // eleventh set). The drawn card frame is
+          // `border:1px solid var(--line); border-radius:12px;
+          //  background:var(--surface-strong)`. `.soft-panel` grounds on
+          // `var(--surface)` — one token light of it — and the review card's
+          // `run_card` frame draws no background of its own, so this section is
+          // the ground a reader actually sees. Only the WORKING reading is
+          // redrawn here: the review reading is the graded cell it already was
+          // and keeps the class string it was measured on.
+          className={
+            reviewScreenNode !== null
+              ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+          }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
           // ruled property: a proof has to be able to see the placeholder go and
           // the review screen arrive in the same slot.
           data-run-review-slot={reviewScreenNode !== null ? "review" : "working"}
         >
-          {recommendationCardNode}
           {reviewScreenNode ?? <ReviewGatePlaceholder />}
         </section>
         {hitlConversationPanelNode}
@@ -1685,45 +1810,61 @@ export function AgenticRunPanel({
 
   return (
     <>
-    <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
+    <section
+      className={
+        railDrawsTheFrame
+          ? "flex flex-col gap-4"
+          : "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+      }
+      // WHICH BOX THIS IS. Passive — it draws nothing and drives nothing — and
+      // it is here for the same reason `data-run-review-slot` above is: the
+      // ruled property is that the skills row is NOT in this box (cinatra#3047),
+      // and a proof of an absence has to be able to name the place it is absent
+      // from.
+      data-run-progress-panel=""
+    >
+      {/* THE HEADING RETIRES FOR THE RUN'S FIRST STEP (cinatra#3068): the rail
+          beside this column names that step and the form below is its screen,
+          so a progress heading over a run that has produced no progress is the
+          one reading this surface must not make. Every other host keeps it. */}
+      {inputStepInRail ? null : (
       <div className="flex items-center justify-between">
+        {/* THE HEADING RETIRES, THE STATUS DOES NOT (cinatra#3002, convergence
+            round). cinatra#3068 retires the PLATE'S HEADING where the rail
+            frames the detail — and the run page frames it for every run with a
+            recommendation step, an input step or a schedule step
+            (railFramesTheRunDetail, instance-screens.tsx), which is the
+            drawing's own completed reading. Retiring the pill with the heading
+            left the run's status drawn NOWHERE on that page: the rail supplies
+            no replacement, and instance-screens draws no pill of its own. So
+            the heading goes and the pill stays. */}
+        {railDrawsTheFrame ? null : (
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
-        <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">
-          {statusIcon(status)}
-          {/* A setup-field INPUT pause must not read as "pending approval" —
-              the discriminator is the interrupt itself, never the status. */}
-          <span>{runStatusBadgeLabel(status, statedWaitDescriptor)}</span>
-        </Badge>
+        )}
+        {/* THE STATUS PILL THE DRAWING DRAWS (cinatra#3002, fix leg 3).
+            This header used to carry the generic badge, whose variants are not
+            the design system's status-pill family at all — the third proof
+            round read it as "the wrong colour family with no dot" on every
+            frame, in both palettes. The ratified drawing draws it as
+            `<span class="pill approved"><span class="dot"></span>completed</span>`
+            (specs/app-artifact-review.html, example `run-schedule-step-fired`),
+            and `<StatusPill glyph="dot" />` IS that form: the tinted ground,
+            the same-colour text, the higher-alpha border and the 7px dot. The
+            LABEL is unchanged — a setup-field INPUT pause must not read as
+            "pending approval", and the discriminator stays the interrupt
+            itself, never the status. */}
+        <StatusPill status={runStatusPillStatus(status)} glyph="dot">
+          {runStatusBadgeLabel(status, statedWaitDescriptor)}
+        </StatusPill>
       </div>
+      )}
 
-      {/* The run-start recommendation hold, through the ONE card (cinatra#2568
-          AC-5). The panel's DIRECT chip-row mount — and the local hold state it
-          needed — are gone: the interaction is a lifecycle card like the review
-          gate beside it, declared on the same `run_card` host, drawn by the one
-          renderer of `recommendation_hold`. No parallel chip-row mount remains
-          on this host, and there is nothing here for a later edit to poll.
-
-          ONE CARD PER TURN, IN EVERY STATE. Inside a chat transcript this panel
-          is a SIBLING of the conversation's own recommendation card, and both
-          resolve the same run — so an unconditional mount here draws the card
-          twice in one turn. It went unnoticed because only the SETTLED states
-          render on both: the held state self-gates to the chat card's turn,
-          which made the duplication look like a settled-only quirk rather than
-          what it is.
-
-          The contract is the one the ruling names: inside a CONVERSATION host
-          — `chat_thread` or the widget's `site_widget`, both served by the one
-          shared column — the conversation's card owns this run's
-          recommendation, in every state, and the panel draws none. The run page
-          keeps its copy untouched — there is no outer conversation host there,
-          so `ambientLifecycleHost` is null and the mount renders exactly as
-          before. Gating on the ambient host rather than on
-          the `surface` prop keeps the rule true for any future embedder of this
-          panel inside a transcript, without that embedder having to remember a
-          prop. The condition itself lives in `runCardOwnsLifecycleCopy` so this
-          mount and the transcript's own test cannot drift into two copies of
-          the same rule. */}
-      {recommendationCardNode}
+      {/* NO RECOMMENDATION CARD IN THIS BOX (cinatra#3047). The skills row is
+          drawn in ONE place on the run page — its own step at the head of the
+          rail, filling the run detail beside it — and the run-progress panel
+          draws no copy of it at any moment. The account of what stood here, and
+          of what the panel still takes from that interaction, is above the
+          review-screen mount. */}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
@@ -1774,6 +1915,15 @@ export function AgenticRunPanel({
               data-field-presentation={hitlFieldPresentationFor("run_card")}
             >
               {(() => {
+                // The gate is gone (cinatra#3219). Draw the state the surface
+                // already draws for it — the shipped panel, its ratified copy
+                // and its Refresh back to the live gate — in place of the whole
+                // gate region: every submit this region offers, the outer
+                // Continue and the setup field alike, would be submitting into
+                // a gate that is no longer there.
+                if (gateBlocked) {
+                  return <ReviewGateBlocked reason={gateBlocked} />;
+                }
                 // Presentation-first branch. When the gate embedded a
                 // PresentationHint in currentValues.presentation, short-circuit
                 // through the generic DispatchRenderer instead of resolving a
@@ -1966,7 +2116,13 @@ export function AgenticRunPanel({
               the xRenderer gate above, for the same ruling: a decided run offers
               nothing selectable inside its own card. */}
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
-          <div className="rounded-control border border-line bg-surface-muted px-4 py-3 flex flex-col gap-2">
+          {/* NO BOX AROUND THE STEP'S OWN CONTENT (cinatra#3188 item 4). The
+              ratified drawing, §I: "One page per gate — the step's own card,
+              and nothing else … the page carries the one card of the step it
+              belongs to." The card is the section this content sits in; a
+              border, a ground and an inset of its own made a second card
+              inside the first. The content and its decision are unchanged. */}
+          <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm text-muted-foreground">
                 Run paused — awaiting human approval before continuing.
@@ -2049,7 +2205,10 @@ export function AgenticRunPanel({
       ) : null}
 
       {error && status === "failed" && (
-        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
+        // The error reads inside the step's one card too (cinatra#3188 item
+        // 4) — no second box around it. The width constraint stays: it is what
+        // keeps a long unbreakable token from widening the card.
+        <div className="max-w-full overflow-hidden">
           <div className="text-xs font-medium text-muted-foreground mb-1">Error</div>
           {/* Long unbreakable tokens (e.g. masked sk-proj-… keys) overflowed the
               panel; constrain the container (max-w-full overflow-hidden) and keep
@@ -2122,7 +2281,12 @@ export function AgenticRunPanel({
               creates a fresh run with blank inputs (StartNewRunButton — orphaned
               since it was first exported, cinatra#2412 archaeology). Start new
               run needs the template slug, so it's omitted where the caller
-              doesn't have one (e.g. chat surfaces) rather than mounted broken. */}
+              doesn't have one rather than mounted broken — and "a caller
+              without one" no longer means "a conversation": the chat mount
+              passes the run's own slug since cinatra#3002 fix leg 4, so a
+              failed run recovers the same way on both surfaces (convergence
+              finding, 2026-09-05: this comment named chat as the slugless
+              example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
@@ -2165,7 +2329,7 @@ export function AgenticRunPanel({
           TEXT_MESSAGE_CONTENT deltas accumulated in streamedText. When non-empty,
           render inline. React's default JSX escaping sanitises the text node —
           no dangerouslySetInnerHTML. Internal LangGraph runs never populate this field. */}
-      {streamedText && (
+      {streamedText && showRawOutputPanels && (
         <div className="soft-panel rounded-panel p-4 flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-foreground">Agent output</h3>
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all font-mono">
@@ -2178,7 +2342,7 @@ export function AgenticRunPanel({
           Payload rendered via React JSX text-node escaping only — no raw-HTML
           injection prop is used. Block is conditional on non-empty frames so
           internal-LangGraph runs (which never emit DATA_PART) never see it. */}
-      {dataPartFrames.length > 0 && (
+      {dataPartFrames.length > 0 && showRawOutputPanels && (
         <div className="soft-panel rounded-panel p-4 flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-foreground">Structured output</h3>
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all font-mono">
@@ -2198,24 +2362,37 @@ export function AgenticRunPanel({
           runId={runId}
           agentId={completionAgentId}
           outputHint="transcript"
+          // The panel already decided this synchronously, from its own
+          // `messages`, to stand the raw stream panels down. Handing the card
+          // the SAME fact is what keeps the two from disagreeing about where a
+          // finished run's output is during the paint before the card's own
+          // read lands (cinatra#3002, fix leg 4).
+          transcriptCarriesOutput={transcriptCarriesTheRunsOutput}
         />
       )}
 
-      {messages.length > 0 ? (
+      {/* THE STEP'S OWN CARD, AND NOTHING ELSE (cinatra#3068 fix leg 2). The
+          ratified drawing: "One page per gate -- the step's own card, and
+          nothing else. Selecting a step opens that step's page in the run
+          detail, and the page carries the one card of the step it belongs to
+          ... two cards are never stacked in one detail." The graded picture of
+          the input moment showed the run-progress reading -- "No messages yet."
+          -- stacked under the form, which is a second reading of a run that has
+          not run. It leaves this detail; every other host keeps it, and the
+          chat thread's run card is byte-identical. */}
+      {inputStepInRail ? null : messages.length > 0 ? (
         <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto">
           {messages.map((msg) => (
             <ThreadRow key={msg.id} message={msg} />
           ))}
         </div>
       ) : (
-        // Suppressed under the completion card: "No messages yet." next to
-        // "Run finished without output" reads as a run that is still coming,
-        // which is precisely the frozen-in-place impression this fixes.
-        !showCompletionCard && (
-          <p className="text-sm text-muted-foreground">
-            {status === "queued" ? "Waiting to start..." : "No messages yet."}
-          </p>
-        )
+        // NOTHING ABOVE AN EMPTY EXCHANGE (cinatra#3222). The ratified drawing,
+        // §IX: "There is no panel above an empty exchange — the window is the
+        // field alone until the first message." The "No messages yet." /
+        // "Waiting to start..." line used to stand here, above the window's
+        // empty field, on every host that draws no rail; it stands nowhere now.
+        null
       )}
     </section>
     {hitlConversationPanelNode}

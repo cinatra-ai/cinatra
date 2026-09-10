@@ -60,12 +60,32 @@ const triggerAgentRun = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
 const writeRunRecommendationSkip = vi.fn();
 const publishRecommendationHoldResume = vi.fn();
+const clearRunSelectedSkillRevisionsBeforeStart = vi.fn(
+  (_input: { runId: string; skillIds: readonly string[] }) => 0,
+);
+const readRunRecommendationOfferedSet = vi.fn(async (_holdId: string) => [] as Array<{
+  skillId: string;
+  skillRevisionId: string;
+  recommended: boolean;
+  rank: number;
+}>);
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   requireActorContext: (...a: unknown[]) => requireActorContext(...a),
 }));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
+  // The pre-start selection clear (cinatra#3047) — an all-clear Continue is a
+  // skip, and a run whose Skills step was already decided has rows to clear.
+  clearRunSelectedSkillRevisionsBeforeStart: (input: {
+    runId: string;
+    skillIds: readonly string[];
+  }) => clearRunSelectedSkillRevisionsBeforeStart(input),
+  // The hold's OWN claimed offer, which is what the clear is scoped by.
+  readRunRecommendationOfferedSet: (holdId: string) => readRunRecommendationOfferedSet(holdId),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: vi.fn(() => true),
   readRunSelectedSkillRevisions: vi.fn(() => []),
   hasRunRecommendationSkip: vi.fn(() => false),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
@@ -130,6 +150,46 @@ beforeEach(() => {
   writeRunRejectedRecommendations.mockReturnValue(undefined);
   // The store VERIFIES the marker and returns whether it read back.
   writeRunRecommendationSkip.mockReturnValue(true);
+  clearRunSelectedSkillRevisionsBeforeStart.mockReturnValue(0);
+  readRunRecommendationOfferedSet.mockResolvedValue([]);
+});
+
+describe("an all-clear Continue clears against the HOLD'S OFFER (cinatra#3047)", () => {
+  it("clears a previously selected skill the FRESH scoring no longer names", async () => {
+    // The hold offered three skills. By the time the reader clears every box and
+    // presses Continue, one of them (`skill-gone`) has been unassigned, so the
+    // scoring taken now returns only two — and `skill-gone` is therefore absent
+    // from the per-skill evidence rows.
+    readRunRecommendationOfferedSet.mockResolvedValue([
+      { skillId: "skill-ranked", skillRevisionId: "rev-a", recommended: true, rank: 1 },
+      { skillId: "skill-forced", skillRevisionId: "rev-b", recommended: false, rank: 2 },
+      { skillId: "skill-gone", skillRevisionId: "rev-c", recommended: true, rank: 3 },
+    ]);
+
+    await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(clearRunSelectedSkillRevisionsBeforeStart).toHaveBeenCalledTimes(1);
+    const cleared = clearRunSelectedSkillRevisionsBeforeStart.mock.calls[0]![0];
+    expect(cleared.runId).toBe(RUN_ID);
+    // The vanished skill is cleared BECAUSE THE OFFER NAMES IT. Left selected,
+    // the resolver's selection-first ladder would read the run back as CONFIRMED
+    // while every box on the reader's screen was clear.
+    expect([...cleared.skillIds].sort()).toEqual(
+      ["skill-forced", "skill-gone", "skill-ranked"],
+    );
+  });
+
+  it("falls back to the scored ids when the hold owns no readable claim", async () => {
+    readRunRecommendationOfferedSet.mockRejectedValue(new Error("claim unreadable"));
+
+    const out = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    // An unreadable claim costs SCOPE, never the skip itself.
+    expect(out.ok).toBe(true);
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    const cleared = clearRunSelectedSkillRevisionsBeforeStart.mock.calls[0]![0];
+    expect([...cleared.skillIds].sort()).toEqual(["skill-forced", "skill-ranked"]);
+  });
 });
 
 describe("skip evidence covers every offered candidate", () => {

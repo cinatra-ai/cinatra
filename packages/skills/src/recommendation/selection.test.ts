@@ -19,6 +19,7 @@ function rec(over: Partial<RankedRecommendation>): RankedRecommendation {
   return {
     skillId: "s1",
     skillRevisionId: "s1@rev1",
+    vendorName: null,
     name: "skill-one",
     // The resolved label a surface prints (cinatra#2841) — distinct from the
     // catalog `name`, so a fixture can never make the two look interchangeable.

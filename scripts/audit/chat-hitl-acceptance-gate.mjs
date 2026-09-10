@@ -582,8 +582,9 @@ function main(argv) {
         specCommit: manifest.specCommit,
         domExpectations: anchorContract.domExpectations,
         captureAnchors: captureAnchorExpectations(),
-        // The fourth input once it is recorded (cinatra#3144). Absent today,
-        // and absent from the digest while it is.
+        // The fourth input, RECORDED since the pin was adopted at the current
+        // revision (cinatra#3144, cinatra#3175). It is absent from the digest
+        // only while the contract carries no such array.
         anchorsUnresolvedAtPin: anchorContract.anchorsUnresolvedAtPin,
       }),
     );

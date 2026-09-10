@@ -4,9 +4,9 @@
   "title": "Paginated Table",
   "description": "Cinatra design-system table-with-pagination composite.",
   "registryDependencies": [
-    "utils",
-    "pagination",
-    "table"
+    "@cinatra-ai/utils",
+    "@cinatra-ai/pagination",
+    "@cinatra-ai/table"
   ],
   "files": [
     {

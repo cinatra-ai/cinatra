@@ -1,0 +1,393 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-artifacts.html",
+  "contentHash": "sha256:c6cad4b9f61f50ecccb3185913afa0f400a41ca6f06327ab57fcbcda68f1e563",
+  "surfaces": [
+    {
+      "id": "artifacts-facet",
+      "fields": [],
+      "actions": [
+        {
+          "action": "filter-facet",
+          "outcome": "filtered"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "artifacts-console-header",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-library-list",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-artifact",
+          "outcome": "rendered"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-library-empty",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "artifacts-library-error",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "artifact-render-typed",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-artifact",
+          "outcome": "rendered"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifact-render-mime",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifact-render-fallback",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-type-definitions",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "objects-stored-list",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "restore-console",
+      "fields": [],
+      "actions": [
+        {
+          "action": "undo",
+          "outcome": "restored"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-restore-entry",
+      "fields": [],
+      "actions": [
+        {
+          "action": "request-undo",
+          "outcome": "restore-open"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "restore-route",
+      "fields": [],
+      "actions": [
+        {
+          "action": "confirm-restore",
+          "outcome": "restored"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-upload-affordance",
+      "fields": [],
+      "actions": [
+        {
+          "action": "upload-file",
+          "outcome": "typed"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-upload-dragover",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "artifacts-upload-progress",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-upload-typed",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "artifacts-type-picker",
+      "fields": [
+        {
+          "field": "type",
+          "source": "installedTypes.accepting-mime"
+        }
+      ],
+      "actions": [
+        {
+          "action": "assert-meaning",
+          "outcome": "meaning-asserted"
+        },
+        {
+          "action": "confirm-suggestion",
+          "outcome": "meaning-asserted"
+        },
+        {
+          "action": "open-marketplace-tab",
+          "outcome": "marketplace-open"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-upload-refused",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-marketplace",
+          "outcome": "marketplace-open"
+        }
+      ],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "artifacts-marketplace-tab",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "install-type",
+          "outcome": "installed"
+        },
+        {
+          "action": "return-to-picker",
+          "outcome": "picker-open"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifacts-marketplace-request",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "request-install",
+          "outcome": "request-sent"
+        }
+      ],
+      "states": [
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "artifacts-dashboard-row",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-dashboard",
+          "outcome": "dashboard-canonical"
+        }
+      ],
+      "states": [
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "artifact-dashboard-pointer",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-dashboard",
+          "outcome": "dashboard-canonical"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "artifact-dashboard-scope-chips",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-scope",
+          "outcome": "scope-view"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "scope-dashboards-tab",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-add-picker",
+          "outcome": "add-picker-open"
+        },
+        {
+          "action": "open-dashboard",
+          "outcome": "dashboard-canonical"
+        },
+        {
+          "action": "remove-listing",
+          "outcome": "listing-removed"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "scope-dashboards-add-picker",
+      "fields": [
+        {
+          "field": "candidate",
+          "source": "collectionAdd.listable"
+        }
+      ],
+      "actions": [
+        {
+          "action": "add-listing",
+          "outcome": "listing-added"
+        },
+        {
+          "action": "request-promotion",
+          "outcome": "promotion-requested"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "scope-dashboards-write-access",
+      "fields": [
+        {
+          "field": "manage-controls",
+          "source": "collectionAdd.actorMayWriteScope"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "artifacts-axes-state",
+      "fields": [],
+      "actions": [],
+      "states": []
+    }
+  ]
+}

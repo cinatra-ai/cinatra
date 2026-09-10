@@ -29,6 +29,7 @@ import {
   listScopeHomedDashboards,
   listScopeListedDashboards,
   listScopePresentDashboardIds,
+  listUserHomedDashboards,
   removeDashboardEntityLink,
   type ListingScope,
   type ScopeDashboardRow,
@@ -88,6 +89,25 @@ export async function getScopeDashboardsTabData(input: {
   ];
 
   return { scopeKind: input.scope.kind, rows, canManage };
+}
+
+/**
+ * The PERSONAL scope's Dashboards tab data — "On a personal scope the tab shows
+ * the acting user's own dashboards" (the ratified drawing's Dashboards-tab
+ * section). The same row projection the three shared scopes use, so the row
+ * anatomy is identical everywhere: glyph, name, updated time, Open.
+ *
+ * `canManage` is FALSE by construction and not a read: the same section rules
+ * that "a personal user scope and the whole-workspace scope are not add-to-scope
+ * targets — they carry no Add", so this tab has no management control to gate.
+ */
+export async function getPersonalDashboardsTabData(input: {
+  readonly orgId: string;
+  readonly userId: string;
+}): Promise<ScopeDashboardsTabData> {
+  const homed = await listUserHomedDashboards(input);
+  const rows = homed.map((r) => projectRow(r, false)).sort(byName);
+  return { scopeKind: "personal", rows, canManage: false };
 }
 
 function projectRow(

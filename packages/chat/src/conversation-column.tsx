@@ -59,6 +59,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -96,6 +97,10 @@ import {
 import { buildTruncationIntent, buildRemovedRunIntent } from "./truncation-intent";
 import { createTurnStreamRegistry } from "./turn-stream-registry";
 import { startScrollSettlePin, type ScrollSettlePass } from "./scroll-settle";
+import {
+  COMPOSER_RESERVED_SPACE_FLOOR_PX,
+  composerReservedSpacePx,
+} from "./composer-reserved-space";
 import dynamic from "next/dynamic";
 import type { UiMessage } from "./types";
 import type { ApplyIntentRef } from "./renderable-views";
@@ -313,9 +318,51 @@ export function ConversationColumn({
     }
   }, []);
 
+  // -------------------------------------------------------------------------
+  // THE ROOM THE COMPOSER STANDS IN (cinatra#3044).
+  // -------------------------------------------------------------------------
+  // The composer is drawn over the bottom of this stream, opaque, so the stream
+  // has to reserve the height it actually occupies — see
+  // `./composer-reserved-space`. Measured from the composer's own box, on
+  // layout, and again whenever that box changes: the notice row that names the
+  // bound card appears and disappears, and the prompt wraps.
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [composerReservedSpace, setComposerReservedSpace] = useState(
+    COMPOSER_RESERVED_SPACE_FLOOR_PX,
+  );
+  const measureComposer = useCallback(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const next = composerReservedSpacePx(el.offsetHeight);
+    setComposerReservedSpace((prev) => (prev === next ? prev : next));
+  }, []);
+  useLayoutEffect(() => {
+    measureComposer();
+  }, [measureComposer, composerNotice, messages, streamingCount]);
+  useEffect(() => {
+    const el = composerRef.current;
+    // A resize observer is the only thing that catches a prompt wrapping under
+    // the reader's own typing. Where the environment has none, the layout pass
+    // above is the whole measurement and the floor covers the rest.
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => measureComposer());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measureComposer]);
+
+  // The pin re-fires when the reservation moves: the stream just got taller or
+  // shorter beneath the last element, and the bottom it was pinned to moved
+  // with it.
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom]);
+  }, [
+    messages,
+    streamingCount,
+    pendingExternalHandle,
+    typingIndicators,
+    scrollToBottom,
+    composerReservedSpace,
+  ]);
 
   // -------------------------------------------------------------------------
   // The COLD-LOAD settle pass (cinatra#2740).
@@ -387,7 +434,15 @@ export function ConversationColumn({
 
       <div
         ref={messagesContainerRef}
-        className="min-h-0 flex-1 overflow-y-auto pb-24 pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-conversation-stream
+        className="min-h-0 flex-1 overflow-y-auto pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        // THE ROOM THE COMPOSER STANDS IN, MEASURED (cinatra#3044). It used to
+        // be the constant `pb-24`, and everything the composer grew past that
+        // covered the newest content — an arriving card was read through
+        // whatever was left above the composer's top edge. See
+        // `./composer-reserved-space` for why the old constant is kept as the
+        // floor and why the fix is space rather than a z-order.
+        style={{ paddingBottom: `${composerReservedSpace}px` }}
         onScroll={() => {
           // Ignore scroll events caused by scrollToBottom() itself — only react to user input.
           if (isProgrammaticScrollRef.current) return;
@@ -433,7 +488,11 @@ export function ConversationColumn({
 
       {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
       <div className="relative mx-auto w-full max-w-3xl px-4">
-        <div className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0">
+        <div
+          ref={composerRef}
+          data-conversation-composer
+          className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0"
+        >
           {composerNotice}
           <PromptField
             ref={promptRef}

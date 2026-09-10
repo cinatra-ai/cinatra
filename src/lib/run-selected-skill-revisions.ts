@@ -26,6 +26,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
+import { PRE_EXECUTION_RUN_STATUSES } from "@cinatra-ai/agents/run-status";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
@@ -123,6 +124,148 @@ export function readRunSelectedSkillRevisions(
     selectionSource: String(r.selection_source),
     selectedAt: String(r.selected_at),
   }));
+}
+
+/**
+ * CLEAR the run's selection rows for the named skills — BUT ONLY WHILE THE RUN
+ * HAS NOT STARTED (cinatra#3047).
+ *
+ * WHY IMMUTABILITY IS NOT WEAKENED BY THIS. The rule this module opens with is
+ * "a re-emit on resume can never overwrite the pinned revision a run already
+ * committed to", and the commitment it protects is an EXECUTING run's: the
+ * execution-start snapshot materializes the run's skill ledger from this set, so
+ * from the moment the run is dispatched the set is history and may not move. A
+ * run that has not been dispatched has materialized nothing and has committed to
+ * nothing — its selection is still the reader's answer to a question, and the
+ * Skills step lets them change that answer until the run starts.
+ *
+ * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The status test is a
+ * join inside the DELETE, against `PRE_EXECUTION_RUN_STATUSES` — the platform's
+ * own set of the statuses a run holds BEFORE it has ever run (`pending_input`,
+ * `pending_trigger`, `armed`). So a caller that asks to clear a started run's
+ * rows deletes NOTHING, whatever it believed about the run when it asked, and
+ * there is no window between a status read and the write for the run to be
+ * dispatched in. The first status outside that set is `queued`, which is the
+ * dispatch CAS itself.
+ *
+ * SCOPED TO THE NAMED SKILLS, never to the run. The caller names the skills its
+ * own decision is authoritative for — the hold's offered set — so a selection
+ * written by another path for a skill this decision never asked about is
+ * untouched.
+ *
+ * Returns the number of rows actually removed, so a caller can state what it
+ * did rather than assume it.
+ */
+export function clearRunSelectedSkillRevisionsBeforeStart(input: {
+  runId: string;
+  skillIds: readonly string[];
+}): number {
+  if (input.skillIds.length === 0) return 0;
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema}"."run_selected_skill_revisions" s
+               USING "${schema}"."agent_runs" r
+               WHERE s.run_id = $1
+                 AND r.id = s.run_id
+                 AND s.skill_id = ANY($2::text[])
+                 AND r.status = ANY($3::text[])`,
+        values: [input.runId, [...input.skillIds], [...PRE_EXECUTION_RUN_STATUSES]],
+      },
+    ],
+  });
+  return result?.rowCount ?? 0;
+}
+
+/**
+ * REPLACE the run's recommendation-sourced selection for one hold's offer, in
+ * ONE transaction, and ONLY while the run has not started (cinatra#3047,
+ * convergence finding 3).
+ *
+ * WHY A REPLACE AND NOT A CLEAR FOLLOWED BY A WRITE. The two statements were
+ * separately guarded at first: the DELETE tested the run's status, the INSERT
+ * did not, and nothing held them together. A dispatch landing between them left
+ * two ways to be wrong — execution could materialize its ledger from a
+ * half-deleted set, and the INSERT could then add rows to a run that had already
+ * started. Both statements now test the SAME status inside ONE transaction, so
+ * the write either lands whole on a pre-start run or does not land at all.
+ *
+ * THE STATUS TEST IS IN THE STATEMENTS, NOT IN THE CALLER. A caller that asks to
+ * replace a started run's set writes NOTHING, whatever it believed about the run
+ * when it asked, and it is TOLD so — the answer is `false`, not silence, so the
+ * decision path can refuse rather than report a write that did not happen.
+ *
+ * SCOPED TO THE HOLD'S OWN OFFER. `scopeSkillIds` is the set this decision is
+ * authoritative for; a selection written by another path for a skill this hold
+ * never offered is untouched. Retained ids keep their existing row, which is
+ * what pins them to the revision the reader was shown.
+ */
+export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
+  runId: string;
+  scopeSkillIds: readonly string[];
+  selections: Array<{
+    skillId: string;
+    skillRevisionId: string;
+    selectionSource: SelectionSource | string;
+  }>;
+}): boolean {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const table = `"${schema}"."run_selected_skill_revisions"`;
+  const runs = `"${schema}"."agent_runs"`;
+  const preStart = [...PRE_EXECUTION_RUN_STATUSES];
+  const kept = new Set(input.selections.map((s) => s.skillId));
+  const dropped = input.scopeSkillIds.filter((skillId) => !kept.has(skillId));
+
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    // 1. THE ANSWER THE CALLER GETS. Read inside the same transaction as the two
+    //    writes, so "it applied" is the transaction's own view and not a probe
+    //    taken a moment earlier.
+    {
+      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND status = ANY($2::text[])`,
+      values: [input.runId, preStart],
+    },
+  ];
+  if (dropped.length > 0) {
+    queries.push({
+      text: `DELETE FROM ${table} s
+             USING ${runs} r
+             WHERE s.run_id = $1
+               AND r.id = s.run_id
+               AND s.skill_id = ANY($2::text[])
+               AND r.status = ANY($3::text[])`,
+      values: [input.runId, dropped, preStart],
+    });
+  }
+  if (input.selections.length > 0) {
+    const rows: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
+    for (const s of input.selections) {
+      rows.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`);
+      values.push(randomUUID(), input.runId, s.skillId, s.skillRevisionId, s.selectionSource);
+    }
+    const runIdParam = `$${p++}`;
+    const statusParam = `$${p++}`;
+    values.push(input.runId, preStart);
+    queries.push({
+      text: `INSERT INTO ${table} (id, run_id, skill_id, skill_revision_id, selection_source)
+             SELECT v.id, v.run_id, v.skill_id, v.skill_revision_id, v.selection_source
+             FROM (VALUES ${rows.join(", ")})
+               AS v(id, run_id, skill_id, skill_revision_id, selection_source)
+             WHERE EXISTS (
+               SELECT 1 FROM ${runs} r
+               WHERE r.id = ${runIdParam} AND r.status = ANY(${statusParam}::text[])
+             )
+             ON CONFLICT (run_id, skill_id) DO NOTHING`,
+      values,
+    });
+  }
+  const [probe] = runPostgresQueriesSync({ connectionString, transaction: true, queries });
+  return (probe?.rows?.length ?? 0) > 0;
 }
 
 /**

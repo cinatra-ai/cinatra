@@ -108,6 +108,15 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     // the gate region for the rail (cinatra#2788), and the rail row is where its
     // `page_gate_region` declaration now lives.
     "packages/agents/src/schedule-rail-step.tsx",
+    // And the review page's RUN SURFACE, for the same reason again
+    // (cinatra#3047): the SKILLS question left the gate region for the rail —
+    // "one page per gate", and the change request's "do not show the skills on
+    // top of the review card" — so the module that composes this page's two
+    // columns is where §V's `page_gate_region` declaration now lives. A host
+    // source list that stopped at the route file would read the recommendation
+    // card's gate-region cell as absent and call the move a `host-lost`
+    // regression, which is exactly what it did before this line.
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
   ]),
 });
 

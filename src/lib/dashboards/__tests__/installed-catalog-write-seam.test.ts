@@ -76,8 +76,15 @@ describe("the surface is bound server-side, and reaches the write only from the 
       expect(src).not.toContain("installed-catalog-actions");
       expect(src).not.toContain("addInstalledCatalogDashboardAction");
       expect(src).not.toContain("ScopeCatalogSource");
-      // Every landing goes through the one builder.
-      expect(src).toContain("buildScopeCatalogNode");
+      // Every landing that HAS an add path goes through the one builder. A
+      // landing with no Add at all builds no node (cinatra#2807 fix leg 3: the
+      // drawing gives the personal scope's Dashboards tab no Add of any kind),
+      // which is the same invariant at its strongest — nothing to bind.
+      if (src.includes("<ScopeAddSourcesProvider")) {
+        expect(src).toContain("buildScopeCatalogNode");
+      } else {
+        expect(src).not.toContain("buildScopeCatalogNode");
+      }
     }
   });
 

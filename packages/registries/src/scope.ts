@@ -194,3 +194,55 @@ export function dependencyScopePrefixesFor(rootPackageName: string): string[] {
   if (ownScope) prefixes.add(`${ownScope}/`);
   return [...prefixes];
 }
+
+// ---------------------------------------------------------------------------
+// THE VENDOR BYLINE
+// ---------------------------------------------------------------------------
+
+/**
+ * VENDOR BYLINE RESOLUTION — the platform's ONE answer to "who makes this
+ * package", and the only one any surface prints.
+ *
+ * It was authored for the Installed extensions page (cinatra#948 reopen, gap 3)
+ * and lives here now (cinatra#3047) because a THIRD surface needs it: the run
+ * page's Skills step prints "<Skill name> by <vendor>" on every pill, and the
+ * package that draws that pill cannot reach the extensions package — the
+ * dependency runs the other way (`@cinatra-ai/extensions` depends on
+ * `@cinatra-ai/agents`), so importing it there would close a cycle.
+ *
+ * WHY THIS PACKAGE. `@cinatra-ai/registries` already owns the vendor concern —
+ * `vendorScopeOfPackage` and `parsePackageId` are the canonical vendor/name
+ * decomposition — and it is a dependency of the extensions, skills and agents
+ * packages alike, so ONE definition is reachable from all three. The extensions
+ * package keeps its own module path, which now re-exports this function: every
+ * existing caller and every existing test is unchanged, and there is still only
+ * one implementation.
+ *
+ * THE CHAIN, UNCHANGED. The hydration is manifest/registry metadata only:
+ *
+ *   1. the extension's SELF-DECLARED vendor identity name (`cinatra.vendor`
+ *      from the generated static extension manifest — the value the
+ *      marketplace publish gate verified);
+ *   2. the registry summary's npm `author` (packument manifest metadata);
+ *   3. null — the byline renders with no "by".
+ *
+ * The raw npm scope segment NEVER renders as the vendor (the shipped
+ * `vendorFor` fell back to it — "Agent by cinatra-ai" — which the reopen
+ * live-proved against the ratified drawing at the contract's pin).
+ */
+export function resolveInstalledVendorName(input: {
+  /** `cinatra.vendor.name` from the generated static extension manifest. */
+  manifestVendorName: string | null | undefined;
+  /** Registry summary `author` (npm packument author, already length-capped). */
+  author: string | null | undefined;
+}): string | null {
+  const manifest = normalizeVendorName(input.manifestVendorName);
+  if (manifest) return manifest;
+  return normalizeVendorName(input.author);
+}
+
+function normalizeVendorName(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}

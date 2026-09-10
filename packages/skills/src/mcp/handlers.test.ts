@@ -57,6 +57,18 @@ vi.mock("@/lib/mcp-pagination", () => ({
   buildListPage: vi.fn((items: unknown[]) => ({ items, total: items.length })),
 }));
 
+// A catalog read reaches Postgres. `readSkillsCatalogSnapshot()` (skill-packages)
+// calls `readSkillCatalogFromDatabase` from `@/lib/database`, a SYNCHRONOUS
+// Postgres read that ensures the schema first. A failed query is now a failure
+// rather than an empty result set (cinatra#3254), so unmocked it raises the
+// refused connection and the authorization behaviour under test never runs.
+// Stub only that seam — every other export of the module stays real — and hand
+// back the empty catalog these assertions have always been written against.
+vi.mock("@/lib/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/database")>()),
+  readSkillCatalogFromDatabase: vi.fn(() => ({ skillPackages: [], skills: [] })),
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(),
   isPlatformAdmin: vi.fn(),

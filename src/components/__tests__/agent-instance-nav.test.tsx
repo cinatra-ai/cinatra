@@ -80,6 +80,18 @@ describe("AgentInstanceNav — the strip is part of the constant frame (§I)", (
     );
   });
 
+  // A STEP IN THE FRAME LIGHTS NOTHING (cinatra#3182 item 8, cinatra#3168).
+  // Application Design — Agents: "A step drawn inside this frame never lights a
+  // tab the strip does not carry."
+  it("lights no tab at all for the 'none' reading, and keeps the same strip", () => {
+    for (const showTriggerTab of [true, false]) {
+      const html = render("none", showTriggerTab);
+      expect(html).not.toContain('data-state="active"');
+      // The strip itself is untouched — the frame is constant either way.
+      expect(tabLabels(html)).toEqual(tabLabels(render("setup", showTriggerTab)));
+    }
+  });
+
   it("never renders an Overview trigger — the dead tab is gone (#2487)", () => {
     for (const tab of ROUTE_TABS) {
       for (const show of [true, false]) {

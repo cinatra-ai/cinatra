@@ -4,73 +4,32 @@ import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
 
 import * as authSession from "@/lib/auth-session";
-const { getActorContext, requireActorContext } = authSession;
+const { requireActorContext } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
-import { betterAuthDb } from "@/lib/better-auth-db";
-import { readOwnerDisplayName } from "@/lib/owner-display-names";
+import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
-import { AuthzError } from "@/lib/authz/errors";
 
-import { buildProjectOverviewConfig } from "@cinatra-ai/dashboards/overview-config";
-import {
-  ensureEntityOverviewAction,
-  listEntityDashboardsAction,
-  getEntityDashboardConfigAction,
-  createEntityDashboardAction,
-  renameEntityDashboardAction,
-  deleteEntityDashboardAction,
-  saveEntityDashboardConfigAction,
-} from "@cinatra-ai/dashboards/entity-dashboard-actions";
-import type { EntityDashboardsDataSource } from "@cinatra-ai/dashboards/entity-dashboards-contract";
-import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
-import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
-import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
 import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
 import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 
-import {
-  ProjectDashboardsTab,
-  type ProjectDashboardsTabProps,
-} from "./project-dashboards-tab";
-
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
 // title repeats the page's read gate before disclosing the project name; any
-// failure yields the generic title.
+// failure yields the generic title. The gate and the read live in ONE place
+// (cinatra#2807 fix leg 2) so this tab title and the page heading beneath it
+// can never disagree about what the viewer may be told.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  try {
-    // Non-throwing session read: requireAuthSession() redirects (throws
-    // NEXT_REDIRECT), which this try/catch would swallow. No session → the
-    // generic title; the page component itself still redirects.
-    const session = await authSession.getAuthSession();
-    if (!session) return { title: "Project" };
-    const { projectId } = await params;
-    const rows = await projectsDb
-      .select()
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
-    const project = rows[0];
-    if (!project) return { title: "Project" };
-    // Sealed-room read gate (#1898): the caller must hold a resolved project
-    // grant for THIS project. `getActorContext` resolves the canonical
-    // `projectGrants` axis (owned ∪ accessed) via `readProjectGrantsForUser`.
-    const actor = await getActorContext();
-    if (!actor || !actorHoldsProjectGrant(actor, project.id)) {
-      return { title: "Project" };
-    }
-    return { title: project.name };
-  } catch {
-    return { title: "Project" };
-  }
+  const { projectId } = await params;
+  const name = await readScopeSurfaceEntityName({ kind: "project", id: projectId });
+  return { title: name || "Project" };
 }
 
 type Props = {
@@ -90,38 +49,23 @@ type Props = {
 //      settings button is gone). Management (ownership, access
 //      grants, guest grants) lives on `/projects/[projectId]/settings` (#1733,
 //      the #1693 teams ruling: one settings surface, no Permissions tab).
-//   2. The reusable entity Dashboards shell (#701) whose non-removable
-//      "Overview" default renders this project's CURRENT info as render-only
-//      portlets (#702): metadata (name / slug / id / owner / organization /
-//      visibility / created / description) + sealed-room counts (objects,
-//      agent runs, chat threads). Counts read directly from the same physical
-//      columns the sealed-room list handlers query
-//      (`*.project_id = $projectId`), so the numbers match what the sealed
-//      room exposes through its tooling.
+//   2. The Dashboards tab body the ratified drawing gives it (cinatra#2807 fix
+//      leg 3): the caption "The dashboards in Project: <name>." over the
+//      scope's rows, with "Add dashboard" at the right of that caption row for
+//      a project manager only. The dashboard CANVAS this landing used to stack
+//      above that panel — a toolbar band, an Overview selector, a project
+//      details card with the raw identifier, and a sealed-room counts card — is
+//      gone: the section names none of them, the Components Toolbar rule
+//      forbids the band's placement ("never stack a toolbar and the etched
+//      paired rule"), and identity belongs to the Settings pane, "where rename,
+//      visibility and the members / access section live folded together". Each
+//      dashboard opens at its canonical surface — "the tab points, it never
+//      renders a dashboard inline".
 //
 // The legacy /customers and /agents routes + their nav buttons were removed in
 // the #707 cleanup slice (customers folded into the permissions Guests section
 // in #1640; /customers 404s with no redirect).
 // ---------------------------------------------------------------------------
-
-const VALID_OWNER_LEVELS: ReadonlySet<string> = new Set([
-  "user",
-  "team",
-  "organization",
-  "workspace",
-  "project",
-]);
-
-function assertOwnerLevel(value: string): ScopeLevel {
-  if (!VALID_OWNER_LEVELS.has(value)) {
-    throw new AuthzError({
-      statusCode: 404,
-      reason: "hidden",
-      message: "Not found.",
-    });
-  }
-  return value as ScopeLevel;
-}
 
 export default async function ProjectDetailPage({ params }: Props) {
   const actor = await requireActorContext();
@@ -160,119 +104,7 @@ export default async function ProjectDetailPage({ params }: Props) {
     notFound();
   }
 
-  const ownerLevel = assertOwnerLevel(project.ownerLevel);
-
-  // (3) Sealed-room counts — match the SQL list handlers run.
-  // Each query filters on the table's `project_id` column directly.
-  // We deliberately run three lightweight COUNT(*) calls rather than a
-  // UNION ALL: the indexes are partial `(project_id, created_at DESC)
-  // WHERE project_id IS NOT NULL` on each table, so an index-only
-  // scan covers each count.
-  const [objectsCountRes, runsCountRes, threadsCountRes] = await Promise.all([
-    projectsDb.execute<{ c: string }>(sql`
-      SELECT COUNT(*)::text AS c FROM "${sql.raw(schema)}"."objects"
-       WHERE project_id = ${project.id} AND deleted_at IS NULL
-    `),
-    projectsDb.execute<{ c: string }>(sql`
-      SELECT COUNT(*)::text AS c FROM "${sql.raw(schema)}"."agent_runs"
-       WHERE project_id = ${project.id}
-    `),
-    projectsDb.execute<{ c: string }>(sql`
-      SELECT COUNT(*)::text AS c FROM "${sql.raw(schema)}"."assistant_threads"
-       WHERE project_id = ${project.id} AND origin = 'legacy-chat'
-    `),
-  ]);
-  const objectsCount = Number(objectsCountRes.rows[0]?.c ?? "0");
-  const runsCount = Number(runsCountRes.rows[0]?.c ?? "0");
-  const threadsCount = Number(threadsCountRes.rows[0]?.c ?? "0");
-
-  // Owner + organization display names (best-effort — fall back to id on a
-  // Better Auth outage so the page stays renderable). Owner-name resolution
-  // is the shared #1905 helper (also feeds the ScopeBadge); the tenant-org
-  // display name below is a separate concern (Overview portlet only).
-  const ownerDisplayName = await readOwnerDisplayName(ownerLevel, project.ownerId);
-  let orgDisplayName: string | null = null;
-  try {
-    if (project.organizationId) {
-      const o = await betterAuthDb.execute<{ name: string }>(sql`
-        SELECT name FROM public."organization" WHERE id = ${project.organizationId} LIMIT 1
-      `);
-      orgDisplayName = o.rows[0]?.name ?? null;
-    }
-  } catch {
-    // Best-effort; leave the name null.
-  }
-
   const isArchived = archivedAt !== null;
-
-  // ── Dashboards tab wiring (#701 shell + #702 Overview) ───────────────────
-  // Per-user dashboards for THIS project instance. The ref is derived
-  // server-side and bound into each action (`.bind(null, ref)`), so it crosses
-  // to the client Next-encrypted and the client never authors the owner axis;
-  // `resolveDashboardAccess` re-derives read/write on every call regardless.
-  const ref: DashboardEntityRef = {
-    entityType: "project",
-    entityId: project.id,
-    ownerLevel: "user",
-    ownerId: userId,
-  };
-
-  const dataSource: EntityDashboardsDataSource = {
-    listDashboards: listEntityDashboardsAction.bind(null, ref),
-    loadConfig: getEntityDashboardConfigAction.bind(null, ref),
-    createDashboard: createEntityDashboardAction.bind(null, ref),
-    renameDashboard: renameEntityDashboardAction.bind(null, ref),
-    deleteDashboard: deleteEntityDashboardAction.bind(null, ref),
-    saveDashboard: saveEntityDashboardConfigAction.bind(null, ref),
-  };
-
-  // The FRESH Overview content: this project's live metadata + sealed-room
-  // counts, composed into render-only portlets. Rebuilt every request — never
-  // persisted (the mutation service rejects render-only kinds), so it can never
-  // serve a stale or authorization-obsolete summary.
-  const overviewConfig = buildProjectOverviewConfig({
-    name: project.name,
-    slug: project.slug,
-    id: project.id,
-    owner: ownerDisplayName ?? project.ownerId,
-    organizationName: orgDisplayName ?? project.organizationId ?? undefined,
-    visibility: project.visibility === "discoverable" ? "Discoverable" : "Private",
-    createdAt: format(project.createdAt, "MMM d, yyyy"),
-    description: project.description ?? undefined,
-    counts: [
-      { label: "Objects", value: objectsCount },
-      { label: "Agent runs", value: runsCount },
-      { label: "Chat threads", value: threadsCount },
-    ],
-  });
-  const overviewPortlets: PortletInstanceProp[] = overviewConfig.portlets.map((p) => ({
-    instanceId: p.instanceId,
-    kind: p.kind,
-    version: p.version,
-    slot: p.slot,
-    config: p.config as Record<string, unknown>,
-  }));
-
-  // Best-effort SSR seed so the default (Overview) paints without a client
-  // round-trip. Ensure the non-removable Overview row exists BEFORE listing (the
-  // shell never seeds it). On any failure (e.g. no active org) fall through with
-  // no seed — the shell then client-loads and surfaces its own loading/error
-  // state — while the Overview portlets above are always available regardless.
-  let dashboardsInitial: ProjectDashboardsTabProps["initialData"];
-  try {
-    await ensureEntityOverviewAction(ref);
-    const list = await listEntityDashboardsAction(ref);
-    const overview = list.dashboards.find((d) => d.isDefault) ?? list.dashboards[0];
-    if (overview) {
-      // The Overview's persisted config is an empty anchor — its rendered
-      // content comes from `overviewPortlets`, not this — but the shell wants a
-      // typed seed for the selected id, so read it through the confined action.
-      const config = await getEntityDashboardConfigAction(ref, overview.id);
-      dashboardsInitial = { list, selectedId: overview.id, config };
-    }
-  } catch {
-    dashboardsInitial = undefined;
-  }
 
   // The §IX.1 add-to-scope source for the unified Add-dashboard popup
   // (cinatra#2474 PR3). `null` for anyone who may not write this project's
@@ -288,6 +120,13 @@ export default async function ProjectDetailPage({ params }: Props) {
       })
     : null;
   const scopeLabel = `Project: ${project.name}`;
+
+  // NOTE (fix leg 3, convergence round): the popup's create and installed-catalog
+  // paths are NOT wired from this landing. Both write a row owned by the acting
+  // user, and this tab reads the SCOPE's collection, so a copy made through them
+  // would report success and then appear nowhere here. The drawn Add is the
+  // add-to-scope picker; where the other two belong is recorded on the pull
+  // request for the maintainer.
 
   // Concept B's installed-catalog section (cinatra#2474 PR4). Guarded on
   // `organizationId` exactly as the reference source is — a project without a
@@ -317,20 +156,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         label="Project"
         title={project.name}
         description="Bounded work context where agents run, project-specific capabilities are reused, data is created, approvals happen, and outputs accumulate."
-        actions={
-          <div className="flex items-center gap-2">
-            {isArchived && <LifecycleBadge status="archived" />}
-            <ScopeBadge
-              level={ownerLevel}
-              ownerName={ownerDisplayName ?? undefined}
-              aria-label={
-                ownerDisplayName
-                  ? `Ownership: ${ownerLevel} — ${ownerDisplayName}`
-                  : `Ownership: ${ownerLevel}`
-              }
-            />
-          </div>
-        }
+        actions={isArchived ? <LifecycleBadge status="archived" /> : undefined}
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
@@ -339,6 +165,10 @@ export default async function ProjectDetailPage({ params }: Props) {
             reader — the settings page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
+          assistantsHref={`/projects/${encodeURIComponent(project.id)}/assistants`}
+          agentsHref={`/projects/${encodeURIComponent(project.id)}/agents`}
+          artifactsHref={`/projects/${encodeURIComponent(project.id)}/artifacts`}
+          skillsHref={`/projects/${encodeURIComponent(project.id)}/skills`}
           settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
           active="dashboards"
         />
@@ -352,44 +182,27 @@ export default async function ProjectDetailPage({ params }: Props) {
           </div>
         )}
 
-        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3) — the
-            popup is launched from the toolbar INSIDE the shell, so the provider
-            wraps the shell. Server-bound actions and a label cross, never the
-            actor or the scope's owner axis. */}
-        <ScopeAddSourcesProvider
-          scopeLabel={scopeLabel}
-          reference={scopeReference}
-          catalog={catalog}
-        >
-          <ProjectDashboardsTab
-            dataSource={dataSource}
-            initialData={dashboardsInitial}
-            overviewPortlets={overviewPortlets}
-          />
-        </ScopeAddSourcesProvider>
-        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
-            landing by cinatra#2474 PR2 — formerly the separate
-            `/projects/[projectId]/dashboards` route, which PR2 deletes outright
-            (no redirect, no shim). Same #1897 service, list, picker, Remove;
-            a PROJECT scope carries NO promotion recourse (a project is a
-            resource refinement, not a visibility tier — the contract yields a
-            null recourse there, §IX.1). The sealed-room grant gate above is the
-            READ population; Add/Remove stay gated to a project admin/owner
-            (§IX.2), re-authorized server-side on every mutation.
-
-            Guarded on `organizationId`: the listing scope is tenant-anchored
-            (`dashboard_entity_links.organization_id`), and the retired route
-            404'd a project without one. A landing must not 404 for that, so the
-            panel is simply absent — never mounted against a forged tenant. */}
+        {/* The Dashboards tab body. Guarded on `organizationId`: the listing
+            scope is tenant-anchored (`dashboard_entity_links.organization_id`),
+            and the retired collection route 404'd a project without one. A
+            landing must not 404 for that, so the body is simply absent — never
+            mounted against a forged tenant. */}
         {project.organizationId ? (
-          <ScopeDashboardsSection
-            actor={actor}
-            scope={{
-              kind: "project",
-              scopeId: project.id,
-              orgId: project.organizationId,
-            }}
-          />
+          <ScopeAddSourcesProvider
+            scopeLabel={scopeLabel}
+            reference={scopeReference}
+            catalog={catalog}
+          >
+            <ScopeDashboardsSection
+              actor={actor}
+              scope={{
+                kind: "project",
+                scopeId: project.id,
+                orgId: project.organizationId,
+              }}
+              entityLabel={scopeLabel}
+            />
+          </ScopeAddSourcesProvider>
         ) : null}
       </PageContent>
     </Main>

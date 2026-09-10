@@ -7,8 +7,8 @@
     "lucide-react"
   ],
   "registryDependencies": [
-    "utils",
-    "button"
+    "@cinatra-ai/utils",
+    "@cinatra-ai/button"
   ],
   "files": [
     {

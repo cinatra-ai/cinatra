@@ -415,6 +415,18 @@ export type WidgetServiceStubOptions = {
    * of a stub and a suite could read that silence as a surface with no card.
    */
   hitlScreen?: (runId: string) => unknown | Promise<unknown> | null;
+  /**
+   * The RUN SEED read (cinatra#3044).
+   *
+   * The transcript reads the run itself to learn which lifecycle moment it
+   * stands at — the same route the inline run panel seeds from — so the
+   * widget's server has to answer it too. Without a stub the column would draw
+   * the run's progress reading over a moment that is actually open, and a suite
+   * could read that as a surface with no moment.
+   *
+   * `null` means "this reader gets nothing", which is the route's own 404.
+   */
+  runSeed?: (runId: string) => unknown | Promise<unknown> | null;
 };
 
 /**
@@ -504,6 +516,16 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
       return options.threadMessages
         ? json({ messages: options.threadMessages })
         : json({ error: "Not found" }, 404);
+    }
+    if (url.startsWith("/api/agents/runs/")) {
+      if (!options.runSeed) return json({ error: "Not found" }, 404);
+      const runId = decodeURIComponent(
+        url.slice("/api/agents/runs/".length).split("?")[0] ?? "",
+      );
+      const answer = await options.runSeed(runId);
+      return answer === null || answer === undefined
+        ? json({ error: "Not found" }, 404)
+        : json(answer);
     }
     if (url.startsWith("/api/chat/pending-tool-calls")) {
       return json({ rows: options.pendingRows ?? [] });
