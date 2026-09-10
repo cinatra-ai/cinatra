@@ -530,10 +530,18 @@ for (const palette of PALETTES) {
         // leaving the form — a green cell for a navigation that never happened.
         await page.waitForURL(new RegExp(`${observable}/?(?:[?#].*)?$`), { timeout: 60_000 });
         await usePalette(page, palette);
-        // The package's own name is on the surface that kind is listed on.
-        await expect(
-          page.getByText(packageName(kind)).first(),
-        ).toBeVisible({ timeout: 30_000 });
+        // The package itself is on the surface that kind is listed on. The
+        // agents listing titles a card with the flow's OWN declared name and
+        // carries the package only in the addresses that card links to, so the
+        // agent cell reads the card by the package path it is addressed at;
+        // the other two kinds print the package name as text.
+        const installed =
+          kind === "agent"
+            ? page.locator(
+                `a[href="/agents/${packageName(kind).slice(1)}/new"]`,
+              )
+            : page.getByText(packageName(kind));
+        await expect(installed.first()).toBeVisible({ timeout: 30_000 });
         await shot(page, `cell4-${kind}-${palette}`);
       });
     }
