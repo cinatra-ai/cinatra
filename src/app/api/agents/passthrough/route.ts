@@ -16,6 +16,10 @@ import {
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
 import {
+  shapeArtifactImageInput,
+  type ShapedArtifactImageInput,
+} from "./artifact-image-shaper";
+import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
@@ -76,6 +80,12 @@ const ALLOWED_TOOLS = new Set([
   // per-node OAS metadata mechanism (riskClass/sideEffects) — nothing
   // route-side.
   "artifact_materialize",
+  // THE IMAGE TOOL (cinatra#3032, plan (C) item 0.28) — a prompt in, a picture
+  // filed. Dispatched to `@/lib/artifact-image-tool#generateArtifactImage` under
+  // the bound run's own authority, through the deployment's configured image
+  // provider, sharing the #923 idempotency ledger (`path:'materialize_tool'`)
+  // and, for a regeneration, the mid-run revision's one compare-and-set.
+  "artifact_image_generate",
   // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
   // seam. An extension workflow's prep ApiNode calls these to assemble / shape
   // its own HITL payload before the interrupt; the primitive derives the run +
@@ -280,6 +290,12 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
 // surfaces as a 400 via the existing shaper-throw contract.
 TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
   shapeArtifactMaterializeInput(raw);
+
+// The image tool's seam shaper (cinatra#3032) — pure module in
+// ./artifact-image-shaper, same generic posture: flow variables wire straight to
+// {extension, prompt, title, node_id} plus the picture's own data (native or as
+// a JSON string, which is all a wayflowcore json_body template can carry).
+TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
 
 // blog-pipeline-agent deterministic seam dispatch.
 // The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
@@ -528,6 +544,51 @@ export async function POST(req: Request): Promise<Response> {
           deduped: outcome.deduped,
         };
       }
+    } else if (tool === "artifact_image_generate") {
+      // THE IMAGE TOOL (cinatra#3032, item 0.28). The picture is made through
+      // the deployment's configured image provider and filed under the caller's
+      // declared extension with its typed data, in one write with a ledger row
+      // carrying the prompt, the provider and the model. A call that names an
+      // existing picture AND the revision it read appends the next revision of
+      // that picture instead of filing a second one; a base another write has
+      // already built on is answered 409, exactly as the materialize road
+      // answers it. Dynamic import keeps the provider + artifact stack out of
+      // this route's static module graph (same posture as artifact_materialize).
+      const { generateArtifactImage } = await import("@/lib/artifact-image-tool");
+      const shaped = input as unknown as ShapedArtifactImageInput;
+      const outcome = await generateArtifactImage({
+        runId: run.id,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        nodeId: shaped.nodeId,
+        extension: shaped.extension,
+        title: shaped.title,
+        prompt: shaped.prompt,
+        ...(shaped.model ? { model: shaped.model } : {}),
+        ...(shaped.objectTypeId ? { objectTypeId: shaped.objectTypeId } : {}),
+        ...(shaped.data ? { data: shaped.data } : {}),
+        ...(shaped.artifactId ? { artifactId: shaped.artifactId } : {}),
+        ...(shaped.baseRepresentationRevisionId
+          ? { baseRepresentationRevisionId: shaped.baseRepresentationRevisionId }
+          : {}),
+      });
+      if (!outcome.ok) {
+        return NextResponse.json(
+          { error: outcome.error, reason: outcome.reason },
+          { status: outcome.reason === "stale_base" ? 409 : 400 },
+        );
+      }
+      result = {
+        artifactId: outcome.artifactId,
+        representationRevisionId: outcome.representationRevisionId,
+        revision: outcome.revision,
+        provider: outcome.provider,
+        model: outcome.model,
+        mime: outcome.mime,
+        deduped: outcome.deduped,
+      };
     } else if (RUN_FOLDER_TOOLS.has(tool)) {
       // The run folder's file tools (cinatra#3030, item 0.21). The scope is the
       // run PROVEN above — a bridge-token holder can only ever reach ITS OWN
