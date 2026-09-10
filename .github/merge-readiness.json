@@ -1,0 +1,452 @@
+{
+  "version": 1,
+  "selfContext": "merge-readiness / merge-readiness",
+  "deadlineMinutes": 90,
+  "regeneration": {
+    "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
+    "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true",
+    "generator": "scripts/ci/merge-readiness-inventory.mjs"
+  },
+  "excluded": [
+    {
+      "context": "merge-readiness / merge-readiness",
+      "workflow": ".github/workflows/merge-readiness.yml",
+      "reason": "self: the merge-readiness context itself — the job never waits on itself"
+    }
+  ],
+  "expected": [
+    {
+      "context": "/agents Playwright smoke",
+      "app": "github-actions",
+      "workflow": ".github/workflows/dashboard-live-verify.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "A2A protocol unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Actions SHA-pin gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Agents integration — gated set (+ full-tier report)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Agents-run static invariants (tunnel-wiring)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Archive acceptance coverage-completeness gate (#1943)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Better Auth schema parity",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "build",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Canonical extension invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Chat-HITL held-turn dev-runtime e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "context-resolve route response shape",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Core-store schema migration gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Create GitHub Release",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "CRM migration gates",
+      "app": "github-actions",
+      "workflow": ".github/workflows/crm-migration-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "design-pin-drift",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "design-pin-freshness",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "detect",
+      "app": "github-actions",
+      "workflow": ".github/workflows/dashboard-live-verify.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Detect skip — docs-only or draft (build-image)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Detect skip — docs-only or draft (e2e-app-suites)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Detect upgrade-relevant changes",
+      "app": "github-actions",
+      "workflow": ".github/workflows/works-after-proof.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "devperf invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Execution-plane unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Extension-anchor lifecycle DB tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "gates",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "gates-pnpm",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Hosted-MCP wire gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "image",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Notifications browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Perpetual core invariants (loops, ratchets, unit tiers)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Perpetual extension suites (discovery gate shard)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Perpetual system loops invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Presence-degraded build (required-only universe)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "proof",
+      "app": "github-actions",
+      "workflow": ".github/workflows/works-after-proof.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Publish image (non-release)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Publish image (release)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "RBAC authz unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "RBAC browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Render-smoke browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "secrets-required-gate / secrets-required-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/secrets-required-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Skills unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "skills-drift-gate / skills-drift-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/skills-drift-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "source-leak-gate / source-leak-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/source-leak-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Trigger prod deploy in ops",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "truthful-attribution-gate / truthful-attribution-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/truthful-attribution-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Typecheck and unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "ui-design-system-gate / ui-design-system-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/ui-design-system-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "Upgrade proof (previous releases to candidate)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Workspace package unit suites",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true
+    }
+  ]
+}
