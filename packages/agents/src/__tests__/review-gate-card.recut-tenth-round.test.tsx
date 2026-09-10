@@ -42,8 +42,11 @@ const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComm
 /** The palette class the app writes on a document root for each scheme. */
 const ROOT_CLASS = { light: "cinatra", dark: "dark" } as const;
 
-/** The one height the card frames a SINGLE pinned target at. */
-const ONE_TARGET_HEIGHT = 380;
+/** The floor the frame holds while the island document has reported nothing. */
+const ISLAND_MIN_HEIGHT = 380;
+
+/** The message the island document names its own rendered height with. */
+const HEIGHT_MESSAGE_TYPE = "cinatra.review-island.height";
 
 function headers(count: number): LifecycleTargetHeader[] {
   return Array.from({ length: count }, (_unused, i) => ({
@@ -107,6 +110,21 @@ const frameIn = (container: HTMLElement): HTMLIFrameElement => {
 const skeletonIn = (container: HTMLElement) =>
   container.querySelector('[data-conformance-id="review-target-island-skeleton"]');
 
+/** The island document naming the height it actually drew. */
+async function islandReports(container: HTMLElement, height: number): Promise<void> {
+  const frame = frameIn(container);
+  await act(async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: HEIGHT_MESSAGE_TYPE, height },
+        origin: window.location.origin,
+        source: frame.contentWindow,
+      }),
+    );
+    await Promise.resolve();
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -163,9 +181,17 @@ describe("a palette repaint never draws a blank plate over work already on scree
 // COUNTED DEFECT 2 — six pinned targets draw six representation slots, not two.
 // ---------------------------------------------------------------------------
 
+// SUPERSEDED IN ITS MECHANISM, KEPT IN ITS MEANING (the twelfth proof round's
+// counted defect, 2026-09-10). This round fixed the four missing slots with a
+// constant per pinned target; the round after it measured that a constant is
+// also what drew ~508px of empty panel on one route and clipped the sixth
+// target's body on the other. The defect these readings guard is unchanged —
+// every pinned target's panel is inside the frame — but the frame is now as
+// tall as the island document says its work is, so that is what they read.
+// `review-gate-card.island-height.test.tsx` carries the height contract itself.
 describe("every pinned target gets a representation slot on the card", () => {
   for (const count of [1, 2, 6]) {
-    it(`frames ${count} pinned target(s) at ${count} target-heights`, async () => {
+    it(`frames ${count} pinned target(s) at the height the island reports`, async () => {
       paintHost("light");
       mockResolve(headers(count));
       const { container } = mountCard();
@@ -176,10 +202,15 @@ describe("every pinned target gets a representation slot on the card", () => {
         container.querySelectorAll('[data-conformance-id="review-target-header"]').length,
       ).toBe(count);
 
-      // And room for one representation slot per header beneath them: the frame
-      // is the region every panel is drawn in, so a frame that fits two of six
-      // is four targets that "draw no display at all".
-      expect(frameIn(container).style.height).toBe(`${ONE_TARGET_HEIGHT * count}px`);
+      // Room for one representation slot per header beneath them: the island
+      // draws every panel in one document and names how tall that came out, so
+      // a frame that fits two of six is four targets that "draw no display at
+      // all" — and a frame taller than the document is empty panel.
+      const drawn = 300 * count + 24;
+      await islandReports(container, drawn);
+      expect(frameIn(container).style.height).toBe(
+        `${Math.max(ISLAND_MIN_HEIGHT, drawn)}px`,
+      );
     });
   }
 });

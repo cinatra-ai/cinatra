@@ -304,33 +304,56 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** The island's ONE height. §III of the ratified artifact-review drawing gives
- * the target no height control: "a wide representation scrolls inside its own
- * container rather than widening the page". The frame is that container, and it
- * scrolls; the Expand / Collapse toggle that used to sit under it was a control
- * the surface added of its own, which §IV forbids. */
-const ISLAND_HEIGHT = 380;
+/**
+ * THE FRAME'S FLOOR — the height it holds while the island has said nothing.
+ *
+ * §III of the ratified artifact-review drawing gives the target no height
+ * control: "a wide representation scrolls inside its own container rather than
+ * widening the page". The frame is that container; the Expand / Collapse toggle
+ * that used to sit under it was a control the surface added of its own, which
+ * §IV forbids. This is not a control either — it is the box a document that has
+ * not yet reported gets, and it is the ONLY number this side chooses.
+ */
+const ISLAND_MIN_HEIGHT = 380;
 
 /**
- * THE FRAME IS TALL ENOUGH FOR EVERY PINNED TARGET (the tenth proof round's
- * counted defect 2 on cinatra#3143: "SIX pinned targets, TWO representation
- * slots ... Four of six pinned targets draw no display at all").
+ * THE FRAME ENDS WHERE THE LAST BODY ENDS (the twelfth proof round's counted
+ * defect on cinatra#3143, 2026-09-10).
  *
- * The card draws one header per pinned target and frames ONE island holding
- * every target's panel — so a gate carrying six targets drew six headers over a
- * box that fits two, and the other four panels sat below the frame's own fold
- * with nothing on the card to say they were there. §IV gives every target a
- * representation slot ("Beneath the header sits the representation slot"), and a
- * slot the reader cannot see is not one.
+ * The tenth round's fix made the frame a constant PER PINNED TARGET, and the
+ * twelfth round measured what a constant costs from both sides at once: on the
+ * review route the island drew about 508 px of EMPTY panel below the last
+ * target's body, and on the run route the sixth target's body was CLIPPED
+ * mid-sentence at the frame's bottom edge with no scroll. §IV gives every target
+ * "the single region into which the artifact's type renderer mounts" — half a
+ * panel of nothing and a body cut in two break that sentence from opposite
+ * sides, and no single constant avoids both.
  *
- * The height therefore follows the pinned COUNT — the same `ISLAND_HEIGHT` per
- * target the single-target gate always had, once per target. It is still a fixed
- * height and still no control: nothing is measured out of the frame and the card
- * adds no Expand, exactly as §IV requires. A gate that names no header keeps the
- * one-target height, which is byte-for-byte what every surface drew before.
+ * So the height is MEASURED, and it is measured where the work is: the island
+ * document reports its own rendered height out of the frame
+ * (`src/app/lifecycle/review-island/island-height-report.ts`) and the card sizes
+ * the frame from that number, with the floor above while nothing has arrived.
+ * There is still no control on the surface — nothing here is pressable and no
+ * Expand came back; the frame simply stops guessing.
+ *
+ * WHAT THIS DOES NOT WEAKEN. The message carries ONE NUMBER, in one direction.
+ * It is not content, not a selector and not a callback, the card checks its
+ * shape on arrival, and it is accepted only from the window of the frame this
+ * component is sizing — so the island is exactly as display-only as it was, and
+ * a document that never reports keeps the floor rather than a wrong constant.
  */
-function islandHeightForTargets(targetCount: number): number {
-  return ISLAND_HEIGHT * Math.max(1, targetCount);
+const REVIEW_ISLAND_HEIGHT_MESSAGE_TYPE = "cinatra.review-island.height";
+
+/** The reported height in a message, or `null` for "not that message". The
+ *  server half is `parseReviewIslandHeight` in the module named above, and the
+ *  two are pinned to each other by this side's suite and by the island's. */
+function islandReportedHeight(raw: unknown): number | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const message = raw as { type?: unknown; height?: unknown };
+  if (message.type !== REVIEW_ISLAND_HEIGHT_MESSAGE_TYPE) return null;
+  const height = message.height;
+  if (typeof height !== "number" || !Number.isFinite(height) || height <= 0) return null;
+  return Math.ceil(height);
 }
 
 /**
@@ -911,11 +934,6 @@ function renderState(args: {
     focusBinding,
   } = args;
 
-  // §IV — ONE REPRESENTATION SLOT PER PINNED TARGET. The headers are the card's
-  // reading of the pinned set, so their count is the number of slots the one
-  // island below has to have room for.
-  const targetCount = targetHeaders?.length ?? 0;
-
   switch (state.state) {
     case "loading":
       return (
@@ -982,7 +1000,6 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
-            targetCount={targetCount}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -1032,7 +1049,6 @@ function renderState(args: {
           <ReviewTargetIsland
             src={islandSrc}
             credentialed={islandCredentialed}
-            targetCount={targetCount}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1555,12 +1571,13 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 
 /**
  * The island frame: a same-origin, authenticated, DISPLAY-ONLY iframe holding
- * the server-rendered §III ladder at ONE fixed height, scrolling inside its own
- * container, with NO height control of any kind — §IV: "the review surface adds
- * no per-type controls of its own around it". The height is fixed rather than
- * measured: a card in a transcript must not be able to push the rest of the
- * conversation off screen, and reading a height back out of the frame would need
- * a message channel the display-only posture deliberately does not have.
+ * the server-rendered §III ladder, scrolling inside its own container, with NO
+ * height control of any kind — §IV: "the review surface adds no per-type
+ * controls of its own around it". The height is the one the island document
+ * reports (see `ISLAND_MIN_HEIGHT` above): the frame ends where the last body
+ * ends, so a card in a transcript is exactly as tall as the work it is showing
+ * and never taller — which is the reason the height is not a constant and also
+ * the reason it is not a control.
  *
  * cinatra#2713 — the region draws THREE states while the iframe's own document
  * loads, layered over the same clamped box so the card never resizes under the
@@ -1588,15 +1605,11 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 function ReviewTargetIsland({
   src,
   credentialed,
-  targetCount,
   onRetryResolve,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
-  /** How many targets the gate pinned — one representation slot each, so the
-   * frame is that many target-heights tall. See `islandHeightForTargets`. */
-  targetCount: number;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
 }): ReactElement {
@@ -1621,8 +1634,40 @@ function ReviewTargetIsland({
     return () => clearTimeout(timer);
   }, [load.identity, load.attempt, load.loaded]);
 
+  // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
+  // load bag is keyed on, and for the same reason: a palette repaint is the SAME
+  // document navigating, so the height it already reported still describes the
+  // work on screen and must survive the repaint. A genuinely new target starts
+  // from the floor again and reports its own.
+  const [measured, setMeasured] = useState<{ identity: string; height: number | null }>({
+    identity,
+    height: null,
+  });
+  if (measured.identity !== identity) {
+    setMeasured({ identity, height: null });
+  }
+
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      // ONLY THIS FRAME'S OWN DOCUMENT. The island is same-origin, so the origin
+      // check is exact; the source check is what stops any other document on the
+      // page — or the page itself — from naming this frame's height.
+      if (event.origin !== window.location.origin) return;
+      const current = frame.current;
+      if (!current || !current.contentWindow || event.source !== current.contentWindow) return;
+      const reported = islandReportedHeight(event.data);
+      if (reported === null) return;
+      setMeasured((held) =>
+        held.identity === identity && held.height === reported ? held : { identity, height: reported },
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [identity]);
+
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = islandHeightForTargets(targetCount);
+  const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
 
   return (
     <div
@@ -1635,6 +1680,7 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.identity}:${load.attempt}`}
+        ref={frame}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
