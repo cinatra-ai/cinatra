@@ -195,13 +195,19 @@ const RUN_TAG = process.env.E2E_UPLOAD_RUN_TAG ?? Date.now().toString(36);
 // package of a kind is named `@<vendor>/<slug>-<kind>` (the skill packaging
 // verdict and the artifact validator both refuse anything else), so the run
 // tag belongs in the slug, never after the kind.
-function packageName(kind: "agent" | "skill" | "connector" | "artifact"): string {
-  return `@acme/upload-walk-${RUN_TAG}-${kind}`;
+function packageName(
+  kind: "agent" | "skill" | "connector" | "artifact",
+  tag: string = RUN_TAG,
+): string {
+  return `@acme/upload-walk-${tag}-${kind}`;
 }
 
-function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer {
+function packageZip(
+  kind: "agent" | "skill" | "connector" | "artifact",
+  tag: string = RUN_TAG,
+): Buffer {
   const manifest: Record<string, unknown> = {
-    name: packageName(kind),
+    name: packageName(kind, tag),
     version: "1.0.0",
     cinatra: { kind } as Record<string, unknown>,
   };
@@ -267,7 +273,7 @@ function packageZip(kind: "agent" | "skill" | "connector" | "artifact"): Buffer 
     // why it ships no inline schema: the registrar falls back to a permissive
     // one for a type its own declarer registers.
     const objectTypes = [
-      { type: `${packageName("artifact")}:note`, claim: "dedicated" },
+      { type: `${packageName("artifact", tag)}:note`, claim: "dedicated" },
     ];
     (manifest.cinatra as Record<string, unknown>).artifact = { accepts, objectTypes };
     files.push({
@@ -679,6 +685,144 @@ for (const palette of PALETTES) {
       );
       await expect(page.locator('[role="dialog"]')).toHaveCount(0);
       await shot(page, `cell2-${palette}`);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CELL4, AT THE DEPTH THE CELL NAMES.
+//
+// The cell reads: "a completed install per kind observed where the product
+// shows it: the agent in the agents listing at the chosen scope; the skill on a
+// card's skills offer; the artifact type rendering an object of that type; the
+// schema-config connector's configuration surface". The three cells above stop
+// at the kind's own LISTING — the skills catalog, the installed-extensions
+// list. That is the install landing, not the two observables the sentence names
+// for the skill and the artifact, and a supplied package can reach the listing
+// while reaching neither. These two walks finish those two sentences.
+//
+// Their packages carry their own run tag so this walk installs its OWN skill,
+// agent and artifact pack rather than re-installing the rows the cells above
+// wrote — a re-install over an existing row is a different question with a
+// different answer.
+// ---------------------------------------------------------------------------
+
+const DEEP_TAG = `${RUN_TAG}d`;
+
+/** The floor label the artifacts area renders for an undeclared pack id. */
+function packLabel(tag: string): string {
+  return `upload-walk-${tag}-artifact`
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+async function installThroughUpload(
+  page: Page,
+  kind: "agent" | "skill" | "connector" | "artifact",
+  palette: (typeof PALETTES)[number],
+  landing: RegExp,
+): Promise<void> {
+  await openUpload(page, palette);
+  await supply(page, packageZip(kind, DEEP_TAG), `${kind}.zip`);
+  await expect(page.getByTestId("upload-resolved-kind")).toHaveText(
+    kind.charAt(0).toUpperCase() + kind.slice(1),
+  );
+  await installAtChosenScope(page);
+  await page.waitForURL(landing, { timeout: 90_000 });
+}
+
+for (const palette of PALETTES) {
+  test.describe(`upload screen — the installed kind on the surface the cell names — ${palette}`, () => {
+    test(`CELL4 ${palette}: the uploaded SKILL is offered on an installed agent's own Skills offer`, async ({
+      page,
+    }) => {
+      await installThroughUpload(page, "skill", palette, /\/skills\/?(?:[?#].*)?$/);
+      await installThroughUpload(page, "agent", palette, /\/agents\/?(?:[?#].*)?$/);
+
+      // The agent extension's OWN settings page — its Skills section, which is
+      // the "card's skills offer" the cell names.
+      const segments = packageName("agent", DEEP_TAG).split("/").map(encodeURIComponent);
+      await page.goto(
+        `/configuration/extensions/settings/agent/${segments.join("/")}`,
+      );
+      await usePalette(page, palette);
+      const section = page.locator('[data-slot="agent-skills-section"]');
+      await expect(section).toBeVisible({ timeout: 60_000 });
+
+      // A needle unique to THIS walk's skill package: the offer searches the
+      // extension title, the skill name, the vendor byline and the package
+      // name, so any row that comes back for it is that package's.
+      const needle = `upload-walk-${DEEP_TAG}-skill`;
+      const field = section.getByPlaceholder("Search installed skills…");
+      await field.click();
+      await field.fill(needle);
+
+      const list = page.locator('[role="listbox"]').first();
+      const offered = list.getByRole("option").filter({ hasNotText: "Searching…" });
+      await expect(offered.first()).toBeVisible({ timeout: 60_000 });
+      await expect(list).not.toContainText("No matches.");
+      await expect(list).not.toContainText("Couldn't search");
+      const offeredText = (await offered.first().innerText()).replace(/\s+/g, " ").trim();
+      expect(offeredText, `the offered row: ${offeredText}`).toContain(DEEP_TAG);
+      await shot(page, `cell4-skill-offer-${palette}`);
+    });
+
+    test(`CELL4 ${palette}: an object made in the artifacts area files under the pack's declared type, and the type filter offers it`, async ({
+      page,
+    }) => {
+      await installThroughUpload(
+        page,
+        "artifact",
+        palette,
+        /\/configuration\/extensions\/?(?:[?#].*)?$/,
+      );
+
+      // A taller window for this cell alone: the picker lists EVERY installed
+      // type that accepts the file's MIME, and on an instance carrying many of
+      // them the declared row sits below the fold of the default window — the
+      // walk would then be measuring the window, not the offer.
+      await page.setViewportSize({ width: 1440, height: 1800 });
+      await page.goto("/artifacts");
+      await usePalette(page, palette);
+
+      // The area's OWN upload control, and its own type picker.
+      await page.locator('input[data-testid="artifacts-upload-input"]').setInputFiles({
+        name: `upload-walk-${DEEP_TAG}.txt`,
+        mimeType: "text/plain",
+        buffer: Buffer.from("A note supplied by the upload walk.\n"),
+      });
+      // The filed upload's own "what is this?" affordance opens the area's type
+      // picker — the control an admin uses, not a dialog opened by the walk.
+      const setMeaning = page.getByTestId("artifacts-set-meaning");
+      await expect(setMeaning).toBeVisible({ timeout: 90_000 });
+      await setMeaning.click();
+      const picker = page.locator('[data-conformance-id="artifacts-type-picker"]');
+      await expect(picker).toBeVisible({ timeout: 30_000 });
+
+      // The DECLARED type is on offer — not the built-in floor alone.
+      const declaredType = `${packageName("artifact", DEEP_TAG)}:note`;
+      const row = page.getByTestId("artifacts-picker-type").filter({ hasText: declaredType });
+      await expect(row).toHaveCount(1, { timeout: 60_000 });
+      await shot(page, `cell4-artifact-type-offered-${palette}`);
+      await row.scrollIntoViewIfNeeded();
+      await row.click();
+      await page.getByTestId("artifacts-picker-confirm").click();
+
+      // …and the object is FILED under it: the area's own type filter now
+      // carries the pack, and the row reads as that type rather than as Text.
+      const label = packLabel(DEEP_TAG);
+      await expect(page.getByText(`upload-walk-${DEEP_TAG}.txt`).first()).toBeVisible({
+        timeout: 60_000,
+      });
+      await page.getByTestId("artifacts-facet").click();
+      const option = page.getByRole("option").filter({ hasText: label });
+      await expect(option.first()).toBeVisible({ timeout: 30_000 });
+      await option.first().click();
+      await expect(page.getByText(`upload-walk-${DEEP_TAG}.txt`).first()).toBeVisible({
+        timeout: 30_000,
+      });
+      await shot(page, `cell4-artifact-filed-${palette}`);
     });
   });
 }
