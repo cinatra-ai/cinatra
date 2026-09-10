@@ -13,7 +13,7 @@
 // extensions card (coloured logo-tile panel, byline + description middle
 // panel, hairline-divided actions panel) — but WITHOUT the version and
 // Active/Archived status row (both props simply go unpassed), the
-// description clamped to 2 lines instead of 3, and the right panel dropping to
+// description clamped to 3 lines (cinatra#3227), and the right panel dropping to
 // the primary action Run (a solid, fill-current play icon in place of the
 // settings gear) PLUS "More details". Run stays a filled button; More details
 // takes the design's `btn link` treatment, never a second filled button.

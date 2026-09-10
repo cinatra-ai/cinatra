@@ -839,6 +839,12 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
       released: false,
       arming: true,
       firedOnce: false,
+      // ONE MORE JOINED IT IN cinatra#3174 fix leg 1: `durationCopy`, the
+      // estimated-duration line the settled card draws. `null` here because a
+      // template with no completed runs has no history to estimate from, and
+      // the drawing gives no wording for a missing estimate — so the card draws
+      // no line at all rather than inventing one.
+      durationCopy: null,
       stopped: false,
       canSave: false,
       superseded: false,

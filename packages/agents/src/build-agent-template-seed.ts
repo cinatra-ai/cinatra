@@ -7,6 +7,7 @@ import {
   readManifestLifecycle,
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
+import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import type { AgentPackageManifest } from "./verdaccio/package-contract";
 import { agentPackageLgGraphIdSchema } from "./verdaccio/package-contract";
 
@@ -106,6 +107,22 @@ export type AgentTemplateInstallSeed = {
    * registry outage only fails runs whose packages actually declare bindings.
    */
   hasArtifactBindings: boolean;
+  /**
+   * The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208),
+   * persisted on `agent_templates.artifact_bindings` beside
+   * `has_artifact_bindings` and ALWAYS in the same write as `package_version`.
+   * The run-completion materializer reads it back instead of re-reading the
+   * package registry, so a run can never be materialized against a declaration
+   * it did not execute. `null` when the compile could not see the sibling
+   * manifest (binding/produces parity unestablished) — read as "unknown", which
+   * keeps the pre-#3208 registry fallback exactly as it was.
+   *
+   * Deliberately NOT part of the version `snapshot`: the snapshot feeds the
+   * content hash the install path re-derives byte-for-byte across its three
+   * branches, and this is a compiled ROW column (like triggerMode /
+   * lifecycleConfig), not part of the agent's source identity.
+   */
+  artifactBindings: string | null;
   /** Deterministic snapshot persisted to the agent_versions row. */
   snapshot: Record<string, unknown>;
   /** sha256(JSON.stringify(snapshot)) — full hex, matches the prior install flow. */
@@ -291,6 +308,11 @@ export async function buildAgentTemplateInstallSeed(input: {
     // 10b), threaded straight through so a fresh registry install persists
     // the SAME locally-derived fact a recompile would.
     hasArtifactBindings: compiled.hasArtifactBindings,
+    // cinatra#3208 — the executed declaration itself, serialized once here so
+    // every install branch persists the identical JSON-as-text value.
+    artifactBindings: compiled.artifactBindings
+      ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
+      : null,
     snapshot,
     contentHash,
   };

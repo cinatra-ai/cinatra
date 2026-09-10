@@ -101,6 +101,22 @@ export type LocalAgentTemplateSeed = {
    * parity, exactly like hitlScreens / lifecycleConfig). Undefined/omitted
    * normalizes to NULL ("unknown") at the store layer. */
   hasArtifactBindings?: boolean | null;
+  /** The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208) —
+   * threaded so a FRESH registry install / ZIP import seeds
+   * `agent_templates.artifact_bindings` with the same value the upsert / race
+   * branches write (three-branch parity, exactly like hasArtifactBindings).
+   *
+   * This field is load-bearing precisely BECAUSE the writer below does not
+   * spread its seed: it threads an explicit field list, so a seed field absent
+   * from that list is dropped silently, with no type error (the seed arrives as
+   * a variable, not a fresh object literal, so excess-property checking never
+   * runs). Dropping it landed `has_artifact_bindings = true` beside
+   * `artifact_bindings = NULL` on every first install — a row claiming bindings
+   * exist while offering no way to read the ones this version compiled — and
+   * the run-completion materializer then fell back to the pre-#3208 registry
+   * re-read that #3208 exists to remove. Undefined/omitted normalizes to NULL
+   * ("unknown") at the store layer. */
+  artifactBindings?: string | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -194,6 +210,10 @@ export async function createLocalAgentTemplateVersion(input: {
     executionProvider: input.seed.executionProvider ?? undefined,
     lifecycleConfig: input.seed.lifecycleConfig ?? null,
     hasArtifactBindings: input.seed.hasArtifactBindings ?? null,
+    // cinatra#3208 — the executed declaration rides the SAME create as
+    // packageVersion and the presence flag above. It must move with them or the
+    // materializer's version-pin guard is reading a pair that never agreed.
+    artifactBindings: input.seed.artifactBindings ?? null,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

@@ -5,10 +5,8 @@ import {
 } from "@cinatra-ai/objects/registry";
 
 import { mimeAcceptedByAccepts, normalizeMime } from "./upload-artifact-type-map";
-import {
-  humanizeExtensionPackage,
-  humanizeTypeLocalPart,
-} from "./type-definitions-inventory";
+import { artifactKindLabelFor } from "./artifact-kind-label";
+import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 
 // ---------------------------------------------------------------------------
 // Installed-type picker candidates (epic #1883 slice A4, spec design@16efd8d2
@@ -116,7 +114,7 @@ export function selectMeaningTypesAcceptingMime(
       objectTypeId: t.objectTypeId,
       extension: t.definer,
       displayName: humanizeTypeLocalPart(t.objectTypeId),
-      extensionLabel: humanizeExtensionPackage(t.definer),
+      extensionLabel: artifactKindLabelFor(t.definer),
     });
   }
   return sortMeaningTypes(out);
@@ -152,8 +150,8 @@ export function selectMatcherChannelMeaningTypesAcceptingMime(
     out.push({
       objectTypeId: null,
       extension: entry.packageName,
-      displayName: humanizeExtensionPackage(entry.packageName),
-      extensionLabel: humanizeExtensionPackage(entry.packageName),
+      displayName: artifactKindLabelFor(entry.packageName),
+      extensionLabel: artifactKindLabelFor(entry.packageName),
     });
   }
   return sortMeaningTypes(out);

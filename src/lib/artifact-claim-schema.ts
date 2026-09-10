@@ -486,3 +486,79 @@ export function objectContentSnapshotSchemaQueries(
     },
   ];
 }
+
+/**
+ * THE ARTIFACT-MATERIALIZATION LEDGER (cinatra#923; relocated here for
+ * cinatra#3029).
+ *
+ * MOVED OUT OF drizzle-store.ts VERBATIM, into the leaf that already owns this
+ * slice's SQL and that the bootstrap composition already reaches (the
+ * #1429 / #1430 extract-leaf precedent: run_context_selections and
+ * object_content_snapshots are already here). Nothing about the executed DDL
+ * changes -- the statements are spread into the same region, in the same order,
+ * against the same schema -- and the core-store schema migration gate reads the
+ * relocation as the no-data-impact move it is, because a line removed from one
+ * in-scope region and added in another cancels.
+ *
+ * WHY IT MOVED AT ALL: this slice widens the ledger with the detection ladder's
+ * four columns, and drizzle-store.ts is AT its file-size ceiling, which may only
+ * ever shrink. The ratchet's own remedy is a thin facade plus vertical slices,
+ * and this table is a whole vertical slice -- one journal, its three indexes,
+ * and nothing else reaching into it.
+ */
+export function artifactMaterializationLedgerSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    // Claim-then-write-then-finalize journal for declarative artifact
+    // materialization (the install-op-journal shape). One row per attempted
+    // materialization; the 4-part unique key is the RETRY-idempotency
+    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
+    // hits the same key, reads the finalized row's refs and returns them
+    // instead of writing a second artifact. `phase` transitions
+    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
+    // artifact write — no window in which a committed artifact is invisible
+    // to the ledger). An unfinalized (crashed) claim is re-used by the next
+    // re-drive.
+    //
+    // `output_id` identity per path: the EndNode output name for
+    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
+    // the authoring step id for `llm_emit` provenance rows (unique per emit,
+    // so legitimately distinct same-byte emits never collide on the key).
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_materializations" (
+  id                          text PRIMARY KEY,
+  org_id                      text NOT NULL,
+  run_id                      text NOT NULL,
+  output_id                   text NOT NULL,
+  node_id                     text,
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output','default_road')),
+  extension                   text NOT NULL,
+  content_hash                text NOT NULL,
+  artifact_id                 text,
+  representation_revision_id  text,
+  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
+  -- cinatra#3029: the detection ladder's recorded verdict for a default_road
+  -- row: the DECIDING RUNG, its reason, and (model rung only) the confidence
+  -- and the model. Null on every path that does not run the ladder.
+  detection_rung              text,
+  detection_reason            text,
+  detection_confidence        double precision,
+  detection_model             text,
+  -- cinatra#3032 (plan (C) item 0.28): what produced a picture. The bytes of an
+  -- image carry no record of what was asked for, and a regeneration asks
+  -- something else of the same artifact, so the prompt, the provider and the
+  -- model belong on the row of the write that made THAT revision. Null on every
+  -- write that made no picture.
+  image_prompt                text,
+  image_provider              text,
+  image_model                 text,
+  created_at                  timestamptz NOT NULL DEFAULT now()
+)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${q}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
+    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
+    // declarative rows of one run by extension + content hash.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${q}"."artifact_materializations" (run_id, extension, content_hash)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${q}"."artifact_materializations" (org_id, run_id)` },
+  ];
+}

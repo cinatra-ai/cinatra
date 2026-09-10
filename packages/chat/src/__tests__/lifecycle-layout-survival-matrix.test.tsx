@@ -556,9 +556,18 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         if (!heldTurnMountIsOwed("recommendation_hold")) {
           // The obligation was struck: the owner root itself is now required in
           // the same cell, with no edit to this file.
-          expect(
-            root.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
-          ).toHaveLength(1);
+          //
+          // AWAITED, like the review_card branch above (cinatra#3208 fix leg 1).
+          // The hold card resolves its state in an effect and commits the owner
+          // root only once the answer lands, so the root is never present on the
+          // first render — reading it synchronously races that commit and reds
+          // under load. The assertion is unchanged; only the wait around it is
+          // new.
+          await waitFor(() =>
+            expect(
+              root.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
+            ).toHaveLength(1),
+          );
         }
       }
 

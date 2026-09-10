@@ -22,12 +22,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string"
   && dbUrl.length > 0
-  && !dbUrl.includes("unused:unused@localhost:5432/unused");
+  && !isPlaceholderDbUrl(dbUrl);
 
 describe("agent_runs.org_id NOT NULL (DDL string-introspection, no DB needed)", () => {
   const queries = buildCreateStoreSchemaQueries("cinatra_test");
