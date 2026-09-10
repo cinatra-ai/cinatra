@@ -246,7 +246,14 @@ describe("cinatra#3029 — the terminal seam of the default road", () => {
     expect(pickups[0].artifactId).toBe("art-1");
   });
 
-  it("a run that declared no end-node outputs takes no road at all", async () => {
+  // cinatra#3030 (W6) CHANGED THIS RULE, deliberately. Emitted FILES are the
+  // other half of the pickup (item 0.22), and the runner lists the run's own
+  // outputs folder where that folder lives — so a run that declared NO end-node
+  // output can still have left files behind, and skipping the road for it would
+  // silently drop every one of them. The road now runs on every clean terminal
+  // success; the outputs half simply has nothing to look at, and a road that
+  // found nothing still writes no key.
+  it("a run that declared no end-node outputs still reaches the road, for its emitted files", async () => {
     await handleWayflowTaskState({
       authority: TEST_AUTHORITY,
       runId: "run-road-1",
@@ -254,7 +261,13 @@ describe("cinatra#3029 — the terminal seam of the default road", () => {
       fromStatus: "running",
       task: completedTask(null),
     });
-    expect(runDefaultRoadPickupSpy).not.toHaveBeenCalled();
+    expect(runDefaultRoadPickupSpy).toHaveBeenCalledTimes(1);
+    const call = runDefaultRoadPickupSpy.mock.calls[0]?.[0] as unknown as {
+      endNodeOutputs: Record<string, unknown>;
+    };
+    // The outputs half is handed an EMPTY object, never null: there is nothing
+    // to type, and the file half is the reason the call happens at all.
+    expect(call.endNodeOutputs).toEqual({});
     const [, , , meta] = lastTransition();
     const steps = (meta?.stepResults ?? []) as Array<Record<string, unknown>>;
     expect(steps[0]).not.toHaveProperty("default_road_pickups");
