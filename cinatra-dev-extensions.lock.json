@@ -335,7 +335,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
+      "resolvedSha": "dad157fbc8e6809035c734d6f463218e48f257b7"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",

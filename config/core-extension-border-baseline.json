@@ -261,11 +261,6 @@
       "rule": "pack-type-id-in-core",
       "key": "src/lib/trigger-email-send-use-cases.ts::@cinatra-ai/email:recipient",
       "reason": "standing debt: the send use cases name pack-declared type ids to read the objects they assemble."
-    },
-    {
-      "rule": "skill-legacy-exception",
-      "key": "config/skill-packaging-legacy-exceptions.json::embeddedSkills :: @cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
-      "reason": "The one embedded skill that shipped before the packaging separation rule. The list is a ratchet for that pre-existing debt and empties as the skill is extracted into its own package."
     }
   ]
 }
