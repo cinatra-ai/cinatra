@@ -52,6 +52,7 @@ import {
 import { CubeProvider, chartPluginRegistry } from "drizzle-cube/client";
 
 import { cinatraLinkedTableDefinition } from "./cinatra-linked-table";
+import { registerBarChartLegendClearance } from "./bar-chart-legend-clearance-plugin";
 import {
   DashboardPageAnchorProvider,
   type DashboardPageAnchor,
@@ -68,6 +69,16 @@ chartPluginRegistry.register(
     typeof chartPluginRegistry.register
   >[0],
 );
+
+// cinatra#2773 — the same registry, used the other way round: an override of
+// the BUILT-IN "bar" type whose component is the vendored bar chart inside a
+// wrapper that reserves a band between the -45-degree x-axis tick labels and
+// the legend under them. Registration is deferred inside the helper (it has
+// to read the built-in config before replacing it, and it keeps the chart
+// bundle out of this shell chunk), so this call is the module-side-effect
+// trigger only — every dashboard mount gets the override, and a bar chart
+// whose labels fit keeps the vendored layout untouched.
+registerBarChartLegendClearance();
 
 const DASHBOARDS_API_URL = "/api/dashboards/cubejs-api/v1";
 
