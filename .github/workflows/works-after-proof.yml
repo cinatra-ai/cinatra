@@ -96,7 +96,7 @@ jobs:
   # merge_group there is no PR diff, so `run` is forced true (always exercise).
   detect:
     name: Detect upgrade-relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -151,7 +151,7 @@ jobs:
     name: proof
     needs: detect
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     permissions:
       contents: read

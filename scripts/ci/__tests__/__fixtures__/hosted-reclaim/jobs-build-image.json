@@ -1,0 +1,23 @@
+[
+  {
+    "id": 8800000020,
+    "run_id": 9910000003,
+    "name": "Detect skip — docs-only or draft (build-image)",
+    "conclusion": "success",
+    "steps": [{ "number": 1, "name": "Set up job", "conclusion": "success" }]
+  },
+  {
+    "id": 8800000021,
+    "run_id": 9910000003,
+    "name": "image",
+    "conclusion": "failure",
+    "steps": [
+      { "number": 1, "name": "Set up job", "conclusion": "success" },
+      { "number": 2, "name": "Guard — detect must have succeeded", "conclusion": "skipped" },
+      { "number": 3, "name": "Free runner disk for the image build (default-runner only)", "conclusion": "success" },
+      { "number": 4, "name": "Add CI build swap (default-runner only, after the disk prune)", "conclusion": "success" },
+      { "number": 5, "name": "Build image (load for prod-boot e2e)", "conclusion": "cancelled" },
+      { "number": 6, "name": "Prod-boot e2e — boot the core without private extensions", "conclusion": "skipped" }
+    ]
+  }
+]
