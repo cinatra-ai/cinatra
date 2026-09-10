@@ -136,6 +136,29 @@ export type CreateSemanticArtifactInput = {
   stream: AsyncIterable<Uint8Array>;
   maxBytes?: number;
   createdByRunId?: string | null;
+  /**
+   * THE OBJECT'S OWN DATA, beside the representation envelope (plan (C) item
+   * 0.28, cinatra#3032).
+   *
+   *   item 0.28: "the write path gains a typed-data field for the object's own
+   *   data, validated against the type's schema, since today it takes a fixed
+   *   envelope and no data".
+   *
+   * Until this field the write path composed ONE fixed envelope — the artifact
+   * type, the latest revision, the digest, the MIME, the size, the origin and
+   * the title — and a declared type whose schema asks for fields of its own
+   * (a picture that names the post it belongs to and its placement on it) could
+   * not be written at all: the envelope alone never satisfied its schema.
+   *
+   * The caller's fields are the BASE of the payload and the envelope is spread
+   * OVER them, so a caller can add to what the type carries and can never
+   * restate — or forge — a fact the writer owns (the digest, the size, the
+   * revision id, the detected MIME). The merged payload is then validated
+   * against the type's declared schema exactly as the envelope always was, so a
+   * field the type does not declare, or a value it rejects, refuses the write
+   * before any row is written.
+   */
+  typedData?: Record<string, unknown>;
   // Opt-in HANDLE for the classifier-signal intake path. The service resolves
   // the handle via the tenant-safe reader (`readChatThreadForClassifier`) and
   // composes the persisted `ClassifierSignals` blob server-side. Callers do
@@ -433,7 +456,11 @@ export async function createSemanticArtifact(
         `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
       );
     }
-    const previewEnvelope: ArtifactObjectData = {
+    // The caller's typed data UNDER the envelope (item 0.28): the writer's own
+    // facts always win, so the payload the schema sees carries the type's
+    // declared fields and an unforgeable envelope.
+    const previewEnvelope = {
+      ...(input.typedData ?? {}),
       artifactType: "file",
       latestRepresentationRevisionId: representationRevisionId,
       latestDigest: newBlob.sha256,
@@ -442,7 +469,7 @@ export async function createSemanticArtifact(
       originKind,
       viewerHint: "mime",
       title: input.title,
-    };
+    } as ArtifactObjectData;
     const parsed = preDef.schema.safeParse(previewEnvelope);
     if (!parsed.success) {
       throw new ObjectsTypeNotRegisteredError(
@@ -765,7 +792,8 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     }),
   );
 
-  const objectData: ArtifactObjectData = {
+  const objectData = {
+    ...(input.typedData ?? {}),
     artifactType: "file",
     latestRepresentationRevisionId: representationRevisionId,
     latestDigest: newBlob.sha256,
@@ -774,7 +802,7 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     originKind,
     viewerHint: "mime",
     title: input.title,
-  };
+  } as ArtifactObjectData;
 
   // -------------------------------------------------------------------
   // Dedupe-delta re-validation (epic #1785, wave A3). The pre-Tx1 validation
