@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add",
+  "contentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf",
   "surfaces": [
     {
       "id": "breadcrumb-entity-resolution",
