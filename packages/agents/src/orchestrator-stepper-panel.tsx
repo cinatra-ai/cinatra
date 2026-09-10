@@ -1255,6 +1255,7 @@ function StepperColumn({
   onActiveStepClick,
   railExtras = EMPTY_RAIL_EXTRAS,
   reviewHrefBase = "",
+  electsCurrentEntry = true,
 }: {
   stepperSteps: StepperStep[];
   activeStep: number;
@@ -1275,6 +1276,18 @@ function StepperColumn({
   // deep links into the run-embedded review surface.
   railExtras?: readonly RunStepRailEntry[];
   reviewHrefBase?: string;
+  /**
+   * Does THIS rail stand the reader at an entry? (cinatra#3149, item 3)
+   *
+   * "One entry is highlighted at a time" is a fact about the whole surface, not
+   * about one rail, so the rail that draws the rows the reader is standing on
+   * is the rail that marks one. Where the page's own rail frames the run detail
+   * it draws those rows and marks one itself (`run-surface-rail.tsx`), and this
+   * column stands down — the same stand-down the page-level panel already makes
+   * on this branch (`screenHostsStepRail`). Absent -> this rail is the one rail,
+   * which is what every other caller mounts it as.
+   */
+  electsCurrentEntry?: boolean;
 }) {
   const isLoadingStatus =
     status === "running" || status === "pending_input" || status === "queued";
@@ -1331,6 +1344,16 @@ function StepperColumn({
               >
                 <div
                   className="flex items-center gap-1"
+                  // WHERE THE READER STANDS, WRITTEN INTO THE DOM (cinatra#3149,
+                  // item 3). "The step the run is paused on is highlighted" --
+                  // and `activeStep` is already that entry, elected across the
+                  // spine and the trailing rows alike by
+                  // `electRunRailActiveStep`, which returns a number past every
+                  // row when the run stands at none. The colour said it and the
+                  // DOM said nothing: a real run of the email-outreach agent
+                  // parked on its first step measured five rows, the pending
+                  // one among them, and `aria-current` null on all five.
+                  aria-current={electsCurrentEntry && isActive ? "step" : undefined}
                   data-rail-kind="step"
                   data-rail-step-number={s.stepNumber}
                   data-rail-status={isCompleted ? "completed" : isActive ? "pending" : "upcoming"}
@@ -1392,6 +1415,11 @@ function StepperColumn({
                   entry={entry}
                   reviewHrefBase={reviewHrefBase}
                   displayStep={displayStep}
+                  // The gate the run waits at is a trailing row, and the
+                  // election above already numbers those rows (cinatra#3149,
+                  // item 3): the spine takes 1..N and these continue from N+1,
+                  // which is exactly the `displayStep` this row is drawn with.
+                  isCurrent={electsCurrentEntry && displayStep === activeStep}
                 />
                 {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
               </StepperItem>
@@ -2343,6 +2371,11 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         onActiveStepClick={replayStepIndex !== null ? () => setReplayStepIndex(null) : undefined}
         railExtras={railExtras}
         reviewHrefBase={reviewHrefBase}
+        // ONE PLACE TO STAND ON THE WHOLE SURFACE (cinatra#3149, item 3). Where
+        // the page's own rail frames the run detail it draws the rows the
+        // reader is standing on and marks one of them itself; this column marks
+        // one only where it is the rail that draws them.
+        electsCurrentEntry={!railDrawsTheFrame}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>
     </div>
