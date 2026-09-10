@@ -344,10 +344,10 @@ describe("defect 8 — a machine payload is never drawn as reader-facing prose",
   // inside the finished run's one card and graded it the same class the branch
   // was refused over on the rail — the whole array, braces, quotes, field names
   // and machine codes, laid out under the completion box. So the array of
-  // findings is READ OUT: a titled list of the findings' own sentences, in the
+  // findings is READ OUT: a list of the findings' own sentences, in the
   // card's own type. A structured value that is NOT a findings list keeps
   // exactly the reading fix leg 5 gave it.
-  it("reads a findings ARRAY out as a titled list in the card's own type", async () => {
+  it("reads a findings ARRAY out as a list in the card's own type", async () => {
     await renderRunPage({ initialMessages: [finalTranscriptRow(MACHINE_PAYLOAD)] });
 
     const row = document.querySelector<HTMLElement>('[data-run-transcript-row="final"]')!;
@@ -355,8 +355,12 @@ describe("defect 8 — a machine payload is never drawn as reader-facing prose",
     expect(list, "the findings are read out as a list").not.toBeNull();
     // Inside the ONE runcard the drawing gives the finished run.
     expect(plate().contains(list as Node)).toBe(true);
-    // A TITLE over the list, then the findings' own sentences, in order.
-    expect(list!.textContent!.startsWith("Findings")).toBe(true);
+    // NO TITLE over the list (the re-cut of the seventh round, finding 1):
+    // the findings' own sentences, in order, and the list opens on the first
+    // of them. The drawing draws the header pill, the card and the result,
+    // and gives that result no heading of its own.
+    expect(list!.textContent!.includes("Findings")).toBe(false);
+    expect(list!.textContent!.startsWith("oasJson was not valid JSON")).toBe(true);
     const items = row.querySelectorAll('[data-run-transcript-finding=""]');
     expect(items).toHaveLength(1);
     expect(items[0].textContent).toBe(

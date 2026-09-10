@@ -552,12 +552,13 @@ function ThreadRow({
         </div>
       )}
       {findings !== null ? (
-        // THE LIST THE CARD READS OUT (fix leg 6, defect B): a title and the
-        // findings' own sentences, in the card's own type. No braces, no field
-        // names, no machine codes -- and no box of its own either, because the
-        // drawing draws ONE card for the finished run (fix leg 5).
+        // THE LIST THE CARD READS OUT (fix leg 6, defect B; the re-cut of the
+        // seventh round, finding 1): the findings' own sentences, in the card's
+        // own type. No braces, no field names, no machine codes -- and NO TITLE
+        // over them: the drawing draws the header pill, the card and the result,
+        // and gives that result no heading of its own. No box of its own either,
+        // because the drawing draws ONE card for the finished run (fix leg 5).
         <div data-run-transcript-findings="">
-          <div className="text-sm font-medium text-foreground mb-1.5">Findings</div>
           <ul className="flex flex-col gap-1 list-disc ps-5 text-sm leading-6 text-foreground">
             {findings.map((message, index) => (
               <li key={index} data-run-transcript-finding="">

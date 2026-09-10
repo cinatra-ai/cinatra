@@ -266,12 +266,17 @@ describe("the flow-agent run detail renders ONE step rail, never two (cinatra#27
 });
 
 describe("the surviving rail carries the UNION of both rails' behaviours", () => {
-  it("keeps the ⓘ gate tooltip trigger the page-level rail never had", async () => {
+  it("draws NO ⓘ affordance on an ordered entry — the drawing gives the entry one label", async () => {
+    // WAS: the union this suite locked included the ⓘ gate tooltip the
+    // page-level rail never had (cinatra#2739). The seventh proof round of
+    // cinatra#3149 graded that affordance as a departure — the rail rule
+    // draws an entry's name and its state and nothing else — so the union
+    // loses it. The rest of what this suite locks is untouched; the shape of
+    // the entry is pinned in run-rail-ordered-entry-is-one-label.test.tsx.
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     const rail = rails()[0];
-    // One per step that carries a description — three in the email-outreach shape.
-    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(3);
+    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(0);
   });
 
   it("keeps the completed-step REPLAY click", async () => {
