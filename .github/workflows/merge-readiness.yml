@@ -15,6 +15,11 @@ name: merge-readiness
 # merge, `merge_group.head_sha` for the queue candidate (the script resolves
 # this from the event payload, so nothing here is event-specific).
 #
+# The candidate's CHECK RUNS, though, live on the sha that carries them: on a
+# pull request that is the head, never the ephemeral test merge commit, so both
+# shas are passed in below and the script never has to guess. On the queue
+# event `head_sha` is empty and the queue candidate carries its own runs.
+#
 # There is deliberately NO `push` trigger: the check gates candidates, and a
 # push arm would put the context into its own derived inventory.
 #
@@ -33,3 +38,6 @@ permissions:
 jobs:
   merge-readiness:
     uses: ./.github/workflows/merge-readiness-reusable.yml
+    with:
+      candidate_sha: ${{ github.sha }}
+      head_sha: ${{ github.event.pull_request.head.sha }}

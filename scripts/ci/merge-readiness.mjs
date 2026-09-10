@@ -5,7 +5,11 @@
 // WHAT IT DOES
 //   Approval stays bound to the pull request's head. CI is judged on the
 //   EVENT'S CANDIDATE SHA: `github.sha` for the pull-request test merge,
-//   `merge_group.head_sha` for the queue candidate. The job reads the
+//   `merge_group.head_sha` for the queue candidate. The CHECK RUNS of that
+//   candidate are read from the sha that carries them — the pull request's
+//   head on `pull_request` (the test merge commit carries none), the queue's
+//   own commit on `merge_group` — which the workflow passes in explicitly.
+//   The job reads the
 //   versioned inventory `.github/merge-readiness.json`, selects the expected
 //   contexts whose path applicability matches the candidate's changed paths,
 //   EXCLUDES ITSELF, and waits for every selected context to exist and
@@ -136,6 +140,34 @@ export function resolveCandidateSha({ eventName, githubSha, payload }) {
     return head;
   }
   throw new Error(`merge-readiness: unsupported event '${eventName}' — this check runs on pull_request and merge_group only (failing closed)`);
+}
+
+/**
+ * The TWO shas this job works with, kept apart on purpose.
+ *
+ *   lookupSha   — the commit whose CHECK RUNS are read. On `pull_request`
+ *                 that is the pull request's HEAD (`github.event.pull_request.head.sha`):
+ *                 GitHub reports check runs there, never on the ephemeral test
+ *                 merge commit, so reading the test merge reports every
+ *                 expected context as missing.
+ *   recordedSha — the candidate the summary names as the tree under
+ *                 evaluation: `github.sha` (the test merge) on `pull_request`.
+ *
+ * On `merge_group` the queue's own commit carries its runs, so the two are the
+ * same sha and that road is unchanged.
+ *
+ * The head sha is passed IN by the workflow (`headSha`) — it is never inferred
+ * from the event payload here, so a unit test can pin either event.
+ */
+export function resolveCandidateShas({ eventName, githubSha, headSha, payload }) {
+  const recordedSha = resolveCandidateSha({ eventName, githubSha, payload });
+  if (eventName === "merge_group") return { lookupSha: recordedSha, recordedSha };
+  if (typeof headSha !== "string" || headSha === "") {
+    throw new Error(
+      "merge-readiness: pull_request event without the pull request's head sha (failing closed) — the workflow must pass it",
+    );
+  }
+  return { lookupSha: headSha, recordedSha };
 }
 
 /**
@@ -370,13 +402,16 @@ export function isSettled({ inventory, checks, changedPaths }) {
 }
 
 /** Render the human-readable job summary. */
-export function renderSummary({ candidateSha, eventName, result }) {
+export function renderSummary({ candidateSha, lookupSha, eventName, result }) {
   const lines = [
     `merge-readiness: ${result.verdict}`,
     `  event: ${eventName}`,
     `  candidate: ${candidateSha}`,
-    `  waited on ${result.waitedOn.length} expected context(s)`,
   ];
+  if (typeof lookupSha === "string" && lookupSha !== "" && lookupSha !== candidateSha) {
+    lines.push(`  checks read from: ${lookupSha} (the head that carries the runs; the candidate above is the tree under evaluation)`);
+  }
+  lines.push(`  waited on ${result.waitedOn.length} expected context(s)`);
   for (const r of result.reports) lines.push(`  report: ${r}`);
   for (const f of result.failures) lines.push(`  FAIL: ${f}`);
   return lines.join("\n");
@@ -456,7 +491,12 @@ async function main() {
   }
 
   const inventory = loadInventory(repoRoot);
-  const candidateSha = resolveCandidateSha({ eventName, githubSha: process.env.GITHUB_SHA, payload });
+  const { lookupSha, recordedSha } = resolveCandidateShas({
+    eventName,
+    githubSha: process.env.MERGE_READINESS_CANDIDATE_SHA || process.env.GITHUB_SHA,
+    headSha: process.env.MERGE_READINESS_HEAD_SHA,
+    payload,
+  });
 
   let prNumber = payload?.pull_request?.number ?? null;
   if (eventName === "merge_group") prNumber = pullNumberFromQueueRef(payload?.merge_group?.head_ref);
@@ -467,7 +507,7 @@ async function main() {
   const intervalMs = Number(process.env.MERGE_READINESS_POLL_MS ?? 30_000);
   let checks = [];
   for (;;) {
-    checks = await listChecks(token, repo, candidateSha);
+    checks = await listChecks(token, repo, lookupSha);
     if (isSettled({ inventory, checks, changedPaths })) break;
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
@@ -488,7 +528,7 @@ async function main() {
   }
 
   const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue });
-  const summary = renderSummary({ candidateSha, eventName, result });
+  const summary = renderSummary({ candidateSha: recordedSha, lookupSha, eventName, result });
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n\`\`\`\n${summary}\n\`\`\`\n`);

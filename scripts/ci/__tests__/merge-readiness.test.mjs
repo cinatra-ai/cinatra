@@ -19,6 +19,9 @@ import {
   validateInventory,
   verificationBoundaryVerdict,
 } from "../merge-readiness.mjs";
+// Namespace import for the sha-splitting road, so a missing export shows up as
+// a failing case here instead of a module-load error across the whole file.
+import * as readiness from "../merge-readiness.mjs";
 
 const HEAD = "1066982" + "0d282ab57c466cfa8d2c5ab35324d4fd2";
 
@@ -167,6 +170,103 @@ describe("merge-readiness queue arm", () => {
   it("does not evaluate the queue arm on a pull_request event", () => {
     const r = evalPr(greenChecks());
     expect(r.failures.join("\n")).not.toMatch(/approved-head|verification-boundary/);
+  });
+});
+
+describe("the check runs are read from the sha that carries them", () => {
+  // The pull request's ephemeral TEST MERGE commit: GitHub reports no check
+  // runs on it, which is exactly why the evaluator may not look there.
+  const MERGE_SHA = "e".repeat(40);
+  const PR_HEAD = "f".repeat(40);
+  const QUEUE_SHA = "b".repeat(40);
+
+  const runsOnPullRequest = { [PR_HEAD]: greenChecks(), [MERGE_SHA]: [] };
+  const runsOnQueue = { [QUEUE_SHA]: greenChecks(), [PR_HEAD]: [], [MERGE_SHA]: [] };
+
+  it("reads a pull_request candidate's runs from the head sha and still records the test-merge sha", () => {
+    const { lookupSha, recordedSha } = readiness.resolveCandidateShas({
+      eventName: "pull_request",
+      githubSha: MERGE_SHA,
+      headSha: PR_HEAD,
+      payload: {},
+    });
+    expect(lookupSha).toBe(PR_HEAD);
+    expect(recordedSha).toBe(MERGE_SHA);
+
+    const r = evaluateReadiness({
+      inventory: inventory(),
+      checks: runsOnPullRequest[lookupSha],
+      changedPaths: ["src/a.ts"],
+      eventName: "pull_request",
+    });
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+
+    // The converse: looking the runs up on the test-merge sha reports every
+    // applicable expected context as missing — the measured failure shape.
+    const onMerge = evaluateReadiness({
+      inventory: inventory(),
+      checks: runsOnPullRequest[recordedSha],
+      changedPaths: ["src/a.ts"],
+      eventName: "pull_request",
+    });
+    expect(onMerge.verdict).toBe("FAIL");
+    expect(onMerge.failures).toHaveLength(3);
+    expect(onMerge.failures.every((f) => f.startsWith("missing:"))).toBe(true);
+  });
+
+  it("keeps the merge_group road on the queue's own commit, which carries its runs", () => {
+    const { lookupSha, recordedSha } = readiness.resolveCandidateShas({
+      eventName: "merge_group",
+      githubSha: MERGE_SHA,
+      headSha: PR_HEAD,
+      payload: { merge_group: { head_sha: QUEUE_SHA } },
+    });
+    expect(lookupSha).toBe(QUEUE_SHA);
+    expect(recordedSha).toBe(QUEUE_SHA);
+
+    const r = evaluateReadiness({
+      inventory: inventory(),
+      checks: runsOnQueue[lookupSha],
+      changedPaths: ["src/a.ts"],
+      eventName: "merge_group",
+      queue: {
+        approvedHead: HEAD,
+        pullRequestHead: HEAD,
+        recordText: `Verification boundary: candidate at ${HEAD}\n`,
+      },
+    });
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+  });
+
+  it("fails closed on a pull_request event whose head sha the workflow did not pass", () => {
+    expect(() =>
+      readiness.resolveCandidateShas({ eventName: "pull_request", githubSha: MERGE_SHA, headSha: "", payload: {} }),
+    ).toThrow(/without the pull request's head sha/);
+    expect(() =>
+      readiness.resolveCandidateShas({ eventName: "pull_request", githubSha: MERGE_SHA, payload: {} }),
+    ).toThrow(/without the pull request's head sha/);
+  });
+
+  it("names both shas in the summary: the recorded candidate and the sha the runs were read from", () => {
+    const summary = readiness.renderSummary({
+      candidateSha: MERGE_SHA,
+      lookupSha: PR_HEAD,
+      eventName: "pull_request",
+      result: evalPr(greenChecks()),
+    });
+    expect(summary).toContain(`candidate: ${MERGE_SHA}`);
+    expect(summary).toContain(`checks read from: ${PR_HEAD}`);
+
+    // On the queue road the two are one sha and no second line is rendered.
+    const queued = readiness.renderSummary({
+      candidateSha: QUEUE_SHA,
+      lookupSha: QUEUE_SHA,
+      eventName: "merge_group",
+      result: evalPr(greenChecks()),
+    });
+    expect(queued).not.toContain("checks read from:");
   });
 });
 
