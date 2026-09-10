@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f8971d50e992adad83604d14888b179d70978ff2"
+      "resolvedSha": "58d696740ed18ae7b9c8bf20158d44b174d78d8c"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -125,7 +125,7 @@
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
       "repo": "cinatra-ai/company-discovery-agent",
-      "resolvedSha": "e74409cfcfb2d4956038b5a7410b8808cd86c4a0"
+      "resolvedSha": "9e1b3cbea47749d4d331288778c3302d77fb74c5"
     },
     {
       "packageName": "@cinatra-ai/competitive-analysis-artifact",
@@ -210,7 +210,7 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "7be44f5e47560f31b9f9ad4e750fec1cdf868c17"
+      "resolvedSha": "b3261b1c829c7323ff7d6269647fe121c135dbd5"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
@@ -220,7 +220,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "ee1998d55c877ab38479a3e595a7d5c810261b25"
+      "resolvedSha": "23508f8776e0cf93a5597d7bcc7f35590610962e"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -325,7 +325,7 @@
     {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
       "repo": "cinatra-ai/media-feed-lister-agent",
-      "resolvedSha": "4a3e2f977553df8d676e9d7679386d88db49674b"
+      "resolvedSha": "128f213c24e894f9d41bac0b19bb8931a7bff59d"
     },
     {
       "packageName": "@cinatra-ai/media-feeds-connector",
@@ -415,7 +415,7 @@
     {
       "packageName": "@cinatra-ai/web-research-agent",
       "repo": "cinatra-ai/web-research-agent",
-      "resolvedSha": "25528eeb15f3ea87967fcb383fd644c4cc4d6479"
+      "resolvedSha": "7797ec9007c9e2d2e2ada6daae0c1cbf20dbbce5"
     },
     {
       "packageName": "@cinatra-ai/web-research-skill",
