@@ -202,7 +202,20 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    # Budget rationale for EVERY job on the self-hosted classes
+    # (CI_RUNNER_HEAVY / CI_RUNNER_POOL / CI_RUNNER_PIXEL), cinatra#3364:
+    # `timeout-minutes` covers the WHOLE job, and on a loaded host the setup
+    # phase alone (checkout + the Node setup cache restore + the dependency
+    # install) is most of it. Measured over the 26 most recent runs of this
+    # workflow, the worst setup phase that ran to the end of the dependency
+    # install was 16m44s (Perpetual core invariants), and the Skills unit tests
+    # job measured 8m45s and 8m39s on the two runs that cancelled its test step
+    # under a 10-minute budget. A budget sized for the tests alone therefore
+    # cancels them mid-run with no failing step. Every budget below is that
+    # measured worst setup phase, rounded up to 17, plus the job's own measured
+    # test phase (the longest over those runs, rounded up to a minute), plus a
+    # 5-minute margin — well under the queue's 120-minute limit.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -260,7 +273,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -303,7 +316,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -364,7 +377,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -423,7 +436,7 @@ jobs:
     needs: detect
     if: ${{ always() }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 24
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -474,7 +487,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -519,7 +532,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1456,7 +1469,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1543,10 +1556,10 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
-    # Setup (checkout + clone-extensions + install) is the whole cost here;
-    # 17.4s of measured vitest sits on top of it. 12 leaves room for runner
-    # variance and fleet growth without hiding a genuine stall.
-    timeout-minutes: 12
+    # Setup (checkout + clone-extensions + install) is the whole cost here; the
+    # longest measured test phase over the 25 most recent runs is 2m55s. 25 =
+    # the measured worst setup phase (17) + that test phase (3) + the margin.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1660,7 +1673,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
-    timeout-minutes: 12
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1703,7 +1716,7 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -1773,7 +1786,13 @@ jobs:
     # have left four. Sequential would not have fit that judgement — ~215s of
     # vitest one suite after another is most of the remaining margin by itself,
     # which is why the concurrency below is pinned rather than optional.
-    timeout-minutes: 30
+    #
+    # cinatra#3364: 37 = the measured worst setup phase on the self-hosted
+    # classes (17) + this job's longest measured test phase over the 25 most
+    # recent runs, 14m38s rounded up to 15, + the 5-minute margin. This job also
+    # carries the worst measured setup phase of the fleet (16m44s), which is
+    # where the 17 above comes from.
+    timeout-minutes: 37
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
@@ -2804,7 +2823,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
-    timeout-minutes: 12
+    timeout-minutes: 24
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -2865,7 +2884,9 @@ jobs:
       # worker per package so the outer budget IS the budget; run one suite
       # after another the same work is ~215s, which against a job that already
       # took 10m17s of a 15-minute cap is most of the remaining margin. Hence
-      # the concurrency, and hence `timeout-minutes` 15 → 18, reasoned above.
+      # the concurrency. The job budget itself is now 24 (cinatra#3364): the
+      # measured worst setup phase on the self-hosted classes (17) + this
+      # job's longest measured test phase, 1m31s rounded up to 2, + the margin.
       # Concurrency is PINNED rather than derived from the runner's core count
       # so it cannot silently move when the runner label does. The gate prints
       # its own suite count and wall total every run, so this claim is checkable
@@ -4548,8 +4569,10 @@ jobs:
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    # Same long-pole budget rationale as `build` (next build dominates).
-    timeout-minutes: 30
+    # Long-pole build job: 31 = the measured worst setup phase on the
+    # self-hosted classes (17) + this job's longest measured post-install build
+    # phase over the 26 most recent runs, 8m42s rounded up to 9, + the margin.
+    timeout-minutes: 31
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
