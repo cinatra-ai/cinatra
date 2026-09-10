@@ -45,6 +45,14 @@ export default defineConfig({
     },
   },
   retries: process.env.CI ? 1 : 0,
+  // Serial ON PURPOSE, and left serial by the diff-selective runner
+  // (scripts/ci/design-select.mjs): the conformance families are NOT read-only
+  // pages. They provision one seeded namespace per run (the SEEDED_* exact
+  // counts in tests/e2e/design/conformance/contract.ts) and drive real actions
+  // through it, so a second worker would race the counts the drivers assert.
+  // The selector buys its time back by running FEWER families, never by running
+  // the same families in parallel; a workers knob here would need a read-only
+  // proof this suite cannot give today.
   fullyParallel: false,
   workers: 1,
 

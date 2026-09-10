@@ -21,6 +21,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", () => ({
   readChatThreadForClassifier: () => null,
@@ -41,7 +42,7 @@ vi.mock("@/lib/register-all-object-types", () => ({
 
 const TEST_SCHEMA = "cinatra_test_rbac_del_1428";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const ORG = "org-1428";
 const ARTIFACT_TYPE = "@cinatra-ai/artifact:object";

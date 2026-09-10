@@ -247,6 +247,26 @@ export async function POST(request: Request): Promise<Response> {
         kind: "trigger_schedule_proposal",
         state: card.state,
         body: card.view,
+        // THE FIRED READING RIDES THE ANSWER, NOT THE BODY (cinatra#3193).
+        // Composed HERE for the reason the chips and the settled outcome below
+        // are composed here — this is the one endpoint that draws the card —
+        // and placed BESIDE the body because the body is a versioned,
+        // `.strict()` object that a shipped client parses: a new key in it
+        // blanks the card on every bundle that has not reloaded, and the state
+        // it describes is the common one. The answer around it has never been
+        // strict, so an older parser reads the body it always read and drops
+        // this key without noticing it. See `LifecycleCardAsideByKind`.
+        //
+        // OMITTED UNLESS TRUE, so an ordinary settled card's answer is
+        // byte-identical to the one this route sent before the reading existed.
+        ...(card.firedOnce ? { firedOnce: true as const } : {}),
+        // THE DURATION LINE RIDES THE ANSWER TOO (cinatra#3174 fix leg 1), on
+        // the same seam and for the same reason. OMITTED where there is no
+        // estimate, so an answer for a template with no history is byte-
+        // identical to the one this route sent before the reading existed —
+        // and the card draws no line at all for it, which is what the drawing
+        // gives for a reading it does not draw.
+        ...(card.durationCopy === null ? {} : { durationCopy: card.durationCopy }),
       },
       { headers: { "Cache-Control": "no-store" } },
     );

@@ -71,8 +71,7 @@ vi.mock("lucide-react", () => {
 import {
   HitlConversationPanel,
   RUN_WINDOW_PLACEMENTS,
-  RUN_WINDOW_PLACEHOLDERS,
-  runWindowSendLabel,
+  RUN_WINDOW_SEND_LABEL,
 } from "../hitl-conversation-panel";
 import type { RunWindowSurface } from "../run-window-conversation-store";
 
@@ -156,27 +155,27 @@ describe("§VI — every run window stands beneath the work, never over it", () 
   });
 });
 
-describe("the send control's accessible name carries the window's own sentence", () => {
-  it("is not the name borrowed from another surface", () => {
-    for (const surface of SURFACES) {
-      expect(runWindowSendLabel(surface)).not.toBe("Apply AI suggestion");
-    }
-  });
-
+// THE SEND CONTROL IS ONE ACROSS THE FIVE READINGS (forward resolution, main
+// merged). A per-surface accessible name derived from each reading's sentence
+// stood here. The ratified drawing's §X reads: "One thing is read per surface
+// — the sentence in the empty field, which names what the window does where it
+// stands. Nothing else about the window changes from one reading to the next."
+// The name is therefore pinned to ONE string on every reading, and only the
+// sentence in the empty field is read per surface.
+describe("the send control's accessible name is one across the readings", () => {
   for (const surface of SURFACES) {
-    it(`"${surface}" — the name the field is given is that sentence`, () => {
+    it(`"${surface}" — the name the field is given is the window's one name`, () => {
       mount(surface);
-      expect(promptField.submitAriaLabel).toBe(runWindowSendLabel(surface));
-      expect(promptField.submitAriaLabel).not.toBe("Apply AI suggestion");
+      expect(promptField.submitAriaLabel).toBe(RUN_WINDOW_SEND_LABEL);
     });
   }
 
-  for (const surface of SURFACES) {
-    it(`"${surface}" — the send control says what this window does`, () => {
-      const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
-      const label = runWindowSendLabel(surface);
-      expect(label.startsWith("Send — ")).toBe(true);
-      expect(label.slice("Send — ".length).toLowerCase()).toBe(sentence.toLowerCase());
-    });
-  }
+  it("no reading carries a name of its own", () => {
+    const names = new Set<string>();
+    for (const surface of SURFACES) {
+      mount(surface);
+      names.add(String(promptField.submitAriaLabel));
+    }
+    expect([...names]).toEqual([RUN_WINDOW_SEND_LABEL]);
+  });
 });

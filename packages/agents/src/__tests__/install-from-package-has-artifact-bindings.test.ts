@@ -19,6 +19,30 @@ const PKG = "@cinatra-ai/binding-agent";
 
 /** The OAS compiler's binding-presence result the fixture compile returns. */
 let HAS_ARTIFACT_BINDINGS = false;
+/**
+ * cinatra#3208 — the EXECUTED artifact-binding declaration the fixture compile
+ * returns. `null` mirrors a compile that could not see its sibling manifest.
+ */
+let ARTIFACT_BINDINGS: {
+  bindings: Array<{ nodeId: string; outputId: string; binding: Record<string, unknown> }>;
+  producesRefs: Array<{ extension: string; objectTypeId?: string }>;
+} | null = null;
+
+const FAN_OUT_DECLARATION = {
+  bindings: [
+    {
+      nodeId: "endNode",
+      outputId: "ideas",
+      binding: {
+        extension: "@cinatra-ai/blog-idea-artifact",
+        contentFrom: "ideas",
+        declaredMime: "text/plain",
+        fanOut: { mode: "member", titleFrom: "first-line", titlePrefix: "Title:" },
+      },
+    },
+  ],
+  producesRefs: [{ extension: "@cinatra-ai/blog-idea-artifact" }],
+};
 
 vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
   parseManifestDependencyEdges: vi.fn(() => ({ edges: [], source: "canonical" })),
@@ -120,6 +144,7 @@ vi.mock("../oas-compiler", () => ({
       triggerMode: "full",
       gatedSteps: [],
       hasArtifactBindings: HAS_ARTIFACT_BINDINGS,
+      artifactBindings: ARTIFACT_BINDINGS,
       cinatraConfig: null,
     },
   }),
@@ -143,6 +168,7 @@ vi.mock("../materialize-agent-package", () => ({
 vi.mock("../wayflow-reload-client", () => ({ triggerWayflowReload: async () => ({ ok: true }) }));
 
 import { installAgentFromPackage } from "../install-from-package";
+import { parseArtifactBindingDeclaration } from "../artifact-binding";
 
 const install = () => installAgentFromPackage({ packageName: PKG, orgId: "org-1" });
 
@@ -156,6 +182,7 @@ beforeEach(() => {
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
   HAS_ARTIFACT_BINDINGS = false;
+  ARTIFACT_BINDINGS = null;
 });
 
 describe("cinatra#2498 — installAgentFromPackage persists the compiler's binding-presence result", () => {
@@ -224,5 +251,91 @@ describe("cinatra#2498 — installAgentFromPackage persists the compiler's bindi
     const patch = upsertPatch();
     expect(patch.hasArtifactBindings).toBe(true);
     expect(patch.packageVersion).toBe("1.0.0");
+  });
+});
+
+/**
+ * cinatra#3208 — the install-time write path for the EXECUTED artifact-binding
+ * declaration (`agent_templates.artifact_bindings`). The presence flag above
+ * only says a binding exists; the run-completion materializer needs the binding
+ * ITSELF, or it goes back to asking the package registry and can resolve a
+ * declaration the run never executed. Same three install branches, same
+ * atomicity rule (the declaration is worthless to the version-pin guard if it
+ * lands in a different write than package_version).
+ */
+describe("cinatra#3208 — installAgentFromPackage persists the executed artifact-binding declaration", () => {
+  it("FRESH install: the compiler's collected declaration lands on the seed as JSON-as-text", async () => {
+    HAS_ARTIFACT_BINDINGS = true;
+    ARTIFACT_BINDINGS = FAN_OUT_DECLARATION;
+    await install();
+    const serialized = freshSeed().artifactBindings as string;
+    expect(typeof serialized).toBe("string");
+    // Read back through the SAME grammar the materializer parses with, so this
+    // pins the round trip rather than a string shape.
+    expect(parseArtifactBindingDeclaration(serialized)).toEqual(FAN_OUT_DECLARATION);
+  });
+
+  it("FRESH install: a compile with no readable sibling manifest lands null (unknown, never an empty declaration)", async () => {
+    HAS_ARTIFACT_BINDINGS = false;
+    ARTIFACT_BINDINGS = null;
+    await install();
+    // null, NOT "{...bindings:[]}": an empty declaration would tell the
+    // materializer the run owes nothing, which this compile cannot prove.
+    expect(freshSeed().artifactBindings).toBeNull();
+  });
+
+  it("UPSERT (re-install): the declaration is re-projected onto the existing row", async () => {
+    HAS_ARTIFACT_BINDINGS = true;
+    ARTIFACT_BINDINGS = FAN_OUT_DECLARATION;
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+    await install();
+    expect(parseArtifactBindingDeclaration(upsertPatch().artifactBindings as string)).toEqual(
+      FAN_OUT_DECLARATION,
+    );
+  });
+
+  it("UPSERT: a version that changes its binding overwrites the declaration (no stale shape)", async () => {
+    HAS_ARTIFACT_BINDINGS = true;
+    ARTIFACT_BINDINGS = {
+      bindings: [
+        {
+          nodeId: "endNode",
+          outputId: "ideaBatchDocument",
+          binding: {
+            extension: "@cinatra-ai/blog-idea-artifact",
+            contentFrom: "ideaBatchDocument",
+            declaredMime: "text/markdown",
+            titleFrom: "ideaBatchTitle",
+          },
+        },
+      ],
+      producesRefs: [{ extension: "@cinatra-ai/blog-idea-artifact" }],
+    };
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+    await install();
+    const parsed = parseArtifactBindingDeclaration(upsertPatch().artifactBindings as string);
+    expect(parsed?.bindings[0]?.outputId).toBe("ideaBatchDocument");
+  });
+
+  it("RACE (23505 on the fresh INSERT): the upsert fallback writes the same declaration", async () => {
+    HAS_ARTIFACT_BINDINGS = true;
+    ARTIFACT_BINDINGS = FAN_OUT_DECLARATION;
+    readTemplate.mockResolvedValueOnce(null).mockResolvedValue({ id: "tpl-raced", status: "active" });
+    createLocal.mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "23505" }));
+    await install();
+    expect(parseArtifactBindingDeclaration(upsertPatch().artifactBindings as string)).toEqual(
+      FAN_OUT_DECLARATION,
+    );
+  });
+
+  it("UPSERT: artifactBindings and packageVersion land in the SAME patch object (atomic — not two writes)", async () => {
+    HAS_ARTIFACT_BINDINGS = true;
+    ARTIFACT_BINDINGS = FAN_OUT_DECLARATION;
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+    await install();
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+    const patch = upsertPatch();
+    expect(patch.packageVersion).toBe("1.0.0");
+    expect(patch.artifactBindings).toEqual(expect.any(String));
   });
 });

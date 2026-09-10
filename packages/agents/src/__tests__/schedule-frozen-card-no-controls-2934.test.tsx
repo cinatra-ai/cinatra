@@ -131,12 +131,27 @@ const RESTRICTED = settled({
 
 function mount(body: TriggerScheduleProposalViewBody) {
   const state: LifecycleCardState = { state: "settled" };
+  // THE FIRING READING RIDES THE ANSWER, NOT THE BODY (cinatra#3174 fix leg 1,
+  // carried in by the forward merge of origin/main). A one-off`s gate stamp is
+  // no longer read as its firing on its own: the resolver puts the durable
+  // reading beside the body, and the card elects its frozen rows and its absent
+  // floor by that. These fixtures mark the fired ones with the same `released`
+  // stamp the resolver reads, so the answer says what the server would say.
+  const firedOnce = body.phase === "settled" && body.released === true;
   globalThis.fetch = vi.fn(
     async () =>
-      new Response(JSON.stringify({ kind: "trigger_schedule_proposal", state, body }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({
+          kind: "trigger_schedule_proposal",
+          state,
+          body,
+          ...(firedOnce ? { firedOnce: true } : {}),
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
   ) as unknown as typeof fetch;
   return render(
     <LifecycleCardSurfaceProvider host="run_card">
@@ -168,7 +183,14 @@ describe("the rows read-only, no floor — a spent schedule carries no controls 
     await waitFor(() => expect(rows(container)).not.toBeNull());
     const text = rows(container)!.textContent ?? "";
     expect(text).toContain("Schedule for later");
-    expect(text).toContain("2020-03-04T09:00");
+    // THE MOMENT IN THE READER`S OWN LOCALE (cinatra#3174 fix leg 1): the wire`s
+    // naive wall clock is what the picker EMITS, never what a reading shows.
+    expect(text).toContain(
+      new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    );
     expect(text).toContain("Europe/Berlin");
   });
 

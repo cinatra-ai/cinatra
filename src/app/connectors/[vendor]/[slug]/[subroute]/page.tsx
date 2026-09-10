@@ -1,12 +1,12 @@
 import "server-only";
 
-import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
 import {
   getConnectorRegistryEntryBySlug,
   resolveConnectorBadgeState,
+  hasConnectorReadinessProbe,
 } from "@/lib/connectors-registry.server";
 // Importing the built-in readiness probes (side effect) registers a probe per
 // bundled connector, so the host-injected setup-page badge reads the SAME live
@@ -53,14 +53,12 @@ import {
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
 import type { SchemaConfigSurface } from "@/lib/extension-schema-config";
-import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
+import { SchemaConfigConnectorSetup } from "@/components/extensions/schema-config-connector-setup";
 import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
-import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
-import { InstallActivateCta } from "@/components/extensions/install-activate-cta";
+import { recheckConnectorReadiness } from "@/lib/connector-readiness-action";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
 import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 import { CrumbContributions } from "@/components/crumb-contributions";
@@ -83,20 +81,6 @@ function findStatusProbeActionId(surface: SchemaConfigSurface): string | undefin
 }
 
 export const dynamic = "force-dynamic";
-
-// Host-owned codes-only flash island for the schema-config setup surface. Host
-// actions that redirect back to a connector's setup page carry a stable code —
-// e.g. the external-MCP management actions (campaigns/actions.ts) redirect to
-// the MCP-servers connector page with ?saved=1 / ?deleted=1, and the Twenty
-// connect/disconnect actions with ?error=<code>. The schema-config surface reads
-// no searchParams itself, so nothing rendered these outcomes before; this island
-// maps each code to a STATIC message and toasts it.
-const CONNECTOR_SETUP_FLASH_TOASTS: SearchParamToastConfig[] = [
-  { param: "saved", value: "1", message: "Saved.", variant: "success" },
-  { param: "deleted", value: "1", message: "Removed.", variant: "success" },
-  { param: "error", value: "admin-only", message: "Only an administrator can change this connection.", variant: "error" },
-  { param: "error", value: "connect-failed", message: "Could not connect. Check the details and try again.", variant: "error" },
-];
 
 type RouteParams = {
   vendor: string;
@@ -259,7 +243,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // (`connectorNameCrumbFallbackLabel`) — one fallback, stated in one place.
   //
   // Rendered on EVERY surviving branch of this route, so no reading of a
-  // connector page draws the raw slugs.
+  // connector page draws the raw slugs. The schema-config branch renders it
+  // through the shared setup shape below — cinatra#3214 collapsed that
+  // branch's two layouts into ONE render, so the island reaches both the
+  // probe-declaring and the probe-less connector as that shape's first child
+  // rather than through two branch-level mounts.
   const vendorDisplayName = catalogEntry?.vendorIdentity?.name ?? null;
   const crumbTrail = (
     <CrumbContributions
@@ -292,16 +280,31 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // server-side hydration serve below (no visual change).
     const activeInstall = await resolveActiveInstallForActor(packageId, actor);
     const installId = activeInstall?.id ?? null;
-    // Model-A applies ONLY to a single-connection connector that declares a real
-    // `status-probe` — a connection whose connected/disconnected state the right-
-    // column status card can represent (the two key-based connectors openai +
-    // anthropic, and any other schema-config connector that declares one). A
-    // schema-config connector WITHOUT a status-probe (e.g. the record-list
-    // mcp-server connector, which holds many servers and has no single connection
-    // status / readiness probe) keeps the ORIGINAL single-column body: a single
-    // "Connection status: Disconnected" card would MISREPRESENT such a surface
-    // (gpt-5.5 convergence finding). So the presence of a declared probe is the
-    // gate between the two layouts.
+    // ONE setup shape for EVERY schema-config connector (cinatra#3214,
+    // design/specs/app-connectors.html §II). The two-column body, the
+    // right-column Connection status card and the connection actions used to
+    // be gated on the connector DECLARING a `status-probe` field: a
+    // probe-less connector fell through to a bare single-column form with no
+    // card, no badge and no Check. The drawing names no such exemption — it
+    // draws the generated page as "a single generic form, never per-connector
+    // layout" that "splits into two columns" — and the owner settled the
+    // conflict that way (issue item 1). The gate is gone; what still varies
+    // per connector is the DATA, not the layout:
+    //   - the card's reading is `resolveConnectorBadgeState` above, the SAME
+    //     signal the connector's /connectors card badge reads, so a
+    //     probe-less connector's card states what the product truthfully
+    //     knows (e.g. the appointment-schedules connector's registered road
+    //     counts its saved schedules) and fail-softs to "not connected" for a
+    //     connector with no registered road at all;
+    //   - Check runs the connector's own declared probe where it declares
+    //     one, and otherwise re-runs that same host readiness road when the
+    //     host actually registers one for this connector; a connector with
+    //     NEITHER road gets no `recheck` at all, so the card renders Check in
+    //     the drawing's disabled treatment rather than a control that could
+    //     only ever repeat the registry's generic "not connected" default;
+    //   - the Connect / Disconnect pair comes from the connector's own
+    //     `role`-tagged named actions. The host invents no connect road for a
+    //     connector that declares none.
     // SERVER-invoked opt-in hydration (owner-ratified contract; cinatra#1082
     // item 3): when the connector declares a `hydrateAction`, invoke it here —
     // at render, never from the browser — and thread the sanitized NON-SECRET
@@ -337,98 +340,24 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // Install/Activate CTA state keeps the header rule.
     const hasTabs = !!render.surface.tabs && render.surface.tabs.length > 0;
     const headerDivider = !(installId && hasTabs);
-    if (statusProbeActionId) {
-      // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
-      // the connection-status badge that once sat top-right of the header now
-      // lives in the right-column status card, so `ConnectorSetupPage` carries NO
-      // header actions. The declared status-probe is lifted into that card (its
-      // Check runs the connector's own `connectionStatus` action), and the form
-      // column suppresses the inline probe row so the same probe never renders
-      // twice. Per the owner's ruling (epic #1101, 2026-07-10) the key-based
-      // connectors ALSO get the canonical indigo-plug Connect / red-unplug
-      // Disconnect pair: the form renders it from the connector's own
-      // `role`-tagged named actions (saveConnection→connect, clearConnection→
-      // disconnect), seeded with the connector's connected state so Disconnect is
-      // disabled until connected (design §II items 7/8/15/16). `initialConnected`
-      // is the SAME `resolveConnectorBadgeState` seed the status card reads.
-      //
-      // The status card + sharing section are passed INTO the form as the
-      // `aside` / `setupFooter` slots: the form owns the §II content layout so
-      // a tabbed surface can hoist its tablist ABOVE the two-column grid
-      // (tablist = header chrome, never inside the content column) and keep
-      // the sharing section on the SETUP surface only.
-      return (
-        <ConnectorSetupPage
-          title={displayName}
-          description="Connector setup"
-          divider={headerDivider}
-          className="flex flex-col gap-6 pb-8"
-        >
-          {crumbTrail}
-          {installId ? (
-            <SchemaConfigConnectorForm
-              installId={installId}
-              packageName={packageId}
-              surface={render.surface}
-              isAdmin={isAdmin}
-              initialValues={initialValues}
-              omitFieldKinds={["status-probe"]}
-              initialConnected={badgeState.connected}
-              aside={
-                <ConnectorStatusProbeCard
-                  installId={installId}
-                  actionId={statusProbeActionId}
-                  initialConnected={badgeState.connected}
-                  connectedLabel={badgeState.connectedLabel}
-                />
-              }
-              setupFooter={sharingSection}
-            />
-          ) : (
-            <>
-              <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
-              {sharingSection}
-            </>
-          )}
-        </ConnectorSetupPage>
-      );
-    }
-    // Probe-less schema-config connector: single-column body (no status card to
-    // lift), the SAME §II Wide shell as every other setup page — "the page holds
-    // to the Wide column and never spans full width". Per the owner ruling for
-    // wordpress-assistant-connector#36 ask-6 (design/specs/app-connectors.html §II
-    // shows no top-right badge anywhere), the header carries NO status badge.
-    // Model-A (right-column status card) applies only to the status-probe shape;
-    // a probe-less connector would be MISREPRESENTED by a single "Disconnected"
-    // card (gpt-5.5 convergence finding). A tabbed probe-less surface still gets
-    // the hoisted tablist treatment via the form.
     return (
-      <ConnectorSetupPage
-        title={displayName}
-        description="Connector setup"
+      <SchemaConfigConnectorSetup
+        crumbTrail={crumbTrail}
+        displayName={displayName}
         divider={headerDivider}
-        className="flex flex-col gap-6 pb-8"
-      >
-        {crumbTrail}
-        <Suspense fallback={null}>
-          <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
-        </Suspense>
-        {installId ? (
-          <SchemaConfigConnectorForm
-            installId={installId}
-            packageName={packageId}
-            surface={render.surface}
-            isAdmin={isAdmin}
-            initialValues={initialValues}
-            setupFooter={sharingSection}
-          />
-        ) : (
-          <>
-            <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
-            {sharingSection}
-          </>
-        )}
-      </ConnectorSetupPage>
+        installId={installId}
+        packageName={packageId}
+        surface={render.surface}
+        isAdmin={isAdmin}
+        initialValues={initialValues}
+        {...(statusProbeActionId ? { statusProbeActionId } : {})}
+        connected={badgeState.connected}
+        connectedLabel={badgeState.connectedLabel}
+        {...(hasConnectorReadinessProbe(packageId)
+          ? { recheck: recheckConnectorReadiness.bind(null, packageId) }
+          : {})}
+        footer={sharingSection}
+      />
     );
   }
 
@@ -597,6 +526,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
                 installId={installId}
                 initialConnected={badgeState.connected}
                 connectedLabel={badgeState.connectedLabel}
+                recheck={recheckConnectorReadiness.bind(null, packageId)}
               />
             ) : null
           }

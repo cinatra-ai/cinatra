@@ -152,17 +152,26 @@ describe("resolveSchemaConfigInitialValues — fail-closed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// SEAM PIN — the setup route actually threads the resolver into BOTH
-// schema-config layouts. Rendering the RSC page in a unit test would need the
-// whole auth/DB/registry graph, so this pins the seam at the source level
-// instead (same pin-test convention as
-// mcp-server-connector-schema-config-pin.test.ts). If open PR #1323's renderer
-// restructure (or any later change) drops the `initialValues` thread from a
-// `<SchemaConfigConnectorForm>` render site, this goes red.
+// SEAM PIN — the setup route actually threads the resolver into the setup
+// shape it renders. Rendering the RSC page in a unit test would need the whole
+// auth/DB/registry graph, so this pins the seam at the source level instead
+// (same pin-test convention as mcp-server-connector-schema-config-pin.test.ts).
+// If any later change drops the `initialValues` thread, this goes red.
+//
+// The seam has TWO source hops since cinatra#3214 collapsed the two gated
+// layouts into ONE shape: the route resolves the values and hands them to the
+// owning setup component, which threads them into its single
+// `<SchemaConfigConnectorForm>` render site. Both hops are pinned, and the
+// "exactly one render site" assertion is itself the one-shape guard — a second
+// site would mean a per-connector layout came back.
 // ---------------------------------------------------------------------------
 describe("setup-route seam pin", () => {
   const pageSource = fs.readFileSync(
     path.join(__dirname, "../../app/connectors/[vendor]/[slug]/[subroute]/page.tsx"),
+    "utf8",
+  );
+  const setupSource = fs.readFileSync(
+    path.join(__dirname, "../../components/extensions/schema-config-connector-setup.tsx"),
     "utf8",
   );
 
@@ -173,9 +182,22 @@ describe("setup-route seam pin", () => {
     expect(pageSource).toContain("resolveAction: resolveExtensionUiAction");
   });
 
-  it("EVERY SchemaConfigConnectorForm render site threads initialValues", () => {
-    const sites = pageSource.match(/<SchemaConfigConnectorForm[\s\S]*?\/>/g) ?? [];
-    expect(sites.length).toBeGreaterThanOrEqual(2); // both layouts (status-probe + probe-less)
+  it("the route threads initialValues into the owning setup component", () => {
+    const sites = pageSource.split(/<SchemaConfigConnectorSetup\b/).slice(1);
+    expect(sites.length).toBe(1); // one shape for every schema-config connector
+    for (const site of sites) {
+      expect(site).toContain("initialValues={initialValues}");
+    }
+    // The form is rendered by the setup component now, never inline here — an
+    // inline site would be a second, route-local layout.
+    expect(pageSource).not.toContain("<SchemaConfigConnectorForm");
+  });
+
+  it("EVERY SchemaConfigConnectorForm render site threads initialValues (one shape)", () => {
+    const sites = setupSource.split(/<SchemaConfigConnectorForm\b/).slice(1);
+    // ONE render site: cinatra#3214 removed the status-probe gate that used to
+    // fork this into a two-column layout and a bare probe-less one.
+    expect(sites.length).toBe(1);
     for (const site of sites) {
       expect(site).toContain("initialValues={initialValues}");
     }

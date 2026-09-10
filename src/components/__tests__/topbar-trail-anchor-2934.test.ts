@@ -110,9 +110,12 @@ describe("the left edge below sm, and the single title decision point", () => {
   });
 
   it("decides the agent-instance tab title through the single guarded helper", () => {
-    expect(source).toContain("documentTitleLabelForAgentInstance");
-    // The published label must never be preferred ahead of the guard.
+    // FORWARD RESOLUTION (main merged): the agent-instance reading is now the
+    // TRAIL's own leaf, read under every scope base, and the guard this slice
+    // added stands in front of it. What must never come back is a published
+    // label preferred ahead of that guard.
+    expect(source).toContain("agentInstanceTabLabel(pathname, breadcrumbSegments)");
+    expect(source).toContain("documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments)");
     expect(source).not.toContain("agentLabel ?? documentTitleLabelFromTrail");
-    expect(source).not.toContain("`${agentLabel} | Cinatra`");
   });
 });

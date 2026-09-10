@@ -264,12 +264,17 @@ describe("TriggerScreenClient — duration estimate banner", () => {
     expect(banner).toBeTruthy();
   });
 
-  it("draws no duration line when there is no estimate", () => {
-    // The drawing gives the line only populated, and no wording for an empty
-    // one; "Unavailable." was this form's own invention (cinatra#3182 item 5).
+  it("draws the duration line over the declared step count when there is no estimate", () => {
+    // The drawing gives the line as part of the step's anatomy — "An Estimated
+    // run duration line sits above the actions" — with no condition on it
+    // (cinatra#3224). "Unavailable." was this form's own invention (cinatra#3182
+    // item 5), and withholding the line was the other half of the same
+    // departure; the no-history reading is the drawing's populated shape over
+    // the agent's declared step count.
     renderForm({ durationEstimate: null });
     expect(screen.queryByText("Unavailable.")).toBeNull();
-    expect(screen.queryByText("Estimated run duration")).toBeNull();
+    expect(screen.getByText("Estimated run duration")).toBeTruthy();
+    expect(screen.getByText("About 1 min – 10 min.")).toBeTruthy();
   });
 });
 

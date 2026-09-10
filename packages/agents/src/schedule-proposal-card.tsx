@@ -172,7 +172,12 @@ import type {
   TriggerScheduleProposalPendingView,
   TriggerScheduleProposalSettledView,
   TriggerScheduleProposalExpiredView,
+  TriggerScheduleProposalViewBody,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+
+// The recurring reading a read-only row draws is the SAME renderer the
+// settled card's own plain-language line comes from (cinatra#3174 fix leg
+// 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -189,6 +194,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useReportSettledSchedule,
   useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
@@ -214,6 +220,34 @@ export type ArmedScheduleFill = {
   readonly values: Record<string, unknown>;
 };
 
+/**
+ * THE EMPTY READING'S WORD, KEPT WHERE THE ONE SURFACE THAT DRAWS IT LIVES
+ * (cinatra#3174 fix leg 4).
+ *
+ * The estimated-duration SENTENCE is drawn by two surfaces - the run page's
+ * scheduling step and this card — so it stays in `duration-copy`, the pure leaf
+ * both of them read, and cannot come to two roundings. The word for a reading
+ * with NO estimate is not shared: the scheduling step draws its line only where
+ * there IS a duration to draw, and this card draws the line in EVERY reading
+ * (fix leg 3, after the second graded proof round). One drawer, so one home —
+ * here, beside the paragraph that draws it, which also keeps the card off a
+ * cross-module edge the conversation route's graph does not need to carry.
+ *
+ * WHERE THE WORD COMES FROM, said plainly because it is not the drawing's. The
+ * ratified drawing gives exactly one value anywhere — "About 45s - 3.4 hr." —
+ * and no wording for a reading with no estimate; neither does Components'
+ * "Standard scheduling step", which section VI reproduces. So the empty
+ * reading's word is the one this leg's task names, and it is deliberately not
+ * an invented duration either: a made-up band over a template with no history
+ * would be a worse answer than saying there is none.
+ */
+export const DURATION_LINE_NO_ESTIMATE = "Unavailable.";
+
+/** The duration line's value: the estimate's own sentence, or the word above. */
+function durationLineValue(copy: string | null | undefined): string {
+  return copy ?? DURATION_LINE_NO_ESTIMATE;
+}
+
 /** The one decision entry — the SAME endpoint the review card's floor posts to
  *  (`src/app/api/lifecycle-views/decide/route.ts`), branched by kind. §VI's card
  *  does not get an endpoint of its own for the same reason the widget does not:
@@ -238,30 +272,32 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /**
- * Does THIS host draw the settled schedule's ONE operation — Cancel schedule?
+ * WHICH HOST DRAWS CANCEL SCHEDULE: ALL OF THEM (cinatra#3174 fix leg 3).
  *
- * ONLY THE TWO PAGE HOSTS: §7.4's as-designed step 6 puts Cancel schedule on
- * the page and Save changes in the conversation, and on those two hosts this
- * card IS the page's schedule step (§7.2 step 5, §7.4 step 7), so they have
- * nowhere else to live.
+ * This was a total map that answered `false` for the two conversation hosts,
+ * on §7.4's as-designed step 6 — Cancel schedule on the page, Save changes in
+ * the conversation. THE RATIFIED DRAWING SAYS THE OPPOSITE, in the two places
+ * that decide it, and the drawing is what this card is graded against:
  *
- * THE NAME IS HISTORICAL. This map once also gated a read-only chrome block —
- * the Trigger configuration summary and the held-steps tree — which PR #2939
- * removed from every host, and a second operation, Run now, which cinatra#2972
- * removed from the product. What it gates now is Cancel schedule alone.
+ *   - section VI's fired-recurring example draws the card IN A CHAT THREAD with
+ *     "Save changes" and "Cancel schedule" side by side on its floor;
+ *   - its closing callout: "Wherever a schedule is read — this card, the run's
+ *     schedule step …, the widget — it is drawn as this form in one of the
+ *     five readings above… Cancel schedule appears only where the schedule is
+ *     recurring, and it stops the recurring schedule and then leaves the rows
+ *     no longer editable."
  *
- * A TOTAL MAP, like `HOST_FRAME`, for the same reason: this is the one question
- * this renderer answers differently per host, so a new host cannot be added
- * without someone deciding it. It is not a second drawing — the rows, the
- * duration line and the Save-changes floor are byte-identical on all four hosts;
- * a page host draws an ADDITIONAL region the conversation is ruled not to have.
+ * The one narrowing left is the drawing's own, and it is not a host question at
+ * all: the control is drawn where the schedule is recurring and has fired,
+ * which the server resolves once into `canCancel`. So the map goes rather than
+ * gaining four `true`s — there is no per-host question left for it to answer,
+ * and leaving it would invite a fifth host to be given a reading the drawing
+ * does not have.
+ *
+ * NAMED, because it is a real conflict between two governing documents: the
+ * older plan text (§7.2/§7.4) still reads the other way, and the second graded
+ * proof round failed this floor against the drawing. The drawing wins.
  */
-const HOST_SHOWS_TRIGGER_CHROME: Record<LifecycleCardHost, boolean> = {
-  chat_thread: false,
-  site_widget: false,
-  run_card: true,
-  page_gate_region: true,
-};
 
 // ---------------------------------------------------------------------------
 // The ACTION SURFACE — exported so #2853's prompt window calls the card's own
@@ -369,6 +405,81 @@ export async function adjustAndConfirmSchedule(input: {
 // The card
 // ---------------------------------------------------------------------------
 
+/** The section's own five readings, as the names it gives them. */
+export type ScheduleReading =
+  | "first-shown"
+  | "configured"
+  | "expired"
+  | "fired-one-off"
+  | "fired-recurring";
+
+/**
+ * The five readings the card's own section names, and nothing else:
+ *
+ *   first shown     nothing exists yet          editable    Confirm
+ *   configured      the schedule as it stands   editable    Save changes
+ *   expired         nothing was scheduled       editable    Confirm
+ *   fired, one-off  the schedule was spent      read-only   none at all
+ *   fired, recurring runs still to come         editable    Save changes ·
+ *                                                           Cancel schedule
+ *
+ * READ OFF THE DURABLE SIGNAL, not off a control. `firedOnce` is the server's
+ * whole answer — the tick's own stamp for a recurring schedule, and the gate
+ * stamp READ TOGETHER WITH THE RUN'S OWN ROW for a one-off (see
+ * `scheduleFiredOnce`) — and it stays true after **Cancel schedule** is
+ * pressed, which is exactly where `canCancel` stops being able to answer this
+ * question.
+ *
+ * `released` IS NO LONGER CONSULTED HERE, and that is cinatra#3174 fix leg 1.
+ * It marks the side-effect gate opening, not the firing: the first graded proof
+ * round drew "Fired, one-off — the schedule was spent" over a run whose gate
+ * had opened and which then FAILED without ever starting. Section VI gives the
+ * spent reading read-only rows and no floor at all, and a schedule whose run
+ * never happened has neither earned that reading nor lost its own form. So the
+ * one signal decides, on both families, and a server that predates it says
+ * "not fired" — which draws the configured reading, form intact, rather than a
+ * spent one that cannot be corrected.
+ */
+export function scheduleReadingOf(
+  body: TriggerScheduleProposalViewBody,
+  /** The fired signal, off the resolve answer's own aside (cinatra#3193) — see
+   *  `LifecycleCardAsideByKind` for why it does not travel inside the body.
+   *  Absent, from a server that predates the reading, means "not fired": BOTH
+   *  families then draw the configured reading, form intact. It does NOT fall
+   *  back to `released` -- no reading is keyed on the gate stamp any more
+   *  (cinatra#3174 fix leg 2), and a schedule whose run never happened must
+   *  keep its own form rather than take a spent reading it cannot correct. */
+  firedOnce: boolean = false,
+): ScheduleReading {
+  if (body.phase === "proposal") return "first-shown";
+  if (body.phase === "expired") return "expired";
+  if (body.triggerType === "recurring") {
+    return firedOnce ? "fired-recurring" : "configured";
+  }
+  return firedOnce ? "fired-one-off" : "configured";
+}
+
+/**
+ * THE STOPPED RECURRING SCHEDULE, as the turn has to be able to name it
+ * (cinatra#3174 fix leg 8, criterion 4).
+ *
+ * NOT ONE OF THE FIVE READINGS, on purpose. §VI's five readings are what the
+ * CARD draws, and a stopped card draws the fired-recurring reading's rows with
+ * the floor withdrawn — `scheduleReadingOf` is left exactly as it is, so the
+ * card's own attribute, its rows and the conformance surfaces do not move. What
+ * is new is one question the TURN asks and the card could not answer: has this
+ * schedule been stopped. `canCancel` cannot answer it — it goes false the moment
+ * the schedule is stopped and is false over a one-off as well — and `firedOnce`
+ * stays true across the stop, which is how the still-recurring sentence
+ * survived the press.
+ *
+ * RECURRING, because that is where the drawing puts the act: "Cancel schedule
+ * appears only where the schedule is recurring."
+ */
+export function stoppedRecurringSchedule(body: TriggerScheduleProposalViewBody): boolean {
+  return body.phase === "settled" && body.stopped === true && body.triggerType === "recurring";
+}
+
 /**
  * §VI's card, on whichever host declared itself.
  *
@@ -419,30 +530,67 @@ export function ScheduleProposalCard({
   });
   const state: LifecycleCardState | null = resolved?.state ?? null;
   const body = resolved?.body ?? null;
+  // THE FIRED READING, OFF THE ANSWER'S OWN ASIDE (cinatra#3193). It is the
+  // resolver's whole answer, exactly as it was when it rode the body — what
+  // changed is only which half of the answer carries it, and why.
+  const firedOnce = resolved?.aside?.firedOnce === true;
 
+  // THE TURN IS TOLD WHAT IT IS CARRYING (cinatra#3174, criteria 1 and 2).
+  //
+  // Only the card knows this: the reading comes back from the authoritative
+  // resolve above, and the payload the transcript carries is a ref. Reported
+  // unconditionally - a hook may not sit behind the early returns below - and
+  // reported as FALSE for every other reading, so a card that leaves the
+  // settled reading gives the turn back.
+  //
+  // A NO-OP WHERE NOBODY IS LISTENING. The run page and the review page declare
+  // no register, so this changes nothing on them.
+  useReportSettledSchedule(wireRef, present && body !== null && body.phase === "settled");
   // THE CARD TELLS THE TURN WHAT IT IS READING (cinatra#3044).
   //
   // The line above this card was minted at dispatch and frozen into the turn,
   // and the ratified drawing's section VI gives the spent one-off its own
-  // words. Only this card can say the reading is that one: `released` is the
-  // firing (`markTriggerReleased` stamps it and the resolver reads the stamp),
-  // and `triggerType` is what keeps a RECURRING schedule out -- it "is never
-  // spent by firing: its past runs are history and its runs still to come stay
-  // changeable", so its rows still take a change and its line must not say it
-  // was spent. It is the same pair `frozen` is decided by in the settled phase
-  // below, which is what keeps the sentence and the floor from disagreeing.
+  // words. Only this card can say the reading is that one, and it says it
+  // through the SAME election the rows and the floor are drawn from
+  // (cinatra#3174 fix leg 1) -- one call, so the sentence, the rows and the
+  // floor cannot come to three answers. What decides it is the server's durable
+  // reading, never the gate stamp: a gate that opened over a run that then
+  // failed is not a firing, and `triggerType` is what keeps a RECURRING
+  // schedule out -- it "is never spent by firing: its past runs are history and
+  // its runs still to come stay changeable".
   //
   // REPORTED IN EVERY STATE, including the ones that draw nothing, so the turn
   // hears the neutral reading rather than keeping a stale one. Called before
   // this component's own early returns for the ordinary reason: a hook may not
   // be skipped.
+  //
+  // AND THE RECURRING HALF IS REPORTED TOO (cinatra#3174 fix leg 3, criterion
+  // 4). §VI gives the fired-recurring reading its OWN line above the card —
+  // "It is still recurring, so the rows below still take a change" — and the
+  // second graded round measured the never-fired sentence over it, because the
+  // report had only two values and this reading fell into the same bucket as a
+  // schedule that has never run. The election is the same one call; only the
+  // report it feeds got a third answer.
+  //
+  // AND THE STOP IS READ BEFORE THE FIRING (cinatra#3174 fix leg 8, criterion
+  // 4). Cancel schedule "stops the recurring schedule and then leaves the rows
+  // no longer editable", and §VI gives that reading its own sentence. The
+  // firing STAYS true across the stop — history does not un-happen, and it is
+  // the same `firedOnce` the card keeps drawing its own reading from — so a
+  // stopped schedule went on reporting `fired-recurring` and the turn went on
+  // saying "the rows below still take a change" over rows that take nothing.
+  // The signal is the body's own `stopped`, which is exactly what the rows
+  // freeze on below, so the sentence and the rows cannot come to two answers.
   useReportScheduleReading(
-    body !== null &&
-      body.phase === "settled" &&
-      body.triggerType !== "recurring" &&
-      body.released
-      ? "spent-one-off"
-      : "other",
+    body === null
+      ? "other"
+      : stoppedRecurringSchedule(body)
+        ? "stopped-recurring"
+        : scheduleReadingOf(body, firedOnce) === "fired-one-off"
+          ? "spent-one-off"
+          : scheduleReadingOf(body, firedOnce) === "fired-recurring"
+            ? "fired-recurring"
+            : "other",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
@@ -468,6 +616,102 @@ export function ScheduleProposalCard({
   );
 
   if (!present || state === null || body === null) return null;
+
+  return (
+    <ScheduleProposalCardBody
+      state={state}
+      body={body}
+      // THE TWO HALVES OF THE ANSWER THAT DO NOT RIDE THE BODY (cinatra#3174).
+      // Both come off the resolve's own aside rather than the view body, for
+      // the reason `LifecycleCardAsideByKind` gives: the settled and expired
+      // bodies are `.strict()`, version-1 schemas, and a new key in one of them
+      // blanks the card on every bundle that has not reloaded. They are handed
+      // DOWN rather than read below, because the drawn card is the part the
+      // conformance harness composes and it has to be able to draw all five of
+      // the section's readings with no server behind it.
+      firedOnce={firedOnce}
+      durationCopy={resolved?.aside?.durationCopy ?? null}
+      onDecide={decide}
+      armedFill={armedFill}
+      onAdjustAndConfirm={async (schedule) => {
+        const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
+        if (outcome.kind === "confirmed") refresh();
+        return outcome;
+      }}
+      // CONFIRM ON AN EXPIRED CARD PROPOSES AGAIN AND CONFIRMS THE REPLACEMENT
+      // (plan (A) §7.2 step 2). The expired token is unspendable, so a bare
+      // confirm could never land; the composite is what makes one press mean
+      // what the plan says it means. It is the SAME composite an edited live
+      // proposal performs, on the same endpoint, under the same authorization.
+      onRepropose={async (schedule) => {
+        const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
+        if (outcome.kind === "reproposed") setLiveRef(outcome.ref);
+        if (outcome.kind === "confirmed") refresh();
+        return outcome;
+      }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAWN CARD — everything §VI draws, once the resolve has answered
+// ---------------------------------------------------------------------------
+
+/**
+ * §VI's card AS IT IS DRAWN: the host frame, the card's own attributes, and the
+ * one phase the resolved body selects.
+ *
+ * WHY THIS IS A PART OF ITS OWN, AND EXPORTED. The same reason `SuggestionChips`
+ * is one on the review card (cinatra#3156): the drawing is machine-checked
+ * surface by surface, and the checker has to draw exactly what the product
+ * draws. `ScheduleProposalCard` cannot draw at all without an authorized server
+ * resolve, and the conformance harness is sessionless by contract, so the
+ * checker composes THIS part — the shipped one, the one the card itself composes
+ * — rather than a look-alike. Nothing is reimplemented around it: the card above
+ * still owns the ref, the resolve, the re-resolve after a landed decision and
+ * the reading it reports to the turn, and hands the answer here.
+ *
+ * IT DECIDES NOTHING ITS CALLER COULD DECIDE FOR IT. The host is READ from the
+ * declaration rather than passed, the phase is chosen from the body the server
+ * sent, and both absences below are this card's own — drawn as nothing, never as
+ * a disabled card.
+ */
+export function ScheduleProposalCardBody({
+  state,
+  body,
+  firedOnce,
+  durationCopy,
+  onDecide,
+  onAdjustAndConfirm,
+  onRepropose,
+  armedFill = null,
+}: {
+  state: LifecycleCardState;
+  body: TriggerScheduleProposalViewBody;
+  /** The server's durable firing reading, off the resolve answer's own aside.
+   *  THE ONE SIGNAL the two fired readings are elected by (cinatra#3174 fix leg
+   *  1) - never `body.released`, which marks the side-effect gate opening and
+   *  not the firing. Taken as a prop rather than read here so this part can draw
+   *  all five of the section's readings with no server behind it. */
+  firedOnce: boolean;
+  /** The estimated-duration line, already rendered by the resolver, or `null`
+   *  for a template with no history - which still draws the LINE, over the empty
+   *  reading's own word (cinatra#3174 fix leg 3; see `durationLineValue`). */
+  durationCopy: string | null;
+  onDecide: (
+    op: ScheduleDecisionOp,
+    schedule?: ProposedSchedule,
+  ) => Promise<ScheduleDecisionOutcome>;
+  onAdjustAndConfirm: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  onRepropose: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  /** WHAT THE PROMPT WINDOW UNDER THIS CARD PLACED IN ITS ROWS (cinatra#2934) —
+   *  handed down from the card that owns the ref, because the window is a
+   *  SIBLING of the card rather than a child of it. It moves the SETTLED
+   *  phase's draft and nothing else. */
+  armedFill?: ArmedScheduleFill | null;
+}): ReactElement | null {
+  const host = useLifecycleCardHost();
+  if (host === null) return null;
   // `advisory` is not a schedule state (§VII owns it) and `absent` draws no DOM
   // at all. Both fail closed rather than draw a floor over nothing.
   if (state.state === "advisory" || state.state === "absent") return null;
@@ -481,30 +725,27 @@ export function ScheduleProposalCard({
         key={JSON.stringify(body.schedule)}
         body={body}
         state={state}
-        onDecide={decide}
-        onAdjustAndConfirm={async (schedule) => {
-          const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
-          if (outcome.kind === "confirmed") refresh();
-          return outcome;
-        }}
+        onDecide={onDecide}
+        onAdjustAndConfirm={onAdjustAndConfirm}
       />
     ) : body.phase === "expired" ? (
       <ExpiredPhase
         body={body}
-        // CONFIRM ON AN EXPIRED CARD PROPOSES AGAIN AND CONFIRMS THE REPLACEMENT
-        // (plan (A) §7.2 step 2). The expired token is unspendable, so a bare
-        // confirm could never land; the composite is what makes one press mean
-        // what the plan says it means. It is the SAME composite an edited live
-        // proposal performs, on the same endpoint, under the same authorization.
-        onRepropose={async (schedule) => {
-          const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
-          if (outcome.kind === "reproposed") setLiveRef(outcome.ref);
-          if (outcome.kind === "confirmed") refresh();
-          return outcome;
-        }}
+        // THE EXPIRED READING DRAWS THE LINE TOO (§VI's third picture). It
+        // rides the ANSWER rather than the body for the same reason `firedOnce`
+        // does: the expired body is a `.strict()`, version-1 schema and a new
+        // key in it blanks the card on every bundle that has not reloaded.
+        durationCopy={durationCopy}
+        onRepropose={onRepropose}
       />
     ) : (
-      <SettledPhase body={body} host={host} onDecide={decide} armedFill={armedFill} />
+      <SettledPhase
+        body={body}
+        onDecide={onDecide}
+        armedFill={armedFill}
+        firedOnce={firedOnce}
+        durationCopy={durationCopy}
+      />
     );
 
   return (
@@ -514,6 +755,21 @@ export function ScheduleProposalCard({
       data-lifecycle-card-state={state.state}
       data-lifecycle-card-host={host}
       data-lifecycle-card-phase={body.phase}
+      // WHICH OF THE SECTION'S FIVE READINGS THIS IS (cinatra#3174).
+      //
+      // "One card, five readings, and never a second card." The phase mark
+      // above answers three of them at best: both fired readings and the
+      // configured one share `settled`, and the two that differ most in what
+      // the reader is told — a recurring schedule that has fired against one
+      // that never has — were until now indistinguishable from outside the
+      // card.
+      //
+      // REPORTED, NEVER DRAWN. The same section rules out saying it on screen:
+      // "No summary box is ever drawn, no status label, and nothing stands
+      // between the reader and the form." So this is a passive attribute,
+      // exactly like the marks beside it: it names the reading for a test and
+      // for a rendered reading of the screen, and it draws nothing.
+      data-schedule-reading={scheduleReadingOf(body, firedOnce)}
       data-conformance-id="schedule-proposal-card"
     >
       {drawn}
@@ -646,9 +902,11 @@ function ProposalPhase({
 
 function ExpiredPhase({
   body,
+  durationCopy,
   onRepropose,
 }: {
   body: TriggerScheduleProposalExpiredView;
+  durationCopy: string | null;
   onRepropose: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
@@ -680,7 +938,12 @@ function ExpiredPhase({
         This schedule expired before it was confirmed. Nothing was scheduled —
         change it if you like, then confirm it again.
       </p>
-      <ScheduleOptionRows schedule={draft} editable onChange={setDraft} durationCopy={null} />
+      <ScheduleOptionRows
+        schedule={draft}
+        editable
+        onChange={setDraft}
+        durationCopy={durationCopy}
+      />
       <div
         data-conformance-id="schedule-proposal-floor"
         className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
@@ -715,14 +978,22 @@ function ExpiredPhase({
 
 function SettledPhase({
   body,
-  host,
   onDecide,
   armedFill = null,
+  firedOnce,
+  durationCopy,
 }: {
   body: TriggerScheduleProposalSettledView;
-  host: LifecycleCardHost;
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
   armedFill?: ArmedScheduleFill | null;
+  /** The server's durable firing reading, off the answer's own aside. The ONE
+   *  signal this phase's frozen rows and absent floor are decided by
+   *  (cinatra#3174 fix leg 1). */
+  firedOnce: boolean;
+  /** The estimated-duration line, already rendered, or `null` for a template
+   *  with no history — which still draws the LINE, over the empty reading's own
+   *  word (cinatra#3174 fix leg 3; see `durationLineValue`). */
+  durationCopy: string | null;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
   // THE CARD'S OWN READING OF WHAT IS ARMED — the schedule `draft` started from
@@ -732,14 +1003,13 @@ function SettledPhase({
   const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  // The one host-dependent region, decided by a total map rather than by a
-  // condition someone can forget to extend. What it now gates is the ONE
-  // operation Cancel schedule: the read-only summary box and the held-steps
-  // tree it used to gate were removed on the maintainer's reading of PR #2939,
-  // and Run now was withdrawn by cinatra#2972 — plan (A) §7.2, "the schedule
-  // step … shows the same form and nothing else — no summary box, no status
-  // label; its one control is **Cancel schedule** … there is no Run now".
-  const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
+  // NO HOST-DEPENDENT REGION IS LEFT ON THIS CARD (cinatra#3174 fix leg 3).
+  // The read-only summary box and the held-steps tree went with PR #2939, Run
+  // now with cinatra#2972, and Cancel schedule is now drawn wherever the
+  // schedule is read — see the note above the retired map. `host` decides the
+  // outer FRAME and nothing else, so this phase is no longer given it at all
+  // (converge round): a host argument nothing reads is a question a later
+  // reader would think this renderer still answers.
 
   // AN EDIT IS THE READER'S, AND THE THREAD DOES NOT GET A VOTE (cinatra#3053).
   //
@@ -847,8 +1117,12 @@ function SettledPhase({
   // the scheduler BEFORE it marks the intent done, so a near-term one-off can
   // fire while the intent still reads as arming. A rule that required `!arming`
   // would leave the floor standing on a schedule that had already run.
-  const frozen =
-    (body.triggerType !== "recurring" && body.released) || body.stopped === true;
+  // THE ONE ELECTION, READ ONCE (cinatra#3174 fix leg 1). This used to key on
+  // `body.released` — the gate stamp — which is how a one-off whose run FAILED
+  // without ever starting froze into the spent reading and lost a form the
+  // server was still authorizing. It now reads exactly what the card reports
+  // and what the turn's own sentence is chosen by.
+  const frozen = scheduleReadingOf(body, firedOnce) === "fired-one-off" || body.stopped === true;
 
   // WHY **Save changes** IS WITHHELD FROM THIS READER, when the reason is about
   // the READER (cinatra#2934, the fourth graded capture). Plan (A) §1.2: a card
@@ -907,24 +1181,23 @@ function SettledPhase({
           has no reader here for the same reason the "Armed ·" line has none —
           the settled card is the form, and a form does not restate itself in
           prose. */}
-      {/* The state the controls are withheld for, said out loud rather than
-          drawn as dead buttons. Both hosts draw these: a reader in the
-          conversation whose Save changes is disabled is owed the reason too.
-          NEITHER IS DRAWN ON A FROZEN CARD. Both lines exist to explain a
-          withheld control, and a frozen card has none left to explain — the
-          released/arming race can reach this card, and a status line standing
-          over rows that simply stand is the label §7.2 removes. */}
+      {/* THE ONE TRANSIENT THE CARD STILL SAYS OUT LOUD: a schedule still being
+          installed, which is a moment rather than a reading, and which is
+          withheld from a frozen card because a frozen card has no control left
+          to explain. */}
       {body.arming && !frozen ? (
         <p data-conformance-id="schedule-arming" className="text-sm text-muted-foreground">
           Arming… the schedule is still being installed.
         </p>
       ) : null}
-      {body.released && !frozen ? (
-        <p data-conformance-id="schedule-released" className="text-sm text-muted-foreground">
-          Released — every held step is eligible now, so there is nothing left to
-          cancel.
-        </p>
-      ) : null}
+      {/* AND NO "RELEASED —" LABEL, ON ANY READING (cinatra#3174 fix leg 1,
+          converge round). §VI: "No summary box is ever drawn, no status label,
+          and nothing stands between the reader and the form — the rows are the
+          reading." The line was only ever reachable on a card whose gate had
+          opened, and it reached the reader as a status label because the
+          election above no longer freezes such a card when its run never ran.
+          A label over the CONFIGURED reading is exactly what the section
+          removes; the floor beneath the rows already says what may be done. */}
 
       {/* THE SAME OPTION ROWS AS THE PROPOSAL — one component, drawing the armed
           selections the resolver read back off the installed row. */}
@@ -935,6 +1208,13 @@ function SettledPhase({
           never armed. That is the same dishonesty §7.2's "shows the schedule as
           it stands" rules out, so the terminal card draws the server's schedule
           and only that. */}
+      {/* THE ROWS GO READ-ONLY, NOT MERELY DEAD (cinatra#3174 fix leg 1). §VI:
+          "the rows go read-only — the values still legible, the pickers gone".
+          `editable={false}` disables a picker; it does not take it away, and
+          the first graded proof round measured exactly that — a spent one-off
+          drawn as a live form with every control still standing. `readOnly`
+          draws the values instead of the controls, which is the record the
+          section calls the card once it has fired. */}
       <ScheduleOptionRows
         schedule={frozen ? body.schedule : draft}
         editable={body.canSave}
@@ -951,7 +1231,7 @@ function SettledPhase({
           setSaved(false);
           setDraft(next);
         }}
-        durationCopy={null}
+        durationCopy={durationCopy}
       />
 
       {/* NO FLOOR ON A SCHEDULE THAT IS OVER — see the note above `frozen`. The
@@ -1003,15 +1283,17 @@ function SettledPhase({
             <Check aria-hidden="true" className="size-3.5" />
             {pending === "save" ? "Saving…" : "Save changes"}
           </Button>
-          {/* CANCEL SCHEDULE IS THE PAGE STEP'S, NOT THE CONVERSATION'S — and
-              it is drawn only where the plan puts it: "shown only for a
-              recurring schedule that has fired once" (§7.2, amended
-              2026-08-25). `canCancel` IS that whole reading, resolved
-              server-side, so the control is ABSENT rather than disabled
-              wherever the plan does not put it — a one-off, a recurring
-              schedule that has not fired yet, and one already stopped. There is
-              no Run now beside it any more (cinatra#2972). */}
-          {showsChrome && body.canCancel ? (
+          {/* CANCEL SCHEDULE, BESIDE SAVE CHANGES, WHEREVER THE SCHEDULE IS
+              READ (cinatra#3174 fix leg 3). Section VI's fired-recurring
+              example draws exactly this floor in a chat thread, and its callout
+              puts the form on every host the schedule is read on. The one
+              narrowing is the drawing's own — "Cancel schedule appears only
+              where the schedule is recurring" — and `canCancel` IS that whole
+              reading, resolved server-side, so the control is ABSENT rather
+              than disabled over a one-off, a recurring schedule that has not
+              fired yet, and one already stopped. There is no Run now beside it
+              (cinatra#2972). */}
+          {body.canCancel ? (
             <Button
               type="button"
               variant="secondary"
@@ -1153,14 +1435,27 @@ function ScheduleOptionRows({
    * read-only — the values still legible, the pickers gone — and the card
    * carries no floor at all". So this flag removes the CONTROLS, not the
    * values, and it is set only where the card is frozen.
+   *
+   * THE ROWS ARE THE RECORD, NOT THE FORM (cinatra#3174 fix leg 1), which is
+   * the same reading arrived at from the other side.
+   *
+   * §VI, on the reading a spent one-off settles into: "the rows go read-only —
+   * the values still legible, the pickers gone". This is not `editable`
+   * inverted. A disabled picker is still a picker: the select chrome, the
+   * datetime spinner and the pressable row all stay on screen, offering a
+   * control that refuses, which is what the first graded round measured. Under
+   * `readOnly` the values are drawn as text in the same fields' places, the
+   * chosen row keeps its indigo edge and its filled marker, and there is
+   * nothing on the card to press.
    */
   readOnly?: boolean;
   onChange: (next: ProposedSchedule) => void;
   durationCopy: string | null;
 }): ReactElement {
   const kind = schedule.kind;
+  const live = editable && !readOnly;
   const pick = (next: ProposedSchedule) => {
-    if (editable) onChange(next);
+    if (live) onChange(next);
   };
   const recurring = schedule.kind === "recurring" ? schedule.selection : DEFAULT_RECURRING;
   const timezone =
@@ -1169,13 +1464,20 @@ function ScheduleOptionRows({
     pick({ kind: "recurring", selection: { ...recurring, ...patch }, timezone });
 
   return (
-    <div data-conformance-id="schedule-option-rows" className="flex flex-col gap-2">
+    <div
+      data-conformance-id="schedule-option-rows"
+      // The rows the reading's radios belong to, and only in that reading: the
+      // live rows are pressable buttons and are announced as they always were.
+      role={readOnly ? "radiogroup" : undefined}
+      aria-readonly={readOnly ? true : undefined}
+      className="flex flex-col gap-2"
+    >
       <p className="text-sm font-medium text-foreground">When should this run?</p>
 
       <OptionRow
         rowKind="immediate"
         chosen={kind === "immediate"}
-        editable={editable}
+        editable={live}
         readOnly={readOnly}
         label="Run right after setup"
         icon={<Zap aria-hidden="true" className="size-3.5" />}
@@ -1185,7 +1487,7 @@ function ScheduleOptionRows({
       <OptionRow
         rowKind="scheduled"
         chosen={kind === "scheduled"}
-        editable={editable}
+        editable={live}
         readOnly={readOnly}
         label="Schedule for later"
         icon={<CalendarClock aria-hidden="true" className="size-3.5" />}
@@ -1198,10 +1500,14 @@ function ScheduleOptionRows({
         }
       >
         <div className="ml-7 flex flex-wrap gap-4">
+          {/* THE MOMENT IN THE READER'S OWN LOCALE (cinatra#3174 fix leg 1),
+              inside the named reading box this card's own proof set pinned
+              (cinatra#2934): the wire's naive wall clock is what the picker
+              EMITS, never what a reading shows. */}
           <Field label="Run at">
             {readOnly ? (
               <ReadOnlyValue field="schedule-run-at">
-                {schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
+                {schedule.kind === "scheduled" ? readableRunAt(schedule.runAt) : ""}
               </ReadOnlyValue>
             ) : (
               <Input
@@ -1242,13 +1548,14 @@ function ScheduleOptionRows({
       <OptionRow
         rowKind="recurring"
         chosen={kind === "recurring"}
-        editable={editable}
+        editable={live}
         readOnly={readOnly}
         label="Recurring"
         icon={<Repeat aria-hidden="true" className="size-3.5" />}
         onChoose={() => pick({ kind: "recurring", selection: recurring, timezone })}
       >
         <div className="ml-7 flex flex-col gap-3">
+          <>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">Repeat every</span>
             {readOnly ? (
@@ -1431,15 +1738,24 @@ function ScheduleOptionRows({
               />
             )}
           </Field>
+          </>
         </div>
       </OptionRow>
 
-      {/* §VI — "Estimated run duration / About 45s – 3.4 hr." `null` renders the
-          honest "Unavailable." the shipped form already draws. */}
+      {/* §VI — "Estimated run duration / About 45s – 3.4 hr.", BENEATH THE ROWS
+          IN EVERY READING (cinatra#3174 fix leg 3). The section draws this line
+          in all five of its pictures, and the second graded proof round
+          measured it in none of its eight frames: a freshly installed agent has
+          no run history, the history tier answers null, and the card answered
+          null by drawing nothing at all. A line the drawing draws in every
+          picture may not go missing because the estimator had nothing to say,
+          so the line stands and its VALUE carries the empty reading — the one
+          word this card keeps beside the line, which is where the note
+          on whose word it is lives. */}
       <div className="flex flex-col gap-1 pt-1">
         <p className="text-sm font-medium text-foreground">Estimated run duration</p>
         <p data-conformance-id="schedule-duration" className="text-sm text-muted-foreground">
-          {durationCopy ?? "Unavailable."}
+          {durationLineValue(durationCopy)}
         </p>
       </div>
     </div>
@@ -1454,6 +1770,44 @@ function defaultRunAt(): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
 }
+
+
+/**
+ * THE MOMENT, STILL LEGIBLE (§VI, the fired one-off).
+ *
+ * The wire carries a timezone-NAIVE wall clock ("2026-07-14T09:00") because
+ * that is what the form's `datetime-local` emits and what the schema accepts.
+ * A picker renders it in the reader's own locale; the drawing's fired example
+ * draws it the same way, beside a Timezone row that names the zone. So the
+ * read-only reading formats the same wall clock in the same locale rather than
+ * putting the wire string on screen, and NO timezone conversion is applied —
+ * the clock is the one that was armed.
+ *
+ * A value this cannot read is returned untouched: a reading is never blanked
+ * for being unfamiliar.
+ */
+function readableRunAt(runAt: string): string {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(runAt);
+  if (parts === null) return runAt;
+  const [year, month, day, hour, minute] = parts.slice(1).map(Number);
+  const at = new Date(year, month - 1, day, hour, minute);
+  if (Number.isNaN(at.getTime())) return runAt;
+  // AND ONLY WHERE THE CLOCK SURVIVES THE ROUND TRIP (converge round). The wire
+  // schema accepts any digit-shaped value, and the component constructor
+  // OVERFLOWS the ones that are not real moments — "2026-02-31T09:00" becomes
+  // the third of March, "2026-07-14T29:00" the next day — so an unreadable
+  // value would be redrawn as a DIFFERENT schedule rather than left alone.
+  // Reading the components back is what separates the two.
+  const roundTrips =
+    at.getFullYear() === year &&
+    at.getMonth() === month - 1 &&
+    at.getDate() === day &&
+    at.getHours() === hour &&
+    at.getMinutes() === minute;
+  if (!roundTrips) return runAt;
+  return at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 
 function Field({ label, children }: { label: string; children: ReactElement }): ReactElement {
   return (
@@ -1566,6 +1920,9 @@ function OptionRow({
   rowKind: ProposedSchedule["kind"];
   chosen: boolean;
   editable: boolean;
+  /** The row is a reading, not a choice (§VI, the fired one-off): the marker
+   *  and the label stand, and the button around them is gone rather than
+   *  disabled. */
   readOnly?: boolean;
   label: string;
   icon: ReactElement;
@@ -1608,6 +1965,15 @@ function OptionRow({
       data-schedule-option={rowKind}
       data-chosen={chosen ? "true" : "false"}
       data-readonly={readOnly ? "true" : "false"}
+      // THE CHOSEN ROW IS READABLE WITHOUT EYES (cinatra#3174 fix leg 1,
+      // converge). The live row carries its state on the button's
+      // `aria-pressed`; the read-only row has no button to carry it, and the
+      // indigo edge and the filled marker are not readings a screen reader can
+      // make. So the reading row is a radio that cannot be moved: the state is
+      // stated, and the row says it is not a choice any more.
+      role={readOnly ? "radio" : undefined}
+      aria-checked={readOnly ? chosen : undefined}
+      aria-disabled={readOnly ? true : undefined}
       className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors ${
         chosen ? "border-primary bg-primary/5" : "border-input"
       }`}

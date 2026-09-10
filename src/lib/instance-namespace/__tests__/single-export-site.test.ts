@@ -12,10 +12,11 @@
 //     administration/instance/rename-confirmation.tsx so parallel
 //     new RegExp(namePattern).test(...) checks in those files are caught.
 //   - Forbidden literals include the JS regex form
-//     /^[a-z0-9][a-z0-9-]{1,38}$/, any `new RegExp(` call,
-//     and the bare-string constant form `= "^[a-z0-9][a-z0-9-]{1,38}$"`
+//     /^[a-z0-9][a-z0-9\-]{1,38}$/ (and its pre-cinatra#3207 unescaped
+//     spelling), any `new RegExp(` call, and the bare-string constant form
+//     `= "^[a-z0-9][a-z0-9\\-]{1,38}$"`
 //     (a string fed to new RegExp() elsewhere — the dangerous pattern).
-//   - The HTML `pattern="^[a-z0-9][a-z0-9-]{1,38}$"` attribute on
+//   - The HTML `pattern="^[a-z0-9][a-z0-9\-]{1,38}$"` attribute on
 //     <Input> is intentional defense-in-depth and is excluded by
 //     assertion design (we look for ` = "^...` const assignment, not
 //     just the pattern body, and we look for `new RegExp(` not the
@@ -41,11 +42,20 @@ const CONSUMER_FILES = [
 ] as const;
 
 // JS regex literal as it would appear in source (Zod or `.test()` style):
-//   /^[a-z0-9][a-z0-9-]{1,38}$/
-// The HTML `pattern="^[a-z0-9][a-z0-9-]{1,38}$"` attribute is a string
+//   /^[a-z0-9][a-z0-9\-]{1,38}$/
+// The HTML `pattern="^[a-z0-9][a-z0-9\-]{1,38}$"` attribute is a string
 // literal that does NOT contain the leading slash, so it is correctly
 // excluded by this search.
-const FORBIDDEN_REGEX_LITERAL = "/^[a-z0-9][a-z0-9-]{1,38}$/";
+// cinatra#3207 escaped the hyphen in both forms. BOTH spellings stay
+// forbidden in a consumer: a copy of the pre-#3207 spelling is just as much a
+// parallel implementation as a copy of the current one.
+const FORBIDDEN_REGEX_LITERALS = [
+  "/^[a-z0-9][a-z0-9\\-]{1,38}$/",
+  "/^[a-z0-9][a-z0-9-]{1,38}$/",
+] as const;
+
+// The spelling validator.ts actually owns today — asserted positively below.
+const OWNED_REGEX_LITERAL = "/^[a-z0-9][a-z0-9\\-]{1,38}$/";
 
 // Forbid runtime-constructed regex from the pattern body. This catches
 // `new RegExp(namePattern)` (where namePattern is a string) and
@@ -54,12 +64,15 @@ const FORBIDDEN_REGEX_LITERAL = "/^[a-z0-9][a-z0-9-]{1,38}$/";
 const FORBIDDEN_REGEX_CONSTRUCTOR = "new RegExp(";
 
 // Forbid the bare-string CONSTANT form of the pattern. This would catch
-// `const X = "^[a-z0-9][a-z0-9-]{1,38}$";` and any equivalent
+// `const X = "^[a-z0-9][a-z0-9\\-]{1,38}$";` and any equivalent
 // `= "^[a-z0-9]..."` assignment. The HTML attribute form
 // `<Input pattern="^[a-z0-9]..."/>` does NOT include the `= ` token (JSX
 // renders attributes as `pattern="..."`, not `pattern = "..."`), so the
 // attribute form is correctly excluded by this assertion.
-const FORBIDDEN_PATTERN_CONST_ASSIGNMENT = '= "^[a-z0-9][a-z0-9-]{1,38}$"';
+const FORBIDDEN_PATTERN_CONST_ASSIGNMENTS = [
+  '= "^[a-z0-9][a-z0-9\\\\-]{1,38}$"',
+  '= "^[a-z0-9][a-z0-9-]{1,38}$"',
+] as const;
 
 // Forbid the INLINE HTML/JSX `pattern="^..."` attribute form. Consumers
 // must import the source string from the barrel via
@@ -105,10 +118,12 @@ describe("single export site for instance-namespace validation", () => {
   );
 
   it.each(CONSUMER_FILES)(
-    "%s does NOT contain a parallel JS regex literal /^[a-z0-9][a-z0-9-]{1,38}$/",
+    "%s does NOT contain a parallel JS regex literal for the namespace format",
     (relPath) => {
       const source = readConsumer(relPath);
-      expect(source).not.toContain(FORBIDDEN_REGEX_LITERAL);
+      for (const literal of FORBIDDEN_REGEX_LITERALS) {
+        expect(source).not.toContain(literal);
+      }
     },
   );
 
@@ -124,10 +139,12 @@ describe("single export site for instance-namespace validation", () => {
     "%s does NOT declare the pattern body as a bare string constant",
     (relPath) => {
       const source = readConsumer(relPath);
-      // Forbid `= "^[a-z0-9][a-z0-9-]{1,38}$"` (const/var assignment).
+      // Forbid `= "^[a-z0-9][a-z0-9\\-]{1,38}$"` (const/var assignment).
       // The HTML attribute form `pattern="^..."` is excluded because JSX
       // emits attributes without a space-equals-space pattern.
-      expect(source).not.toContain(FORBIDDEN_PATTERN_CONST_ASSIGNMENT);
+      for (const assignment of FORBIDDEN_PATTERN_CONST_ASSIGNMENTS) {
+        expect(source).not.toContain(assignment);
+      }
     },
   );
 
@@ -143,7 +160,7 @@ describe("single export site for instance-namespace validation", () => {
 
   it("validator.ts is the single owner of the format regex literal", () => {
     const validatorSource = readConsumer("src/lib/instance-namespace/validator.ts");
-    expect(validatorSource).toContain(FORBIDDEN_REGEX_LITERAL);
+    expect(validatorSource).toContain(OWNED_REGEX_LITERAL);
   });
 
   // The verbatim reserved-substring copy must live in EXACTLY ONE place:

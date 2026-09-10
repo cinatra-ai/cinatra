@@ -251,10 +251,15 @@ describe("the trail above the refusal carries no run identifier either", () => {
     expect(container.textContent).not.toContain(REFUSED_RUN_ID);
     const labels = refusedTrail(SCHEDULE_PATH);
     expect(runIdPartsIn(labels.join(" "))).toEqual([]);
-    expect(labels).toEqual(["Agents", "Agent run", "Schedule"]);
+    // A STEP OF THE RUN CONTRIBUTES NO CRUMB (cinatra#3223, carried in by the
+    // forward merge of origin/main): the schedule step is read under its run`s
+    // own trail, so the trail above the refusal ends at the run and the tab
+    // mirrors that leaf. What this case is here to pin is unchanged and still
+    // asserted above — no part of the run id reaches either reading.
+    expect(labels).toEqual(["Agents", "Agent run"]);
     const title = refusedTitle(SCHEDULE_PATH);
     expect(runIdPartsIn(title)).toEqual([]);
-    expect(title).toBe("Schedule | Cinatra");
+    expect(title).toBe("Agent run | Cinatra");
   });
 
   it("OUTSIDER: the not-found reading of both surfaces draws a trail with no substring of the run id", async () => {

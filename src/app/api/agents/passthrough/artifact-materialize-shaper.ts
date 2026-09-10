@@ -16,8 +16,19 @@ export type ShapedArtifactMaterializeInput = {
   content: string;
   /** Text-authorable MIME declared by the node. */
   declaredMime: string;
-  /** Artifact title — explicit, never prompt-invented. */
+  /** Artifact title — explicit, never prompt-invented. Empty on an APPEND: the
+   *  artifact already carries the title its creator gave it. */
   title: string;
+  /**
+   * THE SAME-ARTIFACT REVISION (cinatra#3030, plan item 0.30). When BOTH of
+   * these are present the call APPENDS the next revision of an existing
+   * artifact instead of creating a new one, and `baseRepresentationRevisionId`
+   * is the revision the caller READ — the compare-and-set's expected base.
+   * Present together or not at all: an append that does not name what it read
+   * cannot be checked, and a base without an artifact names nothing.
+   */
+  artifactId?: string;
+  baseRepresentationRevisionId?: string;
   /** The calling ApiNode's id — the idempotency-ledger output identity. */
   nodeId: string;
   /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
@@ -28,6 +39,12 @@ export type ShapedArtifactMaterializeInput = {
 
 /** `@scope/package:local-id` — mirrors the binding grammar regex. */
 const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
+
+/** The title an APPEND may carry, or the empty string. Never invented. */
+function titleIfPresent(raw: Record<string, unknown>): string {
+  const value = raw.title;
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function requireNonEmptyString(
   raw: Record<string, unknown>,
@@ -59,8 +76,27 @@ export function shapeArtifactMaterializeInput(
 ): ShapedArtifactMaterializeInput {
   const extension = requireNonEmptyString(raw, "extension");
   const declaredMime = requireNonEmptyString(raw, "declaredMime");
-  const title = requireNonEmptyString(raw, "title");
   const nodeId = requireNonEmptyString(raw, "node_id");
+
+  // ---- the same-artifact revision (cinatra#3030, item 0.30) --------------
+  const hasArtifactId = raw.artifactId !== undefined && raw.artifactId !== null;
+  const hasBase =
+    raw.baseRepresentationRevisionId !== undefined && raw.baseRepresentationRevisionId !== null;
+  if (hasArtifactId !== hasBase) {
+    throw new Error(
+      "artifact_materialize input.artifactId and input.baseRepresentationRevisionId must be " +
+        "given together — an append names the artifact it revises AND the revision it read",
+    );
+  }
+  const artifactId = hasArtifactId ? requireNonEmptyString(raw, "artifactId") : undefined;
+  const baseRepresentationRevisionId = hasBase
+    ? requireNonEmptyString(raw, "baseRepresentationRevisionId")
+    : undefined;
+  // An APPEND revises an artifact that already carries a title; requiring one
+  // here would make the caller restate — or worse, invent — a name the artifact
+  // already has. A CREATE still states its title explicitly.
+  const title =
+    artifactId === undefined ? requireNonEmptyString(raw, "title") : titleIfPresent(raw);
 
   let objectTypeId: string | undefined;
   const objectTypeIdRaw = raw.objectTypeId;
@@ -127,5 +163,16 @@ export function shapeArtifactMaterializeInput(
     }
   }
 
-  return { extension, content, declaredMime, title, nodeId, ...(objectTypeId ? { objectTypeId } : {}) };
+  return {
+    extension,
+    content,
+    declaredMime,
+    title,
+    nodeId,
+    ...(objectTypeId ? { objectTypeId } : {}),
+    ...(artifactId === undefined ? {} : { artifactId }),
+    ...(baseRepresentationRevisionId === undefined
+      ? {}
+      : { baseRepresentationRevisionId }),
+  };
 }

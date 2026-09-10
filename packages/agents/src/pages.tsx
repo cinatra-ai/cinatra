@@ -211,8 +211,12 @@ export async function NewAgentPage() {
           /agents (this page, the default "All Agents" tab) and
           /agents/executions (the dashboard, packages/dashboards'
           AgentsDashboardPage). TabsListRow's trailing rule replaces the
-          PageHeader divider suppressed above. */}
-      <AgentsTabNav activeTab="all" />
+          PageHeader divider suppressed above — except when the list view
+          mounts its toolbar beneath the strip (cinatra#3228): the toolbar
+          "replaces the section rule for that view — never stack a toolbar
+          and the etched paired rule", so the strip gives its rule up to it.
+          The empty state mounts no toolbar and keeps the rule. */}
+      <AgentsTabNav activeTab="all" toolbarBelow={rows.length > 0} />
       <PageContent className="flex flex-col gap-6 pb-8">
         {rows.length === 0 ? (
           <section className="soft-panel rounded-card flex flex-col items-center justify-center gap-4 py-16 text-center">

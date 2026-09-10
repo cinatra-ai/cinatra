@@ -109,6 +109,26 @@ const EXPIRED_BODY: TriggerScheduleProposalViewBody = {
  * decision POST answers with the outcome shape the endpoint returns, so one
  * mock serves both directions and the test can read what was actually sent.
  */
+// THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3174 fix leg 1).
+// A one-off's gate stamp is no longer read as its firing on its own: the run
+// the gate opened over has to have actually run, which only the server can say,
+// so the resolver's answer carries the reading. These fixtures have always used
+// `released: true` on a NON-recurring settled body to mean "this schedule
+// fired", so the mock states that reading exactly where the fixture means it.
+function firedAside(body: unknown): { firedOnce?: true } {
+  const b = body as {
+    phase?: string;
+    released?: boolean;
+    triggerType?: string;
+  } | null;
+  return b !== null &&
+    b.phase === "settled" &&
+    b.released === true &&
+    b.triggerType !== "recurring"
+    ? { firedOnce: true }
+    : {};
+}
+
 function mockTransport(
   state: LifecycleCardState,
   body: TriggerScheduleProposalViewBody | null,
@@ -121,7 +141,7 @@ function mockTransport(
       JSON.stringify(
         isDecision
           ? { outcome }
-          : { kind: "trigger_schedule_proposal", state, body },
+          : { kind: "trigger_schedule_proposal", state, body, ...firedAside(body) },
       ),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
@@ -275,13 +295,18 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
   });
 
-  // PLAN §7.2, and the whole of it: after Confirm the conversation shows the SAME
-  // card, the SAME rows and a Save-changes control — and NEITHER of the
-  // trigger's own control. Plan (A) §7.2 as amended 2026-08-25: **Cancel
-  // schedule** "is on the run page's schedule step; there is no Run now."
-  it("settled in a CONVERSATION: the same rows and Save changes, and NO trigger chrome or Cancel", async () => {
+  // THE DRAWING, AND THE WHOLE OF IT (cinatra#3174 fix leg 3): after Confirm the
+  // conversation shows the SAME card, the SAME rows and a Save-changes control —
+  // with Cancel schedule beside it wherever the schedule is recurring and has
+  // fired. §VI draws that floor in a chat thread and its callout puts the same
+  // form on every host; the older plan text put Cancel schedule on the page
+  // only, and the second graded proof round failed the conversation's floor for
+  // the missing control. Here the fixture is a recurring schedule that has NOT
+  // fired, so the control is absent for the drawing's own reason, and Run now
+  // is gone everywhere (cinatra#2972).
+  it("settled in a CONVERSATION: the same rows and Save changes, and no Cancel before it fires", async () => {
     for (const host of ["chat_thread", "site_widget"] as const) {
-      mockTransport({ state: "settled" }, settledBody());
+      mockTransport({ state: "settled" }, settledBody({ canCancel: false }));
       const view = renderOn(host);
       await waitFor(() =>
         expect(
@@ -320,7 +345,12 @@ describe("§VI the schedule proposal card", () => {
       return new Response(
         JSON.stringify(
           settled
-            ? { kind: "trigger_schedule_proposal", state: { state: "settled" }, body: settledBody() }
+            ? {
+                kind: "trigger_schedule_proposal",
+                state: { state: "settled" },
+                body: settledBody(),
+                ...firedAside(settledBody()),
+              }
             : {
                 kind: "trigger_schedule_proposal",
                 state: { state: "pending", canDecide: true, canComment: false },
@@ -619,12 +649,11 @@ describe("§IX every host draws the same card", () => {
       cleanup();
 
       // The SETTLED half of the same set, on the same host: the Save-changes
-      // floor everywhere, plus — on the two PAGE hosts, where this card IS the
-      // schedule step — the two operations. The chrome anchor is GONE from the
-      // set on every host (plan (A) §7.2: the step "shows the same form and
-      // nothing else"), and the conversation is ruled not to have the two
-      // operations either, so they are read on the hosts that draw them.
-      const pageHost = host === "run_card" || host === "page_gate_region";
+      // floor everywhere, and — since the fixture is a recurring schedule that
+      // has fired — Cancel schedule beside it, on EVERY host (cinatra#3174 fix
+      // leg 3; §VI draws that floor in a chat thread and its callout puts the
+      // same form wherever a schedule is read). The chrome anchor is GONE from
+      // the set on every host: the step "shows the same form and nothing else".
       mockTransport({ state: "settled" }, settledBody());
       const settled = renderOn(host);
       await waitFor(() =>
@@ -652,7 +681,7 @@ describe("§IX every host draws the same card", () => {
       ).toHaveLength(0);
       expect(
         settled.container.querySelectorAll('[data-action="cancel-trigger-schedule"]'),
-      ).toHaveLength(pageHost ? 1 : 0);
+      ).toHaveLength(1);
       // cinatra#2972 — the anchor set lost one member: "there is no Run now"
       // (plan (A) §7.2, amended 2026-08-25). Zero on EVERY host, page hosts
       // included, which is the only reading the plan leaves.
@@ -1205,15 +1234,25 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       // The rows stand — read-only, showing the schedule that fired. Since the
       // fifth graded proof set (cinatra#2934) that is read the way the drawing
       // draws it: "the values still legible, the pickers gone", so there is no
-      // picker here to be disabled and the moment is legible as text.
+      // picker here to be disabled and the moment is legible as text — in the
+      // READER'S OWN LOCALE, never the wire's naive wall clock (cinatra#3174
+      // fix leg 1, carried in by the forward merge).
       expect(
         view.container.querySelector('[data-field="schedule-run-at"]'),
         host,
       ).toBeNull();
+      // The whole wall clock, drawn as itself and never shifted by a zone
+      // (converge round) — the year and the hour alone would pass a formatter
+      // that moved the day.
       expect(
         view.container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
         host,
-      ).toBe("2020-03-04T09:00");
+      ).toContain(
+        new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }),
+      );
       view.unmount();
       cleanup();
     }
@@ -1311,7 +1350,12 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
         JSON.stringify(
           isDecision
             ? { kind: "cancelled" }
-            : { kind: "trigger_schedule_proposal", state: { state: "settled" }, body: settled },
+            : {
+                kind: "trigger_schedule_proposal",
+                state: { state: "settled" },
+                body: settled,
+                ...firedAside(settled),
+              },
         ),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -1352,10 +1396,13 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     // server's schedule, never the draft nobody saved. Read off the read-only
     // value the drawing puts there since the fifth graded proof set
     // (cinatra#2934); the picker itself is gone.
+    const stoppedRows = container.querySelector('[data-conformance-id="schedule-option-rows"]');
     expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
     expect(
       container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
     ).toBe("Europe/Berlin");
+    expect(stoppedRows?.textContent).toContain("Europe/Berlin");
+    expect(stoppedRows?.textContent).not.toContain("Pacific/Auckland");
   });
 
   /**

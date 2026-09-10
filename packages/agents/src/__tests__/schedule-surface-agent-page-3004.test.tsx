@@ -80,6 +80,26 @@ const ONE_OFF: ProposedSchedule = {
   timezone: "Europe/Berlin",
 };
 
+// THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3174 fix leg 1).
+// A one-off's gate stamp is no longer read as its firing on its own: the run
+// the gate opened over has to have actually run, which only the server can say,
+// so the resolver's answer carries the reading. These fixtures have always used
+// `released: true` on a NON-recurring settled body to mean "this schedule
+// fired", so the mock states that reading exactly where the fixture means it.
+function firedAside(body: unknown): { firedOnce?: true } {
+  const b = body as {
+    phase?: string;
+    released?: boolean;
+    triggerType?: string;
+  } | null;
+  return b !== null &&
+    b.phase === "settled" &&
+    b.released === true &&
+    b.triggerType !== "recurring"
+    ? { firedOnce: true }
+    : {};
+}
+
 function settledBody(
   over: Partial<Extract<TriggerScheduleProposalViewBody, { phase: "settled" }>> = {},
 ): TriggerScheduleProposalViewBody {
@@ -108,7 +128,12 @@ function mockTransport(
 ) {
   const fetchMock = vi.fn(async () =>
     new Response(
-      JSON.stringify({ kind: "trigger_schedule_proposal", state, body }),
+      JSON.stringify({
+        kind: "trigger_schedule_proposal",
+        state,
+        body,
+        ...firedAside(body),
+      }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ),
   );
@@ -182,6 +207,7 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     // a reader who may see but not act on a LIVE schedule is owed — so looking
     // for one here asked this state to draw the other state's DOM.
     expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
+    expect(container.querySelectorAll("input")).toHaveLength(0);
     expect(
       container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
     ).toBeTruthy();
@@ -212,6 +238,7 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     expect(
       container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
     ).toBeTruthy();
+    expect(container.textContent).toContain("Europe/Berlin");
     for (const row of container.querySelectorAll('[data-schedule-option]')) {
       expect(row.querySelectorAll("button, input, select, textarea")).toHaveLength(0);
     }

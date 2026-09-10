@@ -78,18 +78,18 @@ export const RUN_WINDOW_PLACEMENTS: Record<RunWindowSurface, "floating" | "in-fl
 };
 
 /**
- * The send control's ACCESSIBLE NAME, per surface.
+ * The send control's ACCESSIBLE NAME — ONE name across the five readings.
  *
- * It carries the window's own sentence rather than a name borrowed from another
- * surface: a reader on a screen reader hears what this window does where it
- * stands, which is the same thing the empty field says to everyone else. It is
- * DERIVED from that sentence, so the two cannot drift and a sixth surface gets
- * a name the moment it gets a sentence.
+ * FORWARD RESOLUTION (main merged): a per-surface name derived from each
+ * reading's sentence stood here. The ratified drawing's §X, quoted in
+ * `run-page-prompt-window-one-window.test.tsx`, names the send control among
+ * the parts that do NOT change from one reading to the next — "One thing is
+ * read per surface — the sentence in the empty field ... Nothing else about
+ * the window changes from one reading to the next." A second per-surface part
+ * is a departure from that sentence, so the shared name stands and the derived
+ * one is left to the drawing to grant.
  */
-export function runWindowSendLabel(surface: RunWindowSurface): string {
-  const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
-  return `Send — ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
-}
+export const RUN_WINDOW_SEND_LABEL = "Apply AI suggestion";
 
 export type HitlConversationEntry = {
   id: number;
@@ -172,8 +172,6 @@ export function HitlConversationPanel({
   // §VI's own placement for this reading, resolved here rather than at any
   // mount, exactly as the sentence is.
   const placement = RUN_WINDOW_PLACEMENTS[surface];
-  // The window's own sentence, as the send control's accessible name.
-  const submitLabel = runWindowSendLabel(surface);
   const [convOpen, setConvOpen] = useState(false);
   const convContainerRef = useRef<HTMLDivElement>(null);
   const convScrollRef = useRef<HTMLDivElement>(null);
@@ -380,7 +378,7 @@ export function HitlConversationPanel({
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}
-            submitAriaLabel={submitLabel}
+            submitAriaLabel={RUN_WINDOW_SEND_LABEL}
             canSubmitEmpty={false}
             pending={promptPending}
             fieldClassName="border-line shadow-lg"

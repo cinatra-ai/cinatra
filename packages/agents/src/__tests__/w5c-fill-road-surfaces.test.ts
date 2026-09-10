@@ -159,9 +159,18 @@ describe("drafts survive a reload in every window", () => {
 // ATTACHMENTS REACH THE WAITING RUN — by both roads.
 // ---------------------------------------------------------------------------
 describe("a file attached beside a message still reaches the run", () => {
-  it("the two windows that offer a paperclip still offer it", () => {
-    expect(read("packages/agents/src/agentic-run-panel.tsx")).toContain("enableAttachments=");
-    expect(read("packages/agents/src/orchestrator-stepper-panel.tsx")).toContain(
+  // FORWARD RESOLUTION (main merged): the paperclip's opt-in left both run
+  // windows with the one-window slice on main. The ratified drawing's §IX/§X —
+  // "the same panel above the field, the same field, the same send control" and
+  // no leading control on any reading — leaves the field with no left-hand
+  // control, and the field draws one exactly when `onAttachmentsSelected` is
+  // handed to it. So neither host opts in any more, and the road below is the
+  // one that carries a person's files to the waiting run.
+  it("neither window hands the field a leading control of its own", () => {
+    expect(read("packages/agents/src/agentic-run-panel.tsx")).not.toContain(
+      "enableAttachments=",
+    );
+    expect(read("packages/agents/src/orchestrator-stepper-panel.tsx")).not.toContain(
       "enableAttachments=",
     );
   });

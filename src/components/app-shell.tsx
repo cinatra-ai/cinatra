@@ -28,13 +28,14 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   PAGE_NOT_FOUND_CRUMB_LABEL,
+  agentInstanceTabLabel,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
   isIdLikeSegment,
   type BreadcrumbCrumb,
-  documentTitleLabelForAgentInstance,
   documentTitleLabelFromTrail,
+  documentTitleLabelForAgentInstance,
 } from "@/lib/breadcrumb-trail";
 import {
   isPageNotFound,
@@ -667,66 +668,44 @@ export function AppShell({
     // new/empty chat (no title) on the route's own "Chat" tab title.
     const isChatThread = isChatPathname(pathname);
     const segments = pathname.split("/").filter(Boolean);
-    const isAgentInstance = segments.length >= 4 && segments[0] === "agents";
-    const agentLabel = isAgentInstance
-      ? crumbContributions.find(
-          (c) =>
-            // Position-targeted entries are not replacements (cinatra#3068 fix
-            // leg 2 convergence) -- an appended step crumb must never become
-            // the browser-tab title of the run it was appended to.
-            !c.insertBefore &&
-            !c.appendAfter &&
-            c.prefix === "/" + segments.slice(0, 4).join("/"),
-        )?.label
-      : undefined;
+    // THE AGENT INSTANCE'S OWN LABEL (cinatra#2809): read through the trail's
+    // own rule, so the tab mirrors the trail on the bare tree and under every
+    // scope base alike. A null leaves the title to the branches below. This
+    // reader REPLACES the pair this branch carried (the published-contribution
+    // label and the trail reader beside it): it reads the very trail already
+    // drawn above the page, guards the id abbreviation the same way, and does
+    // it under every scope base rather than the bare tree alone — so cinatra#2934
+    // fix leg 9's rule (the tab mirrors the trail's LEAF, never the run's name
+    // on a sub-route) is the rule it applies.
+    // THE ID GUARD STANDS IN FRONT OF THE LEAF (forward resolution, main
+    // merged). Main's reader gave this branch the scope bases and reads the
+    // trail's own leaf, which is the rule this slice wanted. What it does not
+    // carry is this slice's second rule — the drawing's "an id-bearing route
+    // never shows a raw id in the tab", under which the eight characters of an
+    // id and an ellipsis are still an id. So the leaf is read through the one
+    // guarded helper, which answers null where nothing can be said without an
+    // identifier and leaves the route's own server title standing.
+    const agentLabel = agentInstanceTabLabel(pathname, breadcrumbSegments);
+    const agentTabLabel =
+      agentLabel === null
+        ? null
+        : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
+    let resolved: string | null = null;
     if (pageNotFound) {
       // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 11).
       // Its trail is the single crumb "Page not found", so the tab is that one
       // word too - before every branch below, because none of them can name a
-      // page the reader never reached: the agent-instance branch would name the
-      // run, and the general branch the address's own last segment.
-      document.title = `${PAGE_NOT_FOUND_CRUMB_LABEL} | Cinatra`;
+      // page the reader never reached.
+      resolved = `${PAGE_NOT_FOUND_CRUMB_LABEL} | Cinatra`;
     } else if (isChatThread && chatThreadTitle) {
-      document.title = `${chatThreadTitle} | Cinatra`;
-    } else if (isAgentInstance) {
-      // cinatra#2934 — a REFUSED reading of an agent-instance route publishes
-      // no crumb contribution (the not-authorized panel clears it on purpose,
-      // and the not-found boundary never had one), so `agentLabel` is absent
-      // exactly there. It used to fall through to the no-write branch below
-      // on the reasoning that the route's own `generateMetadata` owns the tab
-      // — but a refusal short-circuits BEFORE that metadata ever runs, so what
-      // survived was the route file's static literal, and the tab read "Agent"
-      // above a trail that read "Agents > Agent run > Schedule". The drawing
-      // says the tab mirrors the resolved trail; so it is taken from the very
-      // trail already drawn above the page, which by construction carries no
-      // id. A trail whose own leaf is unresolved answers null and nothing is
-      // written, leaving the server title in place.
-      // ONE decision point: the published label is not automatically safe
-      // either — the owning page publishes the id's first eight characters
-      // plus an ellipsis when it has no name to publish, and a truncated
-      // identifier is still an identifier. The helper guards BOTH inputs and
-      // answers null when neither can be said without an id, in which case
-      // nothing is written and the server title stands.
-      // WHICH CRUMB THE TAB MIRRORS IS THE TRAIL'S LAST ONE, NOT THE RUN'S
-      // NAME (convergence round of fix leg 9). The published instance label may
-      // decide the tab only where the instance crumb IS the leaf - the run's
-      // own page, four segments. On a sub-route the leaf is the sub-route's own
-      // word ("Schedule" above the schedule surface), which is what the route's
-      // own server metadata already answers; preferring the published label
-      // here re-ran on the layout's publish and replaced that word with the
-      // run's name, so the tab read "Blog Pipeline Agent (1)" above a trail
-      // whose leaf read "Schedule" - the drawing's divergence, one route family
-      // over. The trail-only helper carries the same id guard, so nothing about
-      // the refused reading changes.
-      const label =
-        segments.length >= 5
-          ? documentTitleLabelFromTrail(breadcrumbSegments)
-          : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
-      if (label) document.title = `${label} | Cinatra`;
+      resolved = `${chatThreadTitle} | Cinatra`;
+    } else if (agentTabLabel) {
+      resolved = `${agentTabLabel} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
       // correct server title with humanized hex. Deliberately no write.
+      resolved = null;
     } else {
       // THE TAB MIRRORS THE RESOLVED TRAIL HERE TOO (cinatra#2934, fix leg 11).
       // This branch derived its own words from the PATH, which is a second
@@ -738,18 +717,29 @@ export function AppShell({
       // path-derived word remains only as the floor for a trail with nothing
       // safe to say.
       const mirrored = documentTitleLabelFromTrail(breadcrumbSegments);
-      document.title = mirrored
+      resolved = mirrored
         ? `${mirrored} | Cinatra`
         : deriveDocumentTitle(pathname, activeHeader?.title);
     }
-  }, [
-    activeHeader?.title,
-    pathname,
-    chatThreadTitle,
-    crumbContributions,
-    breadcrumbSegments,
-    pageNotFound,
-  ]);
+    if (!resolved) return;
+    const apply = () => {
+      if (document.title !== resolved) document.title = resolved;
+    };
+    apply();
+    // THE ROUTE'S OWN METADATA CAN LAND AFTER US (cinatra#2809). On a client
+    // transition — the launch redirect above all, which replaces the launcher
+    // address with the created instance's own — React commits the route's
+    // `<title>` from `generateMetadata` after this effect has already run, and
+    // the resolved title we just wrote is replaced by the route's generic one
+    // while the trail beside it goes on naming the run. The tab has to keep
+    // mirroring the trail, so re-assert when that commit lands. The guard above
+    // makes the re-assert a no-op once the two agree, so this cannot loop.
+    const head = document.head;
+    if (!head || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(apply);
+    observer.observe(head, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments, pageNotFound]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.

@@ -20,6 +20,17 @@ import {
   safeHref,
   stripEmptyParagraphs,
 } from "@cinatra-ai/agents/markdown-render-core";
+// THE TABLE'S CELL GRAMMAR MOVED WITH THE RENDERER (cinatra#3230, forward merge
+// of origin/main). The four names below are the deterministic reader that
+// decides a column's alignment; they are defined beside the table renderer that
+// is their only caller, and re-exported here so /chat's own suite reads them
+// where it always has.
+export {
+  cellPlainText,
+  isNumericCellText,
+  isTimestampCellText,
+  resolveColumnRightAligned,
+} from "@cinatra-ai/agents/markdown-render-core";
 import { getHighlightedSync, type ThemeName } from "./syntax-highlight";
 import { preprocessMath, restoreMath } from "./math-render";
 // The chart PAYLOAD schema + validator are host-owned and live in the shared
@@ -48,11 +59,6 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
     return `%%APPLINK_${idx}%%`;
   }
 
-  // Resolve applink placeholders to plain text (for CSV data attributes).
-  function resolveAppLinksAsText(text: string): string {
-    return text.replace(/%%APPLINK_(\d+)%%/g, (_, idx) => appLinks[parseInt(idx)]?.label ?? "");
-  }
-
   const md = createCoreMarked({
     code({ text, lang }: Tokens.Code) {
       // Escape HTML to prevent XSS — text from LLM is untrusted.
@@ -74,13 +80,12 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
       const encodedCode = encodeURIComponent(text);
       return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line" data-shiki-code="${encodedCode}" data-shiki-lang="${safeLang}" data-shiki-theme="${theme}"><pre class="overflow-x-auto whitespace-pre bg-surface-muted p-4 text-[0.8rem] leading-relaxed font-mono text-foreground"><code>${escaped}</code></pre>${copyBtn}</div>`;
     },
-    // The CSV column wants the app link's label, not its placeholder token.
-    resolveText: resolveAppLinksAsText,
     // /chat pages a long table and listens for these buttons; the run window
-    // draws neither, which is why both are surface-supplied and not built in.
+    // draws neither, which is why the page size is surface-supplied and not
+    // built in. The table's own header strip, copy and download controls are
+    // GONE with cinatra#3230 — the drawing gives an assistant turn's table no
+    // chrome of its own — so nothing is supplied for them any more.
     tablePageSize: 25,
-    // audit-allow: markdown-content
-    tableChrome: ({ tableId, csvData }) => `<div class="flex items-center justify-end gap-1 border-b border-line px-2 py-1"><button type="button" data-table-id="${tableId}" data-action="copy" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Copy table"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button><button type="button" data-table-id="${tableId}" data-action="download" data-csv="${csvData.replace(/"/g, "&quot;")}" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Download CSV"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`,
   });
 
   return { md, appLinks, appLinkPlaceholder };
@@ -277,3 +282,4 @@ export function detectMermaidBlocks(text: string): MermaidSource[] {
   }
   return blocks;
 }
+

@@ -36,6 +36,57 @@ export function resolveStreamFirst<T>(
  * previous local copy; pending_trigger/armed do not occur on that surface
  * today (trigger runs render through AgenticRunPanel).
  */
+/**
+ * The run status as the DESIGN SYSTEM's status-pill family reads it
+ * (cinatra#3002, forward + fix leg 3).
+ *
+ * The run detail's header used to draw the generic badge, which carries none of
+ * the pill family's rules — that is the "wrong colour family, no dot" the third
+ * proof round recorded on every frame. The ratified drawing draws this header as
+ * `<span class="pill approved"><span class="dot"></span>completed</span>`
+ * (specs/app-artifact-review.html, example `run-schedule-step-fired`), and
+ * `.pill.approved` is a tinted ground from the status colour, the same colour
+ * for the text, and a border at higher alpha (specs/app-components.html).
+ * `<StatusPill />` already IS that family, so the mapping is all this needs.
+ *
+ * The pairings, and why each one:
+ *   - `completed`   -> `approved`, the drawing's own reading of a finished run.
+ *   - `failed` / `stopped` -> `failed`; red never means run.
+ *   - `running`     -> `running`, the family's indigo.
+ *   - `queued` / `armed` -> `queued`, a run that has not started.
+ *   - a human wait  -> `needs-review`, the brand mustard the rest of the app
+ *     gives a "needs you" state. `pending_input` reads the same way: the run is
+ *     waiting on a person either way, and the LABEL is what tells them apart
+ *     (`runStatusBadgeLabel`), exactly as it did under the badge.
+ *
+ * Shared by both run-detail hosts — AgenticRunPanel and the orchestrator
+ * stepper — so the two headers can never drift into two families again.
+ */
+export function runStatusPillStatus(
+  status: string,
+): "running" | "approved" | "needs-review" | "queued" | "failed" {
+  if (status === "completed") return "approved";
+  if (status === "failed" || status === "stopped") return "failed";
+  // `waiting_trigger` IS A RUNNING RUN (convergence round, 2026-09-04). It is
+  // not a wait BEFORE the run — that is `pending_trigger`, three lines below.
+  // It is an IN-FLIGHT WayFlow run parked at a TriggerWaitNode with its A2A
+  // context held open by the worker (run-status.ts, the union's own note), and
+  // the write kernel classifies it UNCONDITIONALLY LIVE in the same set as
+  // `running` (org-write-kernel/src/live-attempt.ts). It is also absent from
+  // PRE_EXECUTION_RUN_STATUSES, the one place the started/not-started boundary
+  // is expressed. Letting it fall through to `queued` drew a run that is
+  // already executing as one that has not begun.
+  if (status === "running" || status === "waiting_trigger") return "running";
+  if (
+    status === "pending_approval" ||
+    status === "pending_input" ||
+    status === "pending_trigger"
+  ) {
+    return "needs-review";
+  }
+  return "queued";
+}
+
 export function statusBadgeVariant(
   status: string,
 ): "default" | "secondary" | "destructive" | "outline" {
@@ -149,6 +200,54 @@ export function classifyRunWaitInterrupt(
     return "input";
   }
   return isSetupInterruptTaskId(interrupt.reviewTaskId) ? "input" : "approval";
+}
+
+/**
+ * IS THE RUN STANDING AT THE SCREEN THE AGENT OPENED MID-RUN? (cinatra#3221,
+ * fix leg 3.)
+ *
+ * A SECOND QUESTION OF THE SAME RECORDED FACT, ASKED HERE BECAUSE EVERY MOMENT
+ * READING IS ASKED HERE. The run page's rail elects a trailing entry for the
+ * mid-run human screen -- the fourth gate the ratified drawing names, and the
+ * only one the rail carries nowhere else -- and before it can elect it, it has
+ * to know which moment the run is standing at. PLAN (B) section 6, The runner:
+ * "A waiting run's row states its moment, card kind and card reference; a wait
+ * for a setup field and a wait for a review are told apart from the row alone,
+ * and no screen re-derives a moment." So the rail asks THIS, and how a moment
+ * is spelled never leaves this module.
+ *
+ * WHY NOT `classifyRunWaitInterrupt`. That one answers a COPY question about an
+ * INTERRUPT, and beneath the recorded fact it keeps two heuristics and a
+ * fail-closed `"approval"`. The rail asks about the RUN's own recorded moment
+ * and nothing else: a row that states no moment elects no trailing entry. Same
+ * recorded fact, two questions, one module reading it.
+ */
+export function runStandsAtMidRunScreenMoment(
+  lifecycleMoment: string | null | undefined,
+): boolean {
+  return lifecycleMoment === "hitl";
+}
+
+/**
+ * IS THE RUN STANDING AT ITS SCHEDULE? (cinatra#3221, fix leg 8.)
+ *
+ * THE THIRD GATE CLASS, ASKED OF THE SAME RECORDED FACT. Leg 6 closed the
+ * mid-run context gate and leg 7 the work review gate; the fourth proof round
+ * came back with the SCHEDULING reading still electing nothing -- a run stopped
+ * in front of its schedule step drew a rail with no entry highlighted, and the
+ * still-to-come Skills row standing above the step it was stopped at.
+ *
+ * The run states this moment itself: the coordinator writes `schedule` on the
+ * run's own row when it parks there (`stateRunScheduleMoment`), on BOTH statuses
+ * the park uses -- `pending_trigger` while the person's choice is outstanding
+ * and `armed` once the choice named an instant. So the rail reads the row here,
+ * exactly as it reads the other two moments, and how a moment is spelled never
+ * leaves this module (PLAN (B) section 6: "no screen re-derives a moment").
+ */
+export function runStandsAtScheduleMoment(
+  lifecycleMoment: string | null | undefined,
+): boolean {
+  return lifecycleMoment === "schedule";
 }
 
 /**
