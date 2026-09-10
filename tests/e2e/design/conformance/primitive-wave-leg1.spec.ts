@@ -437,40 +437,37 @@ for (const { name: palette, theme } of PALETTES) {
       expect(await style(chip, "background-color")).not.toBe("rgba(0, 0, 0, 0)");
     });
 
-    test('RECORDED DEPARTURE — "line border": the neutral chip strokes no hairline', async ({
+    test('"line border": the neutral chip strokes the hairline', async ({
       page,
     }) => {
-      // DOCUMENTED EXPECTED FAILURE. The readings below are unchanged and still
-      // taken in both palettes; `test.fail` reports the case as an expected
-      // failure, so the record stands while the suite stays green. The day the
-      // cross-repository follow-up named below lands, this case passes
-      // unexpectedly, the suite goes red, and the record must be retired.
-      test.fail(
-        true,
-        `RECORDED DEPARTURE (cross-repository follow-up, ${palette}): the neutral chip's stroke is transparent; the chrome line states "line border"`,
-      );
+      // RECORDED DEPARTURE RETIRED — the road this file named has been taken.
+      // Leg 1 measured the clause and could not repair it: the 1px border box
+      // was reserved on every variant and painted fully transparent, and
+      // `badge.tsx` is vendored verbatim into extension packages held in their
+      // own repositories behind a provenance gate, so spelling a border colour
+      // in the primitive's class string was a coordinated cross-repository
+      // change and not a host edit. The record said, in as many words, that the
+      // day the follow-up landed this case would pass unexpectedly and the
+      // record would have to be retired.
+      //
+      // It landed in leg 2, on the DOM seam rather than in the primitive: the
+      // scope at the end of src/app/globals.css colours the stroke of the chip
+      // that still carries the primitive's own `border-transparent` token, so
+      // the host copy and every vendored copy alike paint it and no file the
+      // provenance gate reads changed. The reading below is the one this case
+      // always took, in both palettes, now stated as the clause states it.
       await open(page, theme);
       const chip = page.locator(`${seam("badge")} [data-wave-variant="secondary"]`);
       await expect(chip).toBeVisible();
-      // RECORDED DEPARTURE, measured in both palettes and NOT fixed by this
-      // leg. `badge.tsx` is vendored verbatim into five extension packages that
-      // live in their own repositories (`/extensions/` is git-ignored here and
-      // holds no tracked file), and two standing guards fail the moment the
-      // host copy drifts from them — packages/connectors' cinatra#1014 test,
-      // which pins the variant strings byte-for-byte, and
-      // scripts/extensions/vendor-extension-primitives.test.mjs. Repairing the
-      // clause is a coordinated cross-repository change, not a host edit, so it
-      // is recorded here with the road named. See
-      // src/components/ui/__tests__/badge-drawing-conformance.test.tsx.
-      //
-      // MEASURED: the 1px border box IS reserved — so the fix is a colour and
-      // not a reflow — but it is painted fully transparent.
+      // The box is unchanged — the repair was a colour, never a reflow.
       expect(await style(chip, "border-top-width")).toBe("1px");
       const stroke = await style(chip, "border-top-color");
       expect(
         alphaOf(stroke),
-        `RECORDED DEPARTURE (${palette}): the neutral chip's stroke is transparent; the chrome line states "line border"`,
+        `${palette}: the neutral chip strokes the hairline the chrome line states`,
       ).toBeGreaterThan(0);
+      // …and it is the drawing's line, not a near colour.
+      expect(stroke).toBe(await token(page, "--line"));
     });
 
     test('"border at higher alpha" is graded on the STATUS PILL, not on the chip', async ({
