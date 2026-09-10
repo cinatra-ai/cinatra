@@ -29,11 +29,6 @@ import { registerArtifactExtensions } from "@cinatra-ai/objects/register-artifac
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
-  buildArtifactObjectEnvelope,
-  RESERVED_ARTIFACT_ENVELOPE_KEYS,
-  snapshotDeclaredObjectFields,
-} from "../artifact-object-envelope";
-import {
   FEATURED_PLACEMENT,
   buildFeaturedImageFields,
   readFeaturedImageFields,
@@ -54,6 +49,15 @@ const fileEnvelope = {
   title: "The featured image",
 };
 
+// The write path composes the row's `objects.data` as the caller's typed data
+// UNDER the host's envelope, and validates THAT against the type's declared
+// schema. This composes it the same way, so what the schema sees here is what
+// the write path writes.
+const objectDataFor = (typedData: Record<string, unknown>) => ({
+  ...typedData,
+  ...fileEnvelope,
+});
+
 beforeAll(() => {
   objectTypeRegistry._clearForTests();
   registerArtifactExtensions(EXT_ROOT);
@@ -66,41 +70,37 @@ describe("the picture type's two declared fields, against the live pinned tree",
     expect(def!.schema.safeParse(fileEnvelope).success).toBe(false);
   });
 
-  it("accepts the envelope once the host supplies the two declared fields", () => {
+  it("accepts the row once the host supplies the two declared fields", () => {
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
-    const envelope = buildArtifactObjectEnvelope(
-      fileEnvelope,
-      buildFeaturedImageFields({ post: POST_ID }),
-    );
-    expect(def!.schema.safeParse(envelope).success).toBe(true);
+    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
+    expect(def!.schema.safeParse(data).success).toBe(true);
   });
 
   it("refuses a placement the type does not declare", () => {
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
-    const envelope = buildArtifactObjectEnvelope(fileEnvelope, {
-      post: POST_ID,
-      placement: "body",
-    });
-    expect(def!.schema.safeParse(envelope).success).toBe(false);
+    const data = objectDataFor({ post: POST_ID, placement: "body" });
+    expect(def!.schema.safeParse(data).success).toBe(false);
   });
 });
 
-describe("the declared-fields road into the object envelope", () => {
+describe("the typed-data road into the artifact row's object data", () => {
   it("carries the declared fields alongside the envelope, changing nothing else", () => {
-    const envelope = buildArtifactObjectEnvelope(fileEnvelope, { post: POST_ID, placement: FEATURED_PLACEMENT });
-    expect(envelope).toMatchObject(fileEnvelope);
-    expect(envelope).toMatchObject({ post: POST_ID, placement: "featured" });
+    const data = objectDataFor({ post: POST_ID, placement: FEATURED_PLACEMENT });
+    expect(data).toMatchObject(fileEnvelope);
+    expect(data).toMatchObject({ post: POST_ID, placement: "featured" });
   });
 
-  it("is a no-op when a caller declares no fields", () => {
-    expect(buildArtifactObjectEnvelope(fileEnvelope)).toEqual(fileEnvelope);
-    expect(buildArtifactObjectEnvelope(fileEnvelope, {})).toEqual(fileEnvelope);
+  it("is a no-op when a caller carries no typed data", () => {
+    expect(objectDataFor({})).toEqual(fileEnvelope);
   });
 
-  it("REFUSES a declared field that would overwrite the host's own envelope key", () => {
-    for (const reserved of RESERVED_ARTIFACT_ENVELOPE_KEYS) {
-      expect(() => buildArtifactObjectEnvelope(fileEnvelope, { [reserved]: "x" })).toThrow(
-        /reserved/i,
+  it("never lets a caller restate a fact the writer owns", () => {
+    // The envelope is spread OVER the caller's typed data, so a field naming an
+    // envelope key the host owns cannot reach the row.
+    for (const reserved of Object.keys(fileEnvelope)) {
+      const data = objectDataFor({ [reserved]: "forged" }) as Record<string, unknown>;
+      expect(data[reserved], reserved).toBe(
+        (fileEnvelope as Record<string, unknown>)[reserved],
       );
     }
   });
@@ -108,11 +108,8 @@ describe("the declared-fields road into the object envelope", () => {
 
 describe("the host reads the featured image's fields back", () => {
   it("reads the post it belongs to and its placement", () => {
-    const envelope = buildArtifactObjectEnvelope(
-      fileEnvelope,
-      buildFeaturedImageFields({ post: POST_ID }),
-    );
-    expect(readFeaturedImageFields(envelope)).toEqual({
+    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
+    expect(readFeaturedImageFields(data)).toEqual({
       ok: true,
       post: POST_ID,
       placement: "featured",
@@ -134,32 +131,5 @@ describe("the host reads the featured image's fields back", () => {
       ok: false,
       reason: "no-post",
     });
-  });
-});
-
-describe("the declared fields are materialized ONCE (the snapshot)", () => {
-  // The composer reads a caller's object exactly once into a frozen snapshot,
-  // and the creation road builds BOTH envelopes -- the one validated before the
-  // write and the one persisted -- from that single snapshot, so the persisted
-  // row cannot differ from the row that passed the declared-schema check.
-  it("the snapshot is frozen, plain, and stable across repeated envelope builds", () => {
-    const source = { post: "art-1", placement: "featured" } as Record<string, unknown>;
-    const snapshot = snapshotDeclaredObjectFields(source);
-    expect(Object.isFrozen(snapshot)).toBe(true);
-    source.post = "art-MUTATED";
-    const envelope = {
-      artifactType: "file",
-      latestRepresentationRevisionId: "rev-1",
-      latestDigest: "d",
-      mime: "image/png",
-      size: 1,
-      originKind: "agent_generated",
-      viewerHint: "mime",
-    } as never;
-    const first = buildArtifactObjectEnvelope(envelope, snapshot);
-    const second = buildArtifactObjectEnvelope(envelope, snapshot);
-    // The row that is persisted is byte-identical to the row that was validated.
-    expect(second).toEqual(first);
-    expect((first as Record<string, unknown>).post).toBe("art-1");
   });
 });

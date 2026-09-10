@@ -159,11 +159,12 @@ export async function materializeBlogImageArtifact(
     stream: asImageStream(bytes),
     createdByRunId: input.createdByRunId ?? null,
     skipFallbackClassification: true,
-    // The picture type's own declared fields (W9). Omitted when the caller
-    // names no post: the declared-schema check then refuses the write with the
-    // type's own message, which is the honest outcome — the host does not
-    // invent a post reference to get past a schema.
-    declaredObjectFields: postReference
+    // The picture type's own declared fields (W9), carried on the write
+    // path's typed-data road (the road main merged for a type's own data).
+    // Omitted when the caller names no post: the declared-schema check then
+    // refuses the write with the type's own message, which is the honest
+    // outcome — the host does not invent a post reference to get past a schema.
+    typedData: postReference
       ? buildFeaturedImageFields({ post: postReference })
       : undefined,
   });
