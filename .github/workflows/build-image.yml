@@ -3754,6 +3754,22 @@ jobs:
         shell: bash
         run: pnpm test:run-folder
 
+      # cinatra#3032 (lifecycle-c W8) — the image tool (enabler 0.28) against a
+      # real database and a real disk. The unit tier proves what the tool
+      # DECIDES against substituted ports; what only Postgres and a filesystem
+      # together can show is that the picture is filed as a real row of the
+      # extension's own declared type carrying the data the caller named, that
+      # the bytes the provider produced are the bytes on disk, that the
+      # finalized ledger row of that write carries the prompt, the provider and
+      # the model, and that a regeneration appends revision 2 to the SAME
+      # artifact while a base another write already built on is refused BY THE
+      # UNIQUE INDEX. Wired here on arrival, by the same convention as the tiers
+      # above, so it cannot join the class of root tiers that run nowhere.
+      - name: The image tool — real-DB tier (cinatra#3032, lifecycle-c W8)
+        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        shell: bash
+        run: pnpm test:lifecycle-c-w8
+
       # cinatra#3052 — the widget schedule grant's own real-DB tier, wired in
       # the SAME change that adds it, beside the four tiers above and for the
       # reason the block above records: a root config that no workflow invokes
