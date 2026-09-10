@@ -1,0 +1,68 @@
+[
+  {
+    "id": 4400000001,
+    "name": "reclaim-record.design-visual-verify.8800000002.1.ubuntu-latest",
+    "created_at": "2026-08-30T23:59:59Z",
+    "expired": false
+  },
+  {
+    "id": 4400000002,
+    "name": "reclaim-record.design-visual-verify.8800000010.1.ubuntu-latest",
+    "created_at": "2026-08-31T00:00:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000003,
+    "name": "reclaim-record.design-visual-verify.8800000010.2.ubuntu-latest",
+    "created_at": "2026-08-31T06:12:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000004,
+    "name": "reclaim-record.design-visual-verify.8800000010.1.ubuntu-latest",
+    "created_at": "2026-08-31T06:13:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000005,
+    "name": "reclaim-record.dashboard-live-verify.8800000021.1.ubuntu-latest",
+    "created_at": "2026-09-03T11:00:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000006,
+    "name": "reclaim-record.build-and-publish-image.8800000031.1.ubuntu-latest",
+    "created_at": "2026-09-06T21:45:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000007,
+    "name": "reclaim-record.build-and-publish-image.8800000032.1.ubuntu-latest-8-cores",
+    "created_at": "2026-09-09T09:00:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000008,
+    "name": "reclaim-record.dashboard-live-verify.8800000033.1.ubuntu-latest-8-cores",
+    "created_at": "2026-09-10T09:00:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000009,
+    "name": "reclaim-record.design-visual-verify.8800000040.1.ubuntu-latest",
+    "created_at": "2026-09-07T00:00:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000010,
+    "name": "pixel-diff-report-3310",
+    "created_at": "2026-09-03T11:05:00Z",
+    "expired": false
+  },
+  {
+    "id": 4400000011,
+    "name": "reclaim-record.design-visual-verify.8800000050.1.ubuntu-latest",
+    "created_at": "2026-09-04T08:00:00Z",
+    "expired": true
+  }
+]
