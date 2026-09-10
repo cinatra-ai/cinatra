@@ -1,0 +1,9 @@
+{
+  "seq": "0105",
+  "file": "core/core__0105_image-generation-ledger-provenance.mjs",
+  "summary": "The picture's own provenance on the ledger row of the write that filed it (cinatra#3032, epic #3023 W8; plan (C) item 0.28: \"the prompt, the provider and the model on the ledger row of that revision's write\"). Three ADDITIVE NULLABLE columns on artifact_materializations \u2014 image_prompt, image_provider, image_model \u2014 written inside the same transaction as the ledger finalize by both picture write paths (the first generation through createSemanticArtifact and the regeneration through appendArtifactRevision), so a finalized row can never be missing the provenance of the write that finalized it. NULL on every write that made no picture, which is every row this migration finds: no CHECK is rewritten, no index is rebuilt and no committed row is touched or revalidated, so the ADD COLUMN is metadata-only on a deployed table. image_provider IS NOT NULL is also what the per-run picture cap counts over, so the column carries a rule and not only a record. Idempotent twin of the fresh-install bootstrap DDL in src/lib/artifact-claim-schema.ts, shipped in the SAME pull request (the core__0103 / core__0104 precedent). down() drops the three columns, which is reversible because nothing else reads them. SEQ 0105 \u2014 core__0104 is the highest sequence on this branch's base at authoring time. NOT DESTRUCTIVE: purely additive nullable columns, no constraint rewrite, no data migration.",
+  "destructive": false,
+  "tables": [
+    "artifact_materializations"
+  ]
+}
