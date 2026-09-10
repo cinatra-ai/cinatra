@@ -14,8 +14,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const routerState = vi.hoisted(() => ({ push: vi.fn() as ReturnType<typeof vi.fn> }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerState.push }) }));
+// next/link -> a plain anchor built without JSX, the same way the sibling
+// suites mock it (src/components/extensions/agent-all-card.test.tsx), so the
+// rendered href stays assertable without a raw JSX anchor.
 vi.mock("next/link", () => ({
-  default: ({ children }: { children: React.ReactNode }) => <a href="#">{children}</a>,
+  default: ({
+    href,
+    children,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) =>
+    React.createElement("a", { href, ...rest }, children),
 }));
 
 const actions = vi.hoisted(() => ({
