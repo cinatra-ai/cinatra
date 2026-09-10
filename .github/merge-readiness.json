@@ -10,6 +10,11 @@
   },
   "excluded": [
     {
+      "context": "${{ matrix.name }}",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "reason": "dynamic-name: the job name is a ${{ }} expression (a matrix leg), so the check-run name is not knowable statically"
+    },
+    {
       "context": "merge-readiness / merge-readiness",
       "workflow": ".github/workflows/merge-readiness.yml",
       "reason": "self: the merge-readiness context itself — the job never waits on itself"
@@ -24,6 +29,53 @@
         "**"
       ],
       "skippable": false
+    },
+    {
+      "context": "/design-fixtures pixel-diff + axe",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": true
     },
     {
       "context": "A2A protocol unit tests",
@@ -42,6 +94,15 @@
         "**"
       ],
       "skippable": true
+    },
+    {
+      "context": "actions-pinned-gate / actions-pinned-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/actions-pinned-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
     },
     {
       "context": "Agents integration — gated set (+ full-tier report)",
@@ -143,6 +204,100 @@
       "skippable": false
     },
     {
+      "context": "design suite selection",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "design suite verdict",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": false
+    },
+    {
       "context": "design-pin-drift",
       "app": "github-actions",
       "workflow": ".github/workflows/gates.yml",
@@ -206,6 +361,40 @@
       "skippable": true
     },
     {
+      "context": "Discover batteries",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": true
+    },
+    {
+      "context": "Execution-plane battery tier",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": false
+    },
+    {
       "context": "Execution-plane unit tests",
       "app": "github-actions",
       "workflow": ".github/workflows/build-image.yml",
@@ -236,6 +425,15 @@
       "context": "gates-pnpm",
       "app": "github-actions",
       "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "gitignore-gate / gitignore-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gitignore-gate.yml",
       "paths": [
         "**"
       ],
@@ -332,6 +530,23 @@
       "skippable": true
     },
     {
+      "context": "Queue path selection",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": false
+    },
+    {
       "context": "RBAC authz unit tests",
       "app": "github-actions",
       "workflow": ".github/workflows/build-image.yml",
@@ -357,6 +572,15 @@
         "**"
       ],
       "skippable": true
+    },
+    {
+      "context": "secret-scan-gate / secret-scan-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/secret-scan-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
     },
     {
       "context": "secrets-required-gate / secrets-required-gate",
@@ -389,6 +613,15 @@
       "context": "source-leak-gate / source-leak-gate",
       "app": "github-actions",
       "workflow": ".github/workflows/source-leak-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false
+    },
+    {
+      "context": "toast-banner-gate / toast-banner-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/toast-banner-gate.yml",
       "paths": [
         "**"
       ],
