@@ -67,10 +67,22 @@ export type RunInputStepKey = `input:${number}`;
  */
 export type RunParkedGateStepKey = "gate";
 
+/**
+ * THE RUN'S LAST STEP — what the run made (cinatra#3029).
+ *
+ * The ratified drawing's artifact review, section I.2, ends the rail with the
+ * run's own artifacts: "What this run made". It is the run's LAST step, so it is
+ * one key rather than one per artifact — the artifacts are the ROWS INSIDE it,
+ * each opening on its own page. It carries its own word (run-made-reading.ts)
+ * for the same reason a gate does: the step says what it SHOWS.
+ */
+export type RunMadeStepKey = "made";
+
 export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
   | RunParkedGateStepKey
+  | RunMadeStepKey
   | "detail";
 
 /** A step that HEADS the rail — every selection but the run's own detail. */
@@ -191,6 +203,23 @@ export type RunSurfaceRailStep = {
    * neither of them carries. Defaults to unstated, which is not "no".
    */
   selectable?: boolean;
+  /**
+   * DOES THIS STEP'S ROW STAND AFTER THE PAGE'S OWN RAIL ROWS? (cinatra#3029,
+   * fix leg 2.)
+   *
+   * The rail column draws the steps that HEAD it, and then the page's own rows
+   * beneath them. The ratified drawing's artifact review, section I.2, ends the
+   * rail the other way round for one step: "The rail's last entry is the run's
+   * own record." The run's record is the run's LAST step, so its row cannot sit
+   * above the work steps it comes after — the first proof round photographed
+   * exactly that, with the page's trailing Review row drawn BENEATH the run's
+   * record and the rail reading as two.
+   *
+   * A step marked here keeps its place in `steps` — the selection resolves off
+   * that list and nothing about opening it changes — and only its ROW moves, to
+   * the end of the one rail column.
+   */
+  tail?: boolean;
 };
 
 /**

@@ -498,6 +498,8 @@
     { "alias": "@cinatra-ai/objects", "target": "./packages/objects/src/index.ts" },
     { "alias": "@cinatra-ai/memory/secret-scan", "target": "./packages/memory/src/secret-scan.ts" },
     { "alias": "@cinatra-ai/artifacts", "target": "./packages/artifacts/src/index.ts" },
+    { "alias": "@cinatra-ai/blog-idea-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/blog-idea-artifact/src/renderers/detail.tsx" },
+    { "alias": "@cinatra-ai/blog-idea-artifact/src/renderers/preview", "target": "./extensions/cinatra-ai/blog-idea-artifact/src/renderers/preview.tsx" },
     { "alias": "@cinatra-ai/chart-artifact/src/views/chart", "target": "./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx" },
     { "alias": "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview", "target": "./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/preview.tsx" },

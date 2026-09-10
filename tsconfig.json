@@ -510,6 +510,8 @@
       "@cinatra-ai/objects": ["./packages/objects/src/index.ts"],
       "@cinatra-ai/memory/secret-scan": ["./packages/memory/src/secret-scan.ts"],
       "@cinatra-ai/artifacts": ["./packages/artifacts/src/index.ts"],
+      "@cinatra-ai/blog-idea-artifact/src/renderers/detail": ["./extensions/cinatra-ai/blog-idea-artifact/src/renderers/detail.tsx"],
+      "@cinatra-ai/blog-idea-artifact/src/renderers/preview": ["./extensions/cinatra-ai/blog-idea-artifact/src/renderers/preview.tsx"],
       "@cinatra-ai/chart-artifact/src/views/chart": ["./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx"],
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/preview.tsx"],
