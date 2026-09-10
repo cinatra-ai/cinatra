@@ -1458,24 +1458,27 @@ describe("the generated display map imports through package exports, never a hos
   });
 
   it("the alias-backed remainder is EXACTLY the guarded-optional displays, named and bounded", () => {
-    // The aliases that stay, pinned BY NAME so a re-introduced one for any other
-    // package fails here. A guardedOptional package is outside
-    // `cinatra.extensions`, so it cannot take the workspace dependency edge a
-    // bare specifier resolves through (the coverage gate refuses one) — the
-    // alias is its resolution road, never a substitute for the packaging: each
-    // of these packages publishes the very same subpath through its OWN
-    // `exports`, which the last case in this block proves for every emitted
-    // specifier. An alias goes when its package joins the required set (or the
-    // guarded road gets a resolution of its own).
+    // The aliases this change does not delete, pinned BY NAME so a
+    // re-introduced one for any other package fails here. A guardedOptional
+    // package is outside `cinatra.extensions`, so it cannot take the workspace
+    // dependency edge a bare specifier needs; its alias goes when it joins the
+    // required set (or the guarded road gets its own resolution).
     //
-    // The four blog displays (lifecycle-c W9) enter here: they are companion,
-    // dev-universe extensions, so they take the guarded-optional road the CMS
-    // snapshot display already takes.
+    // The blog-idea display’s two subpaths are on the same guarded-optional
+    // road: the companion tip publishes them through its own `exports`, and the
+    // host alias is their resolution road. The committed companion pin predates
+    // those renderers, so the generated map emits them only once the rolling
+    // dev-lock bump advances that pin — the roster names them either way, and
+    // the emitted alias-backed set stays EXACTLY the roster’s emitted part.
+    //
+    // The picture and post displays join that roster on the same road: they
+    // are companion, dev-universe extensions, so they take the
+    // guarded-optional alias road the CMS snapshot display already takes,
+    // and each publishes the very same subpath through its OWN `exports`.
     const buildConfig = buildConfigAliases();
-    const aliased = emittedRendererSpecifiers().filter(
-      (s) => tsconfigResolves(s) || buildConfig.has(s),
-    );
-    expect(aliased).toEqual([
+    const emitted = emittedRendererSpecifiers();
+    const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
+    const ROSTER = [
       "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
       "@cinatra-ai/blog-image-artifact/src/renderers/detail",
@@ -1489,8 +1492,36 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
-    ]);
+    ];
+    expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)));
+    // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.
+    expect(aliased.length).toBeGreaterThanOrEqual(4);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
+  });
+
+  it("the blog-idea display's two renderer subpaths carry the guarded-optional alias road", () => {
+    // Acceptance item 2: `config/build-config.manifest.json` contains the exact
+    // detail and preview aliases and the generated `tsconfig.json` matches it.
+    // Without both, the packaging rule refuses the companion's tip with "has no
+    // resolution road" and the rolling dev-lock bump stops.
+    const manifest = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "config/build-config.manifest.json"), "utf8"),
+    );
+    const targets = new Map((manifest.tsconfigPaths ?? []).map((e) => [e.alias, e.target]));
+    for (const which of ["detail", "preview"]) {
+      const spec = `@cinatra-ai/blog-idea-artifact/src/renderers/${which}`;
+      expect(targets.get(spec), spec).toBe(
+        `./extensions/cinatra-ai/blog-idea-artifact/src/renderers/${which}.tsx`,
+      );
+      expect(tsconfigResolves(spec), spec).toBe(true);
+    }
+    // Acceptance item 4: no package-name conditional — the generator judges the
+    // resolution road, never the package's name.
+    const generator = readFileSync(
+      path.join(REPO_ROOT, "scripts/extensions/generate-extension-manifest.mjs"),
+      "utf8",
+    );
+    expect(generator.includes("blog-idea-artifact")).toBe(false);
   });
 
   it("every emitted renderer specifier is published by its own package at the generator's exports key", () => {
