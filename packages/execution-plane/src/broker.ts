@@ -33,7 +33,7 @@
  *    redaction hook to the stdio retention sink, never into the audit record.
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -109,6 +109,27 @@ type AuditRecordDetail = {
 
 export type ExecutionBrokerOptions = {
   worker: SandboxWorker;
+  /**
+   * THE L0 IMAGE THIS BROKER STAGES SKILL SNAPSHOTS FROM.
+   *
+   * Staging populates the per-job read-only skills volume through a transient
+   * helper container (`docker create` + `docker cp` in `staging.ts`), and that
+   * container needs an image. The broker used to resolve one on its own, with
+   * no argument — so it always took `CINATRA_SANDBOX_L0_IMAGE` or the local-dev
+   * default tag, whatever image its WORKER had actually been given. The two
+   * agree in production (both read the same environment variable) and they used
+   * to agree in the batteries too, because the battery built the bare default
+   * tag. They stopped agreeing the moment a battery started building its L0
+   * image under a tag derived from the job it runs in — a tag no environment
+   * variable names — and every staged-skills open then failed closed against an
+   * image that job never built (cinatra#3327).
+   *
+   * Absent ⇒ `resolveL0ImageRef()` exactly as before, so the environment
+   * variable and the local-dev default keep deciding and the production road is
+   * byte-identical. Present ⇒ this ref, validated the same way. A caller that
+   * builds its L0 image under a name of its own passes that same name here.
+   */
+  imageRef?: string;
   auditSink: ExecutionAuditSink;
   /**
    * The DURABLE PRE-DISPATCH RESERVATION seam (cinatra#2266 G1). Present ⇒ the
@@ -572,6 +593,90 @@ class BoundedSemaphore {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE SANDBOX PUBLISH (cinatra#3030, epic #3023 W6; plan (C) item 0.21).
+//
+//   item 0.21: "The folder is host-side and is never mounted into a sandbox:
+//   [...] a sandbox publishes a file from its own workspace into the folder
+//   through one tool that copies it across the broker; the execution plane's
+//   workspace, its quota and its no-host-data rule stay as they are."
+//
+// SO THE BYTES TRAVEL, AND NOTHING ELSE DOES. The publish is not a new mount, a
+// new volume or a new share: it is ONE ORDINARY COMMAND on the job's existing
+// audited channel, whose stdout carries the file's bytes back to the host, which
+// then writes them into the run folder itself. Everything the command channel
+// already guarantees therefore holds unchanged and BY CONSTRUCTION — one voucher
+// bound to the exact command text, one liveness revalidation, one admission, one
+// audit record, the egress clamp — because `publishFile` submits THROUGH `exec`
+// rather than around it. No docker argument is added anywhere, so the
+// no-host-bind-mount invariant is untouched.
+//
+// The path is validated on the HOST, before the command text is ever assembled,
+// because that text is what the voucher signs: a path carrying a shell
+// metacharacter would let one signed command mean more than one thing.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE PUBLISH'S REAL CEILING, and it is the CHANNEL'S, not the run folder's.
+ *
+ * Item 0.21 gives the run folder a per-file cap equal to the upload cap, and a
+ * file that arrives there by any other road may be that large. A file that
+ * arrives BY PUBLISH cannot: the only channel a sandbox has is the command
+ * channel's stdout, which the worker retains to `maxStdioBytes` and flags as
+ * truncated beyond it, and `base64` costs four bytes of stdout per three bytes
+ * of file. So the largest file a publish can carry WHOLE is
+ * `floor(maxStdioBytes * 3 / 4)`, and a constant advertising the folder's own
+ * cap would be a number no publish could ever reach — every file between the two
+ * bounds would be refused by a cap the caller was never told about.
+ *
+ * The cap is therefore DERIVED from the ceiling that actually binds, so the
+ * refusal and the advertised number are the same number.
+ */
+export function publishFileMaxBytes(maxStdioBytes: number): number {
+  return Math.floor((maxStdioBytes * 3) / 4);
+}
+
+/** The publish ceiling under the DEFAULT sandbox limits. */
+export const PUBLISH_FILE_MAX_BYTES = publishFileMaxBytes(
+  DEFAULT_SANDBOX_LIMITS.maxStdioBytes,
+);
+
+/** Workspace-relative, no parent segment, and only characters that mean exactly
+ *  themselves inside the command the voucher signs. Returns the refusal, or
+ *  null when the path is publishable. */
+export function validatePublishPath(workspacePath: string): string | null {
+  if (typeof workspacePath !== "string" || workspacePath.trim().length === 0) {
+    return "a published path must be a non-empty workspace-relative path";
+  }
+  if (workspacePath.startsWith("/") || /^[A-Za-z]:/.test(workspacePath)) {
+    return "a published path must be workspace-relative — a sandbox has no host path to publish from";
+  }
+  if (workspacePath.split(/[\\/]/).some((segment) => segment === "..")) {
+    return "a published path may not leave the workspace";
+  }
+  if (!/^[A-Za-z0-9._\-/]+$/.test(workspacePath)) {
+    return (
+      "a published path may contain only letters, digits, dot, dash, underscore and " +
+      "the path separator — the command the voucher signs must mean exactly one thing"
+    );
+  }
+  return null;
+}
+
+export type PublishFileRefusalReason = "invalid_path" | "not_readable" | "too_large" | "refused";
+
+export type PublishFileResult =
+  | {
+      ok: true;
+      /** The workspace-relative path that was published. */
+      path: string;
+      byteLength: number;
+      sha256: string;
+      /** The file's bytes, base64. The host writes them into the run folder. */
+      bytesBase64: string;
+    }
+  | { ok: false; reason: PublishFileRefusalReason; message: string };
+
 export class ExecutionBroker {
   private readonly jobs = new Map<string, BrokerJob>();
   private readonly quotas: BrokerQuotas;
@@ -745,7 +850,7 @@ export class ExecutionBroker {
           skillsVolume = await this.volumeOps.stageSkills(
             jobId,
             openOpts.stagedSkills,
-            resolveL0ImageRef(),
+            resolveL0ImageRef(this.opts.imageRef),
           );
         } catch (err) {
           return {
@@ -1836,4 +1941,80 @@ export class ExecutionBroker {
     };
     return record;
   }
+
+  /**
+   * THE ONE COMMAND a publish runs. Exposed as a static so a mint site signs
+   * EXACTLY the text that will be executed — a voucher minted for anything else
+   * is a voucher for a different command, and the broker refuses it. `base64`
+   * because stdout is the only channel a sandbox has, and raw bytes on it would
+   * not survive the transport.
+   */
+  static publishFileCommand(workspacePath: string): string {
+    return `base64 -w 0 -- ${workspacePath}`;
+  }
+
+  /**
+   * Publish ONE file from the job's own workspace to the host (cinatra#3030,
+   * item 0.21). The host's caller then writes those bytes into the run folder.
+   *
+   * Runs THROUGH `exec`, so every guarantee of the audited command channel
+   * applies without restating any of it here, and no new mount is created.
+   */
+  async publishFile(
+    jobId: string,
+    workspacePath: string,
+    voucher: string,
+  ): Promise<PublishFileResult> {
+    const invalid = validatePublishPath(workspacePath);
+    if (invalid !== null) {
+      // Refused BEFORE the sandbox is asked anything: an unpublishable path
+      // never becomes a command, so it never occupies a permit or a record.
+      return { ok: false, reason: "invalid_path", message: invalid };
+    }
+    const result = await this.exec(
+      jobId,
+      ExecutionBroker.publishFileCommand(workspacePath),
+      voucher,
+    );
+    if (!result.ok) {
+      return { ok: false, reason: "refused", message: result.message };
+    }
+    const cap = publishFileMaxBytes(this.limits.maxStdioBytes);
+    if (result.result.stdoutTruncated) {
+      // Half a file is not a file. The truncation means the answer no longer
+      // carries what was asked for, so it is a refusal, never a short write.
+      return {
+        ok: false,
+        reason: "too_large",
+        message:
+          `the sandbox's answer for "${workspacePath}" was truncated; a published file must ` +
+          `arrive whole (cap ${cap} bytes)`,
+      };
+    }
+    if (result.result.exitCode !== 0) {
+      return {
+        ok: false,
+        reason: "not_readable",
+        message:
+          `the sandbox could not read "${workspacePath}"` +
+          (result.result.stderr ? `: ${result.result.stderr.trim()}` : ""),
+      };
+    }
+    const bytes = Buffer.from(result.result.stdout.trim(), "base64");
+    if (bytes.byteLength > cap) {
+      return {
+        ok: false,
+        reason: "too_large",
+        message: `"${workspacePath}" is ${bytes.byteLength} bytes; the publish cap is ${cap} bytes`,
+      };
+    }
+    return {
+      ok: true,
+      path: workspacePath,
+      byteLength: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytesBase64: bytes.toString("base64"),
+    };
+  }
+
 }

@@ -3,8 +3,10 @@
  * spec design@923fa0d8 `specs/app-artifacts.html` §I/§II). It lists exactly
  * the acting user's artifacts, for EVERY user — there is no view toggle,
  * because the library is the lone view. The page opens with the standard page
- * header (title Artifacts, a one-line description, a closing etched rule),
- * then the library's own toolbar over the list.
+ * header (title Artifacts, a one-line description); the library's own toolbar
+ * then stands directly beneath it, in the closing etched rule's place — a
+ * toolbar under a page header REPLACES that rule and is never stacked with it,
+ * so the header is mounted with `divider={false}` (cinatra#3283).
  *
  * The former administrator surfaces moved off this page: type definitions,
  * stored objects, and change-set restore now live on the
@@ -57,6 +59,7 @@ export default async function ArtifactsPage({ searchParams }: PageProps) {
       <PageHeader
         title="Artifacts"
         description="Everything your agents and uploads have produced."
+        divider={false}
       />
       <PageContent className="flex flex-col gap-4 pb-8">
         <LibraryMode
