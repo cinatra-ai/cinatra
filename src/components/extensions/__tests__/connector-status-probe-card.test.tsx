@@ -118,13 +118,75 @@ describe("ConnectorStatusProbeCard — Model-A status card (#1101)", () => {
     expect(badge()?.getAttribute("data-status")).toBe("disconnected");
   });
 
-  it("renders no Check control when the connector declares no status-probe", async () => {
+  // cinatra#3214 — the drawing carries "the Check action beneath it" on EVERY
+  // connector's setup page, so a connector that declares no `status-probe` no
+  // longer loses the control. Nothing is invented: with no declared probe the
+  // card re-runs the HOST's own shipped readiness road (the same
+  // `resolveConnectorBadgeState` signal that seeded it and paints the
+  // connector's /connectors card), and with neither road it renders the
+  // drawing's disabled treatment rather than a control that cannot answer.
+  it("runs the host's shipped readiness road when the connector declares no status-probe", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const recheck = vi.fn().mockResolvedValue({ connected: true, connectedLabel: "2" });
+    await render({
+      installId: "inst-1",
+      actionId: undefined,
+      initialConnected: false,
+      recheck,
+    });
+    const check = checkButton();
+    expect(check).toBeTruthy();
+    expect(check!.disabled).toBe(false);
+
+    await act(async () => {
+      check!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The host road ran, and no connector action id was invented for it.
+    expect(recheck).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(badge()?.getAttribute("data-status")).toBe("connected");
+    expect(badge()?.textContent?.trim()).toBe("2");
+  });
+
+  it("renders Check in the drawing's disabled treatment when there is no road at all", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     await render({
       installId: "inst-1",
       actionId: undefined,
       initialConnected: false,
     });
-    expect(checkButton()).toBeFalsy();
+    const check = checkButton();
+    expect(check).toBeTruthy();
+    expect(check!.disabled).toBe(true);
+    expect(check!.getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      check!.click();
+      await Promise.resolve();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(badge()?.getAttribute("data-status")).toBe("disconnected");
+  });
+
+  it("degrades to Disconnected when the host readiness road throws", async () => {
+    const recheck = vi.fn().mockRejectedValue(new Error("readiness read blew up"));
+    await render({
+      installId: "inst-1",
+      actionId: undefined,
+      initialConnected: true,
+      connectedLabel: "2",
+      recheck,
+    });
+    await act(async () => {
+      checkButton()!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(badge()?.getAttribute("data-status")).toBe("disconnected");
   });
 });

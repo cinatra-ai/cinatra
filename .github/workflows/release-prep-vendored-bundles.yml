@@ -30,7 +30,7 @@ on:
 jobs:
   pack-bundle:
     name: Pack vendored bundle tarball
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     env:
       # The fetcher's dev-mode gate is hard — CI sets it explicitly because

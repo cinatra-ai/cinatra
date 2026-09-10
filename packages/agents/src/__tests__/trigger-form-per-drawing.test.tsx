@@ -148,9 +148,13 @@ describe("Estimated run duration says only what the drawing draws", () => {
     expect(screen.getByText("About 2.0 hr – 4.0 hr.")).toBeTruthy();
   });
 
-  it("draws no line at all where there is no estimate — the drawing gives none", () => {
+  it("draws the line where there is no estimate too — over the declared step count, never 'Unavailable.' (cinatra#3224)", () => {
+    // "An Estimated run duration line sits above the actions" — the drawing
+    // gives the line with no condition on it, so the no-history reading is its
+    // populated shape over the agent's declared step count.
     renderForm({ durationEstimate: null });
-    expect(screen.queryByText("Estimated run duration")).toBeNull();
+    expect(screen.getByText("Estimated run duration")).toBeTruthy();
+    expect(screen.getByText("About 1 min – 10 min.")).toBeTruthy();
     expect(screen.queryByText("Unavailable.")).toBeNull();
   });
 });

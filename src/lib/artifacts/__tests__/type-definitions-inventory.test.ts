@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 
 import {
   humanizeTypeLocalPart,
-  humanizeExtensionPackage,
   deriveTypeDefinitionRows,
 } from "../type-definitions-inventory";
+import { artifactKindLabelFor } from "../artifact-kind-label";
 
 describe("humanizeTypeLocalPart", () => {
   it("humanizes the local part after the namespace separator (sentence case)", () => {
@@ -20,16 +20,23 @@ describe("humanizeTypeLocalPart", () => {
   });
 });
 
-describe("humanizeExtensionPackage", () => {
-  it("title-cases the package base with the scope stripped", () => {
-    expect(humanizeExtensionPackage("@cinatra-ai/email")).toBe("Email");
-    expect(humanizeExtensionPackage("@cinatra-ai/prospect-lists")).toBe("Prospect Lists");
-    expect(humanizeExtensionPackage("@acme/support-desk")).toBe("Support Desk");
+// The Defined by / Used by columns no longer carry their own copy of the
+// package-id derivation: they read the ONE kind label, which prefers what the
+// pack declares and floors to exactly the derivation these cases pinned.
+describe("the extension columns read the one declared-first kind label", () => {
+  it("floors to the former derivation for a package that declares nothing", () => {
+    expect(artifactKindLabelFor("@cinatra-ai/email")).toBe("Email");
+    expect(artifactKindLabelFor("@cinatra-ai/prospect-lists")).toBe("Prospect Lists");
+    expect(artifactKindLabelFor("@acme/support-desk")).toBe("Support Desk");
   });
 
-  it("drops a local / version suffix before humanizing", () => {
-    expect(humanizeExtensionPackage("@cinatra-ai/email:draft")).toBe("Email");
-    expect(humanizeExtensionPackage("@cinatra-ai/email@1.2.0")).toBe("Email");
+  it("drops a local / version suffix before resolving", () => {
+    expect(artifactKindLabelFor("@cinatra-ai/email:draft")).toBe("Email");
+    expect(artifactKindLabelFor("@cinatra-ai/email@1.2.0")).toBe("Email");
+  });
+
+  it("prefers the DECLARED label over the derivation", () => {
+    expect(artifactKindLabelFor("@cinatra-ai/zip-artifact")).toBe("Archive");
   });
 });
 

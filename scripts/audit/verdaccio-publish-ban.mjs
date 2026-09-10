@@ -1959,7 +1959,7 @@ const CANARY_PROOF_CANONICAL = [
   "  # `proof` context posted by works-after-proof.yml; a second `proof` job would",
   "  # make the required context ambiguous (merge-group-coverage-guard fails closed).",
   "  canary-proof:",
-  "    runs-on: ubuntu-latest",
+  "    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-latest\"') }}",
   "    timeout-minutes: 10",
   "    # Reads VERDACCIO_REGISTRY_URL + VERDACCIO_PUBLISH_TOKEN / _NEXT from this",
   "    # environment. The env must carry NO required-reviewer protection, else the",

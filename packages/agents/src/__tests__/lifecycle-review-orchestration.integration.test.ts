@@ -36,10 +36,11 @@ import {
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2039";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2039-orchestration";
 

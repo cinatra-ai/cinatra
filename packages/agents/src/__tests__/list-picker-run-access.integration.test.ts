@@ -34,6 +34,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // The session seam. `caller` is swapped per test; `requireAdminSession` throws
@@ -96,7 +97,7 @@ const OTHER_ORG_ID = "org-3050-other";
 // "unused:unused" credential pair.
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
-  typeof dbUrl === "string" && dbUrl.length > 0 && !dbUrl.includes("unused:unused");
+  typeof dbUrl === "string" && dbUrl.length > 0 && !isPlaceholderDbUrl(dbUrl);
 
 // The run-creation guard reads the org's lifecycle from `public."organization"`.
 const AUTH = { orgId: RUN_ORG_ID, can: () => true };

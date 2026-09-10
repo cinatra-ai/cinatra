@@ -20,6 +20,8 @@ import {
   webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   assertArtifactRendererPackaging,
+  artifactKindLabelEntries,
+  emitArtifactKindLabels,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { GENERATED_MANIFEST_FILES } from "../generated-manifest-files.mjs";
@@ -41,6 +43,10 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       // Agent UI bindings + role bindings (cinatra#151 Stage 5).
       "src/lib/generated/agent-bindings.ts",
+      // Declared artifact-kind labels (cinatra#2926 / #3023): the import-free
+      // map from a kind:"artifact" package to the label the PACK declares for
+      // its own kind (cinatra.displayName).
+      "src/lib/generated/artifact-kind-labels.ts",
       // Artifact-renderer dispatch spine (cinatra#1629, epic #1620 S2): the
       // literal-import BUILD table of extension-shipped cinatra.artifact.ui
       // renderer modules. Inert until an artifact declares `ui` (S3+/M1).
@@ -1451,23 +1457,59 @@ describe("the generated display map imports through package exports, never a hos
     expect(required.filter((s) => buildConfig.has(s))).toEqual([]);
   });
 
-  it("the alias-backed remainder is EXACTLY the guarded-optional display, named and bounded", () => {
-    // The two aliases this change does not delete, pinned by name so a
+  it("the alias-backed remainder is EXACTLY the guarded-optional displays, named and bounded", () => {
+    // The aliases this change does not delete, pinned BY NAME so a
     // re-introduced one for any other package fails here. A guardedOptional
     // package is outside `cinatra.extensions`, so it cannot take the workspace
     // dependency edge a bare specifier needs; its alias goes when it joins the
     // required set (or the guarded road gets its own resolution).
+    //
+    // The blog-idea display’s two subpaths are on the same guarded-optional
+    // road: the companion tip publishes them through its own `exports`, and the
+    // host alias is their resolution road. The committed companion pin predates
+    // those renderers, so the generated map emits them only once the rolling
+    // dev-lock bump advances that pin — the roster names them either way, and
+    // the emitted alias-backed set stays EXACTLY the roster’s emitted part.
     const buildConfig = buildConfigAliases();
-    const aliased = emittedRendererSpecifiers().filter(
-      (s) => tsconfigResolves(s) || buildConfig.has(s),
-    );
-    expect(aliased).toEqual([
+    const emitted = emittedRendererSpecifiers();
+    const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
+    const ROSTER = [
+      "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
-    ]);
+    ];
+    expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)));
+    // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.
+    expect(aliased.length).toBeGreaterThanOrEqual(4);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);
+  });
+
+  it("the blog-idea display's two renderer subpaths carry the guarded-optional alias road", () => {
+    // Acceptance item 2: `config/build-config.manifest.json` contains the exact
+    // detail and preview aliases and the generated `tsconfig.json` matches it.
+    // Without both, the packaging rule refuses the companion's tip with "has no
+    // resolution road" and the rolling dev-lock bump stops.
+    const manifest = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "config/build-config.manifest.json"), "utf8"),
+    );
+    const targets = new Map((manifest.tsconfigPaths ?? []).map((e) => [e.alias, e.target]));
+    for (const which of ["detail", "preview"]) {
+      const spec = `@cinatra-ai/blog-idea-artifact/src/renderers/${which}`;
+      expect(targets.get(spec), spec).toBe(
+        `./extensions/cinatra-ai/blog-idea-artifact/src/renderers/${which}.tsx`,
+      );
+      expect(tsconfigResolves(spec), spec).toBe(true);
+    }
+    // Acceptance item 4: no package-name conditional — the generator judges the
+    // resolution road, never the package's name.
+    const generator = readFileSync(
+      path.join(REPO_ROOT, "scripts/extensions/generate-extension-manifest.mjs"),
+      "utf8",
+    );
+    expect(generator.includes("blog-idea-artifact")).toBe(false);
   });
 
   it("every emitted renderer specifier is published by its own package at the generator's exports key", () => {
@@ -1563,5 +1605,49 @@ describe("the packaging rule: a display is published by its own package, never b
         hasDependencyEdge: false,
       }),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DECLARED artifact-kind label (cinatra#2926 / #3023 — the core/extension
+// border). What the generator CARRIES is the pack's own `cinatra.displayName`;
+// it derives nothing and holds no roster. This pins the filtering, the keying,
+// the trimming and the byte-stable ordering on RECORDS the suite controls,
+// rather than on the shipped fleet's package names.
+// ---------------------------------------------------------------------------
+describe("artifactKindLabelEntries — carried, never derived", () => {
+  const records = [
+    { packageName: "@x/zip-artifact", kind: "artifact", displayName: "  Archive  " },
+    { packageName: "@x/a-artifact", kind: "artifact", displayName: "Alpha" },
+    // NOT an artifact pack: a declared display name on another kind is carried
+    // by that kind's own road, never into the artifact kind-label map.
+    { packageName: "@x/some-artifact", kind: "connector", displayName: "Looks Artifactish" },
+    { packageName: "@x/agent-thing", kind: "agent", displayName: "An Agent" },
+    // An artifact pack that has NOT spoken: absent, so the host floors it.
+    { packageName: "@x/silent-artifact", kind: "artifact" },
+    { packageName: "@x/blank-artifact", kind: "artifact", displayName: "   " },
+    { packageName: "@x/wrong-artifact", kind: "artifact", displayName: 7 },
+  ];
+
+  it("carries only kind:artifact records that declare a label, trimmed and keyed by package", () => {
+    expect(artifactKindLabelEntries(records)).toEqual([
+      { packageName: "@x/a-artifact", label: "Alpha" },
+      { packageName: "@x/zip-artifact", label: "Archive" },
+    ]);
+  });
+
+  it("emits byte-identically whatever order the records arrive in", () => {
+    const shuffled = [...records].reverse();
+    expect(emitArtifactKindLabels(shuffled)).toBe(emitArtifactKindLabels(records));
+    const emitted = emitArtifactKindLabels(records);
+    expect(emitted).toContain('"@x/zip-artifact": "Archive",');
+    expect(emitted).not.toContain("@x/some-artifact");
+    expect(emitted).not.toContain("@x/silent-artifact");
+  });
+
+  it("emits a well-formed EMPTY map when no pack has declared a label", () => {
+    expect(emitArtifactKindLabels([])).toContain(
+      "export const GENERATED_ARTIFACT_KIND_LABELS: Readonly<Record<string, string>> = {\n};",
+    );
   });
 });

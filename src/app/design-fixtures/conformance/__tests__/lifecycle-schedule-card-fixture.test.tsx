@@ -160,6 +160,35 @@ describe("the conformance harness mounts for the schedule card", () => {
     await waitFor(() => expect(save.disabled).toBe(true));
   });
 
+  it("says the FIRING on the row, and only on the two fired readings", () => {
+    // THE MERGE SEAM THIS GUARDS (cinatra#3174 fix leg 5). These rows once
+    // elected the spent reading off `body.released` — the stamp the release job
+    // writes when it OPENS the gate. The shipped card stopped reading it: a
+    // one-off whose gate opened and whose run then failed before starting was
+    // never spent, and section VI has no reading for that. The firing is now the
+    // resolver's own durable answer, which travels beside the body, so a row
+    // that means "this schedule has fired" has to say it here or the card draws
+    // the configured reading over a spent schedule — which is exactly the
+    // departure the second graded round measured.
+    const fired = LIFECYCLE_SCHEDULE_CARD_FIXTURES.filter((row) => row.firedOnce);
+    expect(fired.map((row) => row.surfaceId).sort()).toEqual([
+      "schedule-card-fired",
+      "schedule-card-fired-recurring",
+      "schedule-card-fired-recurring-floor",
+    ]);
+    // And it is not a restatement of the gate stamp: the spent one-off's body
+    // still carries `released`, and the fired recurring one does not carry it at
+    // all, so the two fields are provably not the same claim.
+    const spent = LIFECYCLE_SCHEDULE_CARD_FIXTURES.find(
+      (row) => row.surfaceId === "schedule-card-fired",
+    );
+    const recurring = LIFECYCLE_SCHEDULE_CARD_FIXTURES.find(
+      (row) => row.surfaceId === "schedule-card-fired-recurring",
+    );
+    expect(spent?.body.phase === "settled" && spent.body.released).toBe(true);
+    expect(recurring?.body.phase === "settled" && recurring.body.released).toBe(false);
+  });
+
   it("names none of the card's own words in the harness itself", () => {
     const harness = readFileSync(
       path.join(__dirname, "..", "lifecycle-schedule-card-fixtures.tsx"),
