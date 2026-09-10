@@ -35,6 +35,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { randomUUID } from "node:crypto";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub without the named
@@ -63,7 +64,13 @@ const ADMIN = "u-admin-1381";
 const TEAM = "team-growth-1381";
 
 let uniq = 0;
-const nextId = (p: string) => `${p}-${Date.now()}-${uniq++}`;
+// The id must NOT be derived from the wall clock: two processes (or two runs
+// of this file against the same database) that start inside the same
+// millisecond mint the same id and collide on a UNIQUE constraint no case is
+// waiting on. A per-process random tag plus the counter is unique without
+// reading the clock at all.
+const RUN_TAG = randomUUID().slice(0, 8);
+const nextId = (p: string) => `${p}-${RUN_TAG}-${uniq++}`;
 
 let runPostgresQueriesSync: typeof import("@/lib/postgres-sync").runPostgresQueriesSync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
@@ -641,16 +648,44 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1381 the atomic apply, against a real dat
       await a.query("BEGIN");
       await b.query("BEGIN");
       await insert(a, nextId("req-a"));
-      // B blocks on the unique constraint until A resolves.
-      const bInsert = insert(b, nextId("req-b"));
+      // B blocks on the unique constraint until A resolves. Its rejection is
+      // this case's EXPECTED outcome, but it fires while the COMMIT below is
+      // awaited -- before any later expect(...).rejects could bind. A bare
+      // promise carried across that await is therefore reported as an
+      // UNHANDLED rejection (all nine cases pass, the process still fails).
+      // Settle it into a value HERE, synchronously at creation, so the
+      // rejection always has a handler and the assertion below reads the
+      // recorded outcome instead of racing for it.
+      const bOutcome = insert(b, nextId("req-b")).then(
+        () => ({ rejected: false as const, error: undefined as unknown }),
+        (error: unknown) => ({ rejected: true as const, error }),
+      );
       await a.query("COMMIT");
-      await expect(bInsert).rejects.toMatchObject({ code: "23505", constraint: "mpr_one_pending" });
+      const outcome = await bOutcome;
+      expect(outcome.rejected).toBe(true);
+      expect(outcome.error).toMatchObject({ code: "23505", constraint: "mpr_one_pending" });
       await b.query("ROLLBACK");
 
       expect(countRows("memory_promotion_request", "object_id = $1 AND status = 'pending'", [objectId])).toBe(1);
     } finally {
       await a.end().catch(() => {});
       await b.end().catch(() => {});
+    }
+  });
+});
+
+// cinatra#3360: the ids this file mints must NOT be derived from the wall
+// clock. Two runs of this file that start inside the same millisecond mint
+// the same pending-object id and collide on the mpr_one_pending UNIQUE
+// constraint, and that rejection belongs to no case. This case pins the
+// property directly, without a database, so a regression is caught even on a
+// host whose race window never opens.
+describe("cinatra#3360 the minted ids do not read the wall clock", () => {
+  it("mints unique ids that carry no millisecond-timestamp segment", () => {
+    const ids = [nextId("mem-onepending"), nextId("mem-onepending"), nextId("req-b")];
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(id).not.toMatch(/-1\d{12}(?:-|$)/);
     }
   });
 });
