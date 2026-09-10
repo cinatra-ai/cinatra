@@ -49,7 +49,9 @@ import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import {
   buildFinalizeMaterializationQuery,
+  buildImageGenerationProvenanceQuery,
   claimMaterialization,
+  type ImageGenerationProvenance,
 } from "./materialization-ledger";
 import { appendRepresentationWithExpectedBase } from "./representation-store";
 import { deriveSubstanceKey } from "./resource-store";
@@ -129,7 +131,17 @@ export async function appendArtifactRevision(input: {
   nodeId: string;
   artifactId: string;
   baseRepresentationRevisionId: string;
-  content: string;
+  /**
+   * The revision's bytes.
+   *
+   * A `string` is the text road this module shipped with and is encoded UTF-8.
+   * A `Uint8Array` is the road a PICTURE takes (plan (C) item 0.28,
+   * cinatra#3032): image bytes are not text, and encoding them as UTF-8 would
+   * not append the picture that was generated — it would append a mangling of
+   * it. Both roads hash and stream the SAME bytes they write, so the ledger's
+   * content hash still identifies exactly what landed.
+   */
+  content: string | Uint8Array;
   mime: string;
   createdBy: string | null;
   /** The extension the write is scoped to — the ledger row's own column. */
@@ -148,6 +160,13 @@ export async function appendArtifactRevision(input: {
    * instead of opening a second one (item 0.30).
    */
   declaredReviewTaskId?: string | null;
+  /**
+   * What produced THIS revision, when a picture produced it (item 0.28: "the
+   * prompt, the provider and the model on the ledger row of that write"). It is
+   * written into the SAME transaction as the ledger finalize, so a finalized
+   * row can never be missing the provenance of the write that finalized it.
+   */
+  imageProvenance?: ImageGenerationProvenance | null;
 }): Promise<ArtifactRevisionAppendResult> {
   ensurePostgresSchema();
   const schema = schemaId();
@@ -214,7 +233,13 @@ export async function appendArtifactRevision(input: {
   // re-drive of the same node with the same bytes returns the finalized refs
   // instead of appending a second revision.
   // ------------------------------------------------------------------
-  const contentHash = createHash("sha256").update(input.content, "utf8").digest("hex");
+  // The bytes exactly as they will be written — text encoded UTF-8, a picture
+  // untouched — so the ledger's content hash names what actually lands.
+  const contentBytes =
+    typeof input.content === "string"
+      ? Buffer.from(input.content, "utf8")
+      : Buffer.from(input.content);
+  const contentHash = createHash("sha256").update(contentBytes).digest("hex");
   const ledgerOutputId = appendLedgerOutputId({
     nodeId: input.nodeId,
     artifactId: input.artifactId,
@@ -278,7 +303,7 @@ export async function appendArtifactRevision(input: {
     // Naming input for the store's legacy key scope only — a content-addressed
     // write keys off the digest, so this never becomes the row's identity.
     representationRevisionId: randomUUID(),
-    stream: Readable.from([Buffer.from(input.content, "utf8")]),
+    stream: Readable.from([contentBytes]),
     declaredMime: input.mime,
     // The same soft default the creation path takes; an appended revision is not
     // a different class of bytes from a first one.
@@ -464,6 +489,18 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
             artifactId: input.artifactId,
             representationRevisionId,
           }),
+          // The picture's own prompt, provider and model on the row this write
+          // finalizes (item 0.28). Absent for every write that made no picture.
+          ...(input.imageProvenance
+            ? [
+                buildImageGenerationProvenanceQuery({
+                  schema,
+                  ledgerId: claim.ledgerId,
+                  orgId: input.orgId,
+                  provenance: input.imageProvenance,
+                }),
+              ]
+            : []),
           ...(producedEventOp ? [producedEventOp] : []),
           ...(typeof input.declaredReviewTaskId === "string" &&
           input.declaredReviewTaskId.length > 0
