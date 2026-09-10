@@ -143,13 +143,19 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**None.** All five pins were reconciled on 2026-08-30 and every one of them
-reads `match` against the published manifests, including on the `push`-to-`main`
-arm that is red on any non-`match` outcome. The record of what each adoption
-changed is below; the five bodies that were drifting are kept as the checker's
-own drift fixture (see `superseded-pins-2026-08-28/` beside the frozen
-published ones), because a gate whose drift path has no input is a gate whose
-drift path is untested.
+**`app` and `app-components`.** The 2026-08-30 reconciliation below left all
+five pins reading `match`; three of them have moved again since. Measured on
+`main` at 0a818cb5977c (cinatra#3372): `app` and `app-components` report
+`drift` in both hashes and are adopted under the issue that owns their surfaces
+(cinatra#3189); their mapped paths are touched by cinatra-ai/cinatra#3329,
+which is why that pull request is red on them. `app-connectors` reported
+`drift` in the same reading and is adopted by the 2026-09-10 record below;
+`app-extensions` and `app-notifications` read `match`.
+
+The bodies a pin named before an adoption are kept as the checker's own drift
+input (see `superseded-pins-2026-08-28/` beside the frozen published ones, and
+every row a later frozen fetch superseded), because a gate whose drift path has
+no input is a gate whose drift path is untested.
 
 ## Reconciliation record
 
@@ -210,6 +216,52 @@ pin needed to be deferred, and none was.
 
 `allowlist.json` gained nothing — it is shrink-only and did not move. Every
 surface in every adopted manifest has a driver.
+
+### 2026-09-10 — `app-connectors` (cinatra#3372)
+
+Adopted the published `app-connectors` manifest fetched from the pin file's
+`publishedBaseUrl` on 2026-09-10 (HTTP 200, 4821 bytes,
+`2b98802f27fb…`), byte-identical on a second fetch. The committed artifact
+under `tests/e2e/design/conformance/manifests/app-connectors.json` is that
+response verbatim and both hashes in `conformance-pins.json` were re-derived
+from it, never typed. The four other pins were not touched.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app-connectors` | `drift` | three surfaces gained: `connector-sharing`, `connector-sharing-rollup`, `connector-sharing-locked`; the eight surfaces the pin already declared are byte-identical; the embedded spec-content hash moved with them | no driver: none of the three is drawn by anything on `main` |
+
+What moved, surface by surface:
+
+- **`connector-sharing`** declares four field bindings (`name <- connection.connectionId`, `url <- connection.connectorKey`, `access <- policy.runListVisibility`, `co-owners <- connection.coOwners`), four actions (`select-scope -> scopes-selected`, `search-people -> people-listed`, `remove-co-owner -> co-owner-removed`, `save-access -> access-saved`) and the `loading` state.
+- **`connector-sharing-rollup`** and **`connector-sharing-locked`** declare no field, action or state of their own.
+- The eight surfaces already pinned — `connector-connection-filter`, `connector-grid`, `connector-install-cta`, `connector-empty-panel`, `connector-setup`, `connector-multi-setup`, `connector-connections`, `connector-config-tab` — are unchanged, declaration for declaration. Their part of this move is spec-content-only: the spec source changed under an unchanged drawing.
+
+**No driver is written here, and this pull request stops at this record.** A
+driver reads the host code the surface is drawn by, and none of the three
+gained surfaces has any: a whole-tree search of first-party source for every
+literal they declare (`connector-sharing`, `select-scope`, `search-people`,
+`remove-co-owner`, `save-access`, and a per-connection `coOwners` +
+`connectorKey` shape) returns nothing. The `runListVisibility` and `coOwners`
+vocabulary that does exist belongs to the per-project, per-run and per-skill
+co-owner mechanics, which are different surfaces. So the three are recorded
+here by name, `allowlist.json` gains nothing (it is shrink-only), and the
+functional-acceptance suite stays red for them until the host code lands and a
+driver can read it — which is what "preserved" means for this pull request: it
+records the adoption and waits, rather than buying a green with an allowlist
+entry the ratchet forbids.
+
+**No issue owns those three surfaces yet.** A search of this repository's open
+and closed issues for `connector-sharing`, `connector-sharing-rollup`,
+`connector-sharing-locked` and for a per-connection sharing feature found none,
+so this record names the surfaces without one; the issue that draws them will
+name this record back.
+
+The response body is frozen beside the checker's other fixtures under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-10/` with
+its own receipt. A frozen fetch is written FORWARD, never over an earlier one:
+the 2026-08-28 rows still describe the fetch of that day, and the unit suite
+resolves a pin's adopted body from the newest directory that carries its file,
+so the `app-connectors` body of 2026-08-28 is a drift input now.
 
 ## Running it locally
 

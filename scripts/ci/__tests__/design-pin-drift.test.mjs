@@ -33,7 +33,7 @@
 //      criterion 5 a suite CAN hold: every mapped path really exists.
 
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -74,6 +74,23 @@ const FIXTURES = path.join(
   "design-pin-drift",
 );
 const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-08-28");
+/**
+ * Every capture directory, NEWEST FIRST. An adoption after the 2026-08-28
+ * reconciliation freezes the body it adopted in a capture of its own beside
+ * its own receipt, so the ADOPTED body of a pin is the one in the newest
+ * capture that carries its file: `published-2026-09-10` holds the
+ * app-connectors body cinatra#3372 adopted, `published-2026-08-28` holds the
+ * other four (and the app-connectors body that adoption superseded). Freezing
+ * forward instead of overwriting is what keeps each receipt re-derivable: a
+ * row records a fetch that happened, and a later fetch never rewrites it.
+ */
+const CAPTURES = [
+  path.join(FIXTURES, "published-2026-09-10"),
+  FROZEN_PUBLISHED,
+];
+/** The capture whose body a pin's file is adopted from today. */
+const adoptedCaptureFor = (file) =>
+  CAPTURES.find((dir) => existsSync(path.join(dir, file)));
 /**
  * The artifacts the pins named BEFORE the cinatra#3057 reconciliation. They
  * are the suite's drift input now that the published bodies are the adopted
@@ -127,25 +144,64 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     }
   });
 
-  it("the frozen 2026-08-28 published manifests are the ADOPTED bytes and every pin matches", async () => {
-    // The reconciliation's own record, held as an assertion rather than as
-    // prose: the pins name the bytes docs.cinatra.ai served, and the
-    // committed copies under manifests/ are those same bytes verbatim.
+  it("the frozen published captures are the ADOPTED bytes and every pin matches", async () => {
+    // Each adoption's own record, held as an assertion rather than as prose:
+    // the pins name the bytes docs.cinatra.ai served, and the committed copies
+    // under manifests/ are those same bytes verbatim. A pin's adopted body is
+    // the newest capture that carries its file, so an adoption that lands
+    // after 2026-08-28 is held to exactly the same bar as the five that
+    // reconciliation adopted.
     const results = await runCheck({
       pins,
-      fetchManifest: fixtureFetcher(FROZEN_PUBLISHED),
+      fetchManifest: fixtureFetcher((file) => ({
+        body: readFileSync(path.join(adoptedCaptureFor(file), file)),
+      })),
     });
     expect(results).toHaveLength(5);
     expect(outcomesOf(results)).toEqual(["match", "match", "match", "match", "match"]);
     expect(decide({ event: "push-main", results, touchedPinIds: [] }).red).toBe(false);
     for (const pin of pins.manifests) {
+      const adoptedCapture = adoptedCaptureFor(pin.file);
+      expect(adoptedCapture, `${pin.id}: no capture carries the adopted body`).toBeDefined();
       expect(
-        readFileSync(path.join(FROZEN_PUBLISHED, pin.file)),
+        readFileSync(path.join(adoptedCapture, pin.file)),
         `${pin.id}: the committed copy is not the published artifact verbatim`,
       ).toEqual(
         readFileSync(path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file)),
       );
     }
+  });
+
+  it("the 2026-09-10 adoption gained exactly the three connector sharing surfaces", async () => {
+    // cinatra#3372's adoption, asserted against the artifacts themselves: the
+    // published app-connectors manifest declares three surfaces the pinned one
+    // did not, redraws none of the eight it already declared, and retires
+    // none. A later re-pin that quietly drops one of the three, or that redraws
+    // a surface this record calls untouched, cannot leave the record standing.
+    const surfacesOf = (dir) =>
+      new Map(
+        JSON.parse(
+          readFileSync(path.join(dir, "app-connectors.json"), "utf8"),
+        ).surfaces.map((surface) => [surface.id, JSON.stringify(surface)]),
+      );
+    const before = surfacesOf(FROZEN_PUBLISHED);
+    const after = surfacesOf(path.join(FIXTURES, "published-2026-09-10"));
+    expect([...after.keys()].filter((id) => !before.has(id))).toEqual([
+      "connector-sharing",
+      "connector-sharing-rollup",
+      "connector-sharing-locked",
+    ]);
+    expect([...before.keys()].filter((id) => !after.has(id))).toEqual([]);
+    for (const [id, declaration] of before) {
+      expect(after.get(id), `${id}: an already-pinned surface was redrawn`).toBe(declaration);
+    }
+    // The spec source moved under those declarations too, which is why both
+    // hashes are compared and why this is an adoption rather than a re-pin.
+    const embedded = (dir) =>
+      JSON.parse(readFileSync(path.join(dir, "app-connectors.json"), "utf8")).contentHash;
+    expect(embedded(path.join(FIXTURES, "published-2026-09-10"))).not.toBe(
+      embedded(FROZEN_PUBLISHED),
+    );
   });
 
   it("the committed manifest copies are the zero-drift set and every pin matches", async () => {
@@ -255,30 +311,55 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     expect(result.detail).not.toContain("specContentHash");
   });
 
-  it("the frozen fixtures carry a capture receipt every row of which describes their real bytes", () => {
-    // A fixture nobody can re-derive is a fixture nobody can trust. The receipt
-    // records the exact URL, date, status, byte length and hash of each frozen
-    // body, so `curl -sS <url> | shasum -a 256` re-checks any row by hand.
-    const receipt = JSON.parse(readFileSync(path.join(FROZEN_PUBLISHED, "capture.json"), "utf8"));
-    expect(receipt.fetchedAt).toBe("2026-08-28");
-    expect(receipt.publishedBaseUrl).toBe(pins.publishedBaseUrl);
-    expect(receipt.manifests.map((m) => m.file)).toEqual(pins.manifests.map((p) => p.file));
-    for (const row of receipt.manifests) {
-      const bytes = readFileSync(path.join(FROZEN_PUBLISHED, row.file));
-      expect(row.url, row.file).toBe(`${pins.publishedBaseUrl}${row.file}`);
-      expect(row.httpStatus, row.file).toBe(200);
-      expect(bytes.length, row.file).toBe(row.byteLength);
-      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
-      const parsed = JSON.parse(bytes.toString("utf8"));
-      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
-      expect(parsed.contentHash, row.file).toBe(row.contentHash);
-      // Every recorded hash IS the pin: this receipt is the provenance of the
-      // adoption — the pins name bytes whose fetch is recorded, not bytes
-      // someone typed.
-      const pin = pins.manifests.find((p) => p.file === row.file);
-      expect(row.sha256, row.file).toBe(pin.manifestSha256);
-      expect(row.contentHash, row.file).toBe(pin.specContentHash);
+  it("every capture carries a receipt every row of which describes its real bytes", () => {
+    // A fixture nobody can re-derive is a fixture nobody can trust. Each
+    // receipt records the exact URL, date, status, byte length and hash of the
+    // bodies frozen beside it, so `curl -sS THE-URL | shasum -a 256` re-checks
+    // any row by hand.
+    for (const capture of CAPTURES) {
+      const receipt = JSON.parse(readFileSync(path.join(capture, "capture.json"), "utf8"));
+      expect(receipt.fetchedAt, capture).toBe(path.basename(capture).replace("published-", ""));
+      expect(receipt.publishedBaseUrl, capture).toBe(pins.publishedBaseUrl);
+      // A receipt covers exactly the bodies frozen beside it, and every one of
+      // them is a pinned manifest.
+      expect(receipt.manifests.map((m) => m.file).slice().sort(), capture).toEqual(
+        readdirSync(capture)
+          .filter((file) => file !== "capture.json")
+          .sort(),
+      );
+      for (const row of receipt.manifests) {
+        const pin = pins.manifests.find((p) => p.file === row.file);
+        expect(pin, `${capture}: ${row.file} is not a pinned manifest`).toBeDefined();
+        const bytes = readFileSync(path.join(capture, row.file));
+        expect(row.url, row.file).toBe(`${pins.publishedBaseUrl}${row.file}`);
+        expect(row.httpStatus, row.file).toBe(200);
+        expect(bytes.length, row.file).toBe(row.byteLength);
+        expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+        const parsed = JSON.parse(bytes.toString("utf8"));
+        expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+        expect(parsed.contentHash, row.file).toBe(row.contentHash);
+        if (adoptedCaptureFor(row.file) === capture) {
+          // The adopted row IS the pin: this receipt is the provenance of the
+          // adoption — the pins name bytes whose fetch is recorded, not bytes
+          // someone typed.
+          expect(row.sha256, row.file).toBe(pin.manifestSha256);
+          expect(row.contentHash, row.file).toBe(pin.specContentHash);
+        } else {
+          // A row a later capture superseded stays exactly as it was fetched,
+          // and is a drift input now rather than the pin.
+          expect(row.sha256, row.file).not.toBe(pin.manifestSha256);
+          expect(row.contentHash, row.file).not.toBe(pin.specContentHash);
+        }
+      }
     }
+    // The reconciliation capture still covers all five pins, so nothing was
+    // dropped out of the record when a later adoption froze forward.
+    const reconciliation = JSON.parse(
+      readFileSync(path.join(FROZEN_PUBLISHED, "capture.json"), "utf8"),
+    );
+    expect(reconciliation.manifests.map((m) => m.file)).toEqual(
+      pins.manifests.map((p) => p.file),
+    );
   });
 
   it("the superseded fixtures carry a provenance receipt every row of which describes their real bytes", () => {
