@@ -336,6 +336,33 @@ jobs:
             echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
           fi
 
+      - name: Start the hosted-VM memory sampler
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        # MEASUREMENT ONLY (cinatra#3382). The job died three times at each of
+        # two candidate heads with "The runner has received a shutdown signal"
+        # after a green run at the same head — the demand, not the change,
+        # decides. Sample the VM every 5s from here (before the build + boot)
+        # to the end of the job; the cleanup step below reports the peak and
+        # uploads the file. Nothing else in the job changes: the cap-or-move
+        # decision is the follow-up the issue names.
+        run: |
+          set -u
+          SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
+          : > "$SAMPLE_FILE"
+          echo "AGENTS_SMOKE_MEMORY_FILE=${SAMPLE_FILE}" >> "$GITHUB_ENV"
+          (
+            while true; do
+              {
+                date -u +%T
+                free -m | awk '/^Mem:/ { print "  mem_used_mb=" $3 " mem_available_mb=" $7 }'
+                ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ print "  rss_kb=" $1 " " $2 }'
+              } >> "$SAMPLE_FILE"
+              sleep 5
+            done
+          ) &
+          echo "AGENTS_SMOKE_MEMORY_SAMPLER_PID=$!" >> "$GITHUB_ENV"
+          echo "memory sampler launched as PID $! writing ${SAMPLE_FILE}"
+
       - name: Build app (production)
         if: ${{ needs.detect.outputs.run_real == 'true' }}
         # Run the smoke against a production build, NOT `pnpm dev`. Turbopack dev
@@ -434,3 +461,38 @@ jobs:
             echo "::error::dashboard live-verify smoke failed or timed out (exit ${code})"
             exit 1
           fi
+
+      - name: Stop the memory sampler and report the readings
+        # ALWAYS: the readings matter most on the runs that die. Reads the same
+        # AGENTS_SMOKE_MEMORY_SAMPLER_PID the sampler step wrote to $GITHUB_ENV.
+        # On the stub path (no sampler) both variables are empty and the step
+        # says so and exits 0.
+        if: ${{ always() }}
+        run: |
+          set -u
+          pid="${AGENTS_SMOKE_MEMORY_SAMPLER_PID:-}"
+          file="${AGENTS_SMOKE_MEMORY_FILE:-}"
+          if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+          fi
+          if [ -z "$file" ] || [ ! -s "$file" ]; then
+            echo "no memory samples recorded (the real-smoke path did not run)"
+            exit 0
+          fi
+          echo "peak used memory (MB): $(awk -F'mem_used_mb=' '/mem_used_mb=/ { split($2, f, " "); if (f[1] + 0 > p) p = f[1] + 0 } END { print p + 0 }' "$file")"
+          echo "minimum available memory (MB): $(awk -F'mem_available_mb=' '/mem_available_mb=/ { split($2, f, " "); v = f[1] + 0; if (m == "" || v < m) m = v } END { print (m == "" ? 0 : m) }' "$file")"
+          echo "samples recorded: $(grep -c mem_used_mb "$file")"
+          echo "--- last 40 lines of ${file} ---"
+          tail -40 "$file"
+
+      - name: Upload the memory samples
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agents-smoke-memory
+          # Never an empty path input: on the stub path the sampler step
+          # did not run, so the variable is unset — fall back to the name
+          # it would have written and let if-no-files-found: ignore pass.
+          path: ${{ env.AGENTS_SMOKE_MEMORY_FILE || format('{0}/agents-smoke-memory.txt', runner.temp) }}
+          retention-days: 7
+          if-no-files-found: ignore
