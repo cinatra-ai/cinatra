@@ -1,0 +1,17 @@
+{
+  "$comment": "Capture receipt for the published conformance manifest beside it, adopted by cinatra#3374. The body in this directory is the VERBATIM response served at the url below on fetchedAt; nothing was reformatted. Re-derive the row with: curl -sS THE-URL | shasum -a 256. A capture freezes FORWARD — an adoption after this one writes its own directory rather than rewriting a row here, so every receipt keeps describing a fetch that really happened.",
+  "fetchedAt": "2026-09-10",
+  "command": "curl -sS THE-URL -o THE-FILE",
+  "publishedBaseUrl": "https://docs.cinatra.ai/references/design/conformance/",
+  "manifests": [
+    {
+      "file": "app-connectors.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-connectors.json",
+      "httpStatus": 200,
+      "byteLength": 4821,
+      "sha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
+    }
+  ]
+}

@@ -44,6 +44,17 @@ const SHARING_SECTION = readFileSync(
   "utf8",
 );
 
+/**
+ * The Sharing TAB's body (cinatra#3374). The composition claim moved here with
+ * the surface: the section still resolves each panel's data, and this
+ * presentational component draws the roll-up, the identity rows and the three
+ * conformance ids — so it is the file that composes the sdk-ui primitives.
+ */
+const SHARING_PANELS = readFileSync(
+  join(ROOT, "components", "extensions", "connector-sharing-panels.tsx"),
+  "utf8",
+);
+
 describe("connector dispatch route — the §II error treatment has a PRODUCTION caller", () => {
   it("routes every degraded branch through ConnectorSetupColumns in the error state", () => {
     expect(DISPATCH_ROUTE).toContain(
@@ -80,28 +91,34 @@ describe("connector dispatch route — the §II error treatment has a PRODUCTION
 
 describe("ConnectionSharingSection — the REAL consumer of the §II connection primitives", () => {
   it("imports the shipped primitives from sdk-ui", () => {
-    expect(SHARING_SECTION).toContain(
+    expect(SHARING_PANELS).toContain(
       'import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card"',
     );
-    expect(SHARING_SECTION).toContain(
+    expect(SHARING_PANELS).toContain(
       'import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list"',
     );
+    // …and the section still mounts them, through the panels component.
+    expect(SHARING_SECTION).toContain("<ConnectorSharingPanels panels={panelViews} />");
   });
 
   it("wraps its panels in the real ConnectionsList — the surface emitter", () => {
     // ConnectionsList owns `data-conformance-id="connector-connections"`, so
     // mounting it here is what gives that surface a production emitter.
-    expect(SHARING_SECTION).toMatch(/<ConnectionsList>[\s\S]*<\/ConnectionsList>/);
-    const listStart = SHARING_SECTION.indexOf("<ConnectionsList>");
-    const listEnd = SHARING_SECTION.indexOf("</ConnectionsList>");
+    expect(SHARING_PANELS).toMatch(/<ConnectionsList>[\s\S]*<\/ConnectionsList>/);
+    const listStart = SHARING_PANELS.indexOf("<ConnectionsList>");
+    const listEnd = SHARING_PANELS.indexOf("</ConnectionsList>");
     expect(listStart).toBeGreaterThan(-1);
-    expect(SHARING_SECTION.slice(listStart, listEnd)).toContain("panels.map(");
+    expect(SHARING_PANELS.slice(listStart, listEnd)).toContain("panels.map(");
   });
 
   it("draws each connection's identity through the real ConnectionRow, not a hand-rolled line", () => {
-    expect(SHARING_SECTION).toMatch(
-      /<ConnectionRow\s+name=\{identity\.connectionId\}\s+url=\{identity\.connectorKey\}\s*\/>/,
+    expect(SHARING_PANELS).toMatch(
+      /<ConnectionRow\s+name=\{panel\.name\}\s+url=\{panel\.url\}\s*\/>/,
     );
+    // …and the row's two bindings are the connection's own identity, resolved
+    // by the section and handed down verbatim.
+    expect(SHARING_SECTION).toContain("name: identity.connectionId");
+    expect(SHARING_SECTION).toContain("url: identity.connectorKey");
     // The bare mono <p> the section used to draw instead — and its
     // `panels.length > 1` gate, which hid the identity entirely on a
     // single-connection page — is gone.
@@ -110,10 +127,18 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     );
   });
 
-  it("heads a multi-connection page with the roll-up card, and only then", () => {
-    expect(SHARING_SECTION).toMatch(
-      /panels\.length > 1 \? \(\s*<ConnectionsStatusCard counts=\{\{ connected: panels\.length \}\} \/>\s*\) : null/,
-    );
+  it("heads the list with the roll-up card, unconditionally, and gives it NO action", () => {
+    // §II, the Sharing tab: "The roll-up card is the Connections status card of
+    // the Setup tab, with no Check and no All connections link: the list it
+    // counts is directly beneath it." The Setup tab's plural-only rule is its
+    // own; this card heads the list whenever there is a list (cinatra#3374).
+    expect(SHARING_PANELS).not.toContain("panels.length > 1");
+    const cardStart = SHARING_PANELS.indexOf("<ConnectionsStatusCard");
+    expect(cardStart).toBeGreaterThan(-1);
+    const card = SHARING_PANELS.slice(cardStart, SHARING_PANELS.indexOf("/>", cardStart));
+    expect(card).toContain("counts={{ connected: panels.length }}");
+    // No action slot at all: that is what drops the Check and the link.
+    expect(card).not.toContain("action=");
   });
 
   it("claims NO per-row status — the host holds no per-connection signal", () => {
@@ -123,8 +148,8 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     // paint a green joined-plug chip and `data-status="connected"`: the colour
     // and the glyph are the claim as much as any label, so relabelling it would
     // not soften it. The prop is optional precisely for this case.
-    const rowStart = SHARING_SECTION.indexOf("<ConnectionRow");
-    const row = SHARING_SECTION.slice(rowStart, SHARING_SECTION.indexOf("/>", rowStart));
+    const rowStart = SHARING_PANELS.indexOf("<ConnectionRow");
+    const row = SHARING_PANELS.slice(rowStart, SHARING_PANELS.indexOf("/>", rowStart));
     expect(row).not.toContain("status=");
     // …and the primitive genuinely admits the omission, rather than the
     // consumer relying on a required prop being elided.
@@ -142,8 +167,68 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     // owns its own `role:"disconnect"` action on its setup form). The rows
     // therefore render actionless, and the header says so. Locking the absence
     // keeps a future `action={…}` from quietly inventing that authz.
-    const rowStart = SHARING_SECTION.indexOf("<ConnectionRow");
-    const rowEnd = SHARING_SECTION.indexOf("/>", rowStart);
-    expect(SHARING_SECTION.slice(rowStart, rowEnd)).not.toContain("action=");
+    const rowStart = SHARING_PANELS.indexOf("<ConnectionRow");
+    const rowEnd = SHARING_PANELS.indexOf("/>", rowStart);
+    expect(SHARING_PANELS.slice(rowStart, rowEnd)).not.toContain("action=");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The MOVE itself (cinatra#3374). Two claims the move must not quietly break,
+// neither of which any assertion above covers:
+//
+//   • the sharing MODEL is unchanged — only its place and its drawing. Shared
+//     use still acts through the owner's connected account and is still
+//     audited, because the panels still mount the app's OWN permissions client
+//     bound to the connection, never a connector-specific copy of it.
+//   • the tab is drawn on the GENERATED setup page only. A bundled-react
+//     connector draws its own page whole, so this change does not reach it:
+//     those branches keep the standalone section they already mounted.
+// ---------------------------------------------------------------------------
+
+const UI_RENDER = readFileSync(join(ROOT, "lib", "connector-ui-render.ts"), "utf8");
+
+describe("the Sharing tab move — what it must NOT change", () => {
+  it("keeps the audited road: the app's own permissions client, bound to the connection", () => {
+    // Each panel view carries the permissions node the SECTION builds…
+    expect(SHARING_SECTION).toMatch(/permissions: \(\s*<ExtensionPermissionsClient/);
+    // …and it is the shared client, kind-discriminated to the CONNECTION and
+    // addressed by that connection's own id — the same binding as before the
+    // move, so the grant it writes is still audited through the owner's
+    // connected account.
+    expect(SHARING_SECTION).toContain('kind="connection"');
+    expect(SHARING_SECTION).toContain("resourceId={identity.id}");
+    expect(SHARING_SECTION).toContain("owner={owner}");
+    expect(SHARING_SECTION).toContain("currentUserId={userId}");
+    // The presentational tab body takes that node and mounts NO client of its
+    // own: a connector-specific copy of the two controls is exactly what §II
+    // forbids ("never a connector-specific copy of them").
+    expect(SHARING_PANELS).not.toContain("<ExtensionPermissionsClient");
+    expect(SHARING_PANELS).toContain("{panel.permissions}");
+  });
+
+  it("hands the Sharing TAB to the generated setup page only", () => {
+    // Exactly one mount of the tab-variant node, and it is the schema-config
+    // setup shape's `sharing` prop.
+    expect(DISPATCH_ROUTE.match(/sharing=\{sharingTab\}/g)).toHaveLength(1);
+    expect(DISPATCH_ROUTE).toMatch(
+      /<ConnectionSharingSection packageId=\{packageId\} variant="tab" \/>/,
+    );
+  });
+
+  it("leaves every self-drawn branch on the standalone section it already had", () => {
+    // The invalid-schema, rebuild, unloadable-module and bundled-react branches
+    // draw no tab strip of the app's, so they keep mounting the section
+    // directly — unchanged by this issue.
+    const standaloneMounts = DISPATCH_ROUTE.match(/\{sharingSection\}/g) ?? [];
+    expect(standaloneMounts.length).toBeGreaterThanOrEqual(4);
+    expect(DISPATCH_ROUTE).toContain(
+      "const sharingSection = <ConnectionSharingSection packageId={packageId} />",
+    );
+    // …and the render CHOICE itself is untouched: a manifest without the
+    // schema-config surface still resolves to bundled-react, with no sharing
+    // branch of any kind added to that decision.
+    expect(UI_RENDER).toContain('return { kind: "bundled-react" };');
+    expect(UI_RENDER.toLowerCase()).not.toContain("sharing");
   });
 });

@@ -143,17 +143,18 @@ export type SchemaConfigConnectorFormProps = {
    */
   aside?: React.ReactNode;
   /**
-   * Host-owned content that belongs to the SETUP surface only (e.g. the
-   * connection-sharing section). On a tabbed surface it renders inside the
-   * Setup panel — beneath the columns — so it never leaks under a custom or
-   * Help tab; on a flat surface it renders after the fields. Like `aside` it
-   * MUST stay input-free (no named form controls): it renders inside the form
-   * fieldset, and `collectFormInputs()` scans every named descendant control.
+   * Host-owned content of the fixed SHARING tab — "who else may use each saved
+   * connection" (design §II: "Two tabs are fixed and every connector carries
+   * both: Setup first and Sharing second", and "sharing is decided on its own
+   * tab, never inside Setup"). It is a PANEL of its own, so it is neither part
+   * of the Setup body nor replaced by the Setup surface's loading / error
+   * treatments.
    *
-   * Rendered ONLY in the `ready` state: the loading / error treatments replace
-   * the setup body, and this footer is part of that body.
+   * Like `aside` it MUST stay input-free of NAMED form controls: it renders
+   * inside the form fieldset, and `collectFormInputs()` scans every named
+   * descendant control.
    */
-  setupFooter?: React.ReactNode;
+  sharingTab?: React.ReactNode;
   /**
    * Which §II setup surface this form IS: `connector-setup` (the single-
    * connection page) or `connector-multi-setup` (the Setup tab of a
@@ -270,10 +271,13 @@ function collectBannerVariants(surface: SchemaConfigSurface): Record<string, Ban
   return out;
 }
 
-// The reserved value of the base "Setup" tab. A leading underscore can never be
+// The reserved values of the two FIXED tabs. A leading underscore can never be
 // a connector tab id (the schema-config KEY_RE requires a leading letter), so
-// this never collides with a declared tab.
+// neither ever collides with a declared tab.
 const SETUP_TAB_VALUE = "__setup";
+const SHARING_TAB_VALUE = "__sharing";
+/** The fixed second tab's label (design §II — the same word on every connector). */
+const SHARING_TAB_LABEL = "Sharing";
 
 export function SchemaConfigConnectorForm({
   installId,
@@ -285,7 +289,7 @@ export function SchemaConfigConnectorForm({
   omitFieldKinds,
   initialConnected = false,
   aside,
-  setupFooter,
+  sharingTab,
   conformanceId = "connector-setup",
   conformanceState = "ready",
 }: SchemaConfigConnectorFormProps) {
@@ -411,15 +415,17 @@ export function SchemaConfigConnectorForm({
     );
   };
 
-  const hasTabs = !!surface.tabs && surface.tabs.length > 0;
+  // The tab strip is NEVER absent (design §II): Setup and Sharing are fixed on
+  // every connector, and a connector's own tabs — Help last, already ordered by
+  // the parser — extend the strip rather than introducing it.
+  const declaredTabs = surface.tabs ?? [];
 
   // The Setup surface body. With a host `aside` the form owns the §II
   // two-column grid (fields | 236px status card). The host passes one for
   // EVERY schema-config connector since cinatra#3214, so the aside-less
   // single-column branch below is a bare-mount fallback rather than a product
-  // shape — there is no probe-less layout any more. `setupFooter` (e.g.
-  // connection sharing) belongs to the SETUP surface only, so it rides inside
-  // this body — never beneath a custom or Help tab.
+  // shape — there is no probe-less layout any more. Sharing is NOT part of this
+  // body: it is the fixed second tab's own panel (cinatra#3374).
   //
   // STATE FORWARDING IS UNCONDITIONAL (#2382 review note 1). It used to be
   // aside-GATED — a probe-less connector could be handed
@@ -442,16 +448,6 @@ export function SchemaConfigConnectorForm({
       ) : (
         renderGroup(surface.fields)
       )}
-      {/* setupFooter is SUPPRESSED while the surface is loading or errored
-          (#2382 review note 2). It used to stay live under both treatments,
-          which read as a contradiction: the host content it carries (the
-          connection-sharing section) describes connections of a setup surface
-          that has explicitly not resolved. §II's loading/error treatments
-          REPLACE the body, and this footer is part of that body. A route that
-          wants its own composition on an error page renders it itself, outside
-          the form — which is exactly what the connector dispatch route does on
-          its invalid-schema / rebuild branches. */}
-      {conformanceState === "ready" ? setupFooter : null}
     </>
   );
 
@@ -470,93 +466,101 @@ export function SchemaConfigConnectorForm({
       data-package={packageName}
       data-connected={connected ? "" : undefined}
     >
-      {hasTabs ? (
-        // Tabbed setup surface (design spec: app-connectors §II). The base fields
-        // are the reserved "Setup" tab; each declared tab follows, and the parser
-        // has already ordered the reserved Help tab LAST. The tab row is
-        // page-header chrome: `TabsListRow` sits at the Wide column directly
-        // beneath the header (its etched rule runs right of the last tab — the
-        // page passes `divider={false}` so the rules never stack), ABOVE the
-        // Setup panel's two-column grid — never inside the content column.
-        <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-6">
-          <TabsListRow>
-            <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
-            {surface.tabs!.map((tab) => (
-              <TabsTrigger key={tab.id} value={tab.id}>
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsListRow>
-          {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
-              the form — still sees inputs on inactive tabs. Radix unmounts
-              inactive tab content by default, which would silently drop those
-              values on submit. With forceMount Radix keeps the panel mounted but
-              no longer sets `hidden`, so we hide the inactive ones ourselves via
-              Radix's own `data-state` (display:none keeps inputs collectable). */}
-          <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
-            {setupBody}
-          </TabsContent>
-          {surface.tabs!.map((tab) =>
-            tab.id === HELP_TAB_ID ? (
-              // Reserved Help tab (§II): read-only setup how-to at the Narrow
-              // width — ONE card, no form, no Save. Rendered by HelpPanel
-              // (advisories become sections of a single card; input-bearing
-              // kinds are not rendered, so they never enter the submit scan).
-              <TabsContent
-                key={tab.id}
-                value={tab.id}
-                forceMount
-                className="data-[state=inactive]:hidden"
+      {/* The FIXED tab strip (design spec: app-connectors §II). Two tabs are
+          fixed and every connector carries both — Setup first, Sharing second
+          ("who else may use each saved connection"); each declared tab follows,
+          and the parser has already ordered the reserved Help tab LAST. The
+          strip is therefore never absent: a custom tab extends it rather than
+          introducing it. The tab row is page-header chrome: `TabsListRow` sits
+          at the Wide column directly beneath the header (its etched rule runs
+          right of the last tab — the page passes `divider={false}` so the rules
+          never stack), ABOVE the Setup panel's two-column grid — never inside
+          the content column. */}
+      <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-6">
+        <TabsListRow>
+          <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
+          <TabsTrigger value={SHARING_TAB_VALUE}>{SHARING_TAB_LABEL}</TabsTrigger>
+          {declaredTabs.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id}>
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsListRow>
+        {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
+            the form — still sees inputs on inactive tabs. Radix unmounts
+            inactive tab content by default, which would silently drop those
+            values on submit. With forceMount Radix keeps the panel mounted but
+            no longer sets `hidden`, so we hide the inactive ones ourselves via
+            Radix's own `data-state` (display:none keeps inputs collectable). */}
+        <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
+          {setupBody}
+        </TabsContent>
+        {/* Sharing (§II): the connection-sharing panels the HOST composes and
+            passes in. It is the only place the sharing question is answered, so
+            it is a panel of its own and the Setup surface's loading / error
+            treatments do not reach it. A person who has saved no connection
+            here sees nothing on it yet — the host passes nothing. */}
+        <TabsContent value={SHARING_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
+          {sharingTab}
+        </TabsContent>
+        {declaredTabs.map((tab) =>
+          tab.id === HELP_TAB_ID ? (
+            // Reserved Help tab (§II): read-only setup how-to at the Narrow
+            // width — ONE card, no form, no Save. Rendered by HelpPanel
+            // (advisories become sections of a single card; input-bearing
+            // kinds are not rendered, so they never enter the submit scan).
+            <TabsContent
+              key={tab.id}
+              value={tab.id}
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
+              <div className="max-w-xl">
+                <HelpPanel fields={tab.fields} installId={installId} />
+              </div>
+            </TabsContent>
+          ) : (
+            // Custom config tab (§II, surface `connector-config-tab`):
+            // content narrows to the Narrow width (max-w-xl · 576px),
+            // flush-left beneath the Wide tablist. The panel carries the
+            // conformance id + the surface's current state; the two
+            // non-ready variants replace the field group IN PLACE so the
+            // surface stays mounted (same treatment as ConnectorSetupColumns).
+            <TabsContent
+              key={tab.id}
+              value={tab.id}
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
+              <div
+                data-conformance-id="connector-config-tab"
+                data-state={conformanceState}
+                className="max-w-xl"
               >
-                <div className="max-w-xl">
-                  <HelpPanel fields={tab.fields} installId={installId} />
-                </div>
-              </TabsContent>
-            ) : (
-              // Custom config tab (§II, surface `connector-config-tab`):
-              // content narrows to the Narrow width (max-w-xl · 576px),
-              // flush-left beneath the Wide tablist. The panel carries the
-              // conformance id + the surface's current state; the two
-              // non-ready variants replace the field group IN PLACE so the
-              // surface stays mounted (same treatment as ConnectorSetupColumns).
-              <TabsContent
-                key={tab.id}
-                value={tab.id}
-                forceMount
-                className="data-[state=inactive]:hidden"
-              >
-                <div
-                  data-conformance-id="connector-config-tab"
-                  data-state={conformanceState}
-                  className="max-w-xl"
-                >
-                  {conformanceState === "loading" ? (
-                    <p
-                      data-slot="connector-config-tab-loading"
-                      aria-busy="true"
-                      className="text-sm text-muted-foreground"
-                    >
-                      Loading settings…
-                    </p>
-                  ) : conformanceState === "error" ? (
-                    <p
-                      data-slot="connector-config-tab-error"
-                      role="alert"
-                      className="text-sm text-destructive"
-                    >
-                      These settings could not be loaded.
-                    </p>
-                  ) : (
-                    renderGroup(tab.fields)
-                  )}
-                </div>
-              </TabsContent>
-            ),
-          )}
-        </Tabs>
-      ) : (
-        setupBody
-      )}
+                {conformanceState === "loading" ? (
+                  <p
+                    data-slot="connector-config-tab-loading"
+                    aria-busy="true"
+                    className="text-sm text-muted-foreground"
+                  >
+                    Loading settings…
+                  </p>
+                ) : conformanceState === "error" ? (
+                  <p
+                    data-slot="connector-config-tab-error"
+                    role="alert"
+                    className="text-sm text-destructive"
+                  >
+                    These settings could not be loaded.
+                  </p>
+                ) : (
+                  renderGroup(tab.fields)
+                )}
+              </div>
+            </TabsContent>
+          ),
+        )}
+      </Tabs>
     </FieldSet>
   );
 }

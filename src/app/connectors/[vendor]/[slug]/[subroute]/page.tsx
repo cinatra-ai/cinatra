@@ -225,6 +225,12 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // NOTHING when the actor owns no connection for this connector or the
   // connector declares `only:"user"` (never shareable).
   const sharingSection = <ConnectionSharingSection packageId={packageId} />;
+  // The same section as the SHARING TAB of the generated setup page: the page
+  // shell already holds the Wide column there, so the tab-mounted copy adds no
+  // column or page padding of its own.
+  const sharingTab = (
+    <ConnectionSharingSection packageId={packageId} variant="tab" />
+  );
 
   // THE TRAIL'S OWN NAMES (cinatra#3215). The ratified components drawing wants
   // the crumb for an entity to read that entity's display name at every
@@ -337,9 +343,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // `TabsListRow` whose etched rule replaces the header's own, so the header
     // divider is suppressed EXACTLY when that tab row actually renders (the
     // form renders — installId present — AND the surface declares tabs). The
-    // Install/Activate CTA state keeps the header rule.
-    const hasTabs = !!render.surface.tabs && render.surface.tabs.length > 0;
-    const headerDivider = !(installId && hasTabs);
+    // Every generated setup page carries a tab strip (§II: Setup and Sharing are
+    // fixed on every connector), and the tab row owns the etched rule — so the
+    // header only draws its own in the Install/Activate CTA state, which has no
+    // form and therefore no strip.
+    const headerDivider = !installId;
     return (
       <SchemaConfigConnectorSetup
         crumbTrail={crumbTrail}
@@ -356,7 +364,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         {...(hasConnectorReadinessProbe(packageId)
           ? { recheck: recheckConnectorReadiness.bind(null, packageId) }
           : {})}
-        footer={sharingSection}
+        sharing={sharingTab}
       />
     );
   }

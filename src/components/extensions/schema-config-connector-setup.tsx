@@ -86,8 +86,13 @@ export type SchemaConfigConnectorSetupProps = {
   connectedLabel?: string;
   /** The host readiness road Check re-runs for a connector with no declared probe. */
   recheck?: () => Promise<ConnectorReadinessReading>;
-  /** Host content belonging to the SETUP surface only (the sharing section). */
-  footer?: ReactNode;
+  /**
+   * Host content of the fixed SHARING tab (design §II: "The second tab is
+   * Sharing, and every connector carries it … sharing is decided on its own
+   * tab, never inside Setup"). The route composes it; this shape only routes it
+   * to the form's Sharing panel.
+   */
+  sharing?: ReactNode;
   /**
    * The route's crumb-publisher island (cinatra#3215). The dispatch route
    * resolves the vendor / connector display names in ITS server render, after
@@ -114,7 +119,7 @@ export function SchemaConfigConnectorSetup({
   connected,
   connectedLabel,
   recheck,
-  footer,
+  sharing,
   crumbTrail,
 }: SchemaConfigConnectorSetupProps) {
   return (
@@ -149,12 +154,16 @@ export function SchemaConfigConnectorSetup({
               recheck={recheck}
             />
           }
-          setupFooter={footer}
+          sharingTab={sharing}
         />
       ) : (
         <>
+          {/* Not installed / not active for this actor: there is no setup form
+              here and so no tab strip. The sharing panels still mount, because
+              a connection saved before the install was deactivated is still the
+              owner's to hand on — and this is not the Setup tab. */}
           <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
-          {footer}
+          {sharing}
         </>
       )}
     </ConnectorSetupPage>

@@ -132,6 +132,22 @@ import {
   CONNECTOR_SETUP_INSTALL_ID,
   CONNECTOR_SETUP_LOADING_LABEL,
 } from "../../../../src/app/design-fixtures/conformance/connector-setup-seed";
+import {
+  CONNECTOR_SHARING_ACCESS_HELPER,
+  CONNECTOR_SHARING_CANDIDATE,
+  CONNECTOR_SHARING_CO_OWNER,
+  CONNECTOR_SHARING_CONNECTION,
+  CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,
+  CONNECTOR_SHARING_LOCKED_SCOPES,
+  CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
+  CONNECTOR_SHARING_LOCK_NOTE,
+  CONNECTOR_SHARING_OWNER,
+  CONNECTOR_SHARING_OWNERSHIP_HELPER,
+  CONNECTOR_SHARING_PANEL_COUNT,
+  CONNECTOR_SHARING_RECOMMENDATION_NOTE,
+  CONNECTOR_SHARING_SEARCH_QUERY,
+  CONNECTOR_SHARING_SELECTED_SCOPE_LABEL,
+} from "../../../../src/app/design-fixtures/conformance/connector-sharing-seed";
 
 export const HARNESS_PATH = "/design-fixtures/conformance";
 
@@ -4728,6 +4744,268 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// §II SHARING-tab drivers (cinatra#3374) — the three surfaces the published
+// app-connectors manifest gained: connector-sharing (one panel per owned
+// connection), connector-sharing-rollup (the roll-up card above the list) and
+// connector-sharing-locked (a declared ceiling, or a recommended scope).
+//
+// Each driver asserts against the conformance id the PRODUCT component emits
+// (`ConnectorSharingPanels`, and the `PermissionsForm` it mounts beneath each
+// row) — the harness `data-surface-id` wrapper only selects WHICH mount, so a
+// driver can never pass against harness-only chrome. Field values are the
+// anti-lookalike seeds of connector-sharing-seed.ts, so a wrong-source read
+// reds.
+// ---------------------------------------------------------------------------
+
+/** The Sharing-tab mount, by variant. */
+const sharingMount = (variant: string) =>
+  `[data-surface-id="connector-sharing"][data-variant="${variant}"]`;
+/** One connection panel (the product's own surface id). */
+const SHARING_PANEL = '[data-conformance-id="connector-sharing"]';
+/** The permissions card's scope note — the lock line beneath the picker. */
+const SHARING_SCOPE_NOTE = "p.text-xs.text-muted-foreground";
+
+/** The access picker's trigger inside one panel. */
+function accessTrigger(root: Locator): Locator {
+  return root.locator('[role="combobox"]').first();
+}
+
+const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator(`${sharingMount("populated")} ${SHARING_PANEL}`).first(),
+  present: async (page, root) => {
+    // The tab is a LIST of panels — exact cardinality, so a panel that failed
+    // to render (or one rendered twice) reds.
+    await expect(page.locator(`${sharingMount("populated")} ${SHARING_PANEL}`)).toHaveCount(
+      CONNECTOR_SHARING_PANEL_COUNT,
+    );
+    // Each panel is a connection row with the shared permissions card beneath
+    // it — the same two controls the permissions surface draws.
+    await expect(root.locator('[data-slot="connection-row"]')).toBeVisible();
+    await expect(root.getByRole("button", { name: "Save changes" })).toBeVisible();
+    // The row carries NO status badge and NO per-row action: a saved identity
+    // is not a claim that the connection still answers.
+    await expect(
+      root.locator('[data-slot="connection-row"] [data-slot="connection-status-badge"]'),
+    ).toHaveCount(0);
+    await expect(
+      root.locator('[data-slot="connection-row"]').getByRole("button"),
+    ).toHaveCount(0);
+    // The helper lines the drawing words for THIS surface.
+    await expect(root).toContainText(CONNECTOR_SHARING_ACCESS_HELPER);
+    await expect(root).toContainText(CONNECTOR_SHARING_OWNERSHIP_HELPER);
+  },
+  fields: {
+    name: {
+      source: "connection.connectionId",
+      assert: async (_page, root) => {
+        await expect(root.locator('[data-slot="connection-row"]')).toContainText(
+          CONNECTOR_SHARING_CONNECTION.name,
+        );
+      },
+    },
+    url: {
+      source: "connection.connectorKey",
+      assert: async (_page, root) => {
+        // The mono secondary line, not the name line.
+        await expect(
+          root.locator('[data-slot="connection-row"] .font-mono'),
+        ).toHaveText(CONNECTOR_SHARING_CONNECTION.url);
+      },
+    },
+    access: {
+      source: "policy.runListVisibility",
+      assert: async (_page, root) => {
+        // The picker opens on the stored grant, rendered as the picker's own
+        // `Type: Name` label — never a token echoed back.
+        await expect(accessTrigger(root)).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+        );
+      },
+    },
+    "co-owners": {
+      source: "connection.coOwners",
+      assert: async (_page, root) => {
+        // The owner who connected it, and the co-owner — each with a name and
+        // an address. The connecting owner carries NO remove button (this
+        // surface hands out no way to remove that owner); the co-owner does.
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.name);
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.email);
+        await expect(root).toContainText(CONNECTOR_SHARING_CO_OWNER.name);
+        await expect(root).toContainText(CONNECTOR_SHARING_CO_OWNER.email);
+        await expect(
+          root.getByRole("button", { name: `Remove ${CONNECTOR_SHARING_OWNER.name}` }),
+        ).toHaveCount(0);
+        await expect(
+          root.getByRole("button", { name: `Remove ${CONNECTOR_SHARING_CO_OWNER.name}` }),
+        ).toBeVisible();
+      },
+    },
+  },
+  actions: {
+    // select-scope -> scopes-selected: the multi-select picker moves this
+    // connection's access to a BROADER scope, and the trigger says so.
+    "select-scope": {
+      outcome: "scopes-selected",
+      run: async (page, root) => {
+        const trigger = accessTrigger(root);
+        await expect(trigger).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+        );
+        await clickUntil(trigger, async () => {
+          await expect(
+            page.getByRole("option", { name: /All/ }).first(),
+          ).toBeVisible({ timeout: 5_000 });
+        });
+        await page
+          .getByRole("option", { name: typeNamePairPattern(CONNECTOR_SHARING_SELECTED_SCOPE_LABEL) })
+          .first()
+          .click();
+        await page.keyboard.press("Escape");
+        await expect(trigger).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_SELECTED_SCOPE_LABEL),
+        );
+      },
+    },
+    // search-people -> people-listed: the ownership card's search field lists
+    // the people that answer the query (it does not add anyone by itself).
+    "search-people": {
+      outcome: "people-listed",
+      run: async (page, root) => {
+        const search = root.getByPlaceholder("Search by name or email…");
+        await search.click();
+        await search.fill(CONNECTOR_SHARING_SEARCH_QUERY);
+        // The listbox is portalled, so it is asserted at the page level.
+        await expect(
+          page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.name) }),
+        ).toBeVisible({ timeout: 10_000 });
+        await expect(
+          page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.email) }),
+        ).toBeVisible();
+        await page.keyboard.press("Escape");
+      },
+    },
+    // remove-co-owner -> co-owner-removed: the co-owner's row goes, and the
+    // owner's row stays (the last owner cannot be removed).
+    "remove-co-owner": {
+      outcome: "co-owner-removed",
+      run: async (_page, root) => {
+        const removeButton = root.getByRole("button", {
+          name: `Remove ${CONNECTOR_SHARING_CO_OWNER.name}`,
+        });
+        await clickUntil(removeButton, async () => {
+          await expect(removeButton).toHaveCount(0, { timeout: 5_000 });
+        });
+        await expect(root).not.toContainText(CONNECTOR_SHARING_CO_OWNER.email);
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.email);
+      },
+    },
+    // save-access -> access-saved: nothing is shared until Save changes is
+    // pressed, and pressing it writes the Access choice.
+    "save-access": {
+      outcome: "access-saved",
+      run: async (page, root) => {
+        const save = root.getByRole("button", { name: "Save changes" });
+        await clickUntil(save, async () => {
+          await expect(page.getByText("Access policy saved.")).toBeVisible({
+            timeout: 10_000,
+          });
+        });
+      },
+    },
+  },
+  states: {
+    // The panel's own loading treatment — never a silently blank tab.
+    loading: async (page) => {
+      const root = page.locator(
+        `${sharingMount("loading")} ${SHARING_PANEL}[data-state="loading"]`,
+      );
+      await expect(root.locator('[data-slot="connector-sharing-loading"]')).toBeVisible();
+      await expect(root.locator('[data-slot="connection-row"]')).toHaveCount(0);
+    },
+  },
+};
+
+const CONNECTOR_SHARING_ROLLUP_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${sharingMount("populated")} [data-conformance-id="connector-sharing-rollup"]`),
+  present: async (page, root) => {
+    // The Connections status card of the Setup tab — one count badge per status
+    // in play, counting the list that is directly beneath it.
+    await expect(root).toBeVisible();
+    await expect(root).toContainText("Connections status");
+    await expect(
+      root.locator('[data-slot="connection-status-badge"][data-status="connected"]'),
+    ).toContainText(String(CONNECTOR_SHARING_PANEL_COUNT));
+    // …with NO Check and NO "All connections" link: this list is directly
+    // beneath it, so there is no other tab to open.
+    await expect(root.getByRole("button")).toHaveCount(0);
+    await expect(root.getByRole("link")).toHaveCount(0);
+    await expect(root).not.toContainText("Check");
+    await expect(root).not.toContainText("All connections");
+    // ABOVE the list it counts.
+    const mount = page.locator(sharingMount("populated"));
+    const rollupBox = await root.boundingBox();
+    const firstPanelBox = await mount.locator(SHARING_PANEL).first().boundingBox();
+    expect(rollupBox && firstPanelBox).toBeTruthy();
+    expect(rollupBox!.y).toBeLessThan(firstPanelBox!.y);
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
+const CONNECTOR_SHARING_LOCKED_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(
+      `${sharingMount("locked")} [data-conformance-id="connector-sharing-locked"]`,
+    ),
+  present: async (page, root) => {
+    // A ceiling: the picker renders every option ABOVE it locked, each carrying
+    // this one sentence as its reason…
+    const trigger = accessTrigger(root);
+    await expect(trigger).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_LOCKED_VALUE_LABEL),
+    );
+    await clickUntil(trigger, async () => {
+      await expect(page.locator('[role="option"][aria-disabled="true"]').first()).toBeVisible({
+        timeout: 5_000,
+      });
+    });
+    const lockedOptions = page.locator('[role="option"][aria-disabled="true"]');
+    await expect(lockedOptions).toHaveCount(CONNECTOR_SHARING_LOCKED_SCOPES.length);
+    await expect(
+      page.locator(`[title="${CONNECTOR_SHARING_LOCK_NOTE}"]`).first(),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    // …and the same sentence sits under the picker with a lock.
+    const note = root.locator(SHARING_SCOPE_NOTE).filter({
+      hasText: CONNECTOR_SHARING_LOCK_NOTE,
+    });
+    await expect(note).toBeVisible();
+    await expect(note.locator("svg")).toHaveCount(1);
+    // Where the connector only RECOMMENDS a scope the line reads instead
+    // "This connector recommends sharing with your organization — nothing is
+    // shared until you save. Currently: only you.", and nothing is shared by
+    // that line on its own: the grant is written when Save changes is pressed.
+    const recommended = page.locator(
+      `${sharingMount("recommended")} [data-conformance-id="connector-sharing-locked"]`,
+    );
+    await expect(recommended).toContainText(CONNECTOR_SHARING_RECOMMENDATION_NOTE);
+    await expect(accessTrigger(recommended)).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+    );
+    await expect(recommended.getByRole("button", { name: "Save changes" })).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
 // ---------------------------------------------------------------------------
 // extension-install-panel (cinatra#2373, design spec §I.1).
 //
@@ -6857,6 +7135,9 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "connector-config-tab": CONNECTOR_CONFIG_TAB_DRIVER,
   "connector-multi-setup": CONNECTOR_MULTI_SETUP_DRIVER,
   "connector-connections": CONNECTOR_CONNECTIONS_DRIVER,
+  "connector-sharing": CONNECTOR_SHARING_DRIVER,
+  "connector-sharing-rollup": CONNECTOR_SHARING_ROLLUP_DRIVER,
+  "connector-sharing-locked": CONNECTOR_SHARING_LOCKED_DRIVER,
   "notifications-list": NOTIFICATIONS_LIST_DRIVER,
   "notifications-filters": NOTIFICATIONS_FILTERS_DRIVER,
   "notification-row": NOTIFICATION_ROW_DRIVER,

@@ -1,10 +1,12 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// ConnectionSharingSection (cinatra#953 W3) — the HOST-owned per-connection
-// share surface, injected on the connector setup dispatch route (every render
-// branch: schema-config, invalid-schema-config, rebuild states, and the
-// bundled-react page — codex round-0 finding 4).
+// ConnectionSharingSection (cinatra#953 W3; moved onto its own tab by
+// cinatra#3374) — the HOST-owned per-connection share surface. On the generated
+// setup page it is the body of the FIXED SECOND TAB, Sharing (§II: "sharing is
+// decided on its own tab, never inside Setup"); the route still mounts it
+// directly on the branches that draw no tab strip (invalid-schema-config, the
+// rebuild states, and the bundled-react pages — codex round-0 finding 4).
 //
 // Lists the ACTOR's OWN saved connections for THIS connector (owner-bound
 // entities — the owner manages their own grants; deliberately NO cross-owner
@@ -37,9 +39,10 @@ import "server-only";
 // drew its own identity line (a bare mono `<p>` of the connection id, and only
 // when there was more than one). It now composes the SHIPPED primitives:
 //
-//   • the roll-up `ConnectionsStatusCard` heads the section whenever the actor
-//     holds MORE THAN ONE connection here — the spec's "multiple connections"
-//     shape, counting only statuses in play;
+//   • the roll-up `ConnectionsStatusCard` heads the section — "The roll-up card
+//     is the Connections status card of the Setup tab, with no Check and no All
+//     connections link: the list it counts is directly beneath it" (§II, the
+//     Sharing tab), so it sits ABOVE the list whenever the list exists;
 //   • the list is the real `ConnectionsList`, so `connector-connections` is
 //     emitted by a PRODUCTION route (every connector setup page where the
 //     actor owns a connection), not by a fixture;
@@ -100,12 +103,23 @@ import {
 import type { AvailableScopes } from "@/components/access-scope";
 import type { OwnerView } from "@/components/permissions-form";
 import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
-import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card";
-import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list";
+import {
+  ConnectorSharingPanels,
+  CONNECTOR_SHARING_INTRO,
+  type ConnectorSharingPanelView,
+} from "@/components/extensions/connector-sharing-panels";
 
 type ConnectionSharingSectionProps = {
   /** The connector package whose OWN connections the actor manages here. */
   packageId: string;
+  /**
+   * Where this section is mounted. `tab` = the setup page's Sharing tab, whose
+   * page shell already holds the Wide column, so the section adds no column or
+   * page padding of its own; `standalone` = a page that mounts it directly (the
+   * §II error treatments and the bundled-react setup pages, which own no tab
+   * strip), where the section still carries the Wide column itself.
+   */
+  variant?: "tab" | "standalone";
 };
 
 type PanelData = {
@@ -118,6 +132,7 @@ type PanelData = {
 
 export async function ConnectionSharingSection({
   packageId,
+  variant = "standalone",
 }: ConnectionSharingSectionProps) {
   const session = await getAuthSession();
   const userId = session?.user?.id ?? null;
@@ -213,62 +228,63 @@ export async function ConnectionSharingSection({
     image: session?.user?.image ?? null,
   };
 
+  const panelViews: ConnectorSharingPanelView[] = panels.map(
+    ({ identity, surface, policy, coOwners, sharingAllowed }) => ({
+      key: identity.id,
+      name: identity.connectionId,
+      url: identity.connectorKey,
+      // What the connector declares about this panel's scope choice: a ceiling
+      // (every out-of-ceiling option locked with its reason) or a recommended
+      // scope (the recommendation line, nothing shared until saved).
+      scopeConstraint:
+        surface.surface === "locked"
+          ? ("locked" as const)
+          : surface.recommendationNote
+            ? ("recommended" as const)
+            : null,
+      permissions: (
+        <ExtensionPermissionsClient
+          kind="connection"
+          resourceId={identity.id}
+          canEdit
+          initialPolicy={policy}
+          owner={owner}
+          coOwners={coOwners}
+          availableScopes={scopes}
+          currentUserId={userId}
+          allowSharing={sharingAllowed}
+          selfRemoveRedirect="/connectors"
+          accessHelperText="Choose who can use this connection."
+          ownershipHelperText="Owners can change this connection's sharing and disconnect it."
+          accessValueOverride={surface.value}
+          accessDisabledScopes={
+            surface.surface === "locked" ? surface.disabledScopes : undefined
+          }
+          accessDisabledReasons={
+            surface.surface === "locked" ? surface.disabledReasons : undefined
+          }
+          accessScopeNote={
+            surface.surface === "locked" ? surface.note : surface.recommendationNote
+          }
+        />
+      ),
+    }),
+  );
+
   return (
     <section
       aria-label="Connection sharing"
-      className="mx-auto w-full max-w-3xl px-4 pb-10 sm:px-8 lg:px-6 flex flex-col gap-4"
+      className={
+        variant === "tab"
+          ? "flex w-full flex-col gap-4"
+          : "mx-auto w-full max-w-3xl px-4 pb-10 sm:px-8 lg:px-6 flex flex-col gap-4"
+      }
     >
       <div>
         <h2 className="text-base font-semibold text-foreground">Connection sharing</h2>
-        <p className="text-xs text-muted-foreground">
-          Choose who can use each of your saved connections. Shared use always
-          acts through your connected account and is audited.
-        </p>
+        <p className="text-xs text-muted-foreground">{CONNECTOR_SHARING_INTRO}</p>
       </div>
-      {/* The multi-connection roll-up (spec §II): one count badge per status in
-          play, shown only when there IS more than one connection to roll up. No
-          Check and no "All connections" link — this list is directly beneath
-          it, so there is no other tab to open. */}
-      {panels.length > 1 ? (
-        <ConnectionsStatusCard counts={{ connected: panels.length }} />
-      ) : null}
-      <ConnectionsList>
-      {panels.map(({ identity, surface, policy, coOwners, sharingAllowed }) => (
-        <div key={identity.id} className="flex flex-col gap-2">
-          {/* The connection's own identity row: its name and the mono secondary
-              line (the connector key it authenticates through). NO status and
-              NO action — see the header. */}
-          <ConnectionRow
-            name={identity.connectionId}
-            url={identity.connectorKey}
-          />
-          <ExtensionPermissionsClient
-            kind="connection"
-            resourceId={identity.id}
-            canEdit
-            initialPolicy={policy}
-            owner={owner}
-            coOwners={coOwners}
-            availableScopes={scopes}
-            currentUserId={userId}
-            allowSharing={sharingAllowed}
-            selfRemoveRedirect="/connectors"
-            accessHelperText="Choose who can use this connection."
-            ownershipHelperText="Owners can change this connection's sharing and disconnect it."
-            accessValueOverride={surface.value}
-            accessDisabledScopes={
-              surface.surface === "locked" ? surface.disabledScopes : undefined
-            }
-            accessDisabledReasons={
-              surface.surface === "locked" ? surface.disabledReasons : undefined
-            }
-            accessScopeNote={
-              surface.surface === "locked" ? surface.note : surface.recommendationNote
-            }
-          />
-        </div>
-      ))}
-      </ConnectionsList>
+      <ConnectorSharingPanels panels={panelViews} />
     </section>
   );
 }

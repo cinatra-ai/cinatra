@@ -143,13 +143,21 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**None.** All five pins were reconciled on 2026-08-30 and every one of them
-reads `match` against the published manifests, including on the `push`-to-`main`
-arm that is red on any non-`match` outcome. The record of what each adoption
-changed is below; the five bodies that were drifting are kept as the checker's
-own drift fixture (see `superseded-pins-2026-08-28/` beside the frozen
-published ones), because a gate whose drift path has no input is a gate whose
-drift path is untested.
+**`app` and `app-components`.** The 2026-08-30 reconciliation below left all
+five pins reading `match`; three of them have moved again since. Measured again
+on 2026-09-10 for cinatra#3374: `app` and `app-components` report `drift` in
+both hashes and are adopted under the issue that owns their surfaces
+(cinatra#3189), never here — a pin moves in the issue that adopts its surfaces.
+Because `tests/e2e/design/conformance/contract.ts` is a mapped path of every
+pin, any pull request that writes a driver counts those two as touched and is
+red on them until that adoption lands. `app-connectors` reported `drift` in the
+same reading and is adopted by the 2026-09-10 record below; `app-extensions` and
+`app-notifications` read `match`.
+
+The bodies a pin named before an adoption are kept as the checker's own drift
+input (see `superseded-pins-2026-08-28/` beside the frozen published ones, and
+every row a later frozen fetch superseded), because a gate whose drift path has
+no input is a gate whose drift path is untested.
 
 ## Reconciliation record
 
@@ -210,6 +218,47 @@ pin needed to be deferred, and none was.
 
 `allowlist.json` gained nothing — it is shrink-only and did not move. Every
 surface in every adopted manifest has a driver.
+
+### 2026-09-10 — `app-connectors` (cinatra#3374, unblocking cinatra#3372)
+
+Adopted the published `app-connectors` manifest fetched from the pin file's
+`publishedBaseUrl` on 2026-09-10 (HTTP 200, 4821 bytes,
+`2b98802f27fb…`), byte-identical on a second fetch. The committed artifact
+under `tests/e2e/design/conformance/manifests/app-connectors.json` is that
+response verbatim and both hashes in `conformance-pins.json` were re-derived
+from it, never typed. The four other pins were not touched.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app-connectors` | `drift` | three surfaces gained: `connector-sharing`, `connector-sharing-rollup`, `connector-sharing-locked`; the eight surfaces the pin already declared are byte-identical; the embedded spec-content hash moved with them | one driver each, written against the host code cinatra#3374 lands; `allowlist.json` unchanged |
+
+What moved, surface by surface:
+
+- **`connector-sharing`** declares four field bindings (`name <- connection.connectionId`, `url <- connection.connectorKey`, `access <- policy.runListVisibility`, `co-owners <- connection.coOwners`), four actions (`select-scope -> scopes-selected`, `search-people -> people-listed`, `remove-co-owner -> co-owner-removed`, `save-access -> access-saved`) and the `loading` state.
+- **`connector-sharing-rollup`** and **`connector-sharing-locked`** declare no field, action or state of their own.
+- The eight surfaces already pinned — `connector-connection-filter`, `connector-grid`, `connector-install-cta`, `connector-empty-panel`, `connector-setup`, `connector-multi-setup`, `connector-connections`, `connector-config-tab` — are unchanged, declaration for declaration. Their part of this move is spec-content-only: the spec source changed under an unchanged drawing.
+
+**The drivers land with this adoption.** A driver reads the host code the
+surface is drawn by, and when the adoption was first prepared none of the three
+gained surfaces had any — which is why that pull request stopped at the record
+rather than buying a green with an allowlist entry the ratchet forbids.
+cinatra#3374 draws them: the setup page's fixed second tab, Sharing, and the
+per-connection panels beneath it. So each of the three now has a driver in
+`tests/e2e/design/conformance/contract.ts`, mounted on the harness by
+`src/app/design-fixtures/conformance/connector-sharing-fixture.tsx`,
+`allowlist.json` gains nothing (it is shrink-only), and this pin reads `match`.
+
+**The issue that owns those three surfaces is cinatra#3374**, which draws the
+Sharing tab and adopts this pin as part of the same change, per the rule above:
+a pin moves in the issue that validates the new contract and updates the
+drivers, harness mounts and proofs together with it.
+
+The response body is frozen beside the checker's other fixtures under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-10/` with
+its own receipt. A frozen fetch is written FORWARD, never over an earlier one:
+the 2026-08-28 rows still describe the fetch of that day, and the unit suite
+resolves a pin's adopted body from the newest directory that carries its file,
+so the `app-connectors` body of 2026-08-28 is a drift input now.
 
 ## Running it locally
 

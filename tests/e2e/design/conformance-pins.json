@@ -27,8 +27,8 @@
       "id": "app-connectors",
       "file": "app-connectors.json",
       "source": "repo",
-      "manifestSha256": "be135a4a4e8d5bf8ae3aaa9afad238cef5050864c4b874f07428f39cb683f223",
-      "specContentHash": "sha256:a7b53676fceb18aed9d3b3991f45824627e1d5ea373b7f48b03926ebe822cd47"
+      "manifestSha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
+      "specContentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
     },
     {
       "id": "app-notifications",
