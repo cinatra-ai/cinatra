@@ -118,10 +118,15 @@ describe("the run's own page", () => {
 });
 
 // The sub-route family — one leaf word each, the trail's own.
+//
+// RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10). /trigger is the
+// run's SCHEDULE STEP, and cinatra#3223 (merged on main) draws no crumb for a
+// step: the trail there ends on the run, so the tab mirrors the run's own name,
+// exactly as the review's does below. Every other sub-route is untouched.
 const SUB_ROUTES: ReadonlyArray<
   [string, string, () => Promise<Record<string, unknown>>]
 > = [
-  ["trigger", "Schedule", () => import("../trigger/page")],
+  ["trigger", "Blog Pipeline Agent (1)", () => import("../trigger/page")],
   ["results", "Results", () => import("../results/page")],
   ["data", "Data", () => import("../data/page")],
   ["permissions", "Permissions", () => import("../permissions/page")],

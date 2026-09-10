@@ -4,6 +4,7 @@
 // for the connector cm-error classifier — keep render-affecting logic out of
 // the client component so it can be asserted without a full DOM render.)
 
+import { AGENT_SETTINGS_SEGMENT } from "./agent-url";
 import type { CrumbContribution } from "./breadcrumb-contributions";
 import { LEGACY_NANOID_RE } from "./id-policy";
 
@@ -420,6 +421,14 @@ const AGENT_INSTANCE_SUBROUTES_WITHOUT_CRUMB: ReadonlySet<string> = new Set([
  */
 export function agentInstanceSubRouteCrumbLabel(segment: string): string | null {
   const subRoute = safelyDecodePathSegment(segment);
+  // ONE READER FOR BOTH SILENCES (forward merge of origin/main, 2026-09-10).
+  // Two rules say a sub-route draws no crumb: a STEP of the run (cinatra#3223,
+  // merged on main) and the REVIEW (cinatra#2934, fix leg 10). The trail read
+  // the step set directly and this reader knew only the review, so the tab —
+  // which is derived from this reader — believed the schedule step still drew
+  // "Schedule" while the trail beside it ended on the run. Both silences are
+  // read here, so the two cannot disagree again.
+  if (AGENT_INSTANCE_STEP_SUBROUTES.has(subRoute)) return null;
   if (AGENT_INSTANCE_SUBROUTES_WITHOUT_CRUMB.has(subRoute)) return null;
   return humanizePathSegment(segment);
 }
@@ -645,12 +654,30 @@ export function buildBreadcrumbTrail(
     // raw thing in the place a name belongs. The position now has ONE
     // unresolved reading, and the crumb carries no link to a run it cannot
     // name.
-    const unresolvedInstance = !contributed;
+    //
+    // EXCEPT THE ONE RESERVED WORD THAT IS NOT A RUN AT ALL (forward merge of
+    // origin/main, 2026-09-10). The per-scope surfaces main merged
+    // (cinatra#2809) mount the PACKAGE's own settings page at this very depth —
+    // `<scope-base>/agents/<vendor>/<package>/settings`, resolved as
+    // `kind: "settings"` by `resolveScopedAgentRoute`, never as an instance —
+    // so that segment is a page's own word rather than a run nobody could name,
+    // and the unresolved-run reading would have drawn "Agent run" over the
+    // agent settings page. The reserved word is read from the same constant the
+    // route resolver reads, so the two cannot drift apart, and the crumb stays
+    // navigable because a page answers there.
+    const instanceSegment = segments[baseDepth + 3];
+    const isPackageSettingsSurface =
+      safelyDecodePathSegment(instanceSegment) === AGENT_SETTINGS_SEGMENT;
+    const unresolvedInstance = !contributed && !isPackageSettingsSurface;
     const crumbs: BreadcrumbCrumb[] = [
       ...collapsedHead(),
       { label: "Agents", href: agentsRoot },
       {
-        label: contributed?.label ?? UNRESOLVED_AGENT_INSTANCE_LABEL,
+        label:
+          contributed?.label ??
+          (isPackageSettingsSurface
+            ? humanizePathSegment(instanceSegment)
+            : UNRESOLVED_AGENT_INSTANCE_LABEL),
         href: instancePath,
         ...(unresolvedInstance ? { nonNavigable: true } : {}),
       },
@@ -672,9 +699,8 @@ export function buildBreadcrumbTrail(
           : (homeScopeBase ?? pathScopeBase ?? ""),
     );
     if (surface.length >= 5) {
-      const subRoute = safelyDecodePathSegment(segments[baseDepth + 4]);
       const subRouteLabel = agentInstanceSubRouteCrumbLabel(segments[baseDepth + 4]);
-      if (!AGENT_INSTANCE_STEP_SUBROUTES.has(subRoute) && subRouteLabel !== null) {
+      if (subRouteLabel !== null) {
         crumbs.push({ label: subRouteLabel, href: pathname });
         agentCrumbPaths.push(pathname);
       }

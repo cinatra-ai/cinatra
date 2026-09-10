@@ -30,11 +30,20 @@ describe("scopeBaseFromSegments", () => {
   });
 });
 
+// RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10). Each reading
+// below measures the SCOPE crumb and the collapse around it, and that is
+// untouched. What moved beneath them is the INSTANCE crumb's unresolved word:
+// the branch being forwarded (cinatra#2934, the sixth graded proof set) reads
+// the run position with nothing published on it as the run's KIND — "Agent run",
+// the word the refusal panel's own header carries — instead of title-casing the
+// raw path segment ("r1" -> "R1"), because a refused reading draws nothing of
+// the run it refused. The scope crumb, its href, the truncation and the step
+// suppression each still read exactly as this issue pinned them.
 describe("the agent-instance collapse is scope-base aware", () => {
   it("keeps the BARE trail exactly as it was", () => {
     expect(buildBreadcrumbTrail("/agents/acme/writer/r1").map((c) => c.label)).toEqual([
       "Agents",
-      "R1",
+      "Agent run",
     ]);
   });
 
@@ -42,7 +51,7 @@ describe("the agent-instance collapse is scope-base aware", () => {
     const crumbs = buildBreadcrumbTrail(`/organizations/${ORG}/agents/acme/writer/r1`, {
       contributions: [{ prefix: `/organizations/${ORG}`, label: "Northwind Analytics" }],
     });
-    expect(crumbs.map((c) => c.label)).toEqual(["Northwind Analytics", "Agents", "R1"]);
+    expect(crumbs.map((c) => c.label)).toEqual(["Northwind Analytics", "Agents", "Agent run"]);
     expect(crumbs[0].href).toBe(`/organizations/${ORG}`);
     expect(crumbs[0].nonNavigable).toBeFalsy();
     expect(crumbs[1].href).toBe(`/organizations/${ORG}/agents`);
@@ -58,12 +67,12 @@ describe("the agent-instance collapse is scope-base aware", () => {
     expect(buildBreadcrumbTrail("/workspace/agents/acme/writer/r1").map((c) => c.label)).toEqual([
       "Workspace",
       "Agents",
-      "R1",
+      "Agent run",
     ]);
     expect(buildBreadcrumbTrail("/personal/agents/acme/writer/r1").map((c) => c.label)).toEqual([
       "Personal",
       "Agents",
-      "R1",
+      "Agent run",
     ]);
   });
 
@@ -71,7 +80,7 @@ describe("the agent-instance collapse is scope-base aware", () => {
     const crumbs = buildBreadcrumbTrail(`/teams/t1/agents/acme/writer/r1/settings`, {
       contributions: [{ prefix: "/teams/t1", label: "Growth" }],
     });
-    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "R1", "Settings"]);
+    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "Agent run", "Settings"]);
     expect(crumbs.some((c) => c.ellipsis)).toBe(false);
   });
 
@@ -83,7 +92,7 @@ describe("the agent-instance collapse is scope-base aware", () => {
     const crumbs = buildBreadcrumbTrail(`/teams/t1/agents/acme/writer/r1/trigger`, {
       contributions: [{ prefix: "/teams/t1", label: "Growth" }],
     });
-    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "R1"]);
+    expect(crumbs.map((c) => c.label)).toEqual(["Growth", "Agents", "Agent run"]);
     expect(crumbs[0].href).toBe("/teams/t1");
   });
 

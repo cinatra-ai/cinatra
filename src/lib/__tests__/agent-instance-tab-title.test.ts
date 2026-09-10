@@ -105,18 +105,29 @@ describe("agentInstanceTabTitle — the tab is the trail's resolved leaf", () =>
     expect(title).not.toContain(RUN_ID.slice(0, 8));
   });
 
+  // RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10). cinatra#3004
+  // named the crumb at /trigger "Schedule"; cinatra#3223, merged on main, asked
+  // the prior question and answered it differently — the schedule is a STEP of
+  // the run, a reading inside the run's own route, so it draws no crumb at all
+  // and the trail there ends on the RUN. The tab mirrors the resolved trail, so
+  // the schedule step's tab is the run's name, exactly as the review's is. Every
+  // sub-route that does draw a crumb of its own still reads its own word.
   it("is the sub-route's own word on a sub-route, matching the trail's leaf", () => {
-    // The schedule surface answers at /trigger and the trail says Schedule
-    // (cinatra#3004), so the tab says Schedule too.
+    expect(agentInstanceTabTitle({ ...BASE, subRoute: "results" })).toBe("Results");
+    expect(agentInstanceTabTitle({ ...BASE, subRoute: "skills" })).toBe("Skills");
+  });
+
+  it("is the RUN's own name on the schedule step, because that is the trail's leaf", () => {
     expect(
       agentInstanceTabTitle({
         ...BASE,
         subRoute: "trigger",
         resolvedInstanceLabel: "Blog Pipeline Agent (1)",
       }),
-    ).toBe("Schedule");
-    expect(agentInstanceTabTitle({ ...BASE, subRoute: "results" })).toBe("Results");
-    expect(agentInstanceTabTitle({ ...BASE, subRoute: "skills" })).toBe("Skills");
+    ).toBe("Blog Pipeline Agent (1)");
+    expect(agentInstanceTabTitle({ ...BASE, subRoute: "trigger" })).toBe(
+      AGENT_INSTANCE_GENERIC_TAB_TITLE,
+    );
   });
 
   // RE-PINNED (cinatra#2934, fix leg 10). The review is the one sub-route that
@@ -198,13 +209,32 @@ describe("resolveAgentInstanceMetadata — the gate-repeating read", () => {
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
+  // RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10): the schedule
+  // step draws no crumb of its own on the merged trail (cinatra#3223), so the
+  // reading is measured on a sub-route that still does.
   it("reads no run data for a sub-route that draws its own crumb", async () => {
     getAuthSession.mockResolvedValue(SESSION);
     await expect(
-      resolveAgentInstanceMetadata({ ...BASE, subRoute: "trigger" }),
-    ).resolves.toEqual({ title: "Schedule" });
+      resolveAgentInstanceMetadata({ ...BASE, subRoute: "results" }),
+    ).resolves.toEqual({ title: "Results" });
     expect(getAuthSession).not.toHaveBeenCalled();
     expect(readAgentRunById).not.toHaveBeenCalled();
+  });
+
+  it("reads the run for the schedule step, whose leaf IS the run", async () => {
+    getAuthSession.mockResolvedValue(SESSION);
+    readAgentTemplateBySlug.mockResolvedValue({ name: "Blog Pipeline Agent" });
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      title: "Blog Pipeline Agent (1)",
+      status: "armed",
+      templateId: "tpl-1",
+      runBy: "user-1",
+    });
+    await expect(
+      resolveAgentInstanceMetadata({ ...BASE, subRoute: "trigger" }),
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
+    expect(readAgentRunById).toHaveBeenCalled();
   });
 
   // RE-PINNED (cinatra#2934, fix leg 10): the review draws no crumb of its own,
@@ -443,7 +473,11 @@ describe("the tab on a route whose screen guards the run", () => {
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
-  it("makes the determination on a sub-route that draws its own crumb, and still takes no name from it", async () => {
+  // RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10): the schedule
+  // step draws no crumb on the merged trail (cinatra#3223), so its resolved
+  // reading is the RUN's name; the not-found determination in front of it is
+  // unchanged, which is what this reading is for.
+  it("makes the determination on the schedule step, before any name is read", async () => {
     readAgentRunById.mockResolvedValue(null);
     await expect(
       resolveAgentInstanceMetadata({
@@ -467,7 +501,7 @@ describe("the tab on a route whose screen guards the run", () => {
         subRoute: "trigger",
         screenSlot: "instanceTrigger",
       }),
-    ).resolves.toEqual({ title: "Schedule" });
+    ).resolves.toEqual({ title: "Blog Pipeline Agent (1)" });
   });
 
   it("still mirrors the run's name once the run is there", async () => {
