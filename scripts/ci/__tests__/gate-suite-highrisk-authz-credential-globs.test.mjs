@@ -28,7 +28,7 @@
 // The classification uses a FAITHFUL COPY of the gate's own glob→regex
 // translation. The production classifier lives cross-repo and is not importable
 // here, so globToRegExp below is copied verbatim from
-//   cinatra-ai/ci scripts/truthful-attribution-gate.mjs @fdc26811b97f435bbf8a754247631db39267a197
+//   cinatra-ai/ci scripts/truthful-attribution-gate.mjs @416a75707fdcfeb768b41c3a54f944078d1ab8fc
 // (the exact pin carried by requiredContexts[].pinned for the
 // truthful-attribution-gate context in gate-suite.json). If that pin advances
 // and the matcher semantics change, update this copy in the same audit that
@@ -153,7 +153,7 @@ const PREVIOUSLY_UNCOVERED = [
 ];
 
 // The full central high-risk default set (cinatra-ai/ci
-// config/high-risk-defaults.json @fdc26811b97f435bbf8a754247631db39267a197).
+// config/high-risk-defaults.json @416a75707fdcfeb768b41c3a54f944078d1ab8fc).
 // A repo suite may EXTEND the defaults but never remove one — the gate fails
 // closed on a non-superset set. This is the local, fast-feedback mirror of that
 // rule: it reds the moment an edit to highRiskPaths drops a default, instead of
@@ -333,6 +333,6 @@ describe("gate-suite highRiskPaths authz/credential/session coverage (2026-08 wi
   // ENGINE's rule (checkSuiteVersionBump), not this assertion's, and stays the
   // gate's job.
   it("carries the CalVer the widened glob set shipped under", () => {
-    expect(loadSuite().version).toBe("2026.08.5");
+    expect(loadSuite().version).toBe("2026.09.1");
   });
 });
