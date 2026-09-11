@@ -1,13 +1,24 @@
 // Hosted "/agents Playwright smoke" memory measurement (cinatra#3382): the
-// SHAPE of the two steps shipped into the real workflow file in this repo.
+// SHAPE of the measurement shipped into the real workflow file in this repo.
 //
 // The job died three times at each of two candidate heads with "The runner has
 // received a shutdown signal", each time after a green run of the SAME head —
-// so the job's demand on the 7 GB hosted VM is what has to be measured before
-// anything is capped or moved. These assertions guard the measurement itself:
-// the sampler starts BEFORE the build/boot, the report runs even when the job
-// dies, both halves read ONE pid variable, and the samples leave the VM as a
-// named artifact.
+// so the job's demand on the hosted VM is what has to be measured before
+// anything is capped or moved.
+//
+// The first measured run proved WHERE the samples have to be written: the
+// sampler was started as a background process in a step of its own, and a
+// background process's stdout belongs to the step that started it and is
+// closed when that step ends — so the job log of the run that died carried
+// exactly ONE sample line (mem_used_mb=1623 mem_available_mb=14366 at
+// 00:47:19Z) although the job ran on for minutes, and the file the always()
+// step would have uploaded died with the VM. These assertions therefore pin
+// the sampler INSIDE the step that boots the app and runs the smoke: the loop
+// backgrounded at the top of that step's script, the smoke run in the
+// foreground, the loop killed by pid in the same script (also on error,
+// through a trap) — so every sample up to the moment of death is in the job
+// log of a step that is still running. The always() report and the artifact
+// are kept for the runs that complete.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,61 +72,123 @@ const step = (predicate, what) => {
   return found[0];
 };
 
-const SAMPLER = () =>
-  step((s) => /memory sampler/i.test(s.name) && /^\s*run: \|/m.test(s.text) && !/Stop/i.test(s.name), "sampler");
-const REPORT = () => step((s) => /Stop the memory sampler/i.test(s.name), "sampler-stop/report");
-const UPLOAD = () => step((s) => /Upload the memory samples/i.test(s.name), "memory-artifact upload");
+// The shell script of a step, without its YAML key lines.
+const runBlock = (s) => {
+  const m = /^ {8}run: \|\s*\n([\s\S]*)$/m.exec(s.text);
+  expect(m, `step "${s.name}" has no run block`).not.toBeNull();
+  return m[1];
+};
+
+const SAMPLE_LOOP = (s) =>
+  /while true; do/.test(s.text) &&
+  /free -m/.test(s.text) &&
+  !/Stop the memory sampler/i.test(s.name);
+const SMOKE_CMD = "pnpm test:e2e:dashboards";
+
+// The ONE step that carries the sampler loop — the same step that boots the
+// app and runs the smoke.
+const SAMPLED_SMOKE = () => step(SAMPLE_LOOP, "sampler-carrying");
+const REPORT = () =>
+  step((s) => /Stop the memory sampler/i.test(s.name), "sampler-stop/report");
+const UPLOAD = () =>
+  step(
+    (s) => /Upload the memory samples/i.test(s.name),
+    "memory-artifact upload",
+  );
 const BUILD = () => step((s) => s.name === "Build app (production)", "build");
-const BOOT = () => step((s) => /Start standalone server/i.test(s.name), "standalone-server boot");
 
 const PID_VAR = "AGENTS_SMOKE_MEMORY_SAMPLER_PID";
 const FILE_VAR = "AGENTS_SMOKE_MEMORY_FILE";
 
-describe("the sampler starts before the boot", () => {
-  it("precedes the production build step", () => {
-    expect(SAMPLER().index).toBeLessThan(BUILD().index);
+describe("the sampler runs inside the step that boots the app and runs the smoke", () => {
+  it("starts the loop and invokes the smoke in ONE run block", () => {
+    const block = runBlock(SAMPLED_SMOKE());
+    expect(block).toMatch(/while true; do/);
+    expect(block).toContain(SMOKE_CMD);
+    // the smoke runs in the foreground, after the loop is backgrounded
+    expect(block.indexOf("while true; do")).toBeLessThan(
+      block.indexOf(SMOKE_CMD),
+    );
   });
 
-  it("precedes the standalone-server boot step", () => {
-    expect(SAMPLER().index).toBeLessThan(BOOT().index);
+  it("boots the app in that same block", () => {
+    const block = runBlock(SAMPLED_SMOKE());
+    expect(block).toContain("node server.js");
+    expect(block).toContain("http://localhost:3100/api/auth/get-session");
   });
 
-  it("writes its samples under $RUNNER_TEMP", () => {
-    expect(SAMPLER().text).toContain("${RUNNER_TEMP}/");
+  it("leaves NO separate sampler-only step behind", () => {
+    const carriers = steps().filter(SAMPLE_LOOP);
+    expect(carriers).toHaveLength(1);
+    for (const s of carriers) {
+      expect(
+        s.text,
+        `sampler step "${s.name}" does not run the smoke`,
+      ).toContain(SMOKE_CMD);
+    }
+    expect(
+      steps().map((s) => s.name),
+      "the sampler no longer has a step of its own",
+    ).not.toContain("Start the hosted-VM memory sampler");
+  });
+
+  it("kills the loop by pid in the same script, and on error through a trap", () => {
+    const block = runBlock(SAMPLED_SMOKE());
+    expect(block).toMatch(/SAMPLER_PID=\$!/);
+    expect(block).toMatch(/trap '.*kill "\$SAMPLER_PID".*' EXIT/);
+    expect(block).toMatch(/^\s*kill "\$SAMPLER_PID"/m);
+  });
+
+  it("writes its samples under the runner temp directory", () => {
+    expect(runBlock(SAMPLED_SMOKE())).toContain("${RUNNER_TEMP}/");
   });
 
   it("samples the clock, the free -m available column and the top three by RSS, every 5 seconds", () => {
-    const text = SAMPLER().text;
+    const text = runBlock(SAMPLED_SMOKE());
     expect(text).toContain("date -u +%T");
     expect(text).toContain("free -m");
     expect(text).toMatch(/mem_available_mb=" \$7/);
     expect(text).toContain("ps -eo rss=,comm= --sort=-rss | head -3");
     expect(text).toMatch(/^\s*sleep 5$/m);
-    expect(text).toMatch(/while true; do/);
   });
 
-  it("writes every sample to the job log as well as the file", () => {
-    const text = SAMPLER().text;
-    // Each sample block goes through tee: the file AND the step's own stdout, so
-    // the samples taken up to the moment the runner kills the VM survive in the
-    // job log even when the always() report and the artifact upload never run.
-    expect(text).toMatch(/\}\s*\|\s*tee -a "\$SAMPLE_FILE"/);
+  it("writes every sample to the job log as well as the file, unbuffered", () => {
+    const text = runBlock(SAMPLED_SMOKE());
+    // Each sample block goes through tee: the file AND the stdout of the step
+    // that is still running, so the samples taken up to the moment the runner
+    // kills the VM survive in the job log even when the always() report and
+    // the artifact upload never run.
+    expect(text).toMatch(/\}\s*\|\s*stdbuf -oL tee -a "\$SAMPLE_FILE"/);
     // never the file-only redirect, whose samples die with the VM
     expect(text).not.toMatch(/\}\s*>>\s*"\$SAMPLE_FILE"/);
     // and the log half is not thrown away
     expect(text).not.toMatch(/tee -a "\$SAMPLE_FILE"\s*>\s*\/dev\/null/);
   });
 
-  it("records the loop's pid to $GITHUB_ENV", () => {
-    expect(SAMPLER().text).toMatch(
-      new RegExp(`echo "${PID_VAR}=\\$!" >> "\\$GITHUB_ENV"`),
+  it("records the loop's pid and the sample path to the job env file", () => {
+    const text = runBlock(SAMPLED_SMOKE());
+    expect(text).toMatch(
+      new RegExp(`echo "${PID_VAR}=\\$\\{SAMPLER_PID\\}" >> "\\$GITHUB_ENV"`),
+    );
+    expect(text).toMatch(
+      new RegExp(`echo "${FILE_VAR}=\\$\\{SAMPLE_FILE\\}" >> "\\$GITHUB_ENV"`),
     );
   });
 
+  it("keeps the smoke exit code on the e2e step id the assert step reads", () => {
+    const s = SAMPLED_SMOKE();
+    expect(s.text).toMatch(/^ {8}id: e2e$/m);
+    expect(runBlock(s)).toMatch(/echo "code=\$\{code\}" >> "\$GITHUB_OUTPUT"/);
+  });
+
   it("stays on the real-smoke path, gated exactly like the other real steps", () => {
-    expect(SAMPLER().text).toContain(
+    expect(SAMPLED_SMOKE().text).toContain(
       "if: ${{ needs.detect.outputs.run_real == 'true' }}",
     );
+  });
+
+  it("runs after the production build whose boot it measures", () => {
+    expect(SAMPLED_SMOKE().index).toBeGreaterThan(BUILD().index);
   });
 });
 
@@ -124,8 +197,8 @@ describe("the report runs even when the job dies", () => {
     expect(REPORT().text).toMatch(/^ {8}if: \$\{\{ always\(\) \}\}$/m);
   });
 
-  it("comes after the sampler and after the smoke assert", () => {
-    expect(REPORT().index).toBeGreaterThan(SAMPLER().index);
+  it("comes after the sampled smoke and after the smoke assert", () => {
+    expect(REPORT().index).toBeGreaterThan(SAMPLED_SMOKE().index);
     expect(REPORT().index).toBeGreaterThan(
       step((s) => s.name === "Assert smoke passed", "assert").index,
     );
@@ -140,16 +213,14 @@ describe("the report runs even when the job dies", () => {
 });
 
 describe("both halves read the same pid variable", () => {
-  it("the sampler writes it and the report kills by it", () => {
-    expect(SAMPLER().text).toContain(`${PID_VAR}=`);
-    expect(REPORT().text).toMatch(
-      new RegExp(`pid="\\$\\{${PID_VAR}:-\\}"`),
-    );
+  it("the sampled smoke writes it and the report kills by it", () => {
+    expect(runBlock(SAMPLED_SMOKE())).toContain(`${PID_VAR}=`);
+    expect(REPORT().text).toMatch(new RegExp(`pid="\\$\\{${PID_VAR}:-\\}"`));
     expect(REPORT().text).toMatch(/^\s*kill "\$pid"/m);
   });
 
   it("carries the sample path across on one variable too", () => {
-    expect(SAMPLER().text).toContain(`${FILE_VAR}=`);
+    expect(runBlock(SAMPLED_SMOKE())).toContain(`${FILE_VAR}=`);
     expect(REPORT().text).toContain(`${FILE_VAR}:-`);
   });
 });
@@ -180,7 +251,7 @@ describe("nothing else in the job changed", () => {
       "runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '\"ubuntu-latest\"') }}",
     );
     expect(job).toMatch(/^ {4}timeout-minutes: 45$/m);
-    expect(BUILD().text).toContain("CINATRA_BUILD_CPUS: \"1\"");
+    expect(BUILD().text).toContain('CINATRA_BUILD_CPUS: "1"');
     expect(BUILD().text).toContain("NODE_OPTIONS: --max-old-space-size=4096");
   });
 });
