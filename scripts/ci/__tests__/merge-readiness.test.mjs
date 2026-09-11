@@ -8,8 +8,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEADLINE_MINUTES,
+  DEFAULT_JOB_TIMEOUT_MINUTES,
+  EXIT_PENDING,
+  MAX_WAIT_MINUTES,
   QUEUE_TIMEOUT_MINUTES,
+  WAIT_MARGIN_MINUTES,
   evaluateReadiness,
+  exitCodeFor,
   isSettled,
   parseBoundaryRecords,
   pathsApply,
@@ -18,6 +23,7 @@ import {
   validateApprovedHead,
   validateInventory,
   verificationBoundaryVerdict,
+  waitBudgetMinutes,
 } from "../merge-readiness.mjs";
 // Namespace import for the sha-splitting road, so a missing export shows up as
 // a failing case here instead of a module-load error across the whole file.
@@ -97,12 +103,51 @@ describe("merge-readiness fixture matrix", () => {
     }
   });
 
-  it("FAILs when an expected context is still running at the deadline", () => {
+  // A deadline is never a readiness verdict (cinatra#3391): a required run that
+  // is still queued or in progress when the wait runs out is PENDING — the
+  // candidate is not red, and a re-run picks up where this one left off.
+  const running = (status) => {
     const checks = greenChecks();
-    checks[0] = { name: "build", status: "in_progress", conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    checks[0] = { name: "build", status, conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    return checks;
+  };
+
+  it("reports PENDING, never a failure, when an expected context is still in progress at the deadline", () => {
+    const r = evalPr(running("in_progress"));
+    expect(r.verdict).toBe("PENDING");
+    expect(r.ok).toBe(false);
+    expect(r.failures).toEqual([]);
+    expect(r.pending.join("\n")).toMatch(
+      /^pending: 'build' is still 'in_progress' after 90 minutes — not a failure$/m,
+    );
+  });
+
+  it("reports PENDING when an expected context is still queued at the deadline", () => {
+    const r = evalPr(running("queued"));
+    expect(r.verdict).toBe("PENDING");
+    expect(r.failures).toEqual([]);
+    expect(r.pending.join("\n")).toMatch(
+      /^pending: 'build' is still 'queued' after 90 minutes — not a failure$/m,
+    );
+  });
+
+  it("names the minutes actually waited in the pending text", () => {
+    const r = evaluateReadiness({
+      inventory: inventory(),
+      checks: running("queued"),
+      changedPaths: ["src/app/page.tsx"],
+      eventName: "pull_request",
+      waitedMinutes: 105,
+    });
+    expect(r.pending.join("\n")).toContain("after 105 minutes");
+  });
+
+  it("stays a FAIL when a real red sits beside a still-queued context", () => {
+    const checks = running("queued");
+    checks[1] = { ...checks[1], conclusion: "failure" };
     const r = evalPr(checks);
     expect(r.verdict).toBe("FAIL");
-    expect(r.failures.join("\n")).toMatch(/timed out: 'build' is still 'in_progress'/);
+    expect(r.failures.join("\n")).toMatch(/failed: 'source-leak-gate/);
   });
 
   it("FAILs on a duplicate source for one expected context", () => {
@@ -333,6 +378,68 @@ describe("the deadline is shorter than the queue timeout", () => {
   });
 });
 
+describe("the wait follows the longest job budget of the evaluated workflows", () => {
+  // Each expected entry carries the `timeout-minutes` of the job that reports
+  // it, derived into the inventory by scripts/ci/merge-readiness-inventory.mjs.
+  const withBudgets = (budgets) => {
+    const inv = inventory();
+    inv.expected = inv.expected.map((e, i) => ({ ...e, timeoutMinutes: budgets[i] }));
+    return inv;
+  };
+
+  it("reads the bound from the inventory: the longest applicable job budget plus the margin", () => {
+    const inv = withBudgets([25, 45, 70]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["src/a.ts"] })).toBe(70 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("ignores the budget of a context this candidate's paths do not apply to", () => {
+    const inv = withBudgets([25, 45, 70]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(45 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("treats a job with no declared timeout-minutes as GitHub's own default budget", () => {
+    const inv = withBudgets([25, null, 45]);
+    expect(DEFAULT_JOB_TIMEOUT_MINUTES).toBe(360);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(MAX_WAIT_MINUTES);
+  });
+
+  it("never waits past the upper bound the evaluator's own job timeout allows", () => {
+    const inv = withBudgets([600, 600, 600]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["src/a.ts"] })).toBe(MAX_WAIT_MINUTES);
+    expect(MAX_WAIT_MINUTES).toBeLessThan(QUEUE_TIMEOUT_MINUTES);
+    expect(MAX_WAIT_MINUTES).toBeGreaterThan(DEADLINE_MINUTES);
+  });
+
+  it("falls back to the inventory's deadlineMinutes when no expected context applies", () => {
+    const inv = withBudgets([25, 45, 70]);
+    inv.expected = inv.expected.map((e) => ({ ...e, paths: ["src/**"] }));
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(inv.deadlineMinutes);
+  });
+});
+
+describe("a pending outcome exits non-zero, and distinctly from a failure", () => {
+  it("gives PASS, PENDING and FAIL three different exit codes", () => {
+    expect(exitCodeFor({ verdict: "PASS" })).toBe(0);
+    expect(exitCodeFor({ verdict: "PENDING" })).toBe(EXIT_PENDING);
+    expect(exitCodeFor({ verdict: "FAIL" })).toBe(1);
+    expect(EXIT_PENDING).not.toBe(0);
+    expect(EXIT_PENDING).not.toBe(1);
+  });
+
+  it("renders the pending lines in the job summary", () => {
+    const checks = greenChecks();
+    checks[0] = { name: "build", status: "queued", conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    const summary = readiness.renderSummary({
+      candidateSha: HEAD,
+      lookupSha: HEAD,
+      eventName: "pull_request",
+      result: evalPr(checks),
+    });
+    expect(summary).toContain("merge-readiness: PENDING");
+    expect(summary).toContain("pending: 'build' is still 'queued' after 90 minutes — not a failure");
+  });
+});
+
 describe("verification-boundary parser", () => {
   it("reads column-0 records in document order", () => {
     const text = `Verification boundary: candidate-pending-ci at ${HEAD} (checks: build; proof)\nVerification boundary: candidate at ${HEAD}\n`;
@@ -418,5 +525,16 @@ describe("inventory validation fails closed", () => {
     const badFlag = inventory();
     badFlag.expected[0] = { ...badFlag.expected[0], skippable: "yes" };
     expect(validateInventory(badFlag).problems.join("\n")).toMatch(/non-boolean 'skippable' flag/);
+  });
+
+  it("accepts a per-entry job budget and rejects a malformed one", () => {
+    const good = inventory();
+    good.expected[0] = { ...good.expected[0], timeoutMinutes: 30 };
+    good.expected[1] = { ...good.expected[1], timeoutMinutes: null };
+    expect(validateInventory(good).ok).toBe(true);
+
+    const bad = inventory();
+    bad.expected[0] = { ...bad.expected[0], timeoutMinutes: 0 };
+    expect(validateInventory(bad).problems.join("\n")).toMatch(/malformed 'timeoutMinutes'/);
   });
 });
