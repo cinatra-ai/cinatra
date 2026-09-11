@@ -9,12 +9,11 @@
  *
  * Additionally enforces: agentspec_version, component_type, packageName,
  * the OpenAI/gpt-5 LLM pair, that toolboxes is UNDEFINED (locked decision —
- * legacy MCP injection path), the three ApiNodes targeting templated
+ * legacy MCP injection path), the single ApiNode targeting templated
  * /api/llm-bridge with SKILL.md auto-discovery (no skill_source_path field),
- * correct StartNode required+hidden coverage (required=[the four fields a
- * person supplies] + hidden=['cinatra_run_id']), the 2 hitlScreens
- * (scrape-schema-review + final-list-review), and EndNode shape with 7
- * outputs.
+ * correct StartNode required+hidden coverage (required=['intent'] +
+ * hidden=[3 others]), the 2 hitlScreens (scrape-schema-review +
+ * final-list-review), and EndNode shape with 6 outputs.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/list-curator-agent-validates.test.ts
  */
@@ -85,34 +84,27 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     expect(cinatra.toolboxes).toBeUndefined();
   });
 
-  it("all three ApiNodes target {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='list-curator-agent' and no skill_source_path", () => {
+  it("ApiNode targets {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='list-curator-agent' and no skill_source_path", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const apiNodes = Object.values(refs).filter((c) => c.component_type === "ApiNode");
-    // The W8 head splits the one bridge call into the three steps the two
-    // gates sit between (propose, collect, create). Each is the same templated
-    // bridge call, so the locked shape is asserted on all three.
-    expect(apiNodes).toHaveLength(3);
-    for (const apiNode of apiNodes) {
-      expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
-      expect(apiNode.http_method).toBe("POST");
-      const data = apiNode.data as Record<string, unknown>;
-      expect(data.agent_id).toBe("list-curator-agent");
-      expect(data.skill_source_path).toBeUndefined();
-    }
+    expect(apiNodes).toHaveLength(1);
+    const apiNode = apiNodes[0]!;
+    expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
+    expect(apiNode.http_method).toBe("POST");
+    const data = apiNode.data as Record<string, unknown>;
+    expect(data.agent_id).toBe("list-curator-agent");
+    expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['intent','seedUrls','targetMemberType','listName'] AND hidden=['cinatra_run_id'] — covers all 5 inputs (DFE translates at ApiNode boundary to match runtime injection)", () => {
+  it("StartNode required=['intent'] AND hidden=['seedUrls','targetMemberType','listName','cinatra_run_id'] — covers all 5 inputs (DFE translates at ApiNode boundary to match runtime injection)", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
     const meta = (start!.metadata as Record<string, unknown> | undefined)?.cinatra as
       | Record<string, unknown>
       | undefined;
-    // W8: the four fields a person supplies are named in `required` — which is
-    // how this host both shows and prompts for a field — and only the derived
-    // run id stays hidden.
-    expect(meta?.required).toEqual(["intent", "seedUrls", "targetMemberType", "listName"]);
-    expect(meta?.hidden).toEqual(["cinatra_run_id"]);
+    expect(meta?.required).toEqual(["intent"]);
+    expect(meta?.hidden).toEqual(["seedUrls", "targetMemberType", "listName", "cinatra_run_id"]);
     const startInputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(startInputs.map((i) => i.title as string));
     const requiredSet = new Set(meta?.required as string[]);
@@ -121,7 +113,7 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 7 outputs (listId/memberCount/accountsCreated/contactsCreated/failures/summary/dispatchedRuns) AND data_flow_connections.length === 32 AND control_flow_connections.length === 7 (includes the DFE for agent_run_id)", () => {
+  it("EndNode declares 6 outputs (listId/memberCount/accountsCreated/contactsCreated/failures/summary) AND data_flow_connections.length === 11 AND control_flow_connections.length === 2 (includes the DFE for agent_run_id)", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -133,11 +125,9 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     expect(byTitle.get("contactsCreated")?.type).toBe("integer");
     expect(byTitle.get("failures")?.type).toBe("array");
     expect(byTitle.get("summary")?.type).toBe("string");
-    expect(byTitle.get("dispatchedRuns")?.type).toBe("array");
-    expect(outputs).toHaveLength(7);
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(32);
+    expect(dfc.length).toBe(11);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(7);
+    expect(cfc.length).toBe(2);
   });
 });

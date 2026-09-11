@@ -19,9 +19,9 @@
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
  *
- * TWO PINS ARE HELD at their previous sha, and each held part is recorded
+ * THREE PINS ARE HELD at their previous sha, and each held part is recorded
  * below as a pinned absence carrying its reason. The wave's own change in
- * those two repositories also carries a defect the host refuses, and the
+ * those three repositories also carries a defect the host refuses, and the
  * border keeps the remedy in the package's own repository rather than in a
  * host special case:
  *
@@ -33,18 +33,14 @@
  *     `hitlScreens`, and that id is a live renderer binding this host resolves
  *     for the send screen, so the agent card would stop advertising a surface
  *     the host still serves.
+ *   - list-curator-agent: its head fails the L1 EndNode invariant — an
+ *     EndNode that specifies both inputs and outputs must have them equal —
+ *     so the runtime refuses to mount the flow at that head. The remedy is
+ *     asked for in that repository as cinatra-ai/list-curator-agent#51.
  *
  * company-discovery-agent's pin is no longer held: its corrected head names
  * the two fields a person supplies in `required`, which is how the host makes
  * a field visible, and this file follows that declaration below.
- *
- * list-curator-agent's pin is no longer held either. The remedy the host asked
- * for landed in that repository: the package now carries its own vitest
- * collection, so the two W8 suites under its tests directory are collected and
- * run there and the perpetual extension suite gate no longer reports on-disk
- * test files no runner executed. The advanced head also names the fields a
- * person supplies in `required` and turns the two declared review screens into
- * real pauses, and this file follows both declarations below.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -455,16 +451,14 @@ describe("acceptance 2 — the curator's two declared pauses", () => {
     ]);
   });
 
-  // The gap the previous pin recorded is closed: the advanced head carries two
-  // InputMessageNode pauses in its flow, matching its two declared screens in
-  // COUNT — this case reads node kinds and cardinality, not screen-to-node
-  // identity — and the manifest's approval-gate claim is now true AND honest,
-  // which is the pairing the fleet-wide case below refuses to let drift apart.
-  it("the curator declares two approval nodes, matching its two review screens in count", () => {
+  // Named, not hidden: the two declared screens are not yet approval nodes in
+  // the curator's flow. The wave's sentence is to MAKE them real pauses, which
+  // is a later wave's item in that repository, not a deletion of the
+  // declaration here.
+  it("the curator's declared screens are not yet pauses in its flow — the gap is pinned", () => {
     const a = agent("list-curator-agent");
-    expect(a.approvalNodes).toBe(2);
-    expect(a.approvalNodes).toBe(a.declaredPauses.length);
-    expect(a.gateClaim).toBe(true);
+    expect(a.approvalNodes).toBe(0);
+    expect(a.gateClaim).toBe(false);
   });
 });
 
