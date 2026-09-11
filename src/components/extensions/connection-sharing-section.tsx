@@ -95,7 +95,10 @@ import {
   readExtensionCoOwners,
 } from "@cinatra-ai/extensions/permissions-store";
 import { defaultAccessPolicyForKind } from "@cinatra-ai/extensions/install-access-contract";
-import { resolveConnectionAccessDeclaration } from "@/lib/connection-use-gate";
+import {
+  connectionSharingPagePackageId,
+  resolveConnectionAccessDeclaration,
+} from "@/lib/connection-use-gate";
 import {
   decideConnectionShareSurface,
   type ConnectionShareSurface,
@@ -141,10 +144,14 @@ export async function ConnectionSharingSection({
 
   // The actor's OWN live connections for this connector, bounded to the
   // active workspace (org rows of the active org + the owner's null-org
-  // legacy rows).
+  // legacy rows). The row belongs to the page its OWN Setup tab registers it
+  // from — `connectionSharingPagePackageId` is that one mapping, so a server
+  // registered on the MCP Servers connector's form (an identity row homed to
+  // the host's external-MCP sentinel package) is listed HERE, on that
+  // connector's tab, and on no other connector's tab (cinatra#3374).
   const ownRows = (await listNangoConnectionsByOwner(userId)).filter(
     (row) =>
-      row.connectorPackageId === packageId &&
+      connectionSharingPagePackageId(row) === packageId &&
       (row.organizationId === null || row.organizationId === activeOrgId),
   );
   if (ownRows.length === 0) return null;
@@ -163,7 +170,14 @@ export async function ConnectionSharingSection({
 
   const panels: PanelData[] = [];
   for (const identity of ownRows) {
-    const resolution = await resolveConnectionAccessDeclaration(identity);
+    // What governs this panel is the declaration of the connector whose page
+    // draws it — every row here maps to THIS page by the filter above, so the
+    // sentinel-homed rows read the MCP Servers connector's own declaration
+    // (mode "default", scope "workspace" → the recommendation line) instead of
+    // the sentinel's declaration-less host semantics.
+    const resolution = await resolveConnectionAccessDeclaration(identity, {
+      packageId,
+    });
     const unresolved = resolution.kind === "package_unresolved";
     const declaration = unresolved ? null : resolution.declaration;
     const storedPolicy = await readExtensionAccessPolicy("connection", identity.id);
