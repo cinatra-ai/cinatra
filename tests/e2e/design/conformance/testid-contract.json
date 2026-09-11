@@ -300,6 +300,7 @@
         {
           "file": "packages/extensions/src/screens/marketplace-detail-modal.tsx",
           "literals": [
+            "data-conformance-id=\"extension-detail-modal\"",
             "data-slot=\"marketplace-modal-name\""
           ]
         },

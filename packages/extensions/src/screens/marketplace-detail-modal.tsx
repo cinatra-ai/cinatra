@@ -11,9 +11,14 @@
 // on-demand via an admin-gated server action (the marketplace MCP client
 // stays server-only), projected into the client-safe MarketplaceDetailView.
 //
-// The full-page detail route is intentionally KEPT — it remains the deep-link
-// target of the agent/instance page header and the registry catalog. This modal
-// is the browse-card "More details" experience only.
+// cinatra#2736 (owner ruling, 2026-08-14): this modal is the app's ONLY
+// extension-detail surface. The in-app full-page detail route is retired — it
+// redirects to the plain marketplace grid and opens nothing — so no in-app URL
+// renders a detail PAGE and none auto-opens this modal as a detail view. The
+// one linkable detail view is the storefront listing on the marketplace
+// itself. (The §V Maintenance · Update row's `?update=<pkg>` deep link is not
+// such a view: it lands on the Installed page and seeds the matching row's own
+// details-only modal through `defaultOpen` — see that prop below.)
 //
 // cinatra#2406 (owner ruling, 2026-08-04): the modal renders NO footer —
 // details-only everywhere it is shown in the app. It previously carried a
@@ -258,6 +263,13 @@ export function MarketplaceDetailModal({
           body, so it escapes any transformed card ancestor and dims the whole
           viewport below the top-16 navbar). */}
       <DialogContent
+        // The drawn §II panel's stable conformance id (cinatra#2736): the
+        // drawing marks this dialog with the extension-detail anchor written
+        // on the attribute below, and the mechanical conformance check binds
+        // the surface through it. The literal is written ONCE, on the
+        // attribute — never repeated in prose here or in the tests, or a
+        // source-text check would pass with the attribute deleted.
+        data-conformance-id="extension-detail-modal"
         showCloseButton={false}
         // The hero renders the visible title; a screen-reader title is always
         // present for the dialog label. No description → suppress the Radix
