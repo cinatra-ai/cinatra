@@ -55,6 +55,7 @@ import {
   collectArtifactMaterializeNodesFromOasDocument,
   producesWithoutMaterializationRoad,
 } from "./artifact-binding";
+import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1253,6 +1254,17 @@ export type CompiledAgentOas = {
   // read by the run-completion materializer BEFORE any registry call, so a
   // registry outage only fails runs whose packages actually declare bindings.
   hasArtifactBindings: boolean;
+  // The EXECUTED artifact-binding declaration (cinatra#3208): the normalized
+  // bindings THIS compile collected plus the typed `cinatra.produces` refs they
+  // were validated against. Persisted (serialized) to
+  // agent_templates.artifact_bindings by every install/recompile writer and read
+  // back by the run-completion materializer INSTEAD of re-reading the package
+  // registry, so materialization can never resolve a declaration the run did not
+  // execute. `null` when the sibling package.json was not readable (builder
+  // path): binding <-> produces parity was then never established and the typed
+  // produces refs the materializer resolves declared types through are unknown,
+  // so nothing is persisted and the materializer keeps its pre-#3208 fallback.
+  artifactBindings: PersistedArtifactBindingDeclaration | null;
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
   // overrides will land on agent_install_settings DB table in a follow-up.
@@ -2203,6 +2215,10 @@ export async function compileOasAgentJson(opts: {
   // walking the document a third time (cinatra#3051).
   let declaredBindings: ReadonlyArray<{ binding: { extension: string } }> = [];
   let declaredMaterializeNodes: ReadonlyArray<{ extension: string }> = [];
+  // cinatra#3208 — the FULL collected declaration, not only its presence. Kept
+  // on the compiled root so the install seed / recompile writer can persist it
+  // beside package_version; `null` while the sibling manifest is unreadable.
+  let artifactBindings: PersistedArtifactBindingDeclaration | null = null;
   {
     const bindingResult = collectArtifactBindingsFromOasDocument(parsed, {
       produces: sibling?.produces ?? null,
@@ -2218,6 +2234,19 @@ export async function compileOasAgentJson(opts: {
     }
     hasArtifactBindings = bindingResult.bindings.length > 0;
     declaredBindings = bindingResult.bindings;
+    // Only a compile that SAW the sibling manifest may persist the declaration:
+    // the parity check above (`binding.extension` is in `produces`) ran, and the
+    // typed produces refs the materializer needs to resolve a binding's declared
+    // object type are known. Without it the persisted set would be silently
+    // parity-unchecked and produces-blind, so it stays null ("unknown") and the
+    // materializer keeps reading the registry exactly as it did before #3208.
+    artifactBindings =
+      sibling === null
+        ? null
+        : {
+            bindings: bindingResult.bindings,
+            producesRefs: sibling.producesRefs,
+          };
   }
 
   // 10c. Deterministic `artifact_materialize` passthrough nodes (cinatra#925)
@@ -2331,6 +2360,8 @@ export async function compileOasAgentJson(opts: {
       gatedSteps,
       // cinatra#2498 — locally-persisted binding-presence authority.
       hasArtifactBindings,
+      // cinatra#3208 — the executed declaration itself, persisted alongside it.
+      artifactBindings,
       // sibling cinatra.json
       cinatraConfig,
     },

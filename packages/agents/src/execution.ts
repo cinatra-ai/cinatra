@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
@@ -12,10 +12,17 @@ import {
   findSavedConnectionForAgentUrl,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
+  updateAgentRunStreamedText,
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
-import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
+// cinatra#3002 — the run's transcript receipt (the writer this path skipped).
+import { recordRunFinalResponseMessage } from "./run-final-response-receipt";
+import {
+  onAgentHitl,
+  onRunStoppedAtReviewGate,
+  stateRunScheduleMoment,
+} from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -571,6 +578,36 @@ function scrubWayflowHistoryCredentials(value: unknown): unknown {
 export const CINATRA_ENDNODE_OUTPUTS_SENTINEL = "__cinatra_endnode_outputs__";
 
 type HistoryMessage = { role?: string; parts?: readonly unknown[] };
+
+// ---------------------------------------------------------------------------
+// THE DEFAULT ROAD's runner slot (cinatra#3029, epic #3023 W5).
+//
+// The pickup core is registered here at BOOT (the system-loops seed phase) and
+// read from the terminal path below. globalThis-backed for the same reason the
+// unbound-derivation runner slot is: a worker dispatching from a different
+// bundle's module instance must still see the boot registration.
+// ---------------------------------------------------------------------------
+export type DefaultRoadPickupRunner = {
+  pickup: (input: {
+    runId: string;
+    orgId: string;
+    templateId: string;
+    packageVersion: string | null;
+    createdBy: string | null;
+    endNodeOutputs: Record<string, unknown>;
+    boundOutputIds: string[];
+  }) => Promise<ReadonlyArray<Record<string, unknown>>>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraDefaultRoadPickupRunner: DefaultRoadPickupRunner | undefined;
+}
+
+/** Boot-only registrar for the slot above (see src/lib/boot/phases/system-loops.ts). */
+export function registerDefaultRoadPickupRunner(runner: DefaultRoadPickupRunner): void {
+  globalThis.__cinatraDefaultRoadPickupRunner = runner;
+}
 
 /**
  * Walk WayFlow `task.history` and return the EndNode output object the
@@ -1178,6 +1215,134 @@ function buildReviewRunBasePath(agentPackageName: string, instanceId: string): s
   return `/agents/${agentPackageName}/${instanceId}`;
 }
 
+/**
+ * THE TEXT THE RUN'S RECEIPT IS WRITTEN FROM (cinatra#3002, fix leg 1).
+ *
+ * The terminal handler's `finalText` reads the LAST agent message only, and
+ * everything it feeds keeps that exact meaning: the parsed terminal output, the
+ * unbound-output derivation capture, and the AG-UI text frames are all about
+ * the run's last word.
+ *
+ * The RECEIPT asks a different question — what text did this run produce that a
+ * reader can be pointed at? — and the first proof round measured the difference
+ * on a real completed run: an artifact-producing run's declared outputs travel
+ * as DataParts, so its last agent message carries no text at all, `finalText`
+ * came out empty, and the run finished with ZERO transcript rows. That is the
+ * blank page under a completion card this issue closes, surviving on the path
+ * the graded run took. So the receipt reads back through the run's own history
+ * for the last agent message that CARRIES text.
+ *
+ * A run with no text anywhere still writes nothing. Its evidence is the
+ * artifacts it wrote, not a transcript, and inventing a row for it would be the
+ * same lie pointed the other way.
+ */
+function lastAgentResponseText(
+  history: ReadonlyArray<HistoryMessage> | undefined,
+): string {
+  if (!history) return "";
+  // THE SEARCH IS BOUNDED TO THE RUN'S LAST TURN. Reading back through the WHOLE
+  // history would answer a different question again: a run that asked the user
+  // something mid-flight and then finished on a data-only message would have the
+  // QUESTION written as its answer, and an artifact-only run whose earlier turn
+  // happened to carry text would get an invented receipt after all — the guard
+  // below defeated by the scan above it. So the scan starts after the last user
+  // message: everything from there on is the run's reply to what it was last
+  // asked, and nothing before it can be mistaken for that reply.
+  let turnStart = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === "user") {
+      turnStart = i + 1;
+      break;
+    }
+  }
+  for (let i = history.length - 1; i >= turnStart; i -= 1) {
+    const message = history[i];
+    if (!message) continue;
+    // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
+    if (message.role !== "agent" && message.role !== "assistant") continue;
+    // Parts arrive from a peer runtime and are typed `unknown` at this boundary
+    // on purpose (see the handler's own note). Narrow at access time — a
+    // malformed earlier message newly reachable by this scan must not throw and
+    // take the run's terminal handling down with it.
+    const parts: unknown = message.parts;
+    if (!Array.isArray(parts)) continue;
+    const text = parts
+      .filter(
+        (p): p is { kind: string; text: string } =>
+          typeof p === "object" &&
+          p !== null &&
+          (p as { kind?: unknown }).kind === "text" &&
+          typeof (p as { text?: unknown }).text === "string",
+      )
+      .map((p) => p.text)
+      .join("");
+    if (text.length > 0) return text;
+  }
+  return "";
+}
+
+/**
+ * THE RUN'S OWN DECLARED OUTPUT, AS TEXT (cinatra#3002, fix leg 2).
+ *
+ * The second proof round measured a run that neither of the two sources above
+ * can read. `Agent Code Reviewer` executed on the agent runtime, completed, and
+ * answered in words — and it finished with ZERO rows in `agent_run_messages`,
+ * because its answer never travelled as a TextPart at all. It is a compiled
+ * flow whose EndNode declares one output, `findings`, and the runtime hands
+ * that value over as the sentinel DataPart this module already extracts into
+ * `endNodeOutputs` (and persists as the step result's `output_data`). So
+ * `finalText` was empty, the bounded backward scan of the final turn found no
+ * text-carrying message either, and the receipt correctly — by its own two
+ * rules — wrote nothing. The blank page under the completion card survived on
+ * exactly the path the graded run took, one channel further out.
+ *
+ * This is that third source, and it is the run's OWN DECLARATION rather than a
+ * heuristic: whatever the flow's EndNode declares as its output is what the run
+ * says it produced.
+ *
+ * IT READS AN UNAMBIGUOUS DECLARATION ONLY, and the narrowness is the point
+ * (convergence finding). A flow that declares SEVERAL things it produced has
+ * not produced one body of prose, and picking a string out of that set names
+ * the wrong thing as the run's answer. `@cinatra-ai/web-research-agent` is the
+ * standing counter-example: its EndNode declares `enrichedRows` (array),
+ * `failures` (array), `webChecks` (array) and `extractionNotes` (string). The
+ * rows are the run's work and the notes are a diagnostic aside — receipting the
+ * notes would put the aside in the transcript and then let the completion card
+ * say "its output is in the run transcript below" over it, which is a NEW false
+ * claim of exactly the class this issue exists to remove. Same for the media
+ * shape `{ transcript, kind }`: `kind` is a label, not the run's words.
+ *
+ * So the run's declaration speaks for the run only when, after dropping the
+ * outputs it left empty, exactly ONE declared output carries anything at all
+ * and that one is a string. Then it is the whole of what the run produced, and
+ * it becomes the transcript row. Every other declaration — several outputs
+ * carrying values, or a lone output that is structured data rather than words —
+ * writes no receipt and keeps the honest step-results reading, the same guard
+ * fix leg 1 wrote, unweakened.
+ *
+ * The value is returned with surrounding whitespace trimmed and nothing else
+ * changed: no label is invented around it.
+ */
+function isEmptyDeclaredValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+export function declaredOutputsResponseText(
+  endNodeOutputs: Record<string, unknown> | null,
+): string {
+  if (!endNodeOutputs) return "";
+  const carried = Object.entries(endNodeOutputs).filter(
+    ([, value]) => !isEmptyDeclaredValue(value),
+  );
+  if (carried.length !== 1) return "";
+  const [, only] = carried[0];
+  return typeof only === "string" ? only.trim() : "";
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
@@ -1313,8 +1478,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
     // guarantee holds even when the positional resolve throws (e.g. Redis fault).
     let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null } | null = null;
+    // IS THIS GATE THE AGENT ASKING FOR CONTEXT? (cinatra#3221, fix leg 6.)
+    //
+    // READ HERE, ABOVE THE RESOLVER, so the answer survives the catch below: the
+    // resolver can throw, and the park's own moment must not depend on whether
+    // the renderer resolved. The predicate is the same shape test the renderer
+    // branch already runs, asked once and kept.
+    const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
     try {
-      if (isContextSelectorInterruptPayload(spreadFromOutput)) {
+      if (gateAsksForContext) {
         wayflowXRenderer =
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
@@ -1573,13 +1745,50 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           `[artifact-review-gate] run=${runId} task=${task.id} pinned review targets + routed to ${reviewSurfaceUrl}`,
         );
         // Same transition tail as the legacy interrupt path below.
+        //
+        // AND THE RUN STATES THE MOMENT IT IS STOPPED AT (cinatra#3221, fix leg
+        // 7). The rail elects the entry a run is parked on from the run's own
+        // row, and this park wrote no moment at all: a run stopped in front of
+        // its work review therefore said nothing about where it stood, so the
+        // page elected nothing on the very gate the reader was looking at.
+        // `review` is the moment the closed set already names for it, and the
+        // card it mounts is this gate's own.
+        const reviewMomentRun = {
+          id: runId,
+          orgId: run.orgId,
+          status: "pending_approval" as const,
+        };
         if (fromStatus === "pending_approval") {
+          // A gate that arrives on an ALREADY-PARKED run performs no transition
+          // — `pending_approval -> pending_approval` is not a legal edge — so
+          // there is no winning CAS to hang the record on. The run is standing
+          // at THIS gate now, and the row has to say so (and name this gate's
+          // card, not the previous one's). The writer carries its own
+          // `onlyWhileStatus` guard, so a run that left the park records
+          // nothing.
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
-          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-          throw e;
-        });
+        // AFTER THE WINNING TRANSITION, never before it and never on a lost one:
+        // winning is the only proof the run is really parked here.
+        let parkedAtReview = false;
+        try {
+          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          parkedAtReview = true;
+        } catch (e) {
+          if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
+        }
+        if (parkedAtReview) {
+          await onRunStoppedAtReviewGate({
+            run: reviewMomentRun,
+            gateRef: lifecycleCardRef,
+            authority,
+          });
+        }
         return;
       }
       // invalid-targets (no gate pinned) → fall through to the legacy HITL
@@ -1637,7 +1846,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // lost its artifact strands the run exactly as hard on the second visit as
     // on the first.
     const wayflowGateId = `wayflow-${task.id}`;
-    await parkRunOnHumanGate({
+    const parkOutcome = await parkRunOnHumanGate({
       runId,
       gateLabel: `WayFlow gate ${wayflowGateId}`,
       alreadyParked: fromStatus === "pending_approval",
@@ -1671,17 +1880,59 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         }),
-      parkRun: () =>
-        transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, for the reason the setup loop states it there:
+        // winning is the only proof the run is really parked here, and a record
+        // written before the transition can outlive a concurrent stop.
+        //
+        // THE CONTEXT GATE ONLY (cinatra#3221, fix leg 6). The caution beside the
+        // setup loop stands unchanged: an ordinary WayFlow gate is an APPROVAL of
+        // work already done, and recording it as an input ask would make every
+        // surface tell a review gate as "needs your input". A CONTEXT gate is not
+        // that gate — it is the agent asking the human to pick what it should
+        // work from, which is what the `hitl` moment IS — and it is the fourth
+        // gate the ratified drawing names, the one the rail carries nowhere else.
+        // Its moment was never written, so the row the run page reads carried no
+        // moment, the rail's classifier read false, and the page elected nothing
+        // on the very gate the reader was standing at. Every other WayFlow gate
+        // leaves this branch untouched and its row byte-identical.
+        if (gateAsksForContext) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: wayflowGateId,
+            authority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         }),
     });
+    // AND ON A RE-EMIT, WHICH PARKS NOTHING. A gate that arrives while the run is
+    // ALREADY `pending_approval` performs no transition — `pending_approval ->
+    // pending_approval` is not a legal edge — so `parkRun` never runs and the
+    // moment above is never stated. The run is nonetheless standing at THIS
+    // context gate now, and the row has to say so (and name this gate's screen,
+    // not the previous one's). `onAgentHitl` carries its own
+    // `onlyWhileStatus` guard, so a run that left the park between the read-back
+    // and here records nothing.
+    if (gateAsksForContext && parkOutcome.outcome === "re-emitted") {
+      await onAgentHitl({
+        run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+        screenRef: wayflowGateId,
+        authority,
+      });
+    }
     return;
   }
 
@@ -1729,10 +1980,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       .map((p) => p.text!)
       .join("") ?? "";
   let parsedOutput: unknown = finalText;
-  let finalOutputIsJson = false;
   try {
     parsedOutput = JSON.parse(finalText);
-    finalOutputIsJson = true;
   } catch {
     // not JSON — keep raw text
   }
@@ -1834,30 +2083,86 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     (outcome) => outcome.ok !== true,
   );
 
-  // Unbound-output capture (cinatra#1893, epic #1883 A5). The derivation-outbox
-  // row is written ATOMICALLY with the terminal CAS + snapshot below — a
-  // transaction-local capture only (produces/binding discovery is the derivation
-  // job's concern, NOT a registry read in this hot completion path). Captured for
-  // EVERY non-empty WayFlow terminal-success run; the job later types it against
-  // the agent's validated `produces` or emits an advisory. Empty output ⇒ nothing
-  // to capture (no row, no advisory). File-part outputs + the external-A2A
-  // completion branch are explicit v1 deferrals (this is the internal WayFlow
-  // success path only).
-  // Only a genuine terminal SUCCESS captures an unbound-output row (the meta
-  // key is legal for `to === "completed"` only). The #2486 failure branch below
-  // therefore neither captures nor enqueues.
-  const derivationOutbox =
-    finalText.length > 0
-      ? {
-          orgId: run.orgId,
-          templateId: run.templateId,
-          packageVersion: run.packageVersion,
-          createdBy: run.runBy,
-          content: finalText,
-          contentIsJson: finalOutputIsJson,
-          contentHash: createHash("sha256").update(finalText, "utf8").digest("hex"),
+  // THE DEFAULT ROAD (cinatra#3029, epic #3023 W5 — plan items 0.17/0.18).
+  //
+  // RETIRED HERE: the response-text derivation. Until this slice the terminal
+  // path captured the run's whole final RESPONSE TEXT into a one-row outbox, a
+  // post-terminal job typed that one blob against the agent's declared output
+  // types only, and on a miss the output was DROPPED with a "not captured"
+  // advisory — so undeclared work the run really made never became an artifact,
+  // and one bound output switched derivation off for the whole agent.
+  //
+  // AFTER: the pickup runs ONCE PER END-NODE OUTPUT at or above the document
+  // floor that no binding names, types each one through the detection ladder,
+  // and writes it through THE ONE write path with one ledger row per item under
+  // a reserved id, deduping identical bytes within the run. The response TEXT is
+  // not an output and takes no road; a datum below the floor takes no road; bytes
+  // every rung refuses land under the binary base. Nothing is dropped, so the
+  // advisory retires with the road that needed it.
+  //
+  // Emitted FILES are the other half of the pickup (plan item 0.22, cinatra#3030):
+  // the runner lists the run's own outputs folder where that folder lives, so a
+  // run that declared NO end-node output can still have emitted files. That is
+  // why the road runs on every clean terminal success and not only when the
+  // sentinel carried structured outputs.
+  //
+  // NOT part of the #2486 materialization-honesty gate: a DECLARED binding that
+  // fails is a broken promise and fails the run (above); an UNDECLARED output the
+  // default road could not file is a visible per-output outcome on the run's own
+  // record. The pickup never throws.
+  let defaultRoadPickups: Array<Record<string, unknown>> = [];
+  if (materializationFailures.length === 0) {
+    try {
+      // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
+      // the ladder, the artifact writer and the pooled-db graph, and this module
+      // sits in the reachable first-party graph of the LOCKED dev-perf routes -
+      // so even a dynamic import("@/lib/artifacts/default-road-pickup-run")
+      // specifier here would pull all of it into every one of those routes.
+      // Same posture as the unbound-derivation / GC-reaper runners: the core is
+      // BOOT-REGISTERED into a globalThis-backed slot by the system-loops seed
+      // phase (src/lib/boot/phases/system-loops.ts), so a worker running from a
+      // different bundle instance still sees it. An empty slot means the boot
+      // seed has not run in this bundle: the road is skipped LOUDLY and the run
+      // verdict is untouched.
+      const runner = globalThis.__cinatraDefaultRoadPickupRunner;
+      if (!runner) {
+        // Skip the ROAD only - never the terminal transition below.
+        throw new Error(
+          "the default-road pickup runner slot is empty (the boot seed has not run in this bundle)",
+        );
+      }
+      defaultRoadPickups = (await runner.pickup({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        // A run with no declared end-node outputs still reaches the road for
+        // its emitted files (cinatra#3030); the outputs half simply has nothing
+        // to look at.
+        endNodeOutputs: (endNodeOutputs ?? {}) as Record<string, unknown>,
+        // The binding rung already named these; the default road never runs twice
+        // over the same output.
+        boundOutputIds: artifactMaterializations
+          .map((outcome) => outcome.outputId)
+          .filter((id): id is string => typeof id === "string"),
+      })) as unknown as Array<Record<string, unknown>>;
+      for (const outcome of defaultRoadPickups) {
+        if (outcome.ok !== true && typeof outcome.error === "string") {
+          console.warn(
+            `[default-road] run=${runId} output=${String(outcome.outputId)} took no road: ${outcome.error}`,
+          );
         }
-      : undefined;
+      }
+    } catch (err) {
+      // Defense-in-depth: the pickup never throws by contract.
+      console.warn(
+        `[default-road] run=${runId} pickup threw (the run's verdict is unchanged):`,
+        err instanceof Error ? err.message : err,
+      );
+      defaultRoadPickups = [];
+    }
+  }
 
   // The ONE terminal stepResults payload — identical on the success and the
   // #2486 materialization-failure edge, so a failed run keeps every bit of
@@ -1881,6 +2186,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // Key absent when the run's package declares no bindings.
       ...(artifactMaterializations.length > 0
         ? { artifact_materializations: artifactMaterializations }
+        : {}),
+      // THE DEFAULT ROAD's per-output outcomes (cinatra#3029): one entry per
+      // end-node output the road looked at — the artifact it wrote and the
+      // ladder rung that decided its form, or why the output took no road.
+      // Key absent when the run emitted no end-node outputs.
+      ...(defaultRoadPickups.length > 0
+        ? { default_road_pickups: defaultRoadPickups }
         : {}),
       history: scrubbedHistory,
     },
@@ -1926,13 +2238,83 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     return;
   }
 
+  // cinatra#3002 — THE RECEIPT.
+  //
+  // Everything above records the response somewhere a reader cannot look: the
+  // AG-UI text frames are ephemeral (nothing persists them for this path), and
+  // the `wayflow_response` step result is JSON no screen renders. The run page
+  // renders the run's TRANSCRIPT, and this path never wrote one — so a reader
+  // who arrived after the stream met a completion card naming a transcript that
+  // was never written. Persist the produced text as the run's own final
+  // transcript message, which is exactly the row the app-side writer would have
+  // written and exactly the row the page reads.
+  //
+  // PLACED HERE, past the materialization-honesty gate and immediately before
+  // the terminal-success transition, for two reasons that pull in opposite
+  // directions and meet exactly at this line:
+  //   * AFTER the #2486 gate, because that gate can route this same handling to
+  //     `failed`. A receipt written before it would leave a success-shaped
+  //     transcript row on a run that lands failed — the very class of lie this
+  //     issue closes, pointed the other way.
+  //   * BEFORE the transition, so the instant a reader can see `completed`, the
+  //     text the completion card names already exists.
+  // The re-entry guard above has already returned for a redelivered terminal
+  // state, so no second copy of the run's answer is written.
+  //
+  // FAIL-SOFT: a receipt that cannot be written must never fail a run that
+  // genuinely succeeded. Without it the card reads the absence honestly (see
+  // `resolveRunTerminalOutcome` — step results no longer stand in for a
+  // transcript) instead of pointing at nothing.
+  //
+  // AND IT IS WRITTEN FROM THE RUN'S HISTORY, not from the last message alone
+  // (fix leg 1). `finalText` is the last agent message's text and stays that,
+  // because the terminal output, the derivation capture and the text frames all
+  // mean "the run's last word". A run whose declared outputs travel as
+  // DataParts ends on a message with no text, and reading only that message
+  // left the very run the first proof round graded with zero transcript rows —
+  // the defect above, alive on the path that run took.
+  //
+  // AND THE RUN'S DECLARED OUTPUT IS READ WHEN THERE ARE NO WORDS AT ALL (fix
+  // leg 2). The second proof round measured a completed, text-answering runtime
+  // run with zero transcript rows: its answer travelled only as the EndNode
+  // output the sentinel carries, so neither `finalText` nor the backward scan
+  // could see it. `declaredOutputsResponseText` reads that declaration, and
+  // reads it only when the declaration is UNAMBIGUOUS: exactly one declared
+  // output carries anything, and it is a string. A flow that declares several
+  // things it produced has not produced one body of prose, and lifting a string
+  // out of that set would name the wrong thing as the run's answer and then let
+  // the card claim the transcript holds it (convergence finding).
+  //
+  // ORDER, and why it is this one. `finalText` still wins: the run's last word
+  // is what every other consumer on this path already means by the run's
+  // output, and a run that ends by speaking has said its answer. The DECLARED
+  // output comes next, ahead of the backward scan, because a declaration beats
+  // a heuristic: when a flow states what it produced, that statement is the
+  // run's answer, and the scan exists only to recover words from a run that
+  // declared nothing. A run with no words in any of the three — and a run whose
+  // declaration is ambiguous or structured — still writes no receipt, exactly as
+  // before, and keeps the honest step-results reading.
+  const finalResponseText =
+    finalText.length > 0
+      ? finalText
+      : declaredOutputsResponseText(endNodeOutputs) || lastAgentResponseText(history);
+  if (finalResponseText.length > 0) {
+    try {
+      await recordRunFinalResponseMessage({ runId, text: finalResponseText });
+    } catch (err) {
+      console.warn(
+        `[run-final-response-receipt] run=${runId} could not persist the run's final response as a transcript message:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   // Both terminal-success edges are legal:
   //   running          -> completed
   //   pending_approval -> completed
   let transitioned = true;
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
-    ...(derivationOutbox ? { derivationOutbox } : {}),
     stepResults: terminalStepResults,
   }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
@@ -1945,46 +2327,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   });
 
   if (!transitioned) return;
-
-  // Unbound-output derivation (cinatra#1893): the outbox row committed with the
-  // terminal transition above; enqueue the one-shot derivation job best-effort.
-  // A failed enqueue never destabilizes the completed run — the durable outbox
-  // row + the reconciliation sweep guarantee eventual derivation. Only when a row
-  // was actually captured (non-empty output).
-  //
-  // Enqueued INLINE through the background-jobs modules (which this locked
-  // dev-perf route already reaches) rather than via a dedicated leaf module, so
-  // the WayFlow terminal-success hot path adds no first-party graph pressure to
-  // the ratchet-tracked routes (route-graph ratchet). The derivation CORE stays
-  // out of this path entirely — it is reached only by the boot-registered worker
-  // slot (see background-jobs-registry's UnboundOutputDerivationRunner slot).
-  if (derivationOutbox) {
-    try {
-      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
-      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
-      await enqueueBackgroundJob(
-        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
-        { runId, orgId: run.orgId },
-        {
-          // 3 attempts (1 + 2 retries), exponential backoff — a transient DB/LLM
-          // blip in the one-shot derive gets a bounded retry; the sweep covers
-          // anything beyond. Colon-free jobId de-dupes a crash-restart re-enqueue
-          // (the row lease makes a double-drive safe anyway; this avoids churn).
-          attempts: 3,
-          backoff: { type: "exponential", delay: 5_000 },
-          jobId: `unbound-output-derive__${runId}`,
-          // The derivation worker anchors its own org-scoped System actor; it
-          // must not inherit the run principal's frame.
-          inheritActorContext: false,
-        },
-      );
-    } catch (e) {
-      console.warn(
-        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
-        e instanceof Error ? e.message : e,
-      );
-    }
-  }
 
   // 1. Publish terminal AG-UI event immediately so the operator's UI shows
   //    "completed" without waiting on autosave latency.
@@ -3101,6 +3443,14 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await startExternalSseProxyFromStream(resumeStream(), initialStatus, runId, {
         publishAgUiEvent: (event) => publishAgUiEvent(runId, event as never),
+        // cinatra#3002 fix leg 1 — AND THE PEER'S TEXT IS PERSISTED HERE TOO.
+        // This branch mirrors the external dispatch in `a2a-actions.ts`, which
+        // has always passed this hook; the mirror dropped it, so a run dispatched
+        // through the WORKER against an external peer streamed its answer past a
+        // live reader and left the run row's `streamed_text` empty — the same
+        // blank run page this issue closes, on a second path. The proxy calls the
+        // hook exactly once, on clean completion, with the accumulated text.
+        persistStreamedText: (text) => updateAgentRunStreamedText(runId, text),
         onCleanCompletion: ({ outputs, lastRemoteState }) => {
           externalStreamCompletedCleanly = true;
           externalStructuredOutputs = outputs;

@@ -1009,6 +1009,105 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
 // unchanged.
 
 /**
+ * Drive a SUPPLIED canonical row (cinatra#3204 D1) through the supplied pipeline
+ * entry — the same finalize gate the registry road reports on.
+ *
+ * The snapshot: a supplied row NAMES where its immutable snapshot is
+ * (`local.path`, or the repository snapshot a github row was fetched into), and
+ * the entry re-verifies the row's `contentDigest` over what it materializes. A
+ * row whose snapshot is no longer readable refuses with a NAMED reason rather
+ * than silently reporting a non-install — the snapshot is the install's only
+ * source of bytes, and its absence is a real, actionable failure.
+ *
+ * `finalized` is authoritative exactly as it is for the registry road: the entry
+ * returns `installed:true` only after the journal is finalized, and throws
+ * before that on any refusal.
+ */
+async function runSuppliedInstallAndActivate(
+  row: { kind: string; source: unknown },
+  packageName: string,
+  orgId: string | null,
+  passedVersion?: string,
+): Promise<ExtensionActivateResult> {
+  const { isSuppliedDigestSource } = await import("@cinatra-ai/extensions/canonical-types");
+  if (!isSuppliedDigestSource(row.source)) {
+    return { activated: false, reason: "non-verdaccio-source" };
+  }
+  const source = row.source;
+  const version = passedVersion || "0.0.0";
+
+  let tarball: Uint8Array;
+  try {
+    const { readSuppliedSnapshot } = await import("@/lib/extension-package-store");
+    tarball = await readSuppliedSnapshot(source);
+  } catch (err) {
+    return {
+      finalized: false,
+      activated: false,
+      reason: `supplied-snapshot-unreadable:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  try {
+    const { installExtensionFromSuppliedSnapshot } = await import(
+      "@/lib/extension-install-pipeline"
+    );
+    const { makeDefaultSuppliedInstallPipelineDeps } = await import(
+      "@/lib/extension-install-pipeline-deps"
+    );
+    const deps = await makeDefaultSuppliedInstallPipelineDeps();
+    // cinatra#793 parity: the metadata-only kinds have no hot-loadable module on
+    // this road either, so the in-process activation half is inert for them for
+    // exactly the same reason. Kept as the SAME override the registry road
+    // applies, so the two roads cannot drift on which kinds activate in process.
+    const { METADATA_ONLY_STORE_KINDS } = await import("@/lib/extension-package-store-core");
+    if (METADATA_ONLY_STORE_KINDS.has(row.kind)) {
+      deps.activateInProcess = async () => ({ activated: false, reason: "metadata-only-kind" });
+    }
+    const { isExtensionStoreKind } = await import("@/lib/extension-package-store-core");
+    const result = await installExtensionFromSuppliedSnapshot(
+      {
+        packageName,
+        version,
+        orgId,
+        supplied: {
+          tarball,
+          provenance:
+            source.type === "github"
+              ? {
+                  type: "github",
+                  repo: source.repo,
+                  ref: source.ref,
+                  resolvedSha: source.resolvedSha,
+                  ...(source.path ? { path: source.path } : {}),
+                  contentDigest: source.contentDigest,
+                }
+              : {
+                  type: "local",
+                  path: source.path,
+                  resolvedCommitOrTreeHash: source.resolvedCommitOrTreeHash,
+                  contentDigest: source.contentDigest,
+                },
+        },
+        ...(isExtensionStoreKind(row.kind) ? { expectedKind: row.kind } : {}),
+      },
+      deps,
+    );
+    return {
+      finalized: result.installed === true,
+      activated: result.activated,
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+  } catch (err) {
+    return {
+      finalized: false,
+      activated: false,
+      reason: `supplied-install-failed:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
  * The host activate-hook body. Records real provenance + activates a
  * verdaccio-source package in-process. Returns `{ activated, reason? }` for the
  * dispatcher's best-effort firer (which already swallows throws).
@@ -1055,8 +1154,24 @@ export async function runHostExtensionInstallAndActivate(
     row = pickSingleActiveRow(rows, orgId);
   }
   if (!row) return { finalized: false, activated: false, reason: "no-active-canonical-row" };
+  // cinatra#3204 D1 — a SUPPLIED row (local / github) that carries a well-formed
+  // content digest IS drivable: the supplied pipeline entry materializes the
+  // snapshot it names, re-verifies that digest over the delivered tree, and runs
+  // the identical gate set. So this hook routes it instead of refusing it.
+  //
+  // The gate is the DIGEST, not the source type, and that is deliberate: it
+  // cannot widen anything silently. No row written before #3204 carries a
+  // content digest, so every local/github row that exists today answers false
+  // here and keeps exactly the handling it had — the refusal below, and the
+  // handler owning its install. Only a row created by the supplied road, whose
+  // provenance the dispatcher recorded honestly, takes the new branch.
+  const { isSuppliedDigestSource } = await import("@cinatra-ai/extensions/canonical-types");
+  if (isSuppliedDigestSource(row.source)) {
+    return runSuppliedInstallAndActivate(row, packageName, orgId, passedVersion);
+  }
   if (!row.source || row.source.type !== "verdaccio") {
-    // github / local / add-from-chat are not real-integrity-pipeline sources.
+    // github / local / add-from-chat WITHOUT a content digest, and bundled rows,
+    // are not real-integrity-pipeline sources.
     // finalized:undefined (NOT false) — the dispatcher must NOT roll back a row
     // for a non-verdaccio source it cannot drive through this pipeline (the
     // handler owns those installs; e.g. a github skill the handler resolved).

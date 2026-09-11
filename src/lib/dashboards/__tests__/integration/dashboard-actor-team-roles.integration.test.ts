@@ -85,6 +85,7 @@ import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor
 import { filterReadableDashboards } from "@/lib/dashboards/authz";
 import type { DashboardArtifactRow } from "@/lib/dashboards/dashboard-artifact-surface";
 import { betterAuthPool } from "@/lib/better-auth-db";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // Lane-unique DB fencing. SUPABASE_DB_URL points at the shared verify pg's base
@@ -94,7 +95,7 @@ import { betterAuthPool } from "@/lib/better-auth-db";
 // ---------------------------------------------------------------------------
 const BASE_DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB =
-  BASE_DB_URL !== "" && !BASE_DB_URL.includes("unused:unused@");
+  BASE_DB_URL !== "" && !isPlaceholderDbUrl(BASE_DB_URL);
 
 // Identifier-safe, lane-owned DB name (the regex IS the identifier escape) with
 // a defensive denylist so a DROP can never hit a shared database.

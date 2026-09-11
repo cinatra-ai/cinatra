@@ -31,6 +31,7 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
+import { artifactScopeWord } from "@/lib/artifacts/artifact-kind-label";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
@@ -197,22 +198,10 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 // so the header exposes NO edit control and NO revision picker.
 // ---------------------------------------------------------------------------
 
-/** Prettify an artifact object-type id into a short type label for the header
- * type tag (§II) — `@cinatra-ai/email:draft` → "Email". Local (not imported
- * from the library client surface) so the review route grows no client-graph
- * coupling. */
-export function reviewTypeLabel(objectType: string): string {
-  const afterScope = objectType.includes("/")
-    ? objectType.slice(objectType.indexOf("/") + 1)
-    : objectType;
-  const base = (afterScope.split(":")[0] ?? afterScope).trim();
-  const pretty = base
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-  return pretty || objectType;
-}
+// The header's type tag (§II) reads the pack's DECLARED kind label through the
+// one host function (`@/lib/artifacts/artifact-kind-label`, import-free data so
+// the review route still grows no client-graph coupling). The former local
+// derivation is deleted — it was the third copy of the same string surgery.
 
 /**
  * The read-only row facts the header's meta line carries (§IV) — the ones the
@@ -254,8 +243,8 @@ export function reviewTargetRowFacts(
   // artifact this reader may not read (or which is gone) carries ids and
   // nothing else — and an empty scope word is worse than a shorter true line.
   const facts: string[] = [];
-  if (artifact.ownerLevel) facts.push(reviewScopeWord(artifact.ownerLevel));
-  if (artifact.visibility) facts.push(reviewScopeWord(artifact.visibility));
+  if (artifact.ownerLevel) facts.push(artifactScopeWord(artifact.ownerLevel));
+  if (artifact.visibility) facts.push(artifactScopeWord(artifact.visibility));
   if (artifact.mime) facts.push(artifact.mime);
   if (artifact.updatedAt) {
     facts.push(`updated ${reviewRelativeInstant(artifact.updatedAt, now)}`);
@@ -263,12 +252,9 @@ export function reviewTargetRowFacts(
   return facts;
 }
 
-/** A scope fact in the host's own vocabulary: the stored level/visibility word,
- *  capitalized, exactly as the library's own rows print it
- *  (`src/components/artifacts/library-mode.tsx`'s `ownerLabel`). */
-export function reviewScopeWord(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
+/* The scope fact is READ, not derived here: the host holds ONE scope word
+ * (`@/lib/artifacts/artifact-scope-word`), exactly as it holds one kind label.
+ * The review surface model keeps no string projection of its own. */
 
 /**
  * An instant as the header reads it: a relative time, through the SAME

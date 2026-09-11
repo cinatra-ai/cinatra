@@ -37,10 +37,11 @@ import {
 import { WIDGET_SIGNIN_GRANTED_SCOPES } from "@/lib/widget-lifecycle-scope";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { postgresSchema } from "@/lib/postgres-config";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 import { X3052_SCHEMA } from "@/lib/lifecycle/__tests__/widget-schedule-grant.setup";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const describeDb = HAS_DB ? describe : describe.skip;
 
 const IN_DEDICATED_LANE = process.env.CINATRA_WIDGET_SCHEDULE_GRANT_REALDB === "1";

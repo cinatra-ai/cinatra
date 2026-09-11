@@ -68,10 +68,8 @@ import {
   readArtifactForDetail,
   readArtifactForSettledReview,
 } from "@/lib/artifacts/artifact-service";
-import {
-  reviewTargetRowFacts,
-  reviewTypeLabel,
-} from "@/lib/artifacts/review-surface-model";
+import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
 import {
   decodeLifecycleGateRef,
   type LifecycleGateRefPayload,
@@ -210,7 +208,9 @@ export async function readReviewTargetHeaders(input: {
       const artifact = read.artifact;
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
-        typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), "Artifact") : "Artifact",
+        typeLabel: artifact.objectType
+          ? clamp(artifactKindLabelFor(artifact.objectType), "Artifact")
+          : "Artifact",
         objectType: (artifact.objectType ?? "").slice(0, LIFECYCLE_TARGET_HEADER_MAX_TEXT),
         revisionId: clamp(target.representationRevisionId, "—"),
         // Worded by the SURFACE MODEL, not here: the card owns no artifact

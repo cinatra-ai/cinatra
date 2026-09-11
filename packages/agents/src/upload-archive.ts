@@ -22,7 +22,40 @@
 //                              already understands (zip-helpers.readZipFiles
 //                              handles stored entries only), so the server
 //                              contract does not change.
+//
+// cinatra#3204 D3 — the reader is now KIND-AWARE and HARDENED:
+//   4. readZipEntries        — refuses a traversing or absolute path, a symlink
+//                              entry, and an archive over the entry-count /
+//                              per-entry / total-size caps, BEFORE decompressing
+//                              or returning anything;
+//   5. resolveSuppliedArchive— reads the DECLARED `cinatra.kind`, resolves the
+//                              payload that kind requires, validates name /
+//                              version / kind against the archive contents, and
+//                              computes the content digest over the delivered
+//                              tree. It accepts all four live kinds — agent,
+//                              skill, connector, artifact — and refuses an
+//                              undeclared kind, an unknown kind and the retired
+//                              `workflow` kind by name.
+//
+// NOTHING HERE EXECUTES PACKAGE CODE. The reader parses JSON and compares
+// strings; it never imports, evaluates or spawns anything from the archive, on
+// any path, for any kind. That is a property of the module, not of a caller
+// remembering to be careful: there is no dynamic import, no `eval`, no `new
+// Function` and no process API in this file at all.
 // ---------------------------------------------------------------------------
+
+import {
+  MAX_SUPPLIED_ENTRY_BYTES,
+  MAX_SUPPLIED_TREE_BYTES,
+  MAX_SUPPLIED_TREE_ENTRIES,
+  SUPPLIED_ARCHIVE_SUBJECT,
+  SUPPLIED_PACKAGE_KINDS,
+  computeContentDigest,
+  resolveSuppliedPackageTree,
+  suppliedEntryNameRefusal,
+  type ResolvedSuppliedPackageTree,
+  type SuppliedPackageKind,
+} from "@cinatra-ai/extension-types";
 
 const EOCD_SIG = 0x06054b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -30,6 +63,41 @@ const CENTRAL_SIG = 0x02014b50;
 /** License sidecars staged for the SPDX gate — MUST mirror the name list
  *  importAgentTemplateCore stages alongside agent.json. */
 const LICENSE_SIDECAR_NAMES = ["LICENSE", "LICENSE.md", "COPYING", ".spdx"] as const;
+
+// ---------------------------------------------------------------------------
+// Intake caps + entry-name policy (cinatra#3204 criterion 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The caps. They are generous for a real extension package and ruinous for a
+ * decompression bomb, which is the whole trade: a package that legitimately
+ * needs more than this is a packaging problem worth a conversation, while an
+ * archive that expands to gigabytes is an attack on the machine reading it.
+ * Enforced on the CENTRAL DIRECTORY's declared sizes, so the refusal happens
+ * before a single byte is inflated.
+ */
+export const MAX_ARCHIVE_ENTRIES = MAX_SUPPLIED_TREE_ENTRIES;
+export const MAX_ARCHIVE_ENTRY_BYTES = MAX_SUPPLIED_ENTRY_BYTES;
+export const MAX_ARCHIVE_TOTAL_BYTES = MAX_SUPPLIED_TREE_BYTES;
+
+/** Unix file-type bits carried in a ZIP central directory's external attributes. */
+const S_IFMT = 0o170000;
+const S_IFLNK = 0o120000;
+
+/**
+ * Refuse an entry name that could write outside the extraction root.
+ *
+ * Three shapes, all refused: an ABSOLUTE path (`/etc/...`, or a Windows drive
+ * or UNC path), any `..` PATH SEGMENT, and a BACKSLASH anywhere. The backslash
+ * rule is not paranoia about Windows — it is that a name containing one is
+ * ambiguous about where its segments divide, and an ambiguous path is exactly
+ * what a traversal check has to be certain about.
+ *
+ * The reader itself writes nothing, so this is not the last line of defence; it
+ * is the FIRST, and it is here so that no consumer of these entries can be the
+ * first to notice.
+ */
+export const archiveEntryNameRefusal = suppliedEntryNameRefusal;
 
 // ---------------------------------------------------------------------------
 // ZIP reading
@@ -74,15 +142,27 @@ export async function readZipEntries(buf: ArrayBuffer): Promise<Map<string, Uint
   const numEntries = view.getUint16(eocdOffset + 10, true);
   const centralDirOffset = view.getUint32(eocdOffset + 16, true);
 
+  // ENTRY-COUNT CAP (cinatra#3204 criterion 3) — read off the central directory
+  // header, so an archive declaring hundreds of thousands of entries is refused
+  // before the loop that would walk them.
+  if (numEntries > MAX_ARCHIVE_ENTRIES) {
+    throw new Error(
+      `Invalid archive: it declares ${numEntries} entries, over the ${MAX_ARCHIVE_ENTRIES} limit.`,
+    );
+  }
+
   const td = new TextDecoder("utf-8");
   let pos = centralDirOffset;
+  let totalUncompressed = 0;
   for (let i = 0; i < numEntries; i++) {
     if (pos + 46 > len || view.getUint32(pos, true) !== CENTRAL_SIG) break;
     const method = view.getUint16(pos + 10, true);
     const compressedSize = view.getUint32(pos + 20, true);
+    const uncompressedSize = view.getUint32(pos + 24, true);
     const filenameLen = view.getUint16(pos + 28, true);
     const extraLen = view.getUint16(pos + 30, true);
     const commentLen = view.getUint16(pos + 32, true);
+    const externalAttrs = view.getUint32(pos + 38, true);
     const localHeaderOffset = view.getUint32(pos + 42, true);
     // Bounds checks: a truncated or crafted archive must fail with a real
     // reason, not a RangeError from an out-of-bounds typed-array view.
@@ -93,6 +173,38 @@ export async function readZipEntries(buf: ArrayBuffer): Promise<Map<string, Uint
     pos += 46 + filenameLen + extraLen + commentLen;
 
     if (filename.endsWith("/")) continue; // directory entry
+
+    // SYMLINK ENTRIES (criterion 3). A ZIP symlink is a regular entry whose
+    // stored "content" is a target path and whose unix mode says S_IFLNK. It is
+    // refused HERE, at the reader, because by the time anything extracts it the
+    // damage is a link pointing wherever its content says — which is the escape
+    // this whole gate exists to prevent. Refused for every archive, not only for
+    // links that happen to point outside: a link that points inside today points
+    // outside after one rename.
+    if ((externalAttrs >>> 16 & S_IFMT) === S_IFLNK) {
+      throw new Error(`Invalid archive: entry "${filename}" is a symlink, which is not allowed.`);
+    }
+
+    // ENTRY-NAME POLICY (criterion 3): traversal, absolute and ambiguous names.
+    const nameRefusal = archiveEntryNameRefusal(filename);
+    if (nameRefusal !== null) {
+      throw new Error(`Invalid archive: ${nameRefusal}.`);
+    }
+
+    // SIZE CAPS (criterion 3) — checked against the DECLARED uncompressed sizes
+    // before inflating, so a small archive that claims to expand to gigabytes is
+    // refused instead of being inflated to find out.
+    if (uncompressedSize > MAX_ARCHIVE_ENTRY_BYTES) {
+      throw new Error(
+        `Invalid archive: entry "${filename}" declares ${uncompressedSize} bytes, over the ${MAX_ARCHIVE_ENTRY_BYTES}-byte per-entry limit.`,
+      );
+    }
+    totalUncompressed += uncompressedSize;
+    if (totalUncompressed > MAX_ARCHIVE_TOTAL_BYTES) {
+      throw new Error(
+        `Invalid archive: its entries declare more than the ${MAX_ARCHIVE_TOTAL_BYTES}-byte total limit.`,
+      );
+    }
 
     if (localHeaderOffset + 30 > len) {
       throw new Error(`Invalid archive: entry "${filename}" has a truncated local header.`);
@@ -176,8 +288,14 @@ function resolveAtRoot(files: Map<string, string>, prefix: string): RootResoluti
     }
     const kind = pkg.cinatra?.kind;
     if (kind !== undefined && kind !== "agent") {
+      // The AGENT-NARROWED view (cinatra#3204 D3). `resolveSuppliedArchive`
+      // above accepts all four live kinds; this reader is the agent-only lens
+      // the agent import road still uses, so it still refuses a non-agent
+      // package — but it now says which road does accept one instead of leaving
+      // the operator with a dead end.
       throw new Error(
-        `Invalid archive: this is a "${String(kind)}" extension package, not an agent package.`,
+        `Invalid archive: this is a "${String(kind)}" extension package, not an agent package. ` +
+          `A supplied package of any live kind is read by resolveSuppliedArchive.`,
       );
     }
     const entrypoint = pkg.cinatra?.entrypoint;
@@ -251,6 +369,48 @@ export function resolveAgentArchive(entries: Map<string, Uint8Array>): ResolvedA
   throw new Error(
     "Invalid archive: no agent definition found. Expected a package.json with cinatra.entrypoint or a cinatra/oas.json payload (standard agent package), or a root agent.json (legacy export).",
   );
+}
+
+// ---------------------------------------------------------------------------
+// KIND-AWARE RESOLUTION (cinatra#3204 D3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The four kinds the product can actually install, and the reader's own names
+ * for the SHARED resolution. Both are re-exports, not copies: the kind list, the
+ * refusal set and the payload rules live in the dependency-free leaf
+ * (`@cinatra-ai/extension-types`) so the repository intake (cinatra#3204 leg 2)
+ * resolves through the SAME implementation this reader does. A kind added on one
+ * road is added on both, because there is only one road for that decision.
+ */
+export const SUPPLIED_ARCHIVE_KINDS = SUPPLIED_PACKAGE_KINDS;
+export type SuppliedArchiveKind = SuppliedPackageKind;
+export type ResolvedSuppliedArchive = ResolvedSuppliedPackageTree;
+
+/**
+ * Read a SUPPLIED package ARCHIVE of any of the four live kinds.
+ *
+ * Everything specific to a ZIP happens HERE — the macOS junk entries a zipper
+ * adds are dropped before the tree is read — and everything that is about the
+ * PACKAGE happens in the shared resolver: the declared kind, the identity, the
+ * kind's required payload, and the content digest over the delivered tree.
+ *
+ * REFUSALS, each by name: no declared kind; an unknown kind; the retired
+ * `workflow` kind; a missing or unparseable package.json; a missing `name` or
+ * `version`; a name that disagrees with the archive's own top-level folder; and
+ * the kind's missing payload. Every one of them happens before anything is
+ * written anywhere — the reader has no filesystem, no network and no execution,
+ * so a refusal here cannot have left a trace.
+ */
+export async function resolveSuppliedArchive(
+  entries: Map<string, Uint8Array>,
+): Promise<ResolvedSuppliedArchive> {
+  const raw = new Map<string, Uint8Array>();
+  for (const [name, bytes] of entries) {
+    if (isJunkEntry(name)) continue;
+    raw.set(name, bytes);
+  }
+  return resolveSuppliedPackageTree(raw, SUPPLIED_ARCHIVE_SUBJECT);
 }
 
 // ---------------------------------------------------------------------------
