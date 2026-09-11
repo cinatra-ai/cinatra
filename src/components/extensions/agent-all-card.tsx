@@ -26,7 +26,11 @@ import { useState } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import { Settings } from "lucide-react";
+import {
+  InstalledExtensionCard,
+  InstalledStatusIndicator,
+} from "@/components/extensions/installed-extension-card";
 import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
@@ -43,8 +47,24 @@ export type AgentAllCardRow = {
   runHref: string;
   /** Scoped npm package name of the agent's listing; null for A2A/unscoped. */
   packageName: string | null;
-  /** Full-page marketplace-detail route; null for A2A/unscoped (in lockstep). */
+  /** Full-page marketplace-detail route; null for A2A/unscoped (in lockstep).
+   *  Also null on a per-scope tab (cinatra#2808) — a member-facing surface
+   *  renders no `/configuration` link, and the detail PAGE is retired, so the
+   *  "More details" control is the modal's own button there. */
   detailHref: string | null;
+  /**
+   * The agent's SETTINGS surface at the scope this card is rendered in
+   * (cinatra#2808, per-scope surfaces S2) — produced by #2809's href contract
+   * (`scopeSurfaceAgentSettingsHref`), never composed here. Absent on the
+   * global /agents picker, which addresses no scope.
+   */
+  settingsHref?: string | null;
+  /** Already-formatted version text, shown on the §VI spec line. Absent on the
+   *  global picker (the §IV agent card carries no version/status row). */
+  version?: string | null;
+  /** Lifecycle status shown beside the version. `active|locked` — an archived
+   *  package is never listed on a scope tab. */
+  status?: "active" | "locked";
   /**
    * Set when this agent CANNOT run (cinatra#2605) — not installed, or a required
    * dependency is not installed. The primary action slot then carries this
@@ -81,10 +101,12 @@ export function AgentAllCard({
   // resolves to the explicit missing-vendor state, never the raw slug. This
   // surface never renders `row.host` as a vendor label.
   const vendor = resolveAgentCardVendor({ host: row.host, ref: row.packageName ?? row.key });
-  // A scoped listing carries both packageName and detailHref (in lockstep) → the
-  // accent panel and "More details" both open the §V modal. External A2A /
-  // unscoped agents carry neither → Run only, inert accent.
-  const hasDetail = row.detailHref != null && row.packageName != null;
+  // A scoped listing is addressable by PACKAGE NAME — that is the modal's
+  // loader key. The full-page `detailHref` is only the no-JS fallback, and a
+  // per-scope card deliberately carries none (see the row type), so the modal
+  // is offered whenever the package name is there. External A2A / unscoped
+  // agents carry no package name → Run only, inert accent, exactly as before.
+  const hasDetail = row.packageName != null;
 
   return (
     <InstalledExtensionCard
@@ -97,9 +119,21 @@ export function AgentAllCard({
       description={row.description || undefined}
       // §IV (cinatra#3227): "The description is capped at three lines."
       descriptionLineClamp={3}
-      // No `version` / `status` — the Agent card is the Installed-extensions
-      // card minus the version + Active/Archived indicator (cinatra#1007).
-      accentDetailHref={hasDetail ? row.detailHref! : undefined}
+      // The §VI spec line is the version AND its lifecycle indicator TOGETHER
+      // (cinatra#948 reopen, gap 3), so both arrive or neither does. The global
+      // /agents picker keeps rendering with NO version/status row — the §IV
+      // Agent-card derivation is "the Installed-extensions card minus the
+      // version + Active/Archived indicator" (cinatra#1007), and its row model
+      // has carried a `version` field since long before this card existed. A
+      // per-scope row (cinatra#2808) supplies the status as well and gets the
+      // full line.
+      {...(row.version && row.status
+        ? {
+            version: row.version,
+            status: <InstalledStatusIndicator status={row.status} />,
+          }
+        : {})}
+      accentDetailHref={hasDetail && row.detailHref ? row.detailHref : undefined}
       onAccentActivate={hasDetail ? () => setOpen(true) : undefined}
       accentLabel={hasDetail ? `View details for ${row.name}` : undefined}
       accentInert={!hasDetail}
@@ -146,6 +180,19 @@ export function AgentAllCard({
               </Link>
             </Button>
           )}
+          {/* §VI Settings (cinatra#2808): the per-entry settings control the
+              per-scope Agents tab adds, on the EXACT scope- and package-specific
+              address #2809's contract mints. The assignment epic owns what that
+              page contains; this card only addresses it. Absent on the global
+              picker, which addresses no scope. */}
+          {row.settingsHref && (
+            <Button asChild size="sm" variant="outline">
+              <Link href={row.settingsHref} data-slot="agent-card-settings">
+                <Settings data-icon="inline-start" aria-hidden="true" />
+                Settings
+              </Link>
+            </Button>
+          )}
           {/* "More details" opens the §V detail modal IN PLACE (owner ruling,
               2026-07-06) — the SAME <MarketplaceDetailModal> the Installed-
               extensions card uses, details-only (no footer/install CTA). Its
@@ -157,7 +204,7 @@ export function AgentAllCard({
               name={row.name}
               description={row.description}
               packageName={row.packageName!}
-              detailHref={row.detailHref!}
+              detailHref={row.detailHref}
               open={open}
               onOpenChange={setOpen}
               loadDetail={loadDetail}
