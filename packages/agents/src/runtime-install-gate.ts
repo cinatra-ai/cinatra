@@ -242,6 +242,43 @@ export function resolveAgentRunAvailability(input: {
     seen.add(depName);
     const depRecord = input.catalog[depName];
     const provisioned = isProvisioned(depRecord, input.statusOf(depName));
+    // SKILL EDGES KEEP THE IMAGE-SHIPPED FLOOR (cinatra#3369). The
+    // "not-installed" arm's evidence is "the catalog governs this package as
+    // guardedOptional AND it has no canonical row". For a SKILL that evidence
+    // does not hold: a skill's liveness is not the canonical row. The skills
+    // resolver's own predicate (`isSkillExtensionLiveFailClosed`) ends on "no
+    // lifecycle rows -> image-shipped floor (live by being on disk)", and the
+    // header of this module names that same rule as the floor it follows — a
+    // bundled skill normally carries NO row, because the boot seeder anchors one
+    // only for the `required` set. Reading that as "not installed" refused a run
+    // the skills resolver would have served: the list curator's wizard route
+    // answered the application's not-found boundary on a boot where
+    // `@cinatra-ai/list-curation-skill` was on disk and registered. An
+    // explicitly ARCHIVED skill row is untouched below — the archive beats the
+    // floor here exactly as it does for every other kind.
+    //
+    // WHY THIS CANNOT UNDER-REFUSE IN PRODUCTION. The evidence this branch keeps
+    // the floor on — "a catalogued skill with no canonical row" — is not by
+    // itself proof that the skill's files are on disk. It does not have to be:
+    // the state it silences is boot-FATAL one layer up. The closure boot gate
+    // (src/lib/extension-closure-boot-gate.ts) THROWS a prod boot whenever an
+    // `active|locked` row holds an install-blocking edge whose target has no
+    // live row; in development that same gate is ADVISORY, which is exactly why
+    // a dev boot reaches THIS gate in that state at all. So in prod either the
+    // agent's own row is absent — the SELF arm above refuses before this loop is
+    // ever entered — or its required skill has a live row and this branch never
+    // fires. On a development boot the pinned fleet IS on disk (the measured
+    // boot registered `@cinatra-ai/list-curation-skill` from its SKILL.md), so
+    // the image-shipped floor the skills resolver applies is the truthful
+    // reading there. This branch therefore narrows to the one state that is
+    // reachable, and it is the state the refusal was false in.
+    if (
+      !provisioned.ok &&
+      provisioned.reason === "not-installed" &&
+      depRecord?.kind === "skill"
+    ) {
+      continue;
+    }
     if (!provisioned.ok) {
       missingByName.set(depName, {
         packageName: depName,
