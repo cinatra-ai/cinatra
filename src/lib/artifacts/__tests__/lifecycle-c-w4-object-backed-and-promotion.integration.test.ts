@@ -28,6 +28,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import * as zod from "zod";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -53,7 +54,7 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
 const ORG = "org-3028-w4";
 const EXT = "@cinatra-ai/campaigns-artifact";

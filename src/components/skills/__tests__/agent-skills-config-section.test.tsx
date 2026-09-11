@@ -158,7 +158,12 @@ describe("the section node", () => {
     expect(node).not.toBeNull();
     const { initialRows, cap } = propsOf(node);
 
-    expect(cap).toBe(3);
+    // The cap the section hands the client is the STORE's cap, and the cap
+    // moved with the scope tuple: cinatra#2813 S1 (epic #2812) states it as
+    // "cap raised 3 to 5 per (package, exact scope)". Pinned as a literal on
+    // purpose — importing the constant would make this assertion agree with
+    // whatever the store says instead of with the issue.
+    expect(cap).toBe(5);
     expect(searchAssignableSkillExtensions).not.toHaveBeenCalled();
     // The label lookup is keyed by (id, OWNER) — never by the id alone, so a
     // colliding id from another package can't dress this row (codex round B).

@@ -4,7 +4,7 @@
   "title": "Table",
   "description": "Cinatra design-system Table primitives.",
   "registryDependencies": [
-    "utils"
+    "@cinatra-ai/utils"
   ],
   "files": [
     {

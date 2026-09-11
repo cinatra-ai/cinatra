@@ -40,8 +40,24 @@ export type MaterializationPath =
   | "materialize_tool"
   | "llm_emit"
   // cinatra#1893 (epic #1883 A5): the post-terminal derivation job's path — the
-  // produces-scoped capture of an UNBOUND run's final output.
-  | "derived_output";
+  // produces-scoped capture of an UNBOUND run's final output. RETIRED as a
+  // write path by cinatra#3029 (the response-text derivation retires); the
+  // value stays legal so historical rows keep reading.
+  | "derived_output"
+  // cinatra#3029 (epic #3023 W5): THE DEFAULT ROAD — one row per end-node
+  // output at or above the document floor that no binding names, carrying the
+  // detection ladder's deciding rung.
+  | "default_road";
+
+/** The detection ladder's recorded verdict, journalled on the row that write
+ *  produced (cinatra#3029 item 0.18: "the verdict, model and rung recorded on
+ *  the ledger row"). Absent on every path that does not run the ladder. */
+export type MaterializationDetection = {
+  rung: string;
+  reason: string;
+  confidence: number | null;
+  model: string | null;
+};
 
 export type MaterializationClaim =
   | {
@@ -95,14 +111,17 @@ export async function claimMaterialization(input: {
   path: MaterializationPath;
   extension: string;
   contentHash: string;
+  /** The detection ladder's verdict (the `default_road` path only). */
+  detection?: MaterializationDetection | null;
 }): Promise<MaterializationClaim> {
   ensurePostgresSchema();
   const s = schema();
   const id = randomUUID();
   const inserted = await pool().query(
     `INSERT INTO "${s}"."artifact_materializations"
-   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed')
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+    detection_rung, detection_reason, detection_confidence, detection_model)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12)
  ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
  RETURNING id`,
     [
@@ -114,6 +133,10 @@ export async function claimMaterialization(input: {
       input.path,
       input.extension,
       input.contentHash,
+      input.detection?.rung ?? null,
+      input.detection?.reason ?? null,
+      input.detection?.confidence ?? null,
+      input.detection?.model ?? null,
     ],
   );
   if (inserted.rows.length > 0) {
@@ -332,4 +355,61 @@ export async function recordLlmEmitMaterialization(input: {
       input.representationRevisionId,
     ],
   );
+}
+
+// ---------------------------------------------------------------------------
+// THE PICTURE'S PROVENANCE ON ITS LEDGER ROW (plan (C) item 0.28, cinatra#3032).
+//
+//   item 0.28: "[...] and, per revision, since a regenerated picture has a
+//   prompt of its own, the prompt, the provider and the model on the ledger row
+//   of that write [...]"
+//
+// A picture is the first artifact whose CONTENT is not the record of how it was
+// asked for: the bytes carry no prompt, and a regeneration produces different
+// bytes from the same artifact with a different prompt. The materialization
+// ledger already carries one row per write, keyed by (run, output, extension,
+// content hash), so the three facts belong on THAT row and nowhere else — a
+// second table would be a second answer to "what produced this revision".
+//
+// ONE WRITER. Both write paths — the create in `artifact-image-tool.ts` and the
+// append in `artifact-revision-append.ts` — compose the query this module
+// builds into the SAME transaction that finalizes the ledger row, so a row can
+// never be finalized without the provenance of the write that finalized it.
+
+/** What was asked of which provider, and which model answered. */
+export type ImageGenerationProvenance = {
+  /** The prompt THIS revision was generated from — never a previous one's. */
+  prompt: string;
+  /** The deployment's configured image provider that served the call. */
+  provider: string;
+  /** The model the adapter ADDRESSED (which need not be the one asked for). */
+  model: string | null;
+};
+
+/**
+ * The provenance write for one ledger row, as a composable query.
+ *
+ * Phase-guarded on the row's identity only: the callers build it against the
+ * ledger id their own claim returned, inside the transaction that finalizes
+ * that claim, so a lost race rolls this back with the write it describes.
+ */
+export function buildImageGenerationProvenanceQuery(input: {
+  /** The already-quote-escaped schema identifier. */
+  schema: string;
+  ledgerId: string;
+  orgId: string;
+  provenance: ImageGenerationProvenance;
+}): { text: string; values: unknown[] } {
+  return {
+    text: `UPDATE "${input.schema}"."artifact_materializations"
+              SET image_prompt = $1, image_provider = $2, image_model = $3
+            WHERE id = $4 AND org_id = $5`,
+    values: [
+      input.provenance.prompt,
+      input.provenance.provider,
+      input.provenance.model,
+      input.ledgerId,
+      input.orgId,
+    ],
+  };
 }

@@ -38,6 +38,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // Same @/lib/database surface as the sibling #1430 integration suite: the
 // root vitest alias lacks the named exports the artifact graph imports.
@@ -64,7 +65,7 @@ vi.mock("@/lib/register-all-object-types", () => ({
 }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_context_mcp_1430";
 const ORG = "org-mcp-1430";
 const USER = "user-mcp-1430";

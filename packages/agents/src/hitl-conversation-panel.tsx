@@ -96,7 +96,13 @@ export type HitlConversationEntry = {
 };
 
 export type HitlConversationPanelProps = {
-  /** Stable element to portal into (parent computes via document.querySelector("main")). */
+  /**
+   * Stable element to portal into — the mount the HOST renders where the
+   * drawing puts the window, under the work it belongs to (cinatra#3188 item
+   * 3). A host that hands over the page frame instead puts the window at the
+   * END of the page rather than under anything in particular, which is the one
+   * thing this prop must not be used for.
+   */
   portalTarget: HTMLElement | null;
   /** Visibility gate set by the parent. */
   visible: boolean;
@@ -288,27 +294,19 @@ export function HitlConversationPanel({
 
   if (!visible || !portalTarget) return null;
 
+  // THE WINDOW STANDS UNDER THE WORK, IT DOES NOT DOCK (cinatra#3188 item 3).
+  // The ratified drawing puts it "below the scheduler, in the same column", and
+  // has the gate's "decision bar and the run's prompt window ... fill the run
+  // detail on the right" — a window fixed across the foot of the frame is
+  // neither. So the dock goes (`sticky bottom-0 z-30`), and with it the fade
+  // that existed only to soften the page passing UNDER a floating window;
+  // nothing passes under it now. The inset it keeps is the window's own
+  // breathing room inside the column it stands in.
   return createPortal(
     <div
       data-conv-open={convOpen}
       data-run-window-placement={placement}
-      // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
-      // context. An element that is not taken out of flow and comes after the
-      // card in document order cannot draw over it at any width, which is the
-      // whole of §VI's "beneath the decision bar".
-      className={
-        inFlow ? "px-5 pb-4 pt-6" : "sticky bottom-0 z-30 px-5 pb-4 pt-6"
-      }
-      // The fade exists so a FLOATING window has content passing under it. A
-      // window standing in the flow has nothing behind it to fade.
-      style={
-        inFlow
-          ? undefined
-          : {
-              background:
-                "linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 85%, transparent) 30%, var(--background) 55%)",
-            }
-      }
+      className="px-5 pb-4 pt-6"
     >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (

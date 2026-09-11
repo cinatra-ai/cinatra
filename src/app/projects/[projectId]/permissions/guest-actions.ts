@@ -21,18 +21,24 @@
 // closed-registration gate (auth.ts user.create.before →
 // closed-registration-gate.ts) is honored, never tunneled:
 //   - signUpEmail (public-path semantics; allowed while registration is open)
-//   - on REGISTRATION_CLOSED: a PLATFORM-admin inviter retries via the admin
-//     plugin's create-user endpoint (ADMIN_CREATE_USER_PATH — the gate's
-//     always-allowed D1 context, with the actor's own headers); anyone else
-//     gets a structured
-//     "registration-closed" error (existing accounts stay grantable).
+//   - on REGISTRATION_CLOSED: the invite retries via the admin plugin's
+//     create-user endpoint (ADMIN_CREATE_USER_PATH — the gate's always-allowed
+//     D1 context).
+//
+// Closing registration turns strangers away; it does not take invitations away
+// from the people who administer a project. An invitation is an explicit
+// admin road: someone who already administers THIS project names one person
+// and vouches for them, which is a different act from a stranger signing
+// themselves up. So the fallback serves every inviter assertProjectAdmin()
+// authorized — a project admin/owner as much as a platform admin — and the
+// authorization for it is that check, which has already run before any
+// account-creating call is reached.
 // The new guest then receives a password-reset email (existing
 // sendResetPassword wiring) to set their own password. A send failure does
 // NOT unwind the invite — it is surfaced as resetEmailSent: false.
 // ---------------------------------------------------------------------------
 
 import { randomBytes } from "node:crypto";
-import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 
 import { auth } from "@/lib/auth";
@@ -83,7 +89,6 @@ export type GuestInviteResult =
         | "invalid-email"
         | "already-member"
         | "already-has-access"
-        | "registration-closed"
         | "forbidden"
         | "unknown";
     };
@@ -134,11 +139,14 @@ function isPlausibleEmail(email: string): boolean {
  * cookie dies with the discarded fetch response; the gate still evaluates
  * its real public-path posture. The admin-plugin fallback creates no session,
  * so it stays an in-process `auth.api` call.
+ *
+ * ⚠️ CALLERS: this creates an account. It is module-private and has exactly
+ * one call site, reached only after `assertProjectAdmin()` has authorized the
+ * actor for THIS project. That check is the authorization; keep it that way.
  */
 async function createGuestAccount(input: {
   email: string;
-  platformAdmin: boolean;
-}): Promise<{ userId: string } | { error: "registration-closed" | "unknown" }> {
+}): Promise<{ userId: string } | { error: "unknown" }> {
   const name = input.email.split("@")[0] || input.email;
   // ≥ minPasswordLength (12); the guest never learns it — they set their own
   // via the reset email. base64url of 24 bytes = 32 chars.
@@ -174,14 +182,21 @@ async function createGuestAccount(input: {
     console.error("[guest-invite] sign-up self-fetch errored", err);
   }
   if (registrationClosed) {
-    if (!input.platformAdmin) return { error: "registration-closed" };
     try {
       // Sanctioned D1 context: the admin plugin's create-user endpoint
-      // (ADMIN_CREATE_USER_PATH), under the acting platform admin's own
-      // session headers. Creates NO session — hijack-free in-process.
+      // (ADMIN_CREATE_USER_PATH). Creates NO session — hijack-free in-process.
+      //
+      // Deliberately NO headers. The endpoint runs its own role check on
+      // whatever session the headers carry, and it demands better-auth's
+      // "admin" role — which a project admin does not have, so passing the
+      // inviter's headers would refuse the very people this road exists for.
+      // Handing it no request context at all is its documented trusted
+      // server-side call: no session to check, so no check to fail. Nothing is
+      // widened by that here, because the only caller reached this line behind
+      // assertProjectAdmin(), and the created account is a plain "user" that
+      // receives one guest grant on one project and no membership anywhere.
       const created = await auth.api.createUser({
         body: { email: input.email, password, name, role: "user" },
-        headers: await headers(),
       });
       const adminCreatedId = created?.user?.id;
       if (adminCreatedId) return { userId: adminCreatedId };
@@ -206,7 +221,7 @@ export async function inviteGuestByEmailAction(
   try {
     const email = String(emailRaw ?? "").trim().toLowerCase();
     if (!projectId || !isPlausibleEmail(email)) return { ok: false, error: "invalid-email" };
-    const { orgId, userId: actorId, platformAdmin } = await assertProjectAdmin(projectId);
+    const { orgId, userId: actorId } = await assertProjectAdmin(projectId);
     const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
     if (expiresAt && Number.isNaN(expiresAt.getTime())) return { ok: false, error: "unknown" };
 
@@ -249,7 +264,7 @@ export async function inviteGuestByEmailAction(
       };
     }
 
-    const created = await createGuestAccount({ email, platformAdmin });
+    const created = await createGuestAccount({ email });
     if ("error" in created) return { ok: false, error: created.error };
 
     await grantCustomerAccess({

@@ -1,6 +1,7 @@
 // cinatra#1937 (archive S1) — the default-OFF activation gate. Pins:
-// fail-CLOSED gate reads (error/absent/non-true → OFF — the deliberate
-// inversion of the fail-open instance-mode toggles) and the archive entry
+// fail-CLOSED gate reads (error/absent/non-true → OFF — the same posture the
+// registration setting takes, and the opposite of the single-org toggle's
+// fail-soft read) and the archive entry
 // point refusing with `activation-gate-off` while off, BEFORE anything else
 // runs (the stub's invariant, preserved verbatim by the real V5 transaction —
 // whose own six-cell/wire-shape suite is organization-archive-tx.test.ts).

@@ -106,6 +106,15 @@
      semantics are not hijacked by brand chrome. Consumed through the @theme
      inline binding below as `text-brand-mustard`. */
   --brand-mustard: #c79545;
+  /* The drawing's MUSTARD INK (`--mustard-ink`, specs/app-artifact-review.html)
+     — the darkened mustard the drawing writes text and glyphs in when they sit
+     on a warm mustard tint: the review gate's header glyph inside its tile, the
+     awaiting-your-decision pill, and the `· pinned` marker that is the one
+     highlighted fact on an otherwise muted mono line. It is an INK, not a
+     ground: `--warning` / `--brand-mustard` is the tint it is read on, and at
+     that tint's own value text would not clear the contrast floor. Consumed as
+     `text-mustard-ink` through the @theme inline binding below. */
+  --mustard-ink: #7a5a1f;
   /* Marketplace review stars (design spec §V reviews drawing): the storefront
      rating amber + its empty-star warm grey. Deliberately OUTSIDE the status
      palette — star ratings mirror the public storefront's commerce chrome,
@@ -206,6 +215,15 @@
      hijack status semantics. Bound to text-brand-mustard via @theme inline
      below. */
   --brand-mustard: #c79545;
+  /* The drawing's MUSTARD INK (`--mustard-ink`, specs/app-artifact-review.html)
+     — the darkened mustard the drawing writes text and glyphs in when they sit
+     on a warm mustard tint: the review gate's header glyph inside its tile, the
+     awaiting-your-decision pill, and the `· pinned` marker that is the one
+     highlighted fact on an otherwise muted mono line. It is an INK, not a
+     ground: `--warning` / `--brand-mustard` is the tint it is read on, and at
+     that tint's own value text would not clear the contrast floor. Consumed as
+     `text-mustard-ink` through the @theme inline binding below. */
+  --mustard-ink: #7a5a1f;
   --border: var(--line);
   /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
      held at or above the 3:1 non-text contrast floor against the grounds a
@@ -502,6 +520,13 @@
   --warning-foreground: oklch(0.984 0.003 247.858);
   --info: oklch(0.66 0.15 240);
   --info-foreground: oklch(0.984 0.003 247.858);
+  /* The mustard INK, inverted for a dark ground (#3141 item 3/4). The light
+     palette reads a darkened mustard on a pale tint; on a dark surface the same
+     tint is dark, so the ink is the LIGHT end of the one hue rather than the
+     light palette's value composited onto a ground it cannot clear. Same hue
+     family as the dark `--warning` above, held above it so a glyph reads
+     against the tint the glyph sits on. */
+  --mustard-ink: oklch(0.84 0.11 78);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -523,6 +548,12 @@
   --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  /* The strengthened line. `--line-strong` is declared for the light
+     palette only -- the dark palette must not re-declare it, the
+     etched-rule gate binds to that -- so a boundary that has to stay
+     findable in BOTH palettes draws from `--line-control`, which is
+     `var(--line-strong)` in the light one. */
+  --color-line-control: var(--line-control);
   --color-accent-soft: var(--accent-soft);
   /* Fabric stripe utility tokens. */
   --color-stripe-mid: var(--stripe-mid);
@@ -555,6 +586,10 @@
      border-brand-mustard. Separate from --warning so page-title display and
      wordmark do not collide with status semantics. */
   --color-brand-mustard: var(--brand-mustard);
+  /* Mustard INK utility: text-mustard-ink / bg-mustard-ink / border-mustard-ink.
+     The drawing names this colour by itself and it has no counterpart among the
+     status tokens — `--warning` is the TINT it is read on, never the reading. */
+  --color-mustard-ink: var(--mustard-ink);
   /* Attention-counter digit utility (spec §IV bell badge): always-white text
      on the solid red attention pill, theme-invariant by construction. */
   --color-attention-foreground: var(--attention-foreground);
@@ -638,6 +673,44 @@
   --text-badge-xs: var(--badge-text-xs);
   --text-badge-2xs: var(--badge-text-2xs);
   --text-badge-2xs--letter-spacing: var(--badge-tracking);
+  /* The entity page's Dashboards-tab caption — the ratified drawing draws that
+     lede at 13px muted, one step under the 14px body baseline and one over the
+     12px helper. Named here (cinatra#2807) so the site carries a token, never a
+     bracket literal. */
+  --text-scope-caption: 13px;
+  --text-scope-caption--line-height: 1.5;
+  /* The Dashboards tab's own empty reading — the load-states drawing sets its
+     headline at 12.5px/600 over its helper at 11px/1.5, a real step between the
+     two lines. Named here (cinatra#2807 fix leg 5) for the same reason the
+     caption above is: the site carries a token, never a bracket literal. */
+  --text-scope-empty-title: 12.5px;
+  --text-scope-empty-title--line-height: 1.4;
+  --text-scope-empty-help: 11px;
+  --text-scope-empty-help--line-height: 1.5;
+  /* Three ROLES the scale had no name for, named at the ratified drawing's own
+     sizes (cinatra#3029). Named by the ROLE, never by the surface that first
+     needed them, so the scale carries them anywhere the role appears -- the
+     rule --text-scope-caption follows above.
+       --text-row-title  a row's own title inside a bordered list row, one step
+                         under the 14px body baseline. --text-listing-title is
+                         the listing's title; this is a row's. No line-height
+                         pairing: the drawing gives a row title none, so the
+                         row's own rhythm decides.
+       --text-reading    a sentence a surface reports back with (role=status)
+                         and the readable control text beside it -- the step
+                         between the 12px helper and the 13px caption.
+       --text-fact-line  the mono line of facts under a title: an identifier, a
+                         revision, a media type. Its tracking rides on its own
+                         size token the way the badge tracking rides on
+                         --text-badge-2xs, so the consumer drops the bracket.
+     The drawing's 10px tags need no token of their own: text-badge-xs IS 10px.
+     A whole pixel separates each of the three from the nearest standard size,
+     and a pixel off the drawing is a departure -- so the answer is the one this
+     table already gives twice: a token, never a bracket literal. */
+  --text-row-title: 13px;
+  --text-reading: 12.5px;
+  --text-fact-line: 10px;
+  --text-fact-line--letter-spacing: 0.04em;
   --tracking-title-tight: var(--title-tracking-tight);
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);
@@ -730,6 +803,211 @@ body {
   }
 }
 
+/* =====================================================================
+   RENDERED-MARKDOWN TYPOGRAPHY (cinatra#3141 item 5)
+
+   A renderer that emits a markdown document emits ONE container carrying a
+   styling hook — `markdown-body` / `data-markdown-body` — and the elements the
+   document is made of inside it. The host ships Tailwind's preflight, which
+   normalizes `h1`-`h6` to INHERIT their size and weight, and registered no rule
+   for that hook and no typography layer at all, so a heading inside a rendered
+   document landed at paragraph size by construction: "Summary" and "Rollout"
+   drew indistinguishably from the prose around them.
+
+   THIS IS THE HOST'S SIDE OF THE SEAM, AND IT BELONGS HERE. The renderer names
+   a hook and adds no heading styling of its own; the document it draws inherits
+   THIS stylesheet's base layer, including the preflight that flattened it. A
+   rule for the hook therefore reaches every renderer that emits the same hook —
+   the extension-shipped ones, and the host's own markdown handler, which asked
+   for `prose prose-sm` classes that were never defined anywhere either.
+
+   IT IS SCOPED TO THE HOOK AND NOWHERE ELSE. Everything below is a DESCENDANT
+   selector under one of the three hooks, so nothing here can reach a heading
+   the app draws itself; the app's own headings keep being styled by the
+   utilities that draw them. Sizes are relative (`em`) so a body mounted at
+   `text-sm` inside a review target and the same body at full size on the detail
+   surface both keep the same hierarchy — "the renderer fills the slot exactly
+   as it would on the detail surface" (specs/app-artifact-review.html §IV).
+
+   The colours are the app's own tokens, so a document reads in whichever
+   palette the surface — the run card, the review page, the island document,
+   the widget — is painting in.
+   ===================================================================== */
+@layer components {
+  .markdown-body,
+  [data-markdown-body],
+  .prose {
+    color: var(--foreground);
+  }
+
+  .markdown-body h1,
+  [data-markdown-body] h1,
+  .prose h1 {
+    font-size: 1.6em;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin-block: 1.1em 0.45em;
+  }
+
+  .markdown-body h2,
+  [data-markdown-body] h2,
+  .prose h2 {
+    font-size: 1.3em;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-block: 1.15em 0.4em;
+  }
+
+  .markdown-body h3,
+  [data-markdown-body] h3,
+  .prose h3 {
+    font-size: 1.12em;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-block: 1.05em 0.35em;
+  }
+
+  .markdown-body h4,
+  [data-markdown-body] h4,
+  .prose h4 {
+    font-size: 1.02em;
+    font-weight: 600;
+    margin-block: 1em 0.3em;
+  }
+
+  /* The baseline every heading above is measured against. */
+  .markdown-body p,
+  [data-markdown-body] p,
+  .prose p {
+    font-size: 1em;
+    font-weight: 400;
+    margin-block: 0 0.85em;
+  }
+
+  /* A document opens on its title, not on a gap. */
+  .markdown-body > :first-child,
+  [data-markdown-body] > :first-child,
+  .prose > :first-child {
+    margin-block-start: 0;
+  }
+
+  .markdown-body strong,
+  [data-markdown-body] strong,
+  .prose strong {
+    font-weight: 700;
+    color: inherit;
+  }
+
+  .markdown-body em,
+  [data-markdown-body] em,
+  .prose em {
+    font-style: italic;
+  }
+
+  .markdown-body a,
+  [data-markdown-body] a,
+  .prose a {
+    color: var(--info);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .markdown-body code,
+  [data-markdown-body] code,
+  .prose code {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 0.9em;
+    background: var(--surface-muted);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+  }
+
+  .markdown-body pre,
+  [data-markdown-body] pre,
+  .prose pre {
+    background: var(--surface-muted);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.75em 0.9em;
+    overflow-x: auto;
+    margin-block: 0 0.9em;
+  }
+
+  /* A code span inside a block is the block's ground already. */
+  .markdown-body pre code,
+  [data-markdown-body] pre code,
+  .prose pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .markdown-body ul,
+  [data-markdown-body] ul,
+  .prose ul {
+    list-style: disc;
+    padding-inline-start: 1.45em;
+    margin-block: 0 0.85em;
+  }
+
+  .markdown-body ol,
+  [data-markdown-body] ol,
+  .prose ol {
+    list-style: decimal;
+    padding-inline-start: 1.45em;
+    margin-block: 0 0.85em;
+  }
+
+  .markdown-body li,
+  [data-markdown-body] li,
+  .prose li {
+    margin-block: 0.2em;
+  }
+
+  .markdown-body blockquote,
+  [data-markdown-body] blockquote,
+  .prose blockquote {
+    border-inline-start: 2px solid var(--line-strong);
+    padding-inline-start: 0.9em;
+    color: var(--muted);
+    margin-block: 0 0.9em;
+  }
+
+  .markdown-body hr,
+  [data-markdown-body] hr,
+  .prose hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin-block: 1.2em;
+  }
+
+  .markdown-body table,
+  [data-markdown-body] table,
+  .prose table {
+    border-collapse: collapse;
+    margin-block: 0 0.9em;
+  }
+
+  .markdown-body th,
+  .markdown-body td,
+  [data-markdown-body] th,
+  [data-markdown-body] td,
+  .prose th,
+  .prose td {
+    border: 1px solid var(--line);
+    padding: 0.35em 0.6em;
+    text-align: start;
+  }
+
+  .markdown-body th,
+  [data-markdown-body] th,
+  .prose th {
+    font-weight: 600;
+    background: var(--surface);
+  }
+}
+
 @layer utilities {
   .animate-slack-slide-left     { animation: slackModeSlideLeft 700ms cubic-bezier(0.22, 1, 0.36, 1); }
   .animate-slack-avatar-fade-in { animation: slackModeAvatarFadeIn 500ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both; }
@@ -811,6 +1089,46 @@ body {
 @utility italic-overhang-safe {
   padding-inline-end: 0.08em;
   margin-inline-end: -0.08em;
+}
+
+/* THE TOAST'S CLOSE SITS BESIDE COPY, INSIDE THE TOAST.
+   The ratified drawing describes a toast as the popover surface, a
+   status-coloured border and matching text, the type's icon leading, and Copy
+   and Close on the right — one row, both controls in it. The toast library pins
+   its close control OUTSIDE a corner of the toast with position: absolute and a
+   transform, and the only choice its custom properties offer is WHICH corner;
+   on a real surface that badge measured overlapping the application header's own
+   notification badge. So the placement is a rule rather than a variable, and it
+   is written once here for every toast the application draws.
+   FOUR ATTRIBUTE SELECTORS AGAINST THE LIBRARY'S THREE. Both stylesheets are
+   unlayered, and the library injects its own at run time, so this rule wins on
+   specificity rather than on which of the two the browser happens to see first.
+   GEOMETRY ONLY. Not one colour is written here: the close control keeps
+   whatever the library paints it, in every theme and in every status, so this
+   rule cannot make a toast look wrong in a theme it was never measured in.
+   AND EVERY TOAST, NOT ONLY THE ONE WITH AN ACTION. The toast is a flex row.
+   Where there IS an action the library gives it an automatic margin that pushes
+   it to the end of the row, and ordering the close control after it puts the
+   two together there. Where there is NO action — most toasts in the
+   application — that margin does not exist, and a close control taken out of
+   the corner would have come to rest against the text. So the toast's own text
+   is what takes up the slack instead: it grows to fill the row, and the
+   controls sit at the end of it whether there are two of them or one. Flow
+   order and a growing box carry no physical left or right, so the pair follows
+   the reading direction on its own. */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] {
+  position: static;
+  transform: none;
+  order: 1;
+  height: 24px;
+  width: 24px;
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-content] {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 ::selection {
@@ -1102,4 +1420,73 @@ textarea:focus::placeholder {
 .lifecycle-fields-subordinate[data-send-affordance="card"] button[type="submit"],
 .lifecycle-fields-subordinate[data-send-affordance="card"] input[type="submit"] {
   display: none !important;
+}
+
+/* =====================================================================
+   THE CARD CORNER — the components drawing's Card section, clause
+   "10–12px radius", declared once here rather than on the primitive.
+
+   THE DEFECT. `card.tsx` cuts its corner on the shared `xl` step,
+   `calc(var(--radius) + 4px)`. This product declares `--radius` three times:
+   0.625rem on the bare `:root`, 0.5rem on the light palette the app boots in
+   (`.cinatra`), and 0.625rem again on `.dark`. The step therefore resolves to
+   12px light — inside the band, at the top — and to 14px dark, OUTSIDE it. Two
+   earlier gradings of this row each measured a single palette, which is how a
+   corner that conforms in one and not in the other survived both of them.
+
+   THE RECIPE. Two steps above the radius base, `calc(var(--radius) + 2px)`,
+   lands inside the band under all three declarations — 12px, 10px and 12px —
+   so the clause holds in either palette and under the bare defaults too.
+   Moving the shared `xl` step instead would move `empty`, `command` and the
+   inset sidebar, none of which this wave has graded.
+
+   WHY IT IS A SCOPE ON THE SEAM AND NOT A CLASS ON THE PRIMITIVE — the same
+   reason as the card chrome above. `card.tsx` is a design-registry primitive
+   vendored verbatim, modulo import rewriting, into extension packages held in
+   their own repositories, and
+   scripts/extensions/vendor-extension-primitives.mjs is a provenance gate over
+   every one of those copies: it fails the moment the host source and a
+   vendored copy differ by a byte. Spelling the corner in the primitive's class
+   string therefore drifts six extension repositories at once and cannot go
+   green until each has re-vendored and the pins in
+   cinatra-dev-extensions.lock.json have been raised — a cross-repository
+   transaction, which is the same mechanism that keeps the badge's "line
+   border" clause a recorded departure on this leg. A rule on the DOM seam
+   reaches the host copy and every vendored copy alike, by containment, with no
+   file the gate reads changed at all.
+
+   IT IS UNLAYERED ON PURPOSE. Tailwind's utilities arrive in `layer(utilities)`
+   (see the imports at the top of this file), and unlayered rules win over
+   layered ones whatever their specificity, so this states the corner over the
+   `xl` utility the primitive still spells without an `!important` anywhere. The
+   consequence, stated rather than hidden: a consumer that passes its own
+   rounded utility to `<Card>` no longer wins. There was exactly one — the
+   environment page, on `rounded-card` (1rem), itself outside the band — and
+   this leg removes that override rather than leaving the DOM disagreeing with
+   the class it is given.
+
+   ALL FOUR SITES MOVE TOGETHER. The card clips its children
+   (`overflow-hidden`), so a header, footer or edge image left on the old step
+   draws a visible seam inside the outer corner the moment it paints a ground
+   of its own — which the footer already does.
+
+   Graded as a recipe, and as arithmetic against the palette declarations
+   above, in src/components/ui/__tests__/card-drawing-conformance.test.tsx;
+   read at the DOM seam in BOTH palettes on the live boot by
+   tests/e2e/design/conformance/primitive-wave-leg1.spec.ts.
+   ===================================================================== */
+[data-slot="card"] {
+  border-radius: calc(var(--radius) + 2px);
+}
+
+[data-slot="card"] [data-slot="card-header"],
+[data-slot="card"] > img:first-child {
+  border-top-left-radius: calc(var(--radius) + 2px);
+  border-top-right-radius: calc(var(--radius) + 2px);
+}
+
+[data-slot="card"] [data-slot="card-footer"],
+[data-slot="card"] > img:last-child {
+  border-bottom-left-radius: calc(var(--radius) + 2px);
+  border-bottom-right-radius: calc(var(--radius) + 2px);
 }

@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { conformanceSeedVerdict } from "@/lib/test-support/conformance-seed-fence";
+
 import type { TransitionOpts } from "@cinatra-ai/extensions/lifecycle-primitive";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 
@@ -35,6 +37,19 @@ import {
 // the documented browser-e2e switch CINATRA_E2E_SETUP_BYPASS === "true" is set
 // (the design-visual-verify CI harness). Never enabled in a real production
 // deployment; every write is confined to the @cinatra-e2e/<runId>-- namespace.
+//
+// AUTHORIZATION CONTRACT — the reachability contract above is NOT one. It says
+// which BUILDS mount the fixtures, and the verify workflow deliberately arms the
+// e2e switch on a production-SHAPED standalone build so they are mounted there
+// too; the route is also on the guard's dev-only public list, so no session is
+// required to reach this handler. What decides whether a CALLER may drive the
+// lifecycle writes below is a PRESENTED CAPABILITY —
+// CINATRA_CONFORMANCE_SEED_TOKEN, at least 32 characters, compared in constant
+// time, unset meaning the route is off — plus a forwarded chain that names no
+// hop from off this machine. See @/lib/test-support/conformance-seed-fence for
+// the fence and why every refusal answers a bare 404. The route STAYS on the
+// public-path list on purpose: the sessionless harness must reach the handler
+// and be answered by the fence, not bounced to /sign-in.
 // ---------------------------------------------------------------------------
 
 export const dynamic = "force-dynamic";
@@ -86,6 +101,24 @@ async function forceRemoveRow(store: Store, row: InstalledExtension): Promise<vo
 function seedingEnabled(): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   return process.env.CINATRA_E2E_SETUP_BYPASS === "true";
+}
+
+/**
+ * THE ROUTE'S AUTHORIZATION BOUNDARY, evaluated BEFORE the request body is read
+ * — so a refused caller costs one header comparison and touches neither the
+ * parser nor the store, and "no token" is provably "no write".
+ *
+ * Returns the refusal response, or null when the caller may proceed. The
+ * refusal REASON is logged for the operator of this server (a harness that
+ * forgot to forward the capability is otherwise indistinguishable from a
+ * missing route) and is never returned to the caller.
+ */
+function refuseUncapableCaller(req: NextRequest): NextResponse | null {
+  if (!seedingEnabled()) return new NextResponse(null, { status: 404 });
+  const verdict = conformanceSeedVerdict(req);
+  if (verdict.ok) return null;
+  console.warn(`[design-conformance seed] refused: ${verdict.reason}`);
+  return new NextResponse(null, { status: verdict.status });
 }
 
 async function parseRunId(req: NextRequest): Promise<string | null> {
@@ -195,7 +228,8 @@ async function installTargetRow(store: Store, target: TargetRow, runId: string):
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!seedingEnabled()) return new NextResponse(null, { status: 404 });
+  const refusal = refuseUncapableCaller(req);
+  if (refusal) return refusal;
   const runId = await parseRunId(req);
   if (!runId) {
     return NextResponse.json({ error: "body must be { runId } matching " + String(CONFORMANCE_RUN_ID_RE) }, { status: 400 });
@@ -272,7 +306,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function DELETE(req: NextRequest): Promise<NextResponse> {
-  if (!seedingEnabled()) return new NextResponse(null, { status: 404 });
+  const refusal = refuseUncapableCaller(req);
+  if (refusal) return refusal;
   const runId = await parseRunId(req);
   if (!runId) {
     return NextResponse.json({ error: "body must be { runId } matching " + String(CONFORMANCE_RUN_ID_RE) }, { status: 400 });

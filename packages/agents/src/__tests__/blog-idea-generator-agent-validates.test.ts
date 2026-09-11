@@ -14,7 +14,9 @@
  * targeting templated /api/llm-bridge with SKILL.md auto-discovery (no
  * skill_source_path field), correct StartNode required+hidden coverage
  * (required=['brief'] + hidden=[10 others]), and EndNode shape with 2 outputs
- * (ideas array<object> + notes string) plus correct edge counts (10 DFE + 2 CFE).
+ * (ideas array of plain strings + notes string) plus correct edge counts.
+ * cinatra#3034 re-ratification: the two idea-batch outputs and their two edges
+ * are retired — the ideas are filed one by one through the fan-out binding.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/blog-idea-generator-agent-validates.test.ts
  */
@@ -133,10 +135,18 @@ describe("blog-idea-generator-agent OAS validates against L1, LLM-metadata, and 
     const byTitle = new Map(outputs.map((o) => [o.title as string, o]));
     expect(byTitle.get("ideas")?.type).toBe("array");
     expect(byTitle.get("notes")?.type).toBe("string");
+    // The ideas are plain text, and the batch pair is gone for good.
+    expect(
+      (byTitle.get("ideas")?.json_schema as { items?: { type?: string } } | undefined)?.items
+        ?.type,
+    ).toBe("string");
+    expect(byTitle.has("ideaBatchTitle")).toBe(false);
+    expect(byTitle.has("ideaBatchDocument")).toBe(false);
 
-    // Edge counts
+    // Edge counts. Two fewer than before cinatra#3034: the batch title and the
+    // batch document each had an edge into the end node, and both are retired.
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(16);
+    expect(dfc.length).toBe(14);
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(3);
   });

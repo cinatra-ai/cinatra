@@ -46,6 +46,7 @@ import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy
 
 import { resolveOrgPolicyRule, POLICY_ARTIFACT_TYPE_WILDCARD } from "./lifecycle-policy-store";
 import {
+  replaceRunSelectedSkillRevisionsBeforeStart,
   readRunRecommendationOfferedSet,
   writeRunSelectedSkillRevisions,
   writeRunRejectedRecommendations,
@@ -215,9 +216,21 @@ export interface ConfirmRunSkillSelectionInput {
 export const OFFERED_SET_STALE_REASON = "offered_set_stale" as const;
 /** The offer itself could not be read — an error, never "it offered nothing". */
 export const OFFERED_SET_UNREADABLE_REASON = "offered_set_unreadable" as const;
+/**
+ * THE RUN HAS ALREADY STARTED (cinatra#3047, convergence finding 3). A decision
+ * bound to a hold may be taken again while the run has not begun executing; once
+ * it has, its selection set is the ledger execution materialized from and the
+ * write is refused rather than partially applied. The refusal is the STORE'S
+ * answer, taken inside the write's own transaction — not a status read this
+ * module took a moment earlier and hoped was still true.
+ */
+export const RUN_ALREADY_STARTED_REASON = "run_already_started" as const;
 
 export interface ConfirmRunSkillSelectionRefusal {
-  reason: typeof OFFERED_SET_STALE_REASON | typeof OFFERED_SET_UNREADABLE_REASON;
+  reason:
+    | typeof OFFERED_SET_STALE_REASON
+    | typeof OFFERED_SET_UNREADABLE_REASON
+    | typeof RUN_ALREADY_STARTED_REASON;
   /** The kept ids the offer can no longer honour. Empty when it could not be read. */
   staleSkillIds: string[];
 }
@@ -401,7 +414,32 @@ export async function confirmRunSkillSelection(
   }
 
   const selection = derived.selection;
-  writeRunSelectedSkillRevisions({ runId: input.runId, selections: selection });
+  // THE SELECTION IS THE LATEST ONE, UNTIL THE RUN STARTS (cinatra#3047).
+  //
+  // The Skills step keeps its boxes editable while the run is still at its
+  // setup, its schedule or any other pre-start moment, so a second Continue must
+  // be able to take a skill OUT again — and an INSERT alone cannot, because the
+  // selection set is first-write-wins per (run, skill). So the hold-bound
+  // confirm writes through the REPLACE: one transaction, scoped to THIS hold's
+  // own offer, with both statements testing the run's status, and an answer
+  // rather than silence when the run has already started.
+  //
+  // A FIRST confirm takes exactly this path too, and nothing about it changes:
+  // the run owns no row for those ids yet, so the replace deletes nothing and
+  // inserts what a plain write would have. What it gains is the guard — a
+  // confirm can no longer add rows to a run whose ledger execution has already
+  // materialized, whether it is a re-decision or a stale first press.
+  const applied = replaceRunSelectedSkillRevisionsBeforeStart({
+    runId: input.runId,
+    scopeSkillIds: offered.map((o) => o.skillId),
+    selections: selection,
+  });
+  if (!applied) {
+    return {
+      ok: false,
+      refusal: { reason: RUN_ALREADY_STARTED_REASON, staleSkillIds: [] },
+    };
+  }
   const efficacy = summarizeRecommendationEfficacy({
     recommendations: offered,
     selectedSkillIds: selection.map((s) => s.skillId),

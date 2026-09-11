@@ -287,8 +287,19 @@ fi
 info "Starting infrastructure (Postgres + Redis$WAYFLOW_LABEL)..."
 # COMPOSE_PROFILE_ARGS is empty or the deliberate `--profile wayflow` flag pair,
 # so the word split below is intended.
+#
+# `env -u …` STRIPS every provider variable the graphiti service declares
+# value-less (cinatra#2582). A value-less entry means "take it from the
+# environment of the compose process", so a stray `OPENAI_API_KEY` in this
+# shell would otherwise start the knowledge-graph indexer on a key the app's
+# own resolver never approved — the wrong vendor on an Anthropic install, or a
+# key the operator disconnected. This whole-stack `up` therefore starts the
+# indexer KEYLESS by construction, and `npm run kg:up` below is the one step
+# that gives it the key the app actually stored. The list is
+# `GRAPHITI_GENERATED_NAMES` in scripts/gen-graphiti-env.mjs, and a suite
+# asserts every entry point strips exactly it.
 # shellcheck disable=SC2086
-docker compose -f docker-compose.yml -f docker-compose.dev.yml $COMPOSE_PROFILE_ARGS up -d
+env -u LLM__PROVIDER -u LLM__PROVIDERS__OPENAI__API_KEY -u LLM__PROVIDERS__OPENAI__API_URL -u LLM__PROVIDERS__ANTHROPIC__API_KEY -u EMBEDDER__PROVIDER -u EMBEDDER__MODEL -u EMBEDDER__DIMENSIONS -u EMBEDDER__PROVIDERS__OPENAI__API_URL -u EMBEDDER__PROVIDERS__OPENAI__API_KEY -u OPENAI_API_KEY docker compose -f docker-compose.yml -f docker-compose.dev.yml $COMPOSE_PROFILE_ARGS up -d
 
 info "Waiting for Postgres to be ready..."
 until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do
@@ -543,21 +554,30 @@ fi
 
 # ── Knowledge-graph provider key (cinatra#2582) ───────────────────────────────
 
-# The Graphiti container needs an OpenAI key as a static env var at container
+# The Graphiti container needs the provider key as an env var at container
 # startup, and the app keeps that key in the DATABASE, not the shell env. Compose
 # used to interpolate `${OPENAI_API_KEY:-}`, which resolved EMPTY on a normal
 # install: Graphiti then dropped every episode (extraction runs before the graph
 # write) and the graph stayed silently empty.
 #
-# Run the generator HERE, after the database exists, so an install that already
-# has a stored key (a re-run, a restored backup) materializes it into
-# docker/graphiti/.graphiti.env and the recreate below picks it up. On a FRESH
-# install there is no key yet and this reports "indexing OFF" — the honest
-# state, not an error; the hint printed at the end says how to turn it on.
-info "Resolving the knowledge-graph provider key..."
-npm run --silent gen:graphiti-env || warn "Could not resolve the knowledge-graph provider key; the indexer starts without one."
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d graphiti >/dev/null 2>&1 \
-  || warn "Could not recreate the graphiti container; run \`npm run kg:refresh\` once it is up."
+# `npm run kg:up` is ONE step that resolves the key in memory and recreates the
+# graphiti service with it set in the environment of that `docker compose up`.
+# NO FILE IS WRITTEN — docker/graphiti/.graphiti.env is never present, and a
+# leftover from the old road is deleted here and announced.
+#
+# Run it HERE, after the database exists, so an install that already has a
+# stored key (a re-run, a restored backup) gets it into the container on this
+# pass. On a FRESH install there is no key yet and this reports "indexing OFF" —
+# the honest state, not an error; the hint printed at the end says how to turn
+# it on.
+# stdout is quiet (a bring-up's compose chatter is not setup's story), but
+# STDERR IS NOT REDIRECTED: that is where the generator says it deleted a
+# `.graphiti.env` that carried a real credential in clear, and that sentence is
+# the operator's cue to rotate the key. Swallowing it would hide the one thing
+# this step exists to tell them.
+info "Giving the knowledge-graph indexer its provider key..."
+npm run --silent kg:up >/dev/null \
+  || warn "Could not give the knowledge-graph indexer its provider key; run \`npm run kg:refresh\` once the stack is up."
 
 # ── Service check ─────────────────────────────────────────────────────────────
 

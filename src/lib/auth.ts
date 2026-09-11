@@ -708,7 +708,8 @@ async function enforceClosedRegistration(
   const decision = await resolveRegistrationDecision({
     user,
     ctx,
-    // D5 — isRegistrationClosed swallows read errors to false (fail OPEN).
+    // D5 — isRegistrationClosed answers CLOSED when it cannot read the
+    // setting, so a metadata-store failure never opens the door.
     isClosed: isRegistrationClosed,
     // D4 — throws on inspection failure; the orchestrator catches and fails CLOSED.
     countHumans: countHumanUsersLocked,

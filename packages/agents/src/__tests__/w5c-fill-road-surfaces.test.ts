@@ -28,10 +28,11 @@ const WINDOWS: ReadonlyArray<{ surface: string; file: string }> = [
   // that used to draw it is retired, and `SchedulePromptWindow` is the one
   // component both of its hosts mount. Same window, same reading, same rule.
   { surface: "armed-trigger", file: "packages/agents/src/schedule-prompt-window.tsx" },
-  {
-    surface: "review",
-    file: "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-prompt-window.tsx",
-  },
+  // THE REVIEW WINDOW MOVED FILE TOO (cinatra#3141 item 1): the drawing puts it
+  // inside the gate's frame, so `ReviewGateCard` draws it on every surface the
+  // gate opens on and the review page mounts none. Same window, same reading,
+  // same rule.
+  { surface: "review", file: "packages/agents/src/review-gate-card.tsx" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -60,19 +61,21 @@ describe("the field-assist route and its four callers are gone", () => {
     }
   });
 
-  it("the review page's typed sentence is no longer filed by the page", () => {
+  it("the review page's typed sentence is no longer filed by the window", () => {
     const src = read(WINDOWS[4]!.file);
-    // The direct submit is gone: no disposition is composed here at all.
-    expect(src).not.toContain('disposition: "comment"');
-    expect(src).not.toContain("submitAction");
-    // And the page no longer takes the action as a prop.
-    // The DECISION BAR keeps the action — its three buttons are untouched. What
-    // must not carry one any more is the WINDOW.
+    // The DECISION BAR keeps the action — its three buttons are untouched, and
+    // the card's own Comment path is what the assistant presses. What must not
+    // carry one any more is the WINDOW: it is handed no submitter at all.
+    const window = src.slice(src.indexOf("export function ReviewGatePromptWindow"));
+    expect(window).not.toContain('disposition: "comment"');
+    expect(window).not.toContain("submitAction");
+    // And the page mounts no window of its own to file one from (cinatra#3141
+    // item 1) — one card per gate is one window per gate.
     const page = read(
       "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
     );
-    const mount = page.slice(page.indexOf("<ReviewPromptWindow"));
-    expect(mount.slice(0, mount.indexOf("/>"))).not.toContain("submitAction");
+    expect(page).not.toContain("<ReviewPromptWindow");
+    // The decision the BAR takes still comes from the page, unchanged.
     expect(page).toContain("submitAction={submitAction}");
   });
 
@@ -145,9 +148,13 @@ describe("drafts survive a reload in every window", () => {
 // ATTACHMENTS REACH THE WAITING RUN — by both roads.
 // ---------------------------------------------------------------------------
 describe("a file attached beside a message still reaches the run", () => {
-  it("the two windows that offer a paperclip still offer it", () => {
-    expect(read("packages/agents/src/agentic-run-panel.tsx")).toContain("enableAttachments=");
-    expect(read("packages/agents/src/orchestrator-stepper-panel.tsx")).toContain(
+  // THE PAPERCLIP OPT-IN WENT (cinatra#3222 on main): the drawing gives the run
+  // window no leading control, so neither run-page caller opts into one. The
+  // attachment ROAD below is untouched — what a person does attach still rides
+  // the message — which is what this suite is actually about.
+  it("no run-page window opts into the leading control any more", () => {
+    expect(read("packages/agents/src/agentic-run-panel.tsx")).not.toContain("enableAttachments=");
+    expect(read("packages/agents/src/orchestrator-stepper-panel.tsx")).not.toContain(
       "enableAttachments=",
     );
   });

@@ -138,8 +138,11 @@ export default async function RootLayout({
       getGoogleOAuthSettings().catch(() => ({})),
       getAuthSession().catch(() => null),
       isSingleOrgMode().catch(() => false),
-      // D7 — both reads fail-soft so an error keeps sign-up shown (open).
-      isRegistrationClosed().catch(() => false),
+      // Fails to CLOSED, matching the reader itself: an unreadable
+      // registration setting never leaves the sign-up link advertised. A
+      // failing user-count read still keeps the bootstrap path open, since
+      // sign-up is only hidden once BOTH say so.
+      isRegistrationClosed().catch(() => true),
       hasAnyBetterAuthUsers().catch(() => false),
     ]);
     setupGate = setupGateResult;

@@ -13,6 +13,16 @@
 //     the filesystem, so without this gate a prod boot could come up "healthy"
 //     while WayFlow points at an empty/stale tree. Failing closed surfaces a
 //     broken image at deploy time.
+// Seed source: the reconcile reads the directory named by
+// `CINATRA_REQUIRED_OAS_SEED_DIR` when the deploy sets it, and the image-baked
+// `DEFAULT_REQUIRED_OAS_SEED_DIR` otherwise — so a deploy that projects the
+// pinned fleet's seed outside the image (a served checkout) is honoured instead
+// of silently ignored. A named directory that is relative, dot-segmented, or
+// (symlinks resolved) at or under the durable user store is REFUSED — see
+// `resolveRequiredOasSeedDir`, which states exactly what it does and does not
+// guarantee — and a refusal costs what a missing seed costs: fatal in prod,
+// warned and swallowed in dev.
+//
 //   - DEV: the phase still runs but is NOT fail-closed (a minimal dev checkout
 //     has no baked seed — the dev git-native scan owns the tree there), and a
 //     failure is swallowed. The dev/prod split lives inside the phase body so
@@ -54,17 +64,31 @@ export function requiredExtensionMaterializePhases(): BootPhase[] {
         }
 
         const prod = inProdMode();
-        const { materializeRequiredExtensions } = await import(
-          "@/lib/required-extension-materialize"
-        );
+        const {
+          DEFAULT_REQUIRED_OAS_SEED_DIR,
+          materializeRequiredExtensions,
+          resolveRequiredOasSeedDir,
+        } = await import("@/lib/required-extension-materialize");
         const { resolveAgentRuntimeMountDir } = await import(
           "@cinatra-ai/agents/agent-runtime-mount"
         );
         const installDir = resolveAgentRuntimeMountDir();
 
         let result;
+        // The seed the deploy handed us when it named one, else the
+        // image-baked default. A refused override throws here and is treated exactly
+        // like a missing/corrupt seed: fatal in prod, warned and swallowed in dev.
+        let seed = {
+          seedDir: DEFAULT_REQUIRED_OAS_SEED_DIR,
+          source: "image-default" as "env" | "image-default",
+        };
         try {
-          result = materializeRequiredExtensions({ installDir, failClosed: prod });
+          seed = resolveRequiredOasSeedDir();
+          result = materializeRequiredExtensions({
+            installDir,
+            seedDir: seed.seedDir,
+            failClosed: prod,
+          });
         } catch (err) {
           if (prod) throw err; // fail-closed: abort the prod boot
           console.warn(
@@ -81,7 +105,8 @@ export function requiredExtensionMaterializePhases(): BootPhase[] {
 
         if (result.materialized.length || result.pruned.length || result.unchanged.length) {
           console.info(
-            `[required-extension-materialize] install dir ${installDir}: ` +
+            `[required-extension-materialize] seed ${seed.seedDir} (${seed.source}) -> ` +
+              `install dir ${installDir}: ` +
               `materialized=${result.materialized.length} ` +
               `unchanged=${result.unchanged.length} pruned=${result.pruned.length}` +
               (result.materialized.length ? ` [+ ${result.materialized.join(", ")}]` : "") +

@@ -1,48 +1,53 @@
 /**
- * The run-detail screen as a lifecycle-card HOST (cinatra#2573, epic #2564 D-1).
+ * THE RUN-DETAIL SCREEN AS A LIFECYCLE-CARD HOST (cinatra#2573, epic #2564 D-1;
+ * cinatra#3047).
  *
- * WHAT THIS SLICE RETIRED. `instance-screens.tsx` was a FOURTH renderer of the
- * recommendation interaction: its own `readRecommendationParkForRun`, its own
- * actor-scoped candidate prefetch, its own confirmed/skipped derivation, and a
- * DIRECT `RunRecommendationChipRow` mount — running in parallel with the one
+ * WHAT THE FIRST SLICE RETIRED. `instance-screens.tsx` was a FOURTH renderer of
+ * the recommendation interaction: its own `readRecommendationParkForRun`, its
+ * own actor-scoped candidate prefetch, its own confirmed/skipped derivation, and
+ * a DIRECT `RunRecommendationChipRow` mount — running in parallel with the one
  * card S4 (cinatra#2568) made authoritative. The parallel path is gone; the
- * screen now mounts `RecommendationHoldCard` under a declared
- * `LifecycleCardSurfaceProvider host="run_card"`, exactly like the run panel and
- * the stepper's dev preview.
+ * screen mounts `RecommendationHoldCard` under a declared
+ * `LifecycleCardSurfaceProvider host="run_card"`.
  *
- * THE TWO THINGS THAT MUST BOTH HOLD, and why they pull in opposite directions:
+ * WHAT #3047 RETIRED AFTER IT: the SECOND owner. The screen used to stand down
+ * on the `agentic` branch, where `AgenticRunPanel` mounted a card of its own, so
+ * the row was drawn beside the rail at the schedule moment and inside the
+ * run-progress panel at the HITL, working and review moments — one row, two
+ * placements, moving between them as the run advanced. The panel's mount is
+ * deleted and the screen owns the row on EVERY branch: one owner, one place.
+ *
+ * WHAT MUST STILL HOLD, and why it pulled in two directions before:
  *
  *   1. THE HELD STATE STAYS VISIBLE. A held run IS `pending_input`, and the
- *      panel that carries the card (`AgenticRunPanel`, reached through
+ *      panel that used to carry the card (`AgenticRunPanel`, reached through
  *      `SetupCompletionWatcher`) renders only for `status !== "pending_input"`.
  *      On the run-detail page the held state therefore has NO other host —
  *      deleting the parallel path without mounting the card here would make the
- *      hold invisible on the very page the human is asked to decide it on. That
- *      is the regression this file exists to prevent.
+ *      hold invisible on the very page the human is asked to decide it on.
+ *   2. NOTHING IS DRAWN TWICE. That is now a property of the tree rather than of
+ *      a branch gate: exactly one module mounts the card for the run's own hold,
+ *      so there is no second mount for a branch to select between.
  *
- *   2. NOTHING IS DRAWN TWICE. On the branch where `AgenticRunPanel` DOES
- *      render, it already declares `run_card` and mounts the card itself. An
- *      unconditional mount on the screen would draw the decided summary twice on
- *      that branch — a second renderer re-introduced by the very change meant to
- *      remove one.
- *
- * `runDetailPanelKind` is the single branch both the JSX and the host gate read,
- * so the two answers cannot drift apart; this suite pins its table and the
- * ownership rule derived from it. The structural half — "no parallel read, no
- * prefetch, no direct chip-row mount survives in the file" — lives beside the
- * other host assertions in `recommendation-hold-card.test.tsx`.
+ * `runDetailPanelKind` survives as the picker for the OTHER pair it decides —
+ * the two `run_card` review-gate adapters — and this suite pins its table. The
+ * DOM half of the one-place rule (which column the row lands in, on every
+ * branch, and how many roots) is `run-page-recommendation-one-place.test.tsx`.
  *
  * Run:
  *   cd packages/agents && npx vitest run \
  *     src/__tests__/instance-screens-recommendation-host.test.ts
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import {
-  runDetailPanelKind,
-  screenHostsRecommendationCard,
-  type RunDetailPanelKind,
-} from "../instance-screens";
+import { runDetailPanelKind, type RunDetailPanelKind } from "../instance-screens";
+
+const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf-8");
+const SCREEN_SRC = read("instance-screens.tsx");
+const PANEL_SRC = read("agentic-run-panel.tsx");
+const STEPPER_SRC = read("orchestrator-stepper-panel.tsx");
 
 /** A leaf single-agent template: no policy steps, not orchestrator/flow. */
 const LEAF = {
@@ -73,7 +78,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
     expect(runDetailPanelKind({ runStatus: undefined, ...LEAF })).toBe("none");
   });
 
-  it("answers 'agentic' for a triggered leaf run — the panel mounts the card", () => {
+  it("answers 'agentic' for a triggered leaf run — the transcript panel", () => {
     for (const runStatus of ["running", "pending_approval", "completed", "failed", "stopped"]) {
       expect(runDetailPanelKind({ runStatus, ...LEAF })).toBe("agentic");
     }
@@ -112,7 +117,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
 
   it("sends an EXTERNAL template to the agentic panel however it is shaped", () => {
     // The external branch has no first-party stepper to render, so it falls to
-    // the transcript panel — which is the one that mounts the card.
+    // the transcript panel.
     expect(
       runDetailPanelKind({
         runStatus: "running",
@@ -131,8 +136,9 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
     // one-card gate names for that pair, so the property the gate is citing is
     // this one: the function is TOTAL and SINGLE-VALUED over every shape the
     // screen can be handed, which is what makes "one rendered instance" true
-    // rather than hoped for. The neighbouring `screenHostsRecommendationCard`
-    // suite proves the OTHER picker; it does not prove this one.
+    // rather than hoped for. It is the ONLY picker this host needs now: the
+    // recommendation row's second owner is gone (cinatra#3047), so there is no
+    // other pair for a branch gate to choose between.
     const PANELS: RunDetailPanelKind[] = ["none", "trigger", "stepper", "agentic"];
     const shapes: Parameters<typeof runDetailPanelKind>[0][] = [];
     for (const runStatus of [
@@ -185,40 +191,48 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
   });
 });
 
-describe("screenHostsRecommendationCard — exactly one renderer per branch", () => {
-  it("hosts the card itself wherever AgenticRunPanel does not render", () => {
-    // The load-bearing case: a HELD run is `pending_input`, so nothing else on
-    // this page can draw it.
-    expect(screenHostsRecommendationCard("none")).toBe(true);
-    // The stepper renders the run's steps but declares no run_card host for the
-    // run's OWN recommendation hold (its `run_card` mounts are the review-gate
-    // step card and the dev-preview CHILD run), so the screen keeps hosting.
-    expect(screenHostsRecommendationCard("stepper")).toBe(true);
+describe("one owner of the run's recommendation row (cinatra#3047)", () => {
+  it("mounts the card on every branch — no gate withholds it any more", () => {
+    // The mount is not a conditional expression: `hostsRecommendationCard ? (…)`
+    // is exactly the shape that made the `agentic` branch draw nothing here and
+    // let the panel draw it instead.
+    expect(SCREEN_SRC).toContain("const recommendationCardNode = (");
+    expect(SCREEN_SRC).not.toContain("screenHostsRecommendationCard");
+    expect(SCREEN_SRC).not.toContain("hostsRecommendationCard");
   });
 
-  it("stands down on the branch whose panel already declares the host", () => {
-    expect(screenHostsRecommendationCard("agentic")).toBe(false);
+  it("leaves NO recommendation-card mount in the run-progress panel", () => {
+    // REMOVED, not disabled: neither the mount, nor the node it was lifted to,
+    // nor the host gate that chose it survives in the panel.
+    expect(PANEL_SRC).not.toMatch(/<RecommendationHoldCard\b/);
+    expect(PANEL_SRC).not.toContain("panelMountsRecommendationCard");
+    expect(PANEL_SRC).not.toContain("recommendationCardNode");
   });
 
-  it("covers every branch — no shape is left without an answer", () => {
-    const kinds: RunDetailPanelKind[] = ["none", "trigger", "stepper", "agentic"];
-    // Every branch has exactly one renderer: either the screen or the panel.
-    // (`screenHostsRecommendationCard` is total, so the count is the assertion.)
-    // The `trigger` branch (cinatra#2952) mounts no panel at all, so the screen
-    // keeps the host there too.
-    expect(kinds.filter((k) => screenHostsRecommendationCard(k))).toEqual([
-      "none",
-      "trigger",
-      "stepper",
-    ]);
-    expect(kinds.filter((k) => !screenHostsRecommendationCard(k))).toEqual(["agentic"]);
+  it("keeps the panel's OTHER run_card mounts, which this change is not about", () => {
+    // The review screen and the HITL screen card still declare `run_card` here.
+    // A change that emptied the panel of every lifecycle mount would pass the
+    // assertion above and break two other kinds.
+    expect(PANEL_SRC).toMatch(/<ReviewGateCard\b/);
+    expect(PANEL_SRC).toMatch(/<AgentHitlScreenCard\b/);
+  });
+
+  it("the stepper's only mount is the dev preview's CHILD run, not this run's hold", () => {
+    const mounts = STEPPER_SRC.match(/<RecommendationHoldCard\b/g) ?? [];
+    expect(mounts).toHaveLength(1);
+    // …and it sits inside the dev-preview row, which addresses the preview
+    // child's own run id and draws only while a preview is open.
+    const rowStart = STEPPER_SRC.indexOf("function DevPreviewRecommendationRow(");
+    expect(rowStart).toBeGreaterThan(-1);
+    const rowEnd = STEPPER_SRC.indexOf("\n}", STEPPER_SRC.indexOf("<RecommendationHoldCard", rowStart));
+    expect(STEPPER_SRC.indexOf("<RecommendationHoldCard")).toBeGreaterThan(rowStart);
+    expect(rowEnd).toBeGreaterThan(rowStart);
   });
 
   it("keeps the HELD run's host — the regression that would hide the decision", () => {
-    // Stated as the end-to-end claim rather than as two constants: a held run is
-    // pending_input, pending_input is the 'none' branch, and the 'none' branch is
-    // hosted by the screen. Break any link and the hold goes invisible.
-    const panel = runDetailPanelKind({ runStatus: "pending_input", ...LEAF });
-    expect(screenHostsRecommendationCard(panel)).toBe(true);
+    // Stated as the end-to-end claim: a held run is pending_input, pending_input
+    // is the 'none' branch, and on that branch no run panel renders at all — so
+    // the screen's own mount is the only thing that can draw the question.
+    expect(runDetailPanelKind({ runStatus: "pending_input", ...LEAF })).toBe("none");
   });
 });

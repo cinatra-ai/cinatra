@@ -29,7 +29,12 @@ vi.mock("@cinatra-ai/mcp-client", () => ({
   invokePrimitive: vi.fn(),
 }));
 
-import { RUN_START_REPLY_RULE } from "@cinatra-ai/agents/run-status";
+import {
+  RUN_START_QUEUED_CLAUSE,
+  RUN_START_REPLY_RULE,
+  RUN_START_STARTED_CLAUSE,
+  describeStartedRun,
+} from "@cinatra-ai/agents/run-status";
 
 import {
   NAMED_AGENT_START_TOOL_DESCRIPTION,
@@ -67,10 +72,14 @@ function answer(res: Awaited<ReturnType<typeof handleNamedAgentStart>>) {
   };
 }
 
-/** The platform's report, as `agent_run` mints it for this start. */
-const PLATFORM_REPORT =
-  "Dispatched `@cinatra-ai/contact-discovery-agent` " +
-  "(runId: `run_card_1`, status: `queued`). The run started.";
+/** The platform's report, as `agent_run` mints it for this start — taken from
+ *  the platform itself, so the door is proven to relay whatever the platform
+ *  says rather than a wording copied here and left to drift (cinatra#3147). */
+const PLATFORM_REPORT = describeStartedRun({
+  packageName: AGENT,
+  runId: "run_card_1",
+  status: "queued",
+});
 
 /** The platform's sentence for a start the agent's scope refuses. */
 const PLATFORM_REFUSAL = "You can't start this agent. Nothing was started.";
@@ -101,6 +110,14 @@ describe("the platform's report, relayed", () => {
     // Byte for byte: this surface adds nothing to the report and rewrites none
     // of it, exactly as it already does for a refusal.
     expect(answer(res).message).toBe(PLATFORM_REPORT);
+    // And what travels is TRUE of the status beside it (cinatra#3147): the run
+    // is queued, so the line says that and never that the run started.
+    expect(PLATFORM_REPORT).toBe(
+      "Dispatched `@cinatra-ai/contact-discovery-agent` " +
+        "(runId: `run_card_1`, status: `queued`). " +
+        RUN_START_QUEUED_CLAUSE,
+    );
+    expect(answer(res).message).not.toContain(RUN_START_STARTED_CLAUSE);
   });
 
   it("the text half of the answer carries the same report, so a reader of either sees one wording", async () => {

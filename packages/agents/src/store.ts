@@ -1,6 +1,5 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, type SQL } from "drizzle-orm";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
-import { EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY } from "@cinatra-ai/sdk-extensions";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID } from "node:crypto";
 import { buildListPage } from "@/lib/mcp-pagination";
@@ -25,6 +24,10 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+import {
+  assertAssignmentScopeSnapshotNotMutated,
+  buildRunCreationAssignmentScopeSnapshot,
+} from "./assignment-scope-snapshot";
 // cinatra#2933 (lifecycle-b W5b) — `agent_run_messages` now carries a SECOND
 // use: the per-run conversation of the prompt windows outside the chat. This
 // reader is the RUN'S OWN replay thread and must keep returning exactly that,
@@ -133,7 +136,6 @@ import {
 } from "./auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
-  parseAuthPolicySafe,
   deserializeRun,
   deriveRunOboCeilingJson,
 } from "./agent-run-serde";
@@ -241,6 +243,14 @@ export type AgentTemplateRecord = {
   // OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture objects in
   // tests remain valid; `deserializeTemplate` always populates it.
   hasArtifactBindings?: boolean | null;
+  // The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208) —
+  // the normalized bindings the compile that produced this template version
+  // found, plus the typed produces refs they were validated against. null =
+  // unknown (legacy row, or a compile without a readable sibling manifest), and
+  // the run-completion materializer then falls back to its pre-#3208 registry
+  // read. OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture
+  // objects in tests remain valid; `deserializeTemplate` always populates it.
+  artifactBindings?: string | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -338,7 +348,7 @@ export type AgentRunRecord = {
   // the org-write run mint refuses a claimed attempt that no longer matches
   // this column (stale-worker refusal). NULL pre-dispatch.
   executionAttemptId: string | null;
-  humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
+  humanPresent: boolean | null; launchScopeAnchor?: unknown; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless. cinatra#2809 — launchScopeAnchor is the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one. It rides this line for the same reason the fields below do: the module is at its line-count ceiling.
   // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a). Which moment
   // this run is at, which card that moment mounts, and the card's
   // server-checked reference. All three are NULL together for a run at no
@@ -382,6 +392,9 @@ export type CreateAgentTemplateInput = {
   // The locally-persisted binding-presence authority (cinatra#2498). null
   // clears it back to "unknown"; omit to leave the column unchanged.
   hasArtifactBindings?: boolean | null;
+  // The executed artifact-binding declaration as JSON-as-text (cinatra#3208).
+  // null clears it back to "unknown"; omit to leave the column unchanged.
+  artifactBindings?: string | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -448,7 +461,7 @@ export type CreateAgentRunInput = {
   // JSON-serializable identity captured at instantiate. The run-worker
   // replays it at re-authz time. Optional — legacy callers (test fixtures,
   // schema-only paths) omit; new MCP handlers populate it from the actor.
-  delegatedActorSnapshot?: string | null;
+  delegatedActorSnapshot?: string | null; launchScopeAnchor?: unknown; // cinatra#2809 — the IMMUTABLE vantage this run is LAUNCHED from, MINTED by the launching route through buildLaunchScopeAnchor and persisted verbatim; omitted by every headless / A2A / global writer, which persists none. Never inferred here from orgId/projectId/runBy: those move, and an address derived from a moving column moves with it.
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
   humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
   // cinatra#2485 C — the REQUESTING actor for the install-scope run gate.
@@ -480,182 +493,13 @@ export type CreateAgentRunInput = {
 // ---------------------------------------------------------------------------
 // Template row serialization helpers
 // ---------------------------------------------------------------------------
-
-function serializeTemplate(input: CreateAgentTemplateInput) {
-  // derive packageName when callers omit it. The DB column
-  // is NOT NULL, so a literal null would crash on
-  // INSERT; auto-derive guarantees every row has a stable identity.
-  const packageName = derivePackageName({
-    packageName: input.packageName,
-    userId: input.creatorId ?? null,
-    name: input.name,
-    id: input.id,
-  });
-  return {
-    id: input.id,
-    orgId: input.orgId ?? null,
-    // owner tier. NULL when caller did not specify; the
-    // backfill covers legacy rows.
-    ownerLevel: input.ownerLevel ?? null,
-    ownerId: input.ownerId ?? null,
-    creatorId: input.creatorId ?? null,
-    name: input.name,
-    description: input.description ?? null,
-    sourceNl: input.sourceNl,
-    compiledPlan: JSON.stringify(input.compiledPlan),
-    inputSchema: JSON.stringify(input.inputSchema),
-    outputSchema: input.outputSchema ? JSON.stringify(input.outputSchema) : null,
-    approvalPolicy: JSON.stringify(input.approvalPolicy),
-    status: input.status ?? "draft",
-    type: input.type ?? "leaf",
-    taskSpec: input.taskSpec ?? null,
-    packageName,
-    packageVersion: input.packageVersion ?? null,
-    hitlScreens: input.hitlScreens ? JSON.stringify(input.hitlScreens) : null,
-    agentDependencies:
-      input.agentDependencies && Object.keys(input.agentDependencies).length > 0
-        ? JSON.stringify(input.agentDependencies)
-        : null,
-    connectorDependencies:
-      input.connectorDependencies && Object.keys(input.connectorDependencies).length > 0
-        ? JSON.stringify(input.connectorDependencies)
-        : null,
-    ioSpec: input.ioSpec ? JSON.stringify(input.ioSpec) : null,
-    hitlRequired: input.hitlRequired ?? false,
-    executionProvider: input.executionProvider ?? "wayflow",
-    lgGraphCode: input.lgGraphCode ?? null,
-    lgGraphId: input.lgGraphId ?? null,
-    // null on initial create; populated by
-    // agent_source_compile on the first recompile.
-    triggerMode: input.triggerMode ?? null,
-    gatedSteps: input.gatedSteps ? JSON.stringify(input.gatedSteps) : null,
-    // The compiled manifest lifecycle declaration (already JSON-as-text from the
-    // install seed / builder). null on create when the manifest declares none.
-    lifecycleConfig: input.lifecycleConfig ?? null,
-    // The locally-persisted binding-presence authority (cinatra#2498). null on
-    // create when the caller does not derive it from a compile (e.g. a legacy
-    // fixture) — treated as "unknown", the same fail-closed posture every row
-    // had before this column existed.
-    hasArtifactBindings: input.hasArtifactBindings ?? null,
-    // template-level AgentAuthPolicy as JSON-as-text. null = use
-    // DEFAULT_AGENT_AUTH_POLICY at read time.
-    agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
-  };
-}
-
-export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): AgentTemplateRecord {
-  return {
-    id: row.id,
-    orgId: row.orgId,
-    ownerLevel: row.ownerLevel ?? null,
-    ownerId: row.ownerId ?? null,
-    creatorId: row.creatorId,
-    name: row.name,
-    description: row.description,
-    sourceNl: row.sourceNl,
-    compiledPlan: JSON.parse(row.compiledPlan) as CompiledStep[],
-    inputSchema: JSON.parse(row.inputSchema) as Record<string, unknown>,
-    outputSchema: row.outputSchema ? (JSON.parse(row.outputSchema) as Record<string, unknown>) : null,
-    approvalPolicy: JSON.parse(row.approvalPolicy) as ApprovalPolicy,
-    status: row.status,
-    // Normalize null / legacy / unknown values to "leaf"; OAS-aligned "flow"|"node" preserved.
-    type: (row.type === "proxy" ? "proxy"
-         : row.type === "orchestrator" ? "orchestrator"
-         : row.type === "parallel" ? "parallel"
-         : row.type === "supervisor" ? "supervisor"
-         : row.type === "iterative" ? "iterative"
-         : row.type === "node" ? "node"
-         : row.type === "flow" ? "flow"
-         : "leaf") as AgentTemplateRecord["type"],
-    agentKind: row.agentKind === "assistant" ? "assistant" : "executor", // #1037: only an explicit "assistant" opts in; else the column DEFAULT ("executor")
-    taskSpec: row.taskSpec,
-    packageName: row.packageName ?? null,
-    packageVersion: row.packageVersion ?? null,
-    currentVersionId: row.currentVersionId ?? null,
-    hitlScreens: row.hitlScreens ? (JSON.parse(row.hitlScreens) as string[]) : null,
-    agentDependencies: row.agentDependencies
-      ? (JSON.parse(row.agentDependencies) as AgentDependencyMap)
-      : {},
-    connectorDependencies: row.connectorDependencies
-      ? (JSON.parse(row.connectorDependencies) as ConnectorDependencyMap)
-      : {},
-    ioSpec: row.ioSpec ? (JSON.parse(row.ioSpec) as AgentIOSpec) : null,
-    hitlRequired: row.hitlRequired ?? false, // null from pre-migration rows → false
-    executionProvider: (row.executionProvider === "openai" ? "openai"
-      : row.executionProvider === "anthropic" ? "anthropic"
-      : row.executionProvider === "gemini" ? "gemini"
-      : row.executionProvider === "langgraph" ? "langgraph"
-      : row.executionProvider === "wayflow" ? "wayflow"
-      : "default") as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default",
-    lgGraphCode: row.lgGraphCode ?? null,
-    lgGraphId: row.lgGraphId ?? null,
-    // external A2A template columns.
-    // Unknown values (e.g. stray strings from direct SQL writes) fall back
-    // to "internal" so downstream type-narrow branches stay sound.
-    sourceType: (row.sourceType === "external" ? "external" : "internal") as
-      | "internal"
-      | "external",
-    agentUrl: row.agentUrl ?? null,
-    connectorSlug: row.connectorSlug ?? null,
-    remoteAgentId: row.remoteAgentId ?? null,
-    // trigger gate metadata. Stored as text columns;
-    // deserialized to typed values here. Unknown trigger_mode strings (e.g.
-    // direct SQL writes) coerce to null so callers can default to "full"
-    // conservatively at the gate.
-    triggerMode: (row.triggerMode === "full" ? "full"
-                : row.triggerMode === "start-only" ? "start-only"
-                : null) as "full" | "start-only" | null,
-    gatedSteps: row.gatedSteps ? (JSON.parse(row.gatedSteps) as GatedStep[]) : null,
-    // Compiled manifest lifecycle stays JSON-as-text on the record; the lifecycle
-    // readers parse it fail-soft at their own call sites.
-    lifecycleConfig: row.lifecycleConfig ?? null,
-    // The locally-persisted binding-presence authority (cinatra#2498). Native
-    // boolean column; null (unknown) passes through unchanged.
-    hasArtifactBindings: row.hasArtifactBindings ?? null,
-    // JSON-as-text deserialization. Returns null when column is null.
-    // fix: defensive parse — see parseAuthPolicySafe definition above.
-    agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
-    // the per-kind column was dropped; status is canonical
-    // (installed_extension). deserializeTemplate is a synchronous row mapper
-    // and cannot query the manifest, so it defaults to "active". The marketplace
-    // readers (readActiveExtensionTemplates / readArchivedExtensionTemplates)
-    // OVERRIDE this from readEffectiveStatusByPackageNames; callers that need
-    // the authoritative status must use those readers (or the canonical store).
-    extensionLifecycleStatus: "active" as "active" | "archived",
-    // origin JSONB deserialized as-is; null for legacy rows.
-    // Callers that need visibility should read origin?.visibility ?? 'public' (grandfather clause).
-    origin: (row.origin as ExtensionOrigin | null | undefined) ?? null,
-    // Per-agent execution config (cinatra#1708 slice B). The declared
-    // environment stays RAW on the record — every consumer runs it through the
-    // fail-closed `parseExecutionEnvironment` (a JSON.parse here would have to
-    // choose a failure mode for malformed stored text, and "silently no
-    // environment" is exactly the outcome the fail-closed doctrine forbids).
-    // Unparseable text therefore surfaces as an INVALID declaration downstream,
-    // never as "no environment".
-    executionEnvironment: parseStoredExecutionEnvironment(row.executionEnvironment),
-    executionEnabled: row.executionEnabled ?? null,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-/**
- * JSON-as-text → the RAW declared value handed to `parseExecutionEnvironment`.
- * `null`/empty column ⇒ `null` ("no declared environment"). Text that is not
- * JSON at all cannot be "no environment" (that would silently drop a
- * declaration the author made), so it resolves to the sdk leaf's
- * present-but-malformed POISON marker, which the parser rejects with a precise
- * error at consumption — the same doctrine the manifest claim resolver uses.
- */
-function parseStoredExecutionEnvironment(stored: string | null | undefined): unknown {
-  if (stored == null || stored.trim() === "") return null;
-  try {
-    return JSON.parse(stored) as unknown;
-  } catch {
-    return { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
-  }
-}
-
+// Lives in ./store-template-versions (cinatra#3208 ratchets) — the row <->
+// record mapping is a pure leaf with no db handle, folded in beside the other
+// agent_templates row work rather than given a module of its own, which would
+// add a node to every locked route graph. Re-exported here (grouped with the
+// other seam re-exports above) so every ./store importer stays unchanged.
+import { serializeTemplate, deserializeTemplate } from "./store-template-versions";
+export { deserializeTemplate };
 // ---------------------------------------------------------------------------
 // CRUD — agent_templates
 // ---------------------------------------------------------------------------
@@ -1086,6 +930,11 @@ export async function _runAgentTemplateUpdate(
   // lifecycleConfig does. Omit to leave the column unchanged.
   if (patch.hasArtifactBindings !== undefined)
     updates.hasArtifactBindings = patch.hasArtifactBindings ?? null;
+  // cinatra#3208 — the executed declaration rides the SAME patch guard, so a
+  // re-install/recompile re-projects it (or clears it) exactly as the
+  // presence flag does, in one statement with package_version.
+  if (patch.artifactBindings !== undefined)
+    updates.artifactBindings = patch.artifactBindings ?? null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the
@@ -1727,6 +1576,11 @@ export async function createAgentRun(
     // Persist whatever the caller supplied; the run-worker reads this at
     // re-authz time to reconstruct the originating user's authority.
     delegatedActorSnapshot: input.delegatedActorSnapshot ?? null,
+    // The IMMUTABLE assignment-scope snapshot (cinatra#2813 S1, epic #2812).
+    // Derived by the snapshot module's own run-creation seam — see it for
+    // why the scopes are decided HERE, at the primitive, and not at each
+    // producer, and for why only an explicit human contributes a personal tier.
+    assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input), launchScopeAnchor: input.launchScopeAnchor ?? null, // cinatra#2809 — the IMMUTABLE vantage this run was LAUNCHED from, stamped from the launch route, minted by the launching route and stamped here once, never updated afterwards. Rides this line for the same reason the type fields above do: this module is at its file-size ceiling.
     // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
@@ -1840,6 +1694,11 @@ export async function updateAgentRunMeta(
     stepResults?: unknown[];
   },
 ): Promise<void> {
+  // The run-scope snapshot is decided at creation and never updated
+  // (cinatra#2813 S1). This is the generic patch path, so the guard lives here:
+  // a future writer that adds the field to this payload fails loudly instead of
+  // quietly re-pointing a live run at another set of assignments.
+  assertAssignmentScopeSnapshotNotMutated(patch as Record<string, unknown>);
   const updates: Partial<typeof agentRuns.$inferInsert> = {};
   if (patch.stepResults !== undefined) {
     updates.stepResults = JSON.stringify(patch.stepResults);
@@ -3347,7 +3206,7 @@ export async function createAgentRunPendingInput(
     projectId?: string | null;
     humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
     // cinatra#2485 C — see CreateAgentRunInput.scopeActor. Same contract.
-    scopeActor?: ActorContext | null;
+    scopeActor?: ActorContext | null; launchScopeAnchor?: unknown; // cinatra#2809 — see CreateAgentRunInput.launchScopeAnchor. Same contract: a pending-input run is a run, and it must reach dispatch already knowing where it lives.
     /** Companion writes committed ATOMICALLY WITH THE RUN ROW (cinatra#2569) —
      *  contract + rationale on `GuardedRunCompanionWrite`. */
     withinCreateTx?: GuardedRunCompanionWrite;
@@ -3400,6 +3259,9 @@ export async function createAgentRunPendingInput(
         // the same project frame.
         projectId: input.projectId ?? null,
         oboCeiling: oboCeilingJson,
+        // Same derivation as createAgentRun — a pending-input run is a run,
+        // and it must not reach dispatch with an undecided scope.
+        assignmentScopeSnapshot: buildRunCreationAssignmentScopeSnapshot(input), launchScopeAnchor: input.launchScopeAnchor ?? null, // cinatra#2809 — the same stamp as createAgentRun: a pending-input run is a run, and it must reach dispatch already knowing where it lives.
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
       // LAST in the guarded transaction: the row exists for it to reference, and

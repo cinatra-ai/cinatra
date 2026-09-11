@@ -53,7 +53,8 @@ function sink(): Emitted & {
 
 const START_SENTENCE =
   "Dispatched `@cinatra-ai/blog-draft-writer-agent` " +
-  "(runId: `06a703fe-e779-4ba5-852c-73c41c513924`, status: `queued`). The run started.";
+  "(runId: `06a703fe-e779-4ba5-852c-73c41c513924`, status: `queued`). " +
+  "The run is queued and will start on its own.";
 
 /** What `agent_run` answers the chat assistant — the platform's own report. */
 const CHAT_ANSWER = JSON.stringify({

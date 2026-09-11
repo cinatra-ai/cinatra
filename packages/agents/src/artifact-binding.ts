@@ -19,6 +19,24 @@
 //       "titleFrom": "title"          // explicit — a title is never prompt-invented
 //     }}}]
 //
+// A FAN-OUT binding (cinatra#3034, plan item 0.27) annotates an ARRAY output
+// whose members are plain strings and materializes ONE artifact per member:
+//
+//   "outputs": [{ "title": "ideas", "type": "array",
+//     "json_schema": { "items": { "type": "string" } },
+//     "cinatra": { "artifact": {
+//       "extension": "@cinatra-ai/blog-idea-artifact",
+//       "contentFrom": "ideas",                        // the annotated list itself
+//       "declaredMime": "text/plain",
+//       "fanOut": { "mode": "member", "titleFrom": "first-line", "titlePrefix": "Title:" }
+//     }}}]
+//
+// It carries NO run-level `titleFrom` — a set has no single title — and each
+// member's title is read from that member's own first line behind the declared
+// prefix. The member level must be DECLARED (`json_schema.items.type`) and must
+// be a plain string: a bound list never leaves its members undeclared, and the
+// materializer never dissects an object member into a title.
+//
 // `objectTypeId` (cinatra#1454, completing the #1788 direction on the binding
 // side — symmetric with `cinatra.produces`'s SemanticArtifactRef.objectTypeId)
 // names the EXACT `@scope/pkg:local-id` object type the bound output
@@ -64,6 +82,32 @@ export const ARTIFACT_BINDING_AUTHORABLE_MIMES: ReadonlySet<string> = new Set([
  */
 export const BINDING_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
+/**
+ * A fanned-out member takes the ledger identity `${output}[${index}]`
+ * (run-artifact-materializer). An output that carries that shape in its OWN
+ * name would share the ledger's (run, output, extension, content-hash)
+ * identity with a member of a sibling fan-out, so the shape is RESERVED: a
+ * bound output may never be named that way.
+ */
+export const FAN_OUT_MEMBER_IDENTITY_RE = /\[\d+\]$/;
+
+/**
+ * The fan-out block of a binding (cinatra#3034, plan item 0.27). `mode` is
+ * `member` — one artifact per member of the bound array. `titleFrom` is
+ * `first-line` — the member's own first line, behind `titlePrefix`, IS the
+ * title; a title is never invented and never taken from a sibling output.
+ */
+export const artifactFanOutSchema = z
+  .object({
+    mode: z.literal("member"),
+    titleFrom: z.literal("first-line"),
+    /** Literal marker the member's first line must open with; stripped from the title. */
+    titlePrefix: z.string().min(1),
+  })
+  .strict();
+
+export type ArtifactOutputFanOut = z.infer<typeof artifactFanOutSchema>;
+
 export const artifactOutputBindingSchema = z
   .object({
     /** Artifact-extension package name — must be ∈ `cinatra.produces`. */
@@ -83,24 +127,135 @@ export const artifactOutputBindingSchema = z
           "objectTypeId must be a namespaced object type id (@scope/package:local-id)",
       })
       .optional(),
-    /** EndNode output name that carries the artifact CONTENT. */
-    contentFrom: z.string().min(1),
+    /** EndNode output name that carries the artifact CONTENT. One of the three
+     *  content sources — XOR `fileFrom` / `filePattern` (cinatra#3030). */
+    contentFrom: z.string().min(1).optional(),
+    /**
+     * THE FILE CONTENT SOURCE (cinatra#3030, plan item 0.22): the path, relative
+     * to the run's `outputs` folder, of ONE file the run emitted. XOR
+     * `contentFrom` / `filePattern`.
+     *
+     * A file source names bytes the agent WROTE rather than a value it
+     * returned, so it titles itself (the file's own name, or its first line
+     * behind `titleFromFirstLine`) and never carries `titleFrom`.
+     */
+    fileFrom: z.string().min(1).optional(),
+    /**
+     * THE FILE FAN-OUT (cinatra#3030, plan item 0.27): one artifact per file of
+     * the run's `outputs` folder matching this pattern. `*` matches any run of
+     * characters inside one path segment, `**` crosses segments, `?` matches
+     * one character. XOR `contentFrom` / `fileFrom`.
+     */
+    filePattern: z.string().min(1).optional(),
+    /**
+     * A file-sourced binding's title comes from the file's FIRST LINE rather
+     * than its name (item 0.27: "a title comes from a declared member field,
+     * the first line of a text member, or the file name"). Only legal on a file
+     * source; a file whose first line is empty falls back to the file's name,
+     * which is always something the agent itself chose.
+     */
+    titleFromFirstLine: z.boolean().optional(),
     /** Static MIME. XOR `mimeFrom`. Must be text-authorable (v1). */
     declaredMime: z.string().min(1).optional(),
     /** EndNode output name that carries the MIME at run time. XOR `declaredMime`. */
     mimeFrom: z.string().min(1).optional(),
-    /** EndNode output name that carries the artifact TITLE. */
-    titleFrom: z.string().min(1),
+    /**
+     * EndNode output name that carries the artifact TITLE. Required on a
+     * SCALAR binding; forbidden on a fan-out one (XOR with `fanOut`), where
+     * each member supplies its own title.
+     */
+    titleFrom: z.string().min(1).optional(),
+    /**
+     * Fan-out over the members of the bound ARRAY output (cinatra#3034).
+     * Present → one artifact per member; absent → the scalar binding.
+     */
+    fanOut: artifactFanOutSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
+    // ---- EXACTLY ONE CONTENT SOURCE (cinatra#3030, item 0.22) -------------
+    // An output value, one named file, or a file pattern. Two sources would
+    // make "what are these bytes" unanswerable, and none binds nothing.
+    const contentSources = (
+      [
+        ["contentFrom", value.contentFrom],
+        ["fileFrom", value.fileFrom],
+        ["filePattern", value.filePattern],
+      ] as ReadonlyArray<readonly [string, string | undefined]>
+    ).filter(([, v]) => v !== undefined);
+    if (contentSources.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          contentSources.length === 0
+            ? "exactly one content source is required: contentFrom, fileFrom or filePattern"
+            : `exactly one content source is allowed; this binding declares ${contentSources
+                .map(([k]) => k)
+                .join(" and ")}`,
+      });
+    }
+    const isFileSource = value.fileFrom !== undefined || value.filePattern !== undefined;
+
     const hasDeclared = value.declaredMime !== undefined;
     const hasFrom = value.mimeFrom !== undefined;
-    if (hasDeclared === hasFrom) {
+    if (isFileSource) {
+      // A FILE MAY LEAVE ITS FORM TO THE LADDER. `mimeFrom` names an EndNode
+      // output, which a file source does not read, so it is refused outright
+      // rather than silently ignored.
+      if (hasFrom) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mimeFrom"],
+          message:
+            "a file-sourced binding may not carry mimeFrom — declare declaredMime, or leave the form to the detection ladder",
+        });
+      }
+    } else if (hasDeclared === hasFrom) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "exactly one of declaredMime / mimeFrom is required",
       });
+    }
+
+    const hasTitleFrom = value.titleFrom !== undefined;
+    const hasFanOut = value.fanOut !== undefined;
+    if (isFileSource) {
+      // A FILE TITLES ITSELF (item 0.27). `titleFrom` names an output the file
+      // source never reads, and `fanOut` fans a LIST out — a file pattern is
+      // already the file fan-out.
+      if (hasTitleFrom) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["titleFrom"],
+          message:
+            "a file-sourced binding must not carry titleFrom — the file's own name, or its first line behind titleFromFirstLine, is the title",
+        });
+      }
+      if (hasFanOut) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["fanOut"],
+          message:
+            "a file-sourced binding must not carry fanOut — filePattern IS the file fan-out",
+        });
+      }
+    } else {
+      if (value.titleFromFirstLine !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["titleFromFirstLine"],
+          message:
+            "titleFromFirstLine is only meaningful on a file source (fileFrom / filePattern)",
+        });
+      }
+      if (hasTitleFrom === hasFanOut) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: hasFanOut
+            ? "a fan-out binding must not carry titleFrom — each member's title comes from its own first line"
+            : "titleFrom is required (or declare fanOut, whose members title themselves)",
+        });
+      }
     }
     if (
       value.declaredMime !== undefined &&
@@ -245,10 +400,28 @@ export function collectArtifactBindingsFromOasDocument(
       }
       const binding = parsed.data;
 
+      // The member-identity shape is reserved (see
+      // FAN_OUT_MEMBER_IDENTITY_RE): a bound output named `x[0]` would alias a
+      // fanned-out member of `x` in the materialization ledger.
+      if (FAN_OUT_MEMBER_IDENTITY_RE.test(title)) {
+        errors.push(
+          `${where}: a bound output may not be named "${title}" — a trailing ` +
+            "[index] is reserved for the members of a fanned-out list",
+        );
+        continue;
+      }
+
       let referenceError = false;
       for (const [field, ref] of [
-        ["contentFrom", binding.contentFrom],
-        ["titleFrom", binding.titleFrom],
+        // A FILE-SOURCED binding reads no output, so it names none to check
+        // (cinatra#3030): its content source is a path in the run's outputs
+        // folder, which only exists at run time.
+        ...(binding.contentFrom !== undefined
+          ? ([["contentFrom", binding.contentFrom]] as const)
+          : []),
+        ...(binding.titleFrom !== undefined
+          ? ([["titleFrom", binding.titleFrom]] as const)
+          : []),
         ...(binding.mimeFrom !== undefined
           ? ([["mimeFrom", binding.mimeFrom]] as const)
           : []),
@@ -262,6 +435,50 @@ export function collectArtifactBindingsFromOasDocument(
         }
       }
       if (referenceError) continue;
+
+      // ------------------------------------------------------------------
+      // Fan-out member-shape disclosure (cinatra#3034, plan item 0.27). The
+      // fan-out binds the ANNOTATED list itself, that list is an array, and
+      // its member level is DECLARED as a plain string. No level of a bound
+      // list is left undeclared, and a member is never an object the host
+      // would have to dissect.
+      // ------------------------------------------------------------------
+      if (binding.fanOut !== undefined) {
+        if (binding.contentFrom !== title) {
+          errors.push(
+            `${where}.contentFrom: a fan-out binding must name its OWN output ` +
+              `("${title}"), not "${binding.contentFrom}" — the annotated list IS the fanned-out list`,
+          );
+          continue;
+        }
+        if (outputRaw.type !== "array") {
+          errors.push(
+            `${where}: fanOut requires an output of type "array" (output "${title}" ` +
+              `declares type "${String(outputRaw.type ?? "<none>")}")`,
+          );
+          continue;
+        }
+        const schema = isPlainObject(outputRaw.json_schema)
+          ? (outputRaw.json_schema as Record<string, unknown>)
+          : null;
+        const items = schema !== null && isPlainObject(schema.items)
+          ? (schema.items as Record<string, unknown>)
+          : null;
+        if (items === null) {
+          errors.push(
+            `${where}: the bound list "${title}" leaves its member level undeclared ` +
+              "(json_schema.items) — a bound structured list declares its members",
+          );
+          continue;
+        }
+        if (items.type !== "string") {
+          errors.push(
+            `${where}: fanOut members must be declared plain string members ` +
+              `(json_schema.items.type "string"; "${title}" declares "${String(items.type ?? "<none>")}")`,
+          );
+          continue;
+        }
+      }
 
       // Parity is FAIL-CLOSED against a known produces set (codex round 0):
       // an EMPTY array (package.json readable but `cinatra.produces`
@@ -615,7 +832,28 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       );
     }
 
-    for (const field of ["content", "title"] as const) {
+    // THE SAME-ARTIFACT REVISION'S CALL GRAMMAR (cinatra#3030, item 0.30). A
+    // call that names an existing artifact AND the revision it read APPENDS the
+    // next revision instead of creating a second artifact. The pair is together
+    // or not at all — an append that does not name what it read cannot be
+    // checked, and a base without an artifact names nothing — and an append
+    // carries no title: the artifact already has the one its creator gave it.
+    // Without this the runtime accepts an append the compiler refuses, which
+    // makes the road unreachable from a published package.
+    const hasArtifactId = input.artifactId !== undefined;
+    const hasBase = input.baseRepresentationRevisionId !== undefined;
+    if (hasArtifactId !== hasBase) {
+      fieldError(
+        hasArtifactId ? "baseRepresentationRevisionId" : "artifactId",
+        "an append names the artifact it revises AND the revision it read — " +
+          "declare both (artifactId + baseRepresentationRevisionId) or neither",
+      );
+    }
+    const isAppend = hasArtifactId && hasBase;
+    const requiredStrings = isAppend
+      ? (["content", "artifactId", "baseRepresentationRevisionId"] as const)
+      : (["content", "title"] as const);
+    for (const field of requiredStrings) {
       const value = input[field];
       if (typeof value !== "string" || value.length === 0) {
         fieldError(
@@ -670,4 +908,174 @@ export function collectArtifactMaterializeNodesFromOasDocument(
   });
 
   return { nodes, errors };
+}
+
+// ---------------------------------------------------------------------------
+// The EXECUTED artifact-binding declaration, persisted (cinatra#3208).
+//
+// Until #3208 the run-completion materializer re-derived a run's bindings by
+// re-reading the PACKAGE REGISTRY for the run's (packageName, packageVersion)
+// pair, while execution itself was bound to the immutable template-version
+// snapshot installed on `agent_templates`. Two authorities, and nothing bound
+// them together: when the registry's copy of a version diverged from the copy
+// the template was compiled from, materialization resolved a declaration the
+// run never executed and failed the run after all of the model work was done
+// (the measured symptom: `titleFrom` output `ideaBatchTitle` did not resolve,
+// named by a RETIRED scalar declaration, on a run whose executed declaration
+// is the fan-out one).
+//
+// This is the serialized form of the declaration the compile that produced the
+// installed template actually found — the normalized bindings plus the typed
+// `cinatra.produces` refs they were validated against. It is persisted on
+// `agent_templates.artifact_bindings` (JSON-as-text, the `gated_steps` /
+// `lifecycle_config` convention) by every install/recompile writer, ALWAYS in
+// the same write as `package_version` so the materializer's version-pin guard
+// can trust the two together, and read back by the materializer INSTEAD of the
+// registry.
+//
+// `null` (an absent column, or a value that does not survive the grammar
+// below) is three-valued exactly as `has_artifact_bindings` is: unknown, fall
+// through to the pre-#3208 registry read. A compile that could not see its
+// sibling package.json also persists `null`, because binding-to-`produces`
+// parity was then never established and the persisted set would be missing the
+// typed produces refs the materializer resolves declared types through.
+// ---------------------------------------------------------------------------
+
+/** Serialized-form version tag — a grammar change bumps it and older rows read as unknown. */
+export const ARTIFACT_BINDING_DECLARATION_VERSION = 1;
+
+export const semanticArtifactProducesRefSchema = z
+  .object({ extension: z.string().min(1), objectTypeId: z.string().min(1).optional() })
+  .strict();
+
+export const collectedArtifactBindingSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    outputId: z.string().min(1),
+    binding: artifactOutputBindingSchema,
+  })
+  .strict();
+
+export const persistedArtifactBindingDeclarationSchema = z
+  .object({
+    v: z.literal(ARTIFACT_BINDING_DECLARATION_VERSION),
+    bindings: z.array(collectedArtifactBindingSchema),
+    producesRefs: z.array(semanticArtifactProducesRefSchema),
+  })
+  .strict();
+
+export type PersistedArtifactBindingDeclaration = {
+  bindings: CollectedArtifactBinding[];
+  producesRefs: SemanticArtifactProducesRef[];
+};
+
+/**
+ * Serialize the executed declaration for the `agent_templates.artifact_bindings`
+ * column. Deterministic (no wall-clock, fixed key order) so reinstalling the
+ * same tarball writes a byte-identical value.
+ */
+export function serializeArtifactBindingDeclaration(
+  declaration: PersistedArtifactBindingDeclaration,
+): string {
+  return JSON.stringify({
+    v: ARTIFACT_BINDING_DECLARATION_VERSION,
+    bindings: declaration.bindings.map((entry) => ({
+      nodeId: entry.nodeId,
+      outputId: entry.outputId,
+      binding: entry.binding,
+    })),
+    producesRefs: declaration.producesRefs.map((ref) =>
+      ref.objectTypeId === undefined
+        ? { extension: ref.extension }
+        : { extension: ref.extension, objectTypeId: ref.objectTypeId },
+    ),
+  });
+}
+
+/**
+ * Parse a persisted declaration back. FAIL-CLOSED: anything that is not a
+ * well-formed declaration of the CURRENT grammar version returns `null`
+ * ("unknown"), and every caller then keeps its pre-#3208 behavior rather than
+ * materializing against a half-understood declaration.
+ */
+export function parseArtifactBindingDeclaration(
+  raw: string | null | undefined,
+): PersistedArtifactBindingDeclaration | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const parsed = persistedArtifactBindingDeclarationSchema.safeParse(json);
+  if (!parsed.success) return null;
+  return { bindings: parsed.data.bindings, producesRefs: parsed.data.producesRefs };
+}
+
+// ---------------------------------------------------------------------------
+// THE FILE CONTENT SOURCE'S OWN HELPERS (cinatra#3030, epic #3023 W6; plan
+// items 0.22 and 0.27). Pure, dependency-free, and shared by the host's pickup
+// so the grammar and the road that reads it can never drift apart.
+// ---------------------------------------------------------------------------
+
+/** Every character a regular expression treats as syntax. */
+const REGEX_META = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * Does one run-folder path match a binding's `filePattern`?
+ *
+ * The grammar is deliberately small: `**` crosses path segments, `*` matches a
+ * run of characters WITHIN one segment, `?` matches exactly one such character,
+ * and every other character is literal. The pattern is translated to an anchored
+ * regular expression with every literal escaped first, so a pattern can never
+ * smuggle regular-expression syntax of its own into the match.
+ */
+export function fileMatchesBindingPattern(pattern: string, relPath: string): boolean {
+  if (typeof pattern !== "string" || pattern.length === 0) return false;
+  if (typeof relPath !== "string" || relPath.length === 0) return false;
+  let out = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        out += ".*";
+        i += 2;
+        continue;
+      }
+      out += "[^/]*";
+      i += 1;
+      continue;
+    }
+    if (ch === "?") {
+      out += "[^/]";
+      i += 1;
+      continue;
+    }
+    out += ch.replace(REGEX_META, "\\$&");
+    i += 1;
+  }
+  return new RegExp(`^${out}$`).test(relPath);
+}
+
+/**
+ * A file's own name as its title — "a title comes from [...] the file name"
+ * (item 0.27). The extension is kept: it is part of what the agent named the
+ * file, and dropping it would make two files of the same stem one title.
+ */
+export function fileNameTitle(relPath: string): string {
+  const segments = String(relPath).split("/");
+  const name = segments[segments.length - 1] ?? "";
+  return name.trim().length > 0 ? name.trim() : String(relPath);
+}
+
+/**
+ * A text file's FIRST LINE as its title (item 0.27). Never invented: an empty
+ * or whitespace-only first line returns the empty string and the caller falls
+ * back to the file's name.
+ */
+export function firstLineTitle(text: string): string {
+  const first = String(text).split("\n", 1)[0] ?? "";
+  return first.replace(/^\uFEFF/, "").trim();
 }

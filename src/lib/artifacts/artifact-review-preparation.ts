@@ -166,6 +166,20 @@ export type RevisionMemberOutcome =
       configuration?: unknown;
       /** Its stable digest — what a data capability is sealed to (enabler 0.12). */
       configurationDigest?: string | null;
+      /**
+       * Was this member resolved through the GATE-AUTHORIZED HISTORICAL reader
+       * (enabler 0.9) rather than the live one?
+       *
+       * It exists so a later read of the SAME revision — the content channel's
+       * server read, which runs after this port has answered — is made under the
+       * SAME bound this membership answer was made under, instead of guessing. A
+       * settled card that kept its work must keep its content too; a live
+       * reading must not replay a tombstoned pin to get one.
+       *
+       * Optional, and absent reads as the LIVE bound: that is what every caller
+       * written before the content channel was bound meant.
+       */
+      historical?: boolean;
     }
   | null;
 
@@ -270,13 +284,31 @@ export interface PrepareReviewPorts {
    *  AT THE VERSION THE DISPLAY NEGOTIATED (enabler 0.4), and with the member's
    *  own form so a non-file revision carries no preview or download address
    *  (enabler 0.10). */
+  /**
+   * Build the display props for ONE pinned revision.
+   *
+   * ASYNCHRONOUS BY CONTRACT, like the artifact page's own builder: the props
+   * carry the versioned content channel's projection, and reading the pinned
+   * revision's substance is a server read off the store. A binder that needs no
+   * read may still answer synchronously — the core awaits either.
+   *
+   * IT MUST RESOLVE, NEVER REJECT. Everything else this core reads is answered
+   * with the never-blank floor FOR ONE TARGET, because a card carries several
+   * and one bad row must not blank the others. A rejection here would escape the
+   * whole preparation and take the card down with it, so the read's failure is
+   * the BINDER's to name: the content channel already carries a named absence
+   * for exactly that, and the display draws its own reading from it. The binder
+   * suite pins this; the core deliberately does not catch, so a binder that
+   * throws is a defect in the binder rather than a silently floored card whose
+   * cause nobody sees.
+   */
   buildProps(input: {
     artifact: ArtifactSummary;
     representationRevisionId: string;
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
-  }): ArtifactRendererProps;
+  }): Promise<ArtifactRendererProps> | ArtifactRendererProps;
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +483,13 @@ async function prepareOneTarget(
   // Props are valid from here on (a real artifact + a member revision) — even a
   // type-level floor (requires-rebuild / no-semantic-renderer) renders the
   // generic view from these props, never a blank.
-  const props = ports.buildProps({
+  // AWAITED, because the props builder READS THE PINNED REVISION (enabler 0.3:
+  // "an ASYNCHRONOUS PROPS BUILDER that reads the pinned revision on the
+  // server"). The synchronous signature this replaces is what kept every
+  // consumer of this core on the named-absent content projection, and a display
+  // handed an absent projection draws its own "nothing pinned" floor over work
+  // that is really there.
+  const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,
     mime,

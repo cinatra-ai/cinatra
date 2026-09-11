@@ -12,12 +12,13 @@
 //     — i.e. a cookie session (or a Better-Auth session token the resolver
 //     accepts). The token is NOT decoded-and-trusted here; the resolver
 //     verifies it. We never read claims from an undecoded token.
-//   * Dev-admin loopback bypass (`shouldGrantDevAdminBypass`) for the
-//     local-CLI → local-instance path, gated by the SAME three guards as the
-//     MCP transport: `NODE_ENV !== production` + `CINATRA_MCP_DEV_ADMIN_BYPASS=true`
-//     + a trusted-dev host. This is what makes `cinatra status` against your
-//     OWN dev box work without an OAuth dance, exactly as the MCP path already
-//     does.
+//   * Dev-admin local-operator bypass (`grantDevAdminBypassForRequest`) for the
+//     local-CLI → local-instance path, through the SAME implementation the MCP
+//     transport uses: `NODE_ENV !== production` + `CINATRA_MCP_DEV_ADMIN_BYPASS=true`
+//     + no forwarded header + a loopback SOCKET PEER presenting this boot's
+//     local credential. This is what makes `cinatra status` against your OWN
+//     dev box work without an OAuth dance, exactly as the MCP path already
+//     does. It reads no hostname: a `Host` header is written by the caller.
 //
 // REMOTE BEARER (CLI Class-A) — a remote OAuth Bearer is resolved
 // by `resolveCliBearerActor` (src/lib/cli-api/verified-bearer.ts) ONLY when the
@@ -60,10 +61,7 @@ import {
   resolveOrgRoleForUser,
   type AuthzOrgRole,
 } from "@/lib/auth-session";
-import {
-  isTrustedDevHost,
-  shouldGrantDevAdminBypass,
-} from "@cinatra-ai/mcp-server/dev-admin-bypass";
+import { grantDevAdminBypassForRequest } from "@cinatra-ai/mcp-server/dev-admin-bypass-request";
 import {
   resolveCliBearerActor,
   type CliScope,
@@ -76,7 +74,7 @@ const AUTHORIZED_ORG_ROLES: ReadonlySet<AuthzOrgRole> = new Set<AuthzOrgRole>([
 ]);
 
 export type CliActor = {
-  /** Authenticated user id, or `null` for the loopback dev-admin bypass. */
+  /** Authenticated user id, or `null` for the local-operator dev-admin bypass. */
   userId: string | null;
   /** True when the resolved identity is a platform admin. */
   isPlatformAdmin: boolean;
@@ -85,9 +83,10 @@ export type CliActor = {
   /** Active organization id resolved for this request, when known. */
   organizationId: string | null;
   /**
-   * How the caller was authorized. `dev-admin-bypass` marks the loopback path
-   * (no real session); `session` marks a cookie session; `bearer` marks a
-   * verified remote OAuth Bearer.
+   * How the caller was authorized. `dev-admin-bypass` marks the local-operator
+   * path (no real session — the anonymous local operator, never a named user);
+   * `session` marks a cookie session; `bearer` marks a verified remote OAuth
+   * Bearer.
    */
   via: "session" | "dev-admin-bypass" | "bearer";
 };
@@ -119,7 +118,7 @@ export type AuthorizeCliOptions = {
  *   2. (CLI Class-A) When the endpoint declares `requiredScope`, try a verified
  *      remote OAuth Bearer via `resolveCliBearerActor`. Audience-pinned,
  *      scope-gated, role resolved live from the verified subject.
- *   3. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
+ *   3. Otherwise, try the dev-admin local-operator bypass (local CLI → local box).
  *   4. Otherwise deny (401 if unauthenticated, 403 if authenticated but
  *      under-privileged).
  *
@@ -187,24 +186,12 @@ export async function authorizeCliRequest(
     }
   }
 
-  // ---- 3. Dev-admin loopback bypass (local CLI → local instance). ---------
-  // SAME guards the MCP transport uses; never fires in production.
-  const url = request.url;
-  const trustedDevHost = isTrustedDevHost({
-    nodeEnv: process.env.NODE_ENV,
-    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-    trustedHostsEnv: process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS,
-    urlHost: safeUrlHost(url),
-    forwardedHostRaw: requestHeaders.get("x-forwarded-host"),
-  });
-
-  const grantBypass = shouldGrantDevAdminBypass({
-    nodeEnv: process.env.NODE_ENV,
-    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-    isTrustedDevHost: trustedDevHost,
-  });
-
-  if (grantBypass) {
+  // ---- 3. Dev-admin local-operator bypass (local CLI → local instance). ---
+  // THE SAME implementation the MCP transport uses — one helper, one trust
+  // boundary, so the two surfaces cannot drift. It reads the connecting
+  // socket's peer and this boot's local credential, refuses on any forwarded
+  // header, and never fires in production.
+  if (grantDevAdminBypassForRequest(requestHeaders)) {
     return {
       ok: true,
       actor: {
@@ -225,7 +212,7 @@ export async function authorizeCliRequest(
     ok: false,
     status: 401,
     error:
-      "Unauthorized: sign in to this instance (or run against a trusted dev host with the admin bypass enabled).",
+      "Unauthorized: sign in to this instance (or run locally against your own dev instance with the admin bypass enabled).",
   };
 }
 
@@ -255,13 +242,4 @@ function tierForbidden(minTier: CliAuthTier): CliGuardFailure {
         ? "Forbidden: this CLI endpoint requires platform admin."
         : "Forbidden: the CLI control plane requires platform admin or an organization owner/admin role.",
   };
-}
-
-/** Extract just the host portion of a request URL; null on a malformed URL. */
-function safeUrlHost(url: string): string | null {
-  try {
-    return new URL(url).host;
-  } catch {
-    return null;
-  }
 }

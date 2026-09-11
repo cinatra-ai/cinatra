@@ -103,6 +103,10 @@ const grandfatherList: ReadonlyArray<{ packageName: string; reason: string }> = 
     reason: "Domain-prefixed role noun; tracked for possible generalization.",
   },
   {
+    packageName: "@cinatra-ai/blog-image-generator-agent",
+    reason: "Domain-prefixed role noun; tracked for possible generalization.",
+  },
+  {
     packageName: "@cinatra-ai/blog-image-prompt-agent",
     reason: "Domain-prefixed role noun; tracked for possible generalization.",
   },

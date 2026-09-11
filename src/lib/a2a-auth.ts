@@ -17,6 +17,7 @@ import {
   readServiceAccountByClientId,
   type ServiceAccountRecord,
 } from "@/lib/service-accounts";
+import { localCallerVerdict } from "@/lib/local-caller-gate";
 
 // ---------------------------------------------------------------------------
 // A2A Bearer token verification.
@@ -29,11 +30,13 @@ import {
 //
 // Required scope: "a2a:connect" — registered declaratively in src/lib/auth.ts.
 //
-// Localhost requests bypass the Bearer check only when `A2A_DEV_BYPASS=true`
+// A LOCAL caller bypasses the Bearer check only when `A2A_DEV_BYPASS=true`
 // is set — enabling dev-loop smoke testing without seeding a
 // client_credentials grant. Production deployments must not set this var;
-// any request from a non-local host MUST present a valid Bearer token
-// carrying `a2a:connect`.
+// any request that is not local MUST present a valid Bearer token carrying
+// `a2a:connect`. "Local" is the shared decision in @/lib/local-caller-gate:
+// a loopback SOCKET, no forwarded header from the caller, and this boot's
+// local credential — not a `Host` header, which anyone can write.
 // ---------------------------------------------------------------------------
 
 const A2A_BASE_PATH = "/api/a2a";
@@ -47,20 +50,21 @@ function inferLocalAppOrigin(): string {
   return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 }
 
-function isLocalhostRequest(req: Request): boolean {
-  // Never honor the loopback bypass in
-  // production, even if A2A_DEV_BYPASS=true is misconfigured. Reject any
-  // request carrying an x-forwarded-* chain so a proxy-spoofed Host header
-  // cannot unlock the bypass via SSRF / proxy-misconfig.
-  if (process.env.NODE_ENV === "production") return false;
-  if (req.headers.get("x-forwarded-for")) return false;
-  try {
-    const url = new URL(req.url);
-    const h = url.hostname;
-    return h === "localhost" || h === "127.0.0.1" || h === "host.docker.internal";
-  } catch {
-    return false;
-  }
+/**
+ * The dev bypass now costs exactly what the destructive development-only routes
+ * cost — see @/lib/local-caller-gate for the four fences and which one is
+ * load-bearing.
+ *
+ * What it replaces: `new URL(req.url).hostname`, which is the `Host` HEADER
+ * rather than the socket's peer address, plus a single `x-forwarded-for` check.
+ * A dev server listening on a LAN or container interface answered
+ * `Host: localhost` from anywhere, so any caller on the network could unlock
+ * the bypass by writing that header. The production refusal is preserved (it is
+ * fence 1 of the shared gate) and is now joined by the runtime mode, the
+ * connecting socket and this boot's local credential.
+ */
+function isLocalDevBypassCaller(req: Request): boolean {
+  return localCallerVerdict(req).ok;
 }
 
 export type A2AAuthResult =
@@ -68,7 +72,7 @@ export type A2AAuthResult =
   | { ok: false; response: Response };
 
 export async function verifyA2AAccessToken(req: Request): Promise<A2AAuthResult> {
-  if (process.env.A2A_DEV_BYPASS === "true" && isLocalhostRequest(req)) {
+  if (process.env.A2A_DEV_BYPASS === "true" && isLocalDevBypassCaller(req)) {
     return { ok: true, subject: "dev-bypass" };
   }
 
@@ -234,7 +238,7 @@ function normalizeStoredScopes(scopes: unknown): string {
  * token types until those credentials are migrated.
  */
 export async function verifyLangGraphBridgeToken(req: Request): Promise<A2AAuthResult> {
-  if (process.env.A2A_DEV_BYPASS === "true" && isLocalhostRequest(req)) {
+  if (process.env.A2A_DEV_BYPASS === "true" && isLocalDevBypassCaller(req)) {
     return { ok: true, subject: "dev-bypass" };
   }
 

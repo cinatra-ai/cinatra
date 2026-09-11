@@ -75,6 +75,13 @@ vi.mock("@cinatra-ai/agents", () => ({ withInstallLock }));
 
 // --- the DB store (in-memory, cap-enforcing) --------------------------------
 type Row = {
+  // The scope tuple (cinatra#2813 S1). These actions have no scope of
+  // their own yet, so they write and read the WORKSPACE tier — which is
+  // exactly what package-global assignment always meant.
+  scopeKind: "workspace" | "organization" | "team" | "project" | "user";
+  scopeId: string;
+  source: "manual" | "recommended";
+  originRunId: string | null;
   agentPackageName: string;
   skillId: string;
   position: number;
@@ -82,10 +89,17 @@ type Row = {
   createdAt: string;
 };
 let rows: Row[] = [];
-const CAP = 3;
+// cinatra#2813 S1 (epic #2812): "cap raised 3 to 5 per (package, exact
+// scope)". These actions carry no scope of their own yet, so the tier they
+// write is the workspace one and the cap they meet is that scope's five.
+// The mocked export below repeats the number as a LITERAL rather than reading
+// this constant: `vi.mock` factories are hoisted above it, so a reference here
+// is a temporal-dead-zone crash at import, not a coupling. The two are kept in
+// step by this comment and by the store's own cap fixture.
+const CAP = 5;
 const insertSpy = vi.fn();
 vi.mock("@/lib/agent-assigned-skills-store", () => ({
-  AGENT_ASSIGNED_SKILLS_CAP: 3,
+  AGENT_ASSIGNED_SKILLS_CAP: 5, // keep in step with CAP above
   readAssignedSkillsForAgentPackage: async (pkg: string) =>
     rows.filter((r) => r.agentPackageName === pkg).sort((a, b) => a.position - b.position),
   insertAssignedSkill: async (input: {
@@ -99,6 +113,10 @@ vi.mock("@/lib/agent-assigned-skills-store", () => ({
     if (existing) return { outcome: "already_assigned", row: existing };
     if (mine.length >= CAP) return { outcome: "cap_exceeded", count: mine.length };
     const row: Row = {
+      scopeKind: "workspace",
+      scopeId: "__workspace__",
+      source: "manual",
+      originRunId: null,
       agentPackageName: input.agentPackageName,
       skillId: input.skillId,
       position: mine.reduce((m, r) => Math.max(m, r.position), 0) + 1,
@@ -246,12 +264,14 @@ describe("admin re-assertion + server-derived target (crafted-request test)", ()
     );
   });
 
-  it("REFUSES an assistant target", async () => {
+  it("ADMITS an assistant target (cinatra#2813 S1, epic #2812)", async () => {
+    // The write gate no longer refuses assistants — the epic makes them
+    // first-class assignment targets. The row lands; whether an assistant's
+    // assigned skills are DELIVERED at run time is a separate seam.
     assistantPackages.add("@cinatra-ai/web-scrape-agent");
-    await expect(
-      assignAgentSkill({ agentRef: "web-scrape-agent", skillId: SKILL_ID }),
-    ).resolves.toEqual({ ok: false, reason: "assistant" });
-    expect(rows).toHaveLength(0);
+    const out = await assignAgentSkill({ agentRef: "web-scrape-agent", skillId: SKILL_ID });
+    expect(out.ok).toBe(true);
+    expect(rows).toHaveLength(1);
   });
 
   it("REFUSES a non-agent target (a connector settings page)", async () => {
@@ -322,7 +342,7 @@ describe("assignability enforcement on assign (the picker filter is NOT the enfo
   });
 });
 
-describe("the 3-cap", () => {
+describe(`the ${CAP}-cap`, () => {
   function addSkill(n: number) {
     const id = `@cinatra-ai/pack-${n}-skill:s${n}`;
     catalogSkills.push(catalogRow(id, { packageName: `@cinatra-ai/pack-${n}-skill` }));
@@ -331,20 +351,24 @@ describe("the 3-cap", () => {
     return id;
   }
 
-  it("accepts three and REJECTS the fourth server-side", async () => {
-    const ids = [SKILL_ID, addSkill(2), addSkill(3)];
+  // Counted off CAP rather than spelled out, so the number lives in exactly one
+  // place in this file and the next time the cap moves this case moves with it.
+  it(`accepts ${CAP} and REJECTS the one after it server-side`, async () => {
+    const ids = [SKILL_ID, ...Array.from({ length: CAP - 1 }, (_, i) => addSkill(i + 2))];
     for (const id of ids) {
       await expect(assignAgentSkill({ agentRef: "web-scrape-agent", skillId: id })).resolves.toMatchObject(
         { ok: true },
       );
     }
-    expect(rows.map((r) => r.position)).toEqual([1, 2, 3]);
+    expect(rows.map((r) => r.position)).toEqual(
+      Array.from({ length: CAP }, (_, i) => i + 1),
+    );
 
-    const fourth = addSkill(4);
+    const overflow = addSkill(CAP + 1);
     await expect(
-      assignAgentSkill({ agentRef: "web-scrape-agent", skillId: fourth }),
+      assignAgentSkill({ agentRef: "web-scrape-agent", skillId: overflow }),
     ).resolves.toMatchObject({ ok: false, reason: "cap-exceeded" });
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(CAP);
   });
 
   it("a duplicate assign is idempotent and does NOT consume a cap slot", async () => {
@@ -537,6 +561,10 @@ describe("assign-vs-uninstall race — the lifecycle lock is the ordering", () =
     const spy = vi.spyOn(deps, "insertAssignedSkill").mockImplementation(async (input) => {
       inserts += 1;
       const r: Row = {
+        scopeKind: "workspace",
+        scopeId: "__workspace__",
+        source: "manual",
+        originRunId: null,
         agentPackageName: input.agentPackageName,
         skillId: input.skillId,
         position: 1,
@@ -562,6 +590,10 @@ describe("assign-vs-uninstall race — the lifecycle lock is the ordering", () =
     const storeDeps = await import("@/lib/agent-assigned-skills-store");
     const spy = vi.spyOn(storeDeps, "insertAssignedSkill").mockImplementation(async (input) => {
       const r: Row = {
+        scopeKind: "workspace",
+        scopeId: "__workspace__",
+        source: "manual",
+        originRunId: null,
         agentPackageName: input.agentPackageName,
         skillId: input.skillId,
         position: 1,

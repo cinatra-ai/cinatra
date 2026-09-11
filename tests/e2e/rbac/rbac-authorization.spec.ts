@@ -10,10 +10,15 @@
  *      /configuration/access-control is denied.
  *   4. single-org mode — when the instance toggle is on, the
  *      "Organizations" nav entry is hidden. The describe block toggles the
- *      instance setting on in beforeAll + resets it off in afterAll, with
- *      a wait to clear the 10s readConnectorConfigFromDatabase cache.
- *   5. project admin can grant a customer and revoke them
- *      (uses the customer user seeded by auth.setup.ts).
+ *      instance setting on in beforeAll + resets it off in afterAll. Both go
+ *      through the shared settings-row helper, which preserves the sibling
+ *      settings on that row and waits the 10s
+ *      readConnectorConfigFromDatabase cache out.
+ *   5. project admin can grant a guest and revoke them, on an instance whose
+ *      registration is CLOSED — the posture a real instance ships with. An
+ *      invitation is an explicit admin road, so it has to work there; the
+ *      describe closes registration itself rather than inheriting whatever
+ *      an earlier suite happened to leave behind.
  *
  * The customer-scoped view runs in a separate spec
  * (rbac-customer-scoped.spec.ts) under the customer's storageState.
@@ -24,8 +29,13 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Client } from "pg";
 import { expect, test } from "@playwright/test";
+
+import {
+  closeRegistrationForFixtures,
+  openRegistrationForFixtures,
+  patchInstanceSettingsForFixtures,
+} from "../open-registration";
 
 // 180s overall — the grant/revoke flow carries 60s invite + 60s revoke
 // assertions plus navigation/hydration; the 120s default is too tight on cold CI.
@@ -207,28 +217,24 @@ test.describe("cinatra#2700 — every swept /configuration route denies a non-ad
 
 test.describe("single-org mode", () => {
   // The single-org toggle is read via readConnectorConfigFromDatabase which
-  // has a 10s per-process cache. We set the metadata KV directly (no admin
-  // session needed for the non-admin member), wait > TTL for the dev server
-  // to re-read, then reset on teardown.
+  // has a 10s per-process cache. The shared helper records the toggle on the
+  // instance settings row and waits that cache out for us.
+  //
+  // It goes through the helper rather than writing the row here, because the
+  // single-org toggle SHARES that row with the registration setting. A
+  // hand-rolled whole-row write states one toggle and deletes the other, and a
+  // missing registration key does not read as "unchanged" — it reads as
+  // CLOSED. That is how this describe used to close the instance behind the
+  // guest-invite describe below.
   async function setSingleOrg(on: boolean): Promise<void> {
-    const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000 });
-    await c.connect();
-    try {
-      const value = JSON.stringify({ singleOrg: on });
-      await c.query(
-        `INSERT INTO "${SCHEMA}"."metadata" (key, value) VALUES ($1, $2)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-        ["connector_config:instance_identity", value],
-      );
-    } finally {
-      await c.end();
-    }
+    await patchInstanceSettingsForFixtures(
+      { singleOrg: on },
+      { databaseUrl: DATABASE_URL, schema: SCHEMA },
+    );
   }
 
   test.beforeAll(async () => {
     await setSingleOrg(true);
-    // Bust the dev server's 10s connector_config cache + a small buffer.
-    await new Promise((r) => setTimeout(r, 11_000));
   });
   test.afterAll(async () => {
     await setSingleOrg(false);
@@ -249,6 +255,24 @@ test.describe("project admin grant → revoke guest (cinatra#1501)", () => {
   // "already a member" instead of granting. Inviting an unknown email
   // exercises the full new path — account creation + guest grant — for real.
   const GUEST_EMAIL = `rbac-guest-uat-${Date.now().toString(36)}@local.test`;
+
+  // Registration CLOSED — the posture a real instance ships with, and the one
+  // that makes this test worth running. The acting member is a project owner
+  // and NOT a platform admin (auth.setup.ts is explicit about that), so this
+  // is the ordinary case: someone who administers one project invites an
+  // outside collaborator on an instance that turns strangers away. An
+  // invitation is an explicit admin road; it has to land here, or the only
+  // people who can ever bring a guest in are platform admins.
+  //
+  // Stated here rather than inherited: on an open instance the invite would
+  // ride the public sign-up road and this test would prove nothing about the
+  // closed one.
+  test.beforeAll(async () => {
+    await closeRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
+  });
+  test.afterAll(async () => {
+    await openRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
+  });
 
   test("invite a guest by email then revoke them", async ({ page }) => {
     await page.goto(`/projects/${SEED.projectId}/permissions`, { waitUntil: "domcontentloaded" });

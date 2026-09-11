@@ -80,6 +80,26 @@ const ONE_OFF: ProposedSchedule = {
   timezone: "Europe/Berlin",
 };
 
+// THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3174 fix leg 1).
+// A one-off's gate stamp is no longer read as its firing on its own: the run
+// the gate opened over has to have actually run, which only the server can say,
+// so the resolver's answer carries the reading. These fixtures have always used
+// `released: true` on a NON-recurring settled body to mean "this schedule
+// fired", so the mock states that reading exactly where the fixture means it.
+function firedAside(body: unknown): { firedOnce?: true } {
+  const b = body as {
+    phase?: string;
+    released?: boolean;
+    triggerType?: string;
+  } | null;
+  return b !== null &&
+    b.phase === "settled" &&
+    b.released === true &&
+    b.triggerType !== "recurring"
+    ? { firedOnce: true }
+    : {};
+}
+
 function settledBody(
   over: Partial<Extract<TriggerScheduleProposalViewBody, { phase: "settled" }>> = {},
 ): TriggerScheduleProposalViewBody {
@@ -108,7 +128,12 @@ function mockTransport(
 ) {
   const fetchMock = vi.fn(async () =>
     new Response(
-      JSON.stringify({ kind: "trigger_schedule_proposal", state, body }),
+      JSON.stringify({
+        kind: "trigger_schedule_proposal",
+        state,
+        body,
+        ...firedAside(body),
+      }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ),
   );
@@ -175,13 +200,15 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     );
 
     expect(container.querySelectorAll('[data-schedule-option]')).toHaveLength(3);
-    expect(isDisabled(container.querySelector('[data-field="schedule-run-at"]'))).toBe(true);
-    // "no controls at all" — not a disabled Save changes, not a disabled Cancel
-    // schedule, and no floor for either to stand on (cinatra#2934, the FOURTH
-    // graded capture; the drawing at the pin and plan (A) §7.2).
-    expect(
-      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
-    ).toBeNull();
+    // THE ROWS GO READ-ONLY, NOT DEAD (cinatra#3174 fix leg 1). §VI: "the rows
+    // go read-only — the values still legible, the pickers gone". A disabled
+    // picker is still a picker, and the first graded proof round photographed
+    // exactly that. The value stands where the field stood.
+    expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
+    expect(container.querySelectorAll("input")).toHaveLength(0);
+    // "no controls at all" — not a disabled Save changes, not a disabled
+    // Cancel schedule: the floor is not drawn.
+    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
     expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
     expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.firedOneOff);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
@@ -193,10 +220,13 @@ describe("the agent page's schedule surface draws the schedule form", () => {
     );
 
     expect(container.querySelectorAll('[data-schedule-option]')).toHaveLength(3);
-    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
-    expect(
-      container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
-    ).toBeNull();
+    // THE ROWS GO READ-ONLY, NOT DEAD (cinatra#3174 fix leg 1). §VI: "the rows
+    // go read-only — the values still legible, the pickers gone". A disabled
+    // picker is still a picker, and the first graded proof round photographed
+    // exactly that. The value stands where the field stood.
+    expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(container.textContent).toContain("Europe/Berlin");
+    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
     expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
     expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();

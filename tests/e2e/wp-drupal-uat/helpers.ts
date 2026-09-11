@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { expect, type FrameLocator, type Page } from "@playwright/test";
 
+import { readDevActorPassword } from "./global-setup";
 import type { DevActor, UatSeed } from "./global-setup";
 
 export const WP_BASE = process.env.UAT_WP_BASE_URL ?? "http://localhost:8080";
@@ -159,10 +160,11 @@ export function readSeed(): UatSeed {
 /**
  * The deterministic dev UAT actor, as `dev-auto-setup`'s `ensureDevConnectActor`
  * seeds it on every dev-server boot (global-setup asserts the file exists before
- * any spec runs). At protocol 2 these are the credentials the FRAME's sign-in
- * popup is driven with when it presents its own sign-in screen — the popup is a
- * top-level Cinatra document, so this is a first-party sign-in on the Cinatra
- * origin and the CMS page is not a party to it.
+ * any spec runs). It names the account; the password for this boot comes from
+ * `readDevActorPassword()`. Together they drive the FRAME's sign-in popup at
+ * protocol 2 when it presents its own sign-in screen — the popup is a top-level
+ * Cinatra document, so this is a first-party sign-in on the Cinatra origin and
+ * the CMS page is not a party to it.
  */
 export function readDevActor(): DevActor {
   const file = path.join(__dirname, ".uat", "dev-actor.json");
@@ -387,7 +389,7 @@ export async function openWidget(page: Page): Promise<FrameLocator> {
 
   if (await signedOut.isVisible().catch(() => false)) {
     const popup = await startFrameSignIn(page, frame, budget.left("sign-in popup"));
-    await finishFrameSignIn(popup, readDevActor(), budget.left("popup sign-in"));
+    await finishFrameSignIn(popup, readDevActor(), readDevActorPassword(), budget.left("popup sign-in"));
   }
 
   await active.waitFor({ state: "visible", timeout: budget.left("embed active") });
@@ -491,6 +493,7 @@ async function startFrameSignIn(
 async function finishFrameSignIn(
   popup: Page,
   actor: DevActor,
+  password: string,
   timeout: number,
 ): Promise<void> {
   const deadline = Date.now() + timeout;
@@ -519,18 +522,18 @@ async function finishFrameSignIn(
     );
   }
 
-  const password = popup.locator('input[name="password"], input[type="password"]').first();
+  const passwordField = popup.locator('input[name="password"], input[type="password"]').first();
   await email.click();
   await email.pressSequentially(actor.email, { delay: 12 });
-  await password.click();
-  await password.pressSequentially(actor.password, { delay: 12 });
+  await passwordField.click();
+  await passwordField.pressSequentially(password, { delay: 12 });
 
   // Both fields must really hold what we typed before the submit is meaningful.
   await expect(email).toHaveValue(actor.email);
   expect(
-    (await password.inputValue()).length,
+    (await passwordField.inputValue()).length,
     "the password field did not receive the typed value",
-  ).toBe(actor.password.length);
+  ).toBe(password.length);
 
   const labelled = popup
     .locator('button[type="submit"]')

@@ -215,6 +215,58 @@ describe("GET /api/agents/runs/[runId]", () => {
     expect(readRunReviewSlot).toHaveBeenCalledWith("run-1");
   });
 
+  // cinatra#3044 — THE MOMENT'S CARD TRAVELS ON THE SAME SEED, for the same
+  // reason the review slot does and one step further: the conversation that
+  // STARTED the run streamed its turn, so that turn can never carry a part the
+  // platform wrote into the stored turn afterwards. This read is the only live
+  // channel that page has, so the reference the moment was stated with has to
+  // ride it — otherwise the person waits in silence until they reload.
+  it("carries the moment's own card — the kind and the reference the row states", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue({
+      id: "run-1",
+      templateId: "tpl-1",
+      status: "pending_trigger",
+      error: null,
+      inputParams: {},
+      lifecycleMoment: "schedule",
+      lifecycleCardKind: "trigger_schedule_proposal",
+      lifecycleCardRef: "sched-ref-1",
+    });
+    readAgentRunMessages.mockResolvedValue([]);
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      lifecycleMoment: "schedule",
+      lifecycleCard: { kind: "trigger_schedule_proposal", ref: "sched-ref-1" },
+    });
+  });
+
+  // BOTH HALVES OR NEITHER. A kind with no reference addresses nothing and a
+  // reference with no kind names no renderer; either alone would make a surface
+  // guess, so the seed says there is no card rather than half of one.
+  it("answers NO card for a moment stated without a reference", async () => {
+    requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    readAgentRunById.mockResolvedValue({
+      id: "run-1",
+      templateId: "tpl-1",
+      status: "pending_trigger",
+      error: null,
+      inputParams: {},
+      lifecycleMoment: "schedule",
+      lifecycleCardKind: "trigger_schedule_proposal",
+      lifecycleCardRef: null,
+    });
+    readAgentRunMessages.mockResolvedValue([]);
+
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    await expect(res.json()).resolves.toMatchObject({
+      lifecycleMoment: "schedule",
+      lifecycleCard: null,
+    });
+  });
+
   it("says a review may still open when the run's output is unanswered", async () => {
     requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
     readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tpl-1", status: "completed" });

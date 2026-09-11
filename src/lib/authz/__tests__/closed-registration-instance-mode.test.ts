@@ -1,9 +1,14 @@
 /**
  * Closed-registration instance-mode helpers (D8).
  *
- * Covers the is/set round-trip + default false + the read-modify-write that
- * preserves sibling instance_identity keys (singleOrg), and the config-read
- * failure → FAIL OPEN contract (D5).
+ * Covers the is/set round-trip + the CLOSED default + the read-modify-write
+ * that preserves sibling instance_identity keys (singleOrg), and the
+ * config-read failure -> FAIL CLOSED contract.
+ *
+ * Registration is closed unless the instance says otherwise: only a stored
+ * primitive `false` opens the door. Nothing stored, an unreadable setting, or
+ * a value that is not a boolean all resolve CLOSED, so an instance never ends
+ * up accepting strangers because a setting could not be read.
  *
  * `@/lib/database` is replaced with an in-memory connector_config store so the
  * helpers' read-modify-write (`readConnectorConfigFromDatabase` /
@@ -37,8 +42,13 @@ beforeEach(() => {
 });
 
 describe("closed-registration instance-mode", () => {
-  it("defaults to false (open) when nothing is stored", async () => {
-    expect(await isRegistrationClosed()).toBe(false);
+  it("defaults to true (closed) when nothing is stored", async () => {
+    expect(await isRegistrationClosed()).toBe(true);
+  });
+
+  it("stays closed when the row exists but carries no registration setting", async () => {
+    store.set("instance_identity", { singleOrg: true });
+    expect(await isRegistrationClosed()).toBe(true);
   });
 
   it("round-trips set/is for closed=true then closed=false", async () => {
@@ -48,10 +58,14 @@ describe("closed-registration instance-mode", () => {
     expect(await isRegistrationClosed()).toBe(false);
   });
 
-  it("only a stored primitive `true` resolves closed (fail-soft on garbage)", async () => {
-    store.set("instance_identity", { closedRegistration: "true" });
-    expect(await isRegistrationClosed()).toBe(false);
-    store.set("instance_identity", { closedRegistration: 1 });
+  it("only a stored primitive `false` opens registration (anything else stays closed)", async () => {
+    store.set("instance_identity", { closedRegistration: "false" });
+    expect(await isRegistrationClosed()).toBe(true);
+    store.set("instance_identity", { closedRegistration: 0 });
+    expect(await isRegistrationClosed()).toBe(true);
+    store.set("instance_identity", { closedRegistration: null });
+    expect(await isRegistrationClosed()).toBe(true);
+    store.set("instance_identity", { closedRegistration: false });
     expect(await isRegistrationClosed()).toBe(false);
   });
 
@@ -74,8 +88,21 @@ describe("closed-registration instance-mode", () => {
     expect(stored.singleOrg).toBe(true);
   });
 
-  it("config-read failure → FAIL OPEN (returns false, never throws) — D5", async () => {
+  it("setSingleOrgMode does not re-close an instance that was opened (D8 RMW)", async () => {
+    await setRegistrationClosed(false);
+    await setSingleOrgMode(true);
+    expect(await isRegistrationClosed()).toBe(false);
+  });
+
+  it("config-read failure -> FAIL CLOSED (returns true, never throws)", async () => {
     throwOnRead = true;
-    await expect(isRegistrationClosed()).resolves.toBe(false);
+    await expect(isRegistrationClosed()).resolves.toBe(true);
+  });
+
+  it("a read failure fails closed even when the stored setting says open", async () => {
+    await setRegistrationClosed(false);
+    expect(await isRegistrationClosed()).toBe(false);
+    throwOnRead = true;
+    await expect(isRegistrationClosed()).resolves.toBe(true);
   });
 });

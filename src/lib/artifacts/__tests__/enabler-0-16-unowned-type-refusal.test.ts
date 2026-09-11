@@ -191,6 +191,34 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     ]);
   });
 
+  it("the two blog-pipeline writes count down to the wave scheduled to remove them", () => {
+    // The countdown is only a countdown while it names a wave that is still to
+    // run. W10 (cinatra#3034) closed WITHOUT carrying the removal: its own
+    // record puts "the removal of the selected-idea save and the persisted
+    // draft projection" in "the pipeline's own wave" — W11, cinatra#3035, which
+    // is open. A countdown pointing at the closed wave misreports the two
+    // writes as already retired while the boundary still refuses them.
+    const blogWrites = PASSTHROUGH_SHAPER_DECLARATIONS.filter((d) =>
+      d.shaperId.startsWith("blog-pipeline-seam:"),
+    );
+    expect(blogWrites.map((d) => d.shaperId).sort()).toEqual([
+      "blog-pipeline-seam:blog_pipeline_draft_projection",
+      "blog-pipeline-seam:blog_pipeline_selected_idea",
+    ]);
+    // Never the wave that closed without doing the retirement.
+    for (const d of blogWrites) {
+      expect(d.retiredBy).toBe("cinatra#3035");
+      expect(d.retiredBy).not.toBe("cinatra#3034");
+    }
+    // The audit carries the countdown onto every finding it raises for those
+    // writes — the reader of the audit is the one the stale pointer misleads.
+    const findings = auditPassthroughShaperDeclarations(
+      ports({ writable: ["@cinatra-ai/campaigns:context"] }),
+    ).filter((f) => f.shaperId.startsWith("blog-pipeline-seam:"));
+    expect(findings.length).toBeGreaterThan(0);
+    for (const f of findings) expect(f.retiredBy).toBe("cinatra#3035");
+  });
+
   it("a shaper whose type an installed extension owns raises nothing", () => {
     const findings = auditPassthroughShaperDeclarations(
       ports({ writable: ["@cinatra-ai/campaigns:context"] }),

@@ -23,7 +23,7 @@ fi
 # retirement — the package is archived and in neither extension lock, so the
 # batch matched no test title. The remaining batches are renumbered.
 BATCH1_FILTER="@cinatra-ai/(web-scrape-agent|web-research-agent|media-feed-lister-agent|media-transcript-agent)"
-BATCH2_FILTER="@cinatra-ai/(blog-idea-generator-agent|blog-draft-writer-agent|blog-image-prompt-agent)"
+BATCH2_FILTER="@cinatra-ai/(blog-idea-generator-agent|blog-draft-writer-agent|blog-image-generator-agent)"
 BATCH3_FILTER="@cinatra-ai/(company-discovery-agent|contact-discovery-agent|planner-agent)"
 BATCH4_FILTER="@cinatra-ai/(code-reviewer-agent|security-reviewer-agent|lint-policy-agent)"
 

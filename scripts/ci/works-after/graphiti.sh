@@ -176,7 +176,7 @@ wa_info "local embedder rejects non-object bodies with 400 (not 500)"
 #
 # Every tier below used to hand-roll its graphiti env, which meant the one
 # configuration a real install actually receives — the one
-# `scripts/gen-graphiti-env.mjs#buildGraphitiEnv` writes — was the one
+# `scripts/gen-graphiti-env.mjs#buildGraphitiEnv` produces — was the one
 # configuration the proof matrix never booted. A generator bug therefore could
 # not fail this arm, and one did: the keyed OpenAI branch declared 1536-wide
 # `text-embedding-3-small` while leaving the embedder URL at config.yaml's local
@@ -308,7 +308,7 @@ reset_neo4j() {
 #                only, and it says so).
 #
 # tier=keyless : NO provider key. The LLM slot carries the SAME named sentinel
-#                the bring-up writes (scripts/gen-graphiti-env.mjs). It is not a
+#                the bring-up hands over (scripts/gen-graphiti-env.mjs). It is not a
 #                credential and cannot buy a call — it exists because the server
 #                CRASHES at startup without it: CrossEncoderFactory builds an
 #                OpenAIRerankerClient from the LLM provider block regardless of
@@ -320,7 +320,7 @@ reset_neo4j() {
 #                halves can come from different places.
 # tier=anthropic: the MULTI-PROVIDER arm (cinatra#2591 deliverable 2). The server
 #                runs with llm.provider=anthropic and the local embedder floor —
-#                the shape `scripts/gen-graphiti-env.mjs` materializes for an
+#                the shape `scripts/gen-graphiti-env.mjs` hands over for an
 #                install whose committed provider is Anthropic. It proves the
 #                claim the floor exists for: an Anthropic install BOOTS and RANKS
 #                with exactly ONE vendor, because Anthropic publishes no

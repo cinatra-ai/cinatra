@@ -42,9 +42,10 @@ import { Client } from "pg";
 import { compileDataEqualsClause } from "@/lib/objects-store";
 import { deriveThreadId } from "@/lib/email-thread-key";
 import { connect, createTestSchema, dropSchema, insertObject } from "./_fixture";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const ORG = "org-1456";
 const USER = "user-1456";

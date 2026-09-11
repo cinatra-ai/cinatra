@@ -31,6 +31,77 @@
 /** The `/chat` mount root (the single chat mount; `chat/layout.tsx`). */
 export const CHAT_ROOT = "/chat";
 
+// ---------------------------------------------------------------------------
+// THE SCOPED MOUNT (cinatra#2809, per-scope surfaces S3).
+//
+// The same renderer answers under every scope: an organization, a team, a
+// project, the workspace, a person's own scope. A launch made from a vantage
+// belongs to it, so the address carries it — `/teams/<id>/assistants/<vendor>/
+// <slug>` is the scoped twin of `/chat/<vendor>/<slug>`, with the same four
+// legal shapes below it.
+//
+// The scope base is a PREFIX of the MOUNT, never a segment of the grammar: the
+// route splits the base off and hands the codec the bare `/chat/…` path it has
+// always parsed, which is why every rule below — the slash-free segment
+// validation, the kind-driven disambiguation, the legacy single-segment death —
+// is untouched.
+//
+// The scope-base grammar is spelled HERE as a pattern rather than imported from
+// the host's `scopeSurfaceBase`: this module is a zero-dependency leaf that the
+// client seams, the server component and the shell all import, and it stays
+// that way. The agreement with `scopeSurfaceBase` is pinned by a unit test —
+// the same arrangement `DEFAULT_ASSISTANT_PACKAGE` above already uses.
+// ---------------------------------------------------------------------------
+
+/** The segment the scoped mount answers on, below a scope base. */
+export const SCOPED_CHAT_SEGMENT = "assistants";
+
+/** The five scope bases, as the routes spell them. */
+const SCOPE_BASE_RE =
+  /^\/(?:workspace|personal|(?:organizations|teams|projects)\/[^/\s\\]+)(?=\/|$)/;
+
+function assertScopeBase(base: string): string {
+  if (!/^(?:\/[^/\s\\]+)+$/.test(base)) {
+    throw new Error(`chat-path-codec: invalid scope base ${JSON.stringify(base)}`);
+  }
+  return base;
+}
+
+/** The mount root for a scope — `/chat` bare, `<scope-base>/assistants` scoped. */
+export function chatMountRoot(opts?: { scopeBase?: string | null }): string {
+  const base = opts?.scopeBase;
+  if (base == null) return CHAT_ROOT;
+  return `${assertScopeBase(base)}/${SCOPED_CHAT_SEGMENT}`;
+}
+
+/**
+ * Split a pathname into its scope base and the BARE `/chat/…` path the codec
+ * parses. A pathname that is not a chat mount at all comes back unchanged with
+ * an empty base, so a caller can feed it in blind.
+ */
+export function splitChatScopeBase(pathname: string): {
+  scopeBase: string;
+  chatPathname: string;
+} {
+  if (pathname === CHAT_ROOT || pathname.startsWith(`${CHAT_ROOT}/`)) {
+    return { scopeBase: "", chatPathname: pathname };
+  }
+  const m = SCOPE_BASE_RE.exec(pathname);
+  if (m) {
+    const base = m[0];
+    const rest = pathname.slice(base.length);
+    // The scope's Assistants TAB (`<base>/assistants`) is a listing page, not a
+    // mount: only a path BELOW it addresses a conversation.
+    if (rest.startsWith(`/${SCOPED_CHAT_SEGMENT}/`)) {
+      return {
+        scopeBase: base,
+        chatPathname: `${CHAT_ROOT}${rest.slice(SCOPED_CHAT_SEGMENT.length + 1)}`,
+      };
+    }
+  }
+  return { scopeBase: "", chatPathname: pathname };
+}
+
 /** The canonical default assistant package — the builtin Cinatra assistant.
  *  Pinned in agreement with `BUILTIN_ASSISTANT_ALIAS.packageName`
  *  (src/lib/assistant-registry-schema.ts) by a unit test; kept LOCAL so this
@@ -134,7 +205,10 @@ export function routePackageName(route: Pick<ChatRoute, "vendor" | "slug">): str
  * segment so a malformed route never yields a silently-wrong URL. Round-trips
  * with {@link parseChatPath} for the matching `remoteCapable`.
  */
-export function buildChatPath(route: ChatRoute): string {
+export function buildChatPath(
+  route: ChatRoute,
+  opts?: { scopeBase?: string | null },
+): string {
   const segments: string[] = [route.vendor, route.slug];
   if (route.instance != null) segments.push(route.instance);
   if (route.titleSlug != null) segments.push(route.titleSlug);
@@ -143,7 +217,7 @@ export function buildChatPath(route: ChatRoute): string {
       throw new Error(`buildChatPath: invalid path segment ${JSON.stringify(seg)}`);
     }
   }
-  return `${CHAT_ROOT}/${segments.join("/")}`;
+  return `${chatMountRoot(opts)}/${segments.join("/")}`;
 }
 
 /**
@@ -258,8 +332,9 @@ export function threadSlugFromPathname(
   pathname: string,
   opts: { remoteCapable: boolean },
 ): string | null {
-  if (!pathname.startsWith(CHAT_ROOT)) return null;
-  const segments = pathname.slice(CHAT_ROOT.length).split("/");
+  const { chatPathname } = splitChatScopeBase(pathname);
+  if (!chatPathname.startsWith(CHAT_ROOT)) return null;
+  const segments = chatPathname.slice(CHAT_ROOT.length).split("/");
   const parsed = parseChatPath(segments, opts);
   return parsed.kind === "route" ? parsed.route.titleSlug ?? null : null;
 }
@@ -267,13 +342,15 @@ export function threadSlugFromPathname(
 /** The raw `/chat` trailing segments of a pathname (`[]` when not under /chat or
  *  the bare mount). Kind-agnostic — feeds {@link splitChatSegments}. */
 export function chatSegmentsFromPathname(pathname: string): string[] {
-  if (!pathname.startsWith(CHAT_ROOT)) return [];
-  return normalizeSegments(pathname.slice(CHAT_ROOT.length).split("/"));
+  const { chatPathname } = splitChatScopeBase(pathname);
+  if (!chatPathname.startsWith(CHAT_ROOT)) return [];
+  return normalizeSegments(chatPathname.slice(CHAT_ROOT.length).split("/"));
 }
 
 /** True when a pathname is any `/chat` path (the mount or below). The prefix
  *  checks that "survive as-is" (app-shell:241, app-sidebar) may keep using a
  *  literal `startsWith`; this is the codec-owned equivalent for new callers. */
 export function isChatPathname(pathname: string): boolean {
-  return pathname === CHAT_ROOT || pathname.startsWith(`${CHAT_ROOT}/`);
+  const { chatPathname } = splitChatScopeBase(pathname);
+  return chatPathname === CHAT_ROOT || chatPathname.startsWith(`${CHAT_ROOT}/`);
 }

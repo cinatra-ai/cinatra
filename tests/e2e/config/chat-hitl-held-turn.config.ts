@@ -38,6 +38,18 @@ const BASE_URL = process.env.E2E_CHAT_HITL_BASE_URL ?? `http://localhost:${PORT}
  */
 const WAYFLOW_UNREACHABLE = process.env.E2E_CHAT_HITL_WAYFLOW_URL ?? "http://127.0.0.1:59999";
 
+/**
+ * THE BOOT GATE'S OWN PORT (cinatra#3194).
+ *
+ * `webServer.url` no longer polls the application. It polls the boot gate, a
+ * process that owns the development server's lifecycle and only reports ready
+ * once the routes this flow depends on actually route — see
+ * `scripts/ci/dev-boot-route-gate.mjs` for why that indirection exists. It needs
+ * a port of its own, derived from the suite's so that two suites on one machine
+ * cannot collide, and overridable for the same reason the app port is.
+ */
+const GATE_PORT = Number(process.env.E2E_CHAT_HITL_GATE_PORT ?? PORT + 100);
+
 const STORAGE_STATE = suitePath("chat-hitl-held-turn", ".auth", "state.json");
 
 export default defineConfig({
@@ -116,36 +128,70 @@ export default defineConfig({
       `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=on ` +
       `CINATRA_RUNTIME_MODE=development ` +
       `WAYFLOW_BASE_URL=${WAYFLOW_UNREACHABLE} ` +
-      `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+      `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} ` +
+      // THE BOOT GATE RUNS `pnpm dev`; IT DOES NOT REPLACE IT (cinatra#3194).
+      //
+      // Every variable above is set on THIS command, so the gate inherits them
+      // and the development server it starts inherits them from the gate — the
+      // server is started with precisely the environment it was started with
+      // before. What changed is who waits for it, and what happens when a boot
+      // does not register the routes this flow is about to call.
+      //
+      // The two routes named here are the two the setup already probes, and for
+      // the same reason: an empty body is answered by Better Auth's validation
+      // and by the capabilities handler's unauthenticated first statement, so
+      // neither probe creates any state. The bound is left at the module
+      // default, which is the SAME 120 s the setup spends — #3194 forbids
+      // widening it, and nothing here widens it.
+      `node scripts/ci/dev-boot-route-gate.mjs ` +
+      `--gate-port ${GATE_PORT} ` +
+      `--app-url ${BASE_URL} ` +
+      `--route POST:/api/auth/sign-up/email ` +
+      `--route POST:/api/assistants/chat/capabilities ` +
+      `--child-command "pnpm dev"`,
     cwd: REPO_ROOT,
     /**
-     * READINESS IS `/api/health`, NOT THE ROOT — and this is a determinism fix,
-     * not a preference.
+     * READINESS IS THE BOOT GATE, WHICH ANSWERS ONLY WHEN THE ROUTES ROUTE.
      *
-     * Playwright's `webServer.url` probe accepts 2xx, 3xx and 4xx up to 403; a
-     * 404 reads as NOT READY. The root of a fresh instance redirects
-     * `/` -> `/sign-in?next=%2F` -> `/setup/account`, and that last hop answers
-     * 404 on a boot where the setup bypass is on — so the probe polls a
-     * permanently-404 URL for the full ten minutes and the suite dies as
-     * "Timed out waiting from config.webServer", with no test name and nothing
-     * to read. Observed on a clean database on 2026-08-23, on a stack where the
-     * server itself was up and answering in 522 ms.
+     * It used to be `${BASE_URL}/api/health`, and that endpoint is still the
+     * first thing anything asks — the gate polls it exactly as this line did,
+     * so the runtime's first request is unchanged. But `/api/health` answering
+     * was never the claim this flow needs, and cinatra#3194 is the proof: a boot
+     * answered it normally and then served the runtime's own not-found DOCUMENT
+     * for `POST /api/auth/sign-up/email` in 110-400 ms, for the whole 120 s
+     * readiness bound, and the job died in `[setup]` for a reason that had
+     * nothing to do with holds.
      *
-     * `/api/health` is the endpoint the app publishes for exactly this question:
-     * it answers 200 with the boot's own readiness, it never redirects, and it
-     * does not depend on which wizard route a fresh instance would send a
-     * browser to.
+     * Polling the gate instead means Playwright is told "ready" only once the
+     * routes this suite calls have answered — and a boot that never registers
+     * them is replaced by a fresh one before any test starts, rather than
+     * failing the run.
+     *
+     * (The root is still not polled, for the reason this comment always gave:
+     * Playwright reads a 404 as NOT READY, and the root of a fresh instance
+     * redirects `/` -> `/sign-in?next=%2F` -> `/setup/account`, which answers
+     * 404 on a boot where the setup bypass is on.)
      */
-    url: `${BASE_URL}/api/health`,
-    // TEN MINUTES, sized to a FRESH database rather than a warm one. This suite's
-    // whole premise is a throwaway instance, so its boot is never the cheap case:
-    // it creates the `cinatra` schema, activates the extension closure, registers
-    // the agent templates and rebuilds the skills catalog before it answers at all.
-    // Measured at 5-7 minutes on a contended machine, which walked straight into
-    // the 5-minute ceiling the sibling configs use for warm instances — and a
-    // webServer timeout reports as an infrastructure failure with no test name,
-    // which is the least diagnosable red available.
-    timeout: 600_000,
+    url: `http://127.0.0.1:${GATE_PORT}/ready`,
+    // FIFTEEN MINUTES, sized to a FRESH database rather than a warm one, PLUS
+    // room for the one replacement boot the gate is allowed (cinatra#3194).
+    //
+    // This suite's whole premise is a throwaway instance, so its boot is never
+    // the cheap case: it creates the `cinatra` schema, activates the extension
+    // closure, registers the agent templates and rebuilds the skills catalog
+    // before it answers at all. Measured at 5-7 minutes on a contended machine,
+    // which walked straight into the 5-minute ceiling the sibling configs use
+    // for warm instances — and a webServer timeout reports as an infrastructure
+    // failure with no test name, which is the least diagnosable red available.
+    //
+    // The extra five minutes are NOT a wider readiness bound and buy no patience
+    // for a slow route: the route bound is untouched at 120 s. They are the
+    // budget for detecting an unrouted boot and booting again — a second boot
+    // that finds the schema, the extension closure and the catalog already
+    // written, so it is the cheap case by construction. The suite's own
+    // `globalTimeout` (40 min) and the job's shell timeout (45 min) both still
+    // clear this with the flow's measured run time.
+    timeout: 900_000,
     reuseExistingServer: false,
     stdout: "pipe",
     stderr: "pipe",

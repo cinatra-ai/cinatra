@@ -135,6 +135,20 @@ function deriveFullSchemaFromOas(
   const hidden = Array.isArray(meta?.hidden)
     ? (meta!.hidden as unknown[]).filter((s): s is string => typeof s === "string")
     : [];
+  // THE HUMAN LABEL A FIELD IS MAPPED TO (cinatra#3047 fix leg 8, convergence).
+  //
+  // `oas-compiler.ts` reads `metadata.cinatra.inputTitles` and writes the
+  // mapped label into the compiled property's `title`; this resolver wrote no
+  // `title` at all, so an agent whose stored `input_schema` is empty — the very
+  // case this resolver exists for — lost every display name it declared and
+  // fell back to the generic step label. The two pipelines must agree, which is
+  // the rule this module already states for the `x-` presentation hints below:
+  // a label that survived only one path would name a step on a freshly
+  // compiled template and not on a derived one.
+  const inputTitles =
+    meta?.inputTitles && typeof meta.inputTitles === "object" && !Array.isArray(meta.inputTitles)
+      ? (meta.inputTitles as Record<string, unknown>)
+      : {};
 
   const properties: Record<string, Record<string, unknown>> = {};
   for (const input of inputs) {
@@ -142,6 +156,19 @@ function deriveFullSchemaFromOas(
     const prop: Record<string, unknown> = {
       type: typeof input.type === "string" ? input.type : "string",
     };
+    // `input.title` is the field IDENTIFIER (it is this loop's property key
+    // below); the display label is what `inputTitles` maps it to. Only a mapped
+    // label is written, so a field with no mapping carries no title rather than
+    // its own key restated — the same thing the compiler writes, read the same
+    // way by `run-input-steps.ts`.
+    // Stored TRIMMED, which is the form it is compared and drawn in
+    // (codex convergence, fix leg 8): a mapped label validated after a trim and
+    // then stored untrimmed reads back as a different string than the one that
+    // was checked.
+    const mappedTitle = inputTitles[input.title];
+    if (typeof mappedTitle === "string" && mappedTitle.trim().length > 0) {
+      prop.title = mappedTitle.trim();
+    }
     if (typeof input.format === "string") prop.format = input.format;
     if (typeof input.description === "string") prop.description = input.description;
     if ("default" in input) prop.default = input.default;

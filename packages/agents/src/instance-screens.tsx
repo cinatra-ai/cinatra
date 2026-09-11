@@ -1,4 +1,12 @@
 import { notFound, redirect } from "next/navigation";
+import { buildAgentInstancePath } from "@/lib/agent-url";
+import {
+  canonicalRunPath,
+  homeRedirectFor,
+  launchScopeAnchorForScope,
+  parseLaunchScopeAnchor,
+} from "@/lib/launch-scope-anchor";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
@@ -28,8 +36,22 @@ import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
+// WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
+// that owns the answer — the same ladder the settled card is drawn from — and
+// passed DOWN to the run panel, which draws no recommendation card of its own.
+import {
+  recommendationDecidedForRun,
+  resolveRecommendationHoldStateForActor,
+} from "./run-recommendation-core";
 import { deriveRunHitlContext } from "./hitl-context";
 import { PRE_EXECUTION_RUN_STATUSES } from "./run-status";
+// WHICH MOMENT IS THE RUN STANDING AT (cinatra#3221, fix leg 3)? Asked of the
+// ONE classifier, which is the only module that reads how a moment is spelled
+// -- PLAN (B) section 6: "no screen re-derives a moment".
+import {
+  runStandsAtMidRunScreenMoment,
+  runStandsAtScheduleMoment,
+} from "./run-surface-status";
 // The step from the run's review slot to what the review step draws
 // (cinatra#2970). A leaf, so this server component can call it.
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
@@ -92,18 +114,53 @@ import { RecommendationRailStepRow } from "./recommendation-rail-step";
 // own rail rows and run detail; the setup run page composes the whole frame from
 // it, with the shared row for steps that carry no anchors of their own
 // (cinatra#2970).
-import { RunSurfaceRail } from "./run-surface-rail";
+import { RunSurfaceRail, RunSurfaceRailRow } from "./run-surface-rail";
 // The step's own shape, and the setup page's step-to-row mapping. Both read from
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
 // answer (`instance-screens-client-boundary.test.ts`).
-import type { RunStepSelection, RunSurfaceRailStep } from "./run-surface-rail-step";
+import {
+  isRunSurfaceStepSelectable,
+  runSurfaceRailNumberedCount,
+  runSurfaceStepDrawsGlyph,
+  type RunInputStepKey,
+  type RunStepSelection,
+  type RunSurfaceRailStep,
+} from "./run-surface-rail-step";
 import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-steps";
 // The labels come from a module with NO "use client" directive, deliberately:
 // this screen is a server component, and a constant imported from the rail's own
 // client module reaches it as a client reference whose `.schedule` reads
 // `undefined` rather than the label (cinatra#2970).
 import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
+// The run's last step and its readings (cinatra#3029). Another module with NO
+// "use client" directive, for the same reason the labels are: the server screen
+// reads the real words.
+import {
+  RUN_MADE_STEP_LABEL,
+  runMadeReading,
+  type RunMadeArtifactRow,
+} from "./run-made-reading";
+import { RunMadeStepSurface } from "./run-made-step-surface";
+import { buildRunInputRailSteps } from "./run-input-rail-steps";
+// The gate's own screen names its rail row, by the same rule the gate's card
+// titles itself (cinatra#3221) -- one derivation, so the row and the card
+// cannot say two different things about one gate.
+import {
+  humanizeFieldName,
+  HITL_PLACEHOLDER_FIELD_NAME,
+} from "./humanize-field-name";
+import {
+  buildRunInputSteps,
+  openRunInputStepKey,
+  runAtInputMoment,
+  runCarriesInputSteps,
+} from "./run-input-steps";
+// THE SCHEMA THE SETUP LOOP ACTUALLY ASKS FROM (cinatra#3068 convergence). A
+// stored `input_schema: {}` is resolved from the installed agent's OAS at
+// execution time, so a screen reading the stored one alone would name no input
+// step for exactly the agents whose form is nevertheless asked.
+import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { readRunTriggerByRunId } from "./trigger-store";
 // Did a confirmed conversation proposal create this run? The one fact the
 // schedule-step picker below cannot read off the trigger row itself.
@@ -301,16 +358,18 @@ export function finishedRunNoticeCopy(input: {
 }
 
 // ---------------------------------------------------------------------------
-// WHICH run panel the run-detail body mounts — and therefore which surface owns
-// the `run_card` lifecycle host (cinatra#2573, epic #2564 D-1).
+// WHICH run panel the run-detail body mounts (cinatra#2573, epic #2564 D-1).
 //
 // The branch itself is not new; it is lifted out of the JSX because a SECOND
-// reader now depends on it. `AgenticRunPanel` (reached through
-// `SetupCompletionWatcher`) declares `LifecycleCardSurfaceProvider host="run_card"`
-// and mounts `RecommendationHoldCard` itself, so the screen must NOT mount a
-// second one on that branch — a duplicate decided summary is exactly the
-// four-renderer defect this slice retires. Keeping the branch inline in two
-// places is how the two would drift back apart.
+// reader depends on it: `runDetailPanelKind` is the picker that makes the two
+// `run_card` review-gate adapters — this screen's agentic panel and its stepper
+// panel — mutually exclusive, which is the property the one-card gate cites.
+//
+// IT NO LONGER DECIDES WHO DRAWS THE SKILLS ROW (cinatra#3047). It used to: the
+// `agentic` branch's panel mounted `RecommendationHoldCard` itself, so the
+// screen stood down there and the row moved between two placements as the run
+// advanced. The panel's mount is deleted and this screen owns the row on every
+// branch, so there is no second host to select between.
 // ---------------------------------------------------------------------------
 
 /** The four shapes the run-detail right column can take. */
@@ -321,8 +380,8 @@ export type RunDetailPanelKind = "none" | "trigger" | "stepper" | "agentic";
  *
  * `"none"` is the PENDING_INPUT case: neither panel renders, because there is no
  * execution to show yet. That is the case the recommendation hold lives in — a
- * held run IS `pending_input` — which is why the screen has to host the card
- * itself rather than leaving it to a panel that is not on the page.
+ * held run IS `pending_input` — so the run detail on that branch is the gate's
+ * own step and nothing else.
  *
  * `"trigger"` is the PENDING_TRIGGER case (cinatra#2952). `pending_trigger`
  * MEANS "setup is finished and the trigger step is open, awaiting the user's
@@ -368,20 +427,6 @@ export function runDetailPanelKind(params: {
     (templateType === "orchestrator" || templateType === "flow" || stepperStepCount > 0) &&
     sourceType !== "external";
   return stepper ? "stepper" : "agentic";
-}
-
-/**
- * Does the run-detail SCREEN mount the one `recommendation_hold` card itself?
- *
- * TRUE unless the panel below already declares `run_card` and draws it. There is
- * no third answer: every branch draws the card exactly once, either here or in
- * the panel, so the interaction has ONE renderer on this surface at all times.
- *
- * The `trigger` branch (cinatra#2952) mounts no run panel at all, so the screen
- * keeps the card there, exactly as it does on `none` and `stepper`.
- */
-export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolean {
-  return panel !== "agentic";
 }
 
 /**
@@ -454,11 +499,14 @@ export function screenDrawsPageRail(params: {
     stepperStepCount: params.stepperStepCount,
   });
 }
-/** The statuses that ARE an execution: the run fired and is in it, or died in it. */
+/**
+ * The statuses that ARE an execution: the run fired and is in it, or died in it.
+ *
+ * `pending_approval` and `queued` ARE NOT AMONG THEM -- see the note in the
+ * function below.
+ */
 const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "queued",
   "running",
-  "pending_approval",
   "waiting_trigger",
 ]);
 
@@ -472,6 +520,28 @@ const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
  * execution) and `stopped` is what a CANCELLED schedule leaves behind, so for
  * the terminal statuses the RECORD is the answer — persisted step results, run
  * messages, or streamed text. For the live statuses the status is the record.
+ *
+ * AND NEITHER `pending_approval` NOR `queued` IS EVIDENCE OF A RECORD
+ * (cinatra#3184, fix legs 3 and 4). Both sat in the live set above, read as "in
+ * an execution, with or without output yet". A run reaches either one BEFORE it
+ * has produced anything: answering the run's skills question releases the run,
+ * the release dispatches it -- which is the `queued` row -- and the gate it
+ * parks at next writes `pending_approval` behind it.
+ *
+ * `queued` IS THE ONE THE LIVE ROUND CAUGHT, and it is the reason leg 3's green
+ * tests did not move the boot. The decision's own round trip returns the moment
+ * the dispatch lands, so the refresh the row fires next renders the run at
+ * `queued`, not at the `pending_approval` leg 3 modelled: on the boot the run
+ * page read the row at 05:55:13.4Z as `queued` with nothing behind it, drew the
+ * one-entry rail with Setup lit, and nothing re-rendered the page after the row
+ * moved on 1.9s later. The status alone said "this run has run" of a run that
+ * had not yet been picked up.
+ *
+ * THE RECORD ANSWERS FOR BOTH, exactly as it does for the terminal statuses -- a
+ * mid-run approval and a re-queued retry each have their own history behind them
+ * and still read true, and a run parked or queued before it has produced
+ * anything reads false. `running` and `waiting_trigger` are unchanged: each
+ * names a run that is IN its execution rather than waiting to be given one.
  *
  * Exported so the regression test can pin the whole table without a DB, a
  * session or a Next.js render.
@@ -490,6 +560,301 @@ export function runHasExecutionRecord(params: {
     params.runMessageCount > 0 ||
     params.streamedTextLength > 0
   );
+}
+
+/**
+ * IS THE RUN IN THE HANDOFF BETWEEN TWO OF ITS SETUP QUESTIONS?
+ * (cinatra#3184 fix leg 4.)
+ *
+ * `queued` with no record of its own is the one moment the run has been
+ * dispatched and has still done nothing: the release CAS wrote it, and the next
+ * thing that happens is the run parking at the question it is walking to. It is
+ * a second or two wide, and it is precisely the moment the page is rendered at,
+ * because the decision's own round trip returns when the dispatch lands and the
+ * refresh follows immediately.
+ *
+ * It is NOT `atInputMoment`: no form is being asked yet, so there is no
+ * interrupt to read and nothing may be drawn as though there were. It is only
+ * the answer the rail needs -- that the run's later steps are still ahead of it
+ * -- and it is asked here, from the run's own row, rather than derived twice.
+ *
+ * Exported so the regression test can pin it without a DB or a render.
+ */
+export function runInDispatchHandoff(params: {
+  runStatus: string | null | undefined;
+  hasExecutionRecord: boolean;
+}): boolean {
+  return params.runStatus === "queued" && !params.hasExecutionRecord;
+}
+
+/**
+ * DO THE RUN'S STILL-TO-COME ROWS RIDE ON THE RAIL? (cinatra#3068 fix leg 3)
+ *
+ * The ratified drawing: "A resolved gate stays on the rail as read-only history
+ * -- its entry keeps its place", "steps already passed sit above it, steps still
+ * to come below", "so the rail is the run's whole lifecycle at a glance, not
+ * just its live tip."
+ *
+ * Fix leg 2 drew those rows only while the form was still OPEN. So the moment a
+ * person answered the run's first step, four rows became one: the settled entry
+ * stood alone and the rail was the live tip again -- the one reading the drawing
+ * forbids, measured on the third graded reading of this branch.
+ *
+ * THE ROWS RIDE FOR AS LONG AS THE RAIL CARRIES THE RUN'S INPUT STEPS, which is
+ * exactly the span that includes the answered form the drawing keeps.
+ *
+ * AND THEY STOP WHERE THE RUN'S OWN HISTORY STARTS. Once the run has produced an
+ * execution record its later rows are its REAL ones, drawn by their own steps;
+ * appending "not reached yet" placeholders beside them would draw a run steps it
+ * has already taken another way, or will never take at all.
+ *
+ * AND THE GATE STEP CARRIES THEM THE SAME WAY (cinatra#3184 item 1, convergence
+ * round). The run's input steps were the only fact these rows rode on, and an
+ * agent whose template asks no visible required input carries none: a run held
+ * at its skills question with no schedule row of its own drew the gate row and
+ * nothing else -- the one-entry rail `screenDrawsPageRail`'s own comment calls
+ * the reading the plan does not allow ("a rail holding the gate row alone shows
+ * nothing for it to be ahead of"), and the departure cinatra#3184 names. The
+ * ninth graded reading of cinatra#3047 read four rows because the run it
+ * measured carried a form; the gate is the same kind of fact and rides the same
+ * span -- for as long as the run has produced no execution record.
+ */
+export function railDrawsUpcomingRunSteps(params: {
+  inputStepIsOpen: boolean;
+  inputStepsInRail: boolean;
+  gateStepInRail: boolean;
+  hasExecution: boolean;
+}): boolean {
+  if (params.inputStepIsOpen) return true;
+  return (params.inputStepsInRail || params.gateStepInRail) && !params.hasExecution;
+}
+
+/**
+ * The setup flow's own three steps, in the order the rail draws them -- the same
+ * three the schedule screen's rail names.
+ */
+/**
+ * THE STILL-TO-COME ROWS, IN THE DRAWING'S OWN ORDER (order corrected by
+ * cinatra#3047 fix leg 8).
+ *
+ * The Skills entry heads this list because the ratified drawing puts it at the
+ * head of the rail — "that question is the run's first gate — the first entry
+ * on the step rail, where it is named Skills, ahead of the work steps it would
+ * authorize" — and an upcoming row is drawn in the place its step will take.
+ * Listing the schedule first is what drew the Skills entry third on a run that
+ * also carried an input form, which the eighth proof round photographed.
+ */
+export const UPCOMING_RUN_RAIL_STEP_KEYS = [
+  "recommendation",
+  "schedule",
+  "review",
+] as const;
+
+export type UpcomingRunRailStepKey = (typeof UPCOMING_RUN_RAIL_STEP_KEYS)[number];
+
+/**
+ * WHICH of those three the rail still owes, given what it has already drawn.
+ *
+ * NEVER TWICE: a key the rail already drew -- a live recommendation hold, an
+ * armed schedule -- keeps the row it has, so the de-duplication is part of this
+ * answer rather than a guard at the call site that a later caller could forget.
+ */
+export function upcomingRunRailStepKeys(params: {
+  drawUpcoming: boolean;
+  drawnKeys: readonly string[];
+}): UpcomingRunRailStepKey[] {
+  if (!params.drawUpcoming) return [];
+  const drawn = new Set(params.drawnKeys);
+  return UPCOMING_RUN_RAIL_STEP_KEYS.filter((key) => !drawn.has(key));
+}
+
+/**
+ * THE GATES THAT STAND AFTER THE SKILLS QUESTION — the rail keys whose presence
+ * means the run has already moved past the point its skills would be asked at.
+ */
+const RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION: ReadonlySet<string> = new Set([
+  "schedule",
+  "review",
+  "gate",
+]);
+
+/**
+ * DOES AN UNREACHED SKILLS ENTRY STILL HEAD THE RAIL? (cinatra#3221 item 3, fix
+ * leg 7.)
+ *
+ * The ratified drawing, the review surface, section II ("The Skills step — the
+ * first entry on the rail"): "WHERE a run begins by recommending the skills it
+ * proposes to use, that question is the run's first gate — the first entry on
+ * the step rail, where it is named Skills, ahead of the work steps it would
+ * authorize." The condition is the sentence's own: the entry heads the rail
+ * where the run BEGINS there. Section I fixes the other half — "steps already
+ * passed sit above it, steps still to come below" — so an entry the run has not
+ * reached never stands above the entry it is standing on.
+ *
+ * WHAT THE THIRD PROOF ROUND MEASURED. At the SCHEDULING reading the rail drew
+ * the unreached Skills forecast row above the elected Schedule step: the row was
+ * pinned to the absolute head of the rail whatever else had already been drawn
+ * (cinatra#3047 fix leg 8, which put it there for the run whose first step is
+ * its own input form — the case this keeps unchanged, because an input form is
+ * one of "the work steps it would authorize").
+ *
+ * SO THE RULE IS THE SENTENCE'S CONDITION, not a new ordering: the entry heads
+ * the rail while the run has not passed the point it would be asked at, and is
+ * NOT DRAWN once the rail already carries a LATER gate the run has reached — its
+ * schedule, or the gate it is stopped at. A question the run went past is behind
+ * the reader, and a forecast row for it is neither passed work above nor work
+ * still to come below.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function upcomingSkillsEntryHeadsTheRail(
+  drawn: readonly { key: string; reached?: boolean }[],
+): boolean {
+  return !drawn.some(
+    (step) =>
+      RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION.has(step.key) && step.reached !== false,
+  );
+}
+
+/**
+ * WHICH TAB THE RUN PAGE LIGHTS (cinatra#3068 fix leg 3).
+ *
+ * The ratified drawing, on a step drawn inside this frame: "A step shown inside
+ * the frame selects nothing ... no tab is drawn selected." The run's first step
+ * -- the agent's own input form -- is drawn inside the frame on the run's own
+ * path, and this page lit Setup under it, so the strip told the reader they were
+ * in the body of a tab while what stood there was a step.
+ *
+ * `"none"` names no trigger the strip carries, so nothing is drawn selected and
+ * the strip itself is unchanged: the same tabs on every route, which is the
+ * constant frame cinatra#2487 bought. Every other moment on this path keeps the
+ * Setup tab it has always lit.
+ *
+ * AND THE ANSWERED FORM IS STILL THAT STEP (convergence on this leg). The first
+ * reading asked only whether the form was OPEN, so the moment a person answered
+ * it and pressed its row on the rail, its read-only screen stood in the frame
+ * with Setup lit again -- the same contradiction, one press later. The span the
+ * answer reads is therefore the whole span in which the rail carries the run's
+ * input steps: for as long as the frame is drawing them, the frame is drawing a
+ * STEP, and the drawing gives that reading no lit tab. Outside that span --
+ * every moment this branch did not add -- the page lights Setup exactly as it
+ * always has, so the gate steps tracked elsewhere are left as they are.
+ *
+ * AND THE SCHEDULE STEP IS A STEP IN THIS FRAME TOO (the merge-forward with
+ * cinatra#3182 item 8). Both readings answer the SAME prop -- the run page draws
+ * one tab strip -- so the page cannot ask them one at a time. It asks this one,
+ * which owns the run's own input span and hands the schedule span to
+ * `runPageScheduleStepActiveTab` below, so neither reading is restated here and
+ * a step drawn inside the frame lights no tab whichever step it is.
+ */
+export function runPageActiveTab(params: {
+  inputStepIsOpen: boolean;
+  inputStepsInRail: boolean;
+  scheduleStepInFrame: boolean;
+  gateStepInFrame: boolean;
+}): "setup" | "none" {
+  if (params.inputStepIsOpen || params.inputStepsInRail) return "none";
+  if (params.gateStepInFrame) return "none";
+  return runPageScheduleStepActiveTab({
+    scheduleStepInFrame: params.scheduleStepInFrame,
+  });
+}
+
+/**
+ * AND THE SKILLS GATE IS A STEP IN THIS FRAME TOO (cinatra#3184 item 3).
+ *
+ * Application Design — Agents, the run view's conditional-tab section: "A step
+ * shown inside the frame selects nothing ... no tab is drawn selected: what sits
+ * under the strip is that step, not the body of a tab", and "A step drawn inside
+ * this frame never lights a tab the strip does not carry". The same section
+ * fixes what does NOT move for it: "The frame, the title row and the etched rule
+ * are unchanged."
+ *
+ * The run's own input span and the schedule span each already answer this, and
+ * the skills gate is the one step inside this frame neither of them covers: a
+ * run held at its skills question drew that step in the frame and the strip lit
+ * Setup under it, which is the reading the drawing forbids.
+ *
+ * THE SPAN, NOT THE MOMENT — the same shape the input span above is written in.
+ * The strip's answer is a SERVER prop; the rail's selection is the reader's own
+ * client state and changes without a server round trip. An answer scoped to "the
+ * gate is open right now" would therefore light Setup again the moment a reader
+ * pressed the settled gate's row and its read-only card stood in the frame. The
+ * span this reads is the whole span in which the gate's row CAN BE OPENED and
+ * the run has produced no execution record, so the held reading and the
+ * re-opened settled reading both fall inside it, and every moment outside it
+ * keeps the Setup tab this page has always lit.
+ *
+ * WHY "CAN BE OPENED" AND NOT "HAS AN ENTRY" (convergence round, fix leg 2). A
+ * hold that expires undecided leaves a terminal `policy_unresolved` park with no
+ * evidence behind it: the entry still reads `settled`, so the rail keeps the
+ * row, but `recommendationRailStepOpens` closes it — it is drawn muted, it opens
+ * nothing, and what stands in the frame is the run detail, not a step. Reading
+ * the ENTRY there would darken the whole strip over a page that is showing no
+ * step at all, which is the same contradiction inverted. The page's own
+ * "can this row be opened" answer is therefore the fact this rides on, and it is
+ * read once above and handed to the rail and to this question alike.
+ *
+ * WHERE THIS ANSWER STOPS, NAMED. The span ends at the run's own execution
+ * record. A reader who opens a run ALREADY UNDER WAY and then presses the
+ * settled gate's row is shown the settled card with Setup still lit, because
+ * that moment is not answerable from here: `activeTab` is a server-rendered prop
+ * on the page layout, while the row press is client state inside the rail's own
+ * provider, which wraps the two columns and not the strip above them. Joining
+ * them is a page-tree change and is not this leg's.
+ *
+ * Exported so the regression test can read the rule without a DB or a render.
+ */
+export function runGateStepInFrame(params: {
+  /** The page's own answer that the gate's row opens onto a surface — the
+   *  `recommendationRailStepOpens` reading, not the bare entry. */
+  gateStepOpens: boolean;
+  hasExecution: boolean;
+}): boolean {
+  return params.gateStepOpens && !params.hasExecution;
+}
+
+/**
+ * NO TAB IS LIT WHILE THE SCHEDULE STEP STANDS IN THE FRAME (cinatra#3182
+ * item 8).
+ *
+ * Application Design — Agents, the run view's conditional-tab section: "Then the
+ * strip is the two-tab reading — Setup and Permissions — and no tab is drawn
+ * selected: what sits under the strip is that step, not the body of a tab, so
+ * none of the tabs is lit for it. ... A step drawn inside this frame never
+ * lights a tab the strip does not carry."
+ *
+ * The run page drew that step and lit Setup under it, so the strip told the
+ * reader they were in the body of the Setup tab while what stood there was the
+ * scheduling step. `"none"` names no trigger the strip carries, so nothing is
+ * drawn selected and the strip itself is unchanged. Every other moment on this
+ * path keeps the Setup tab it has always lit.
+ *
+ * Exported so the regression test can read the rule without a DB or a render.
+ */
+export function runPageScheduleStepActiveTab(params: {
+  scheduleStepInFrame: boolean;
+}): "setup" | "none" {
+  return params.scheduleStepInFrame ? "none" : "setup";
+}
+
+/**
+ * AND THE SAME ANSWER ON THE SCHEDULE ROUTE (cinatra#3182 item 8; this is also
+ * the residual cinatra#3168 names).
+ *
+ * The route mounted the frame on the schedule tab unconditionally. While
+ * the run carries a persisted scheduled/recurring row the strip DOES draw that
+ * tab and lighting it is right. While it does not — the transient first-step
+ * scheduling gate — the route was naming a tab the strip does not render at
+ * all: a reference to an absent tab, and a step lighting a tab either way.
+ *
+ * Exported for the same reason as the reading above.
+ */
+export function scheduleRouteActiveTab(params: {
+  persistentScheduleTab: boolean;
+}): "trigger" | "none" {
+  return params.persistentScheduleTab ? "trigger" : "none";
 }
 
 /**
@@ -561,8 +926,43 @@ export function runDetailInitialStep(params: {
   recommendationHeld: boolean;
   hasScheduleStep: boolean;
   hasExecution: boolean;
+  /**
+   * THE RUN'S OWN INPUT FORM, WHERE ONE IS BEING ASKED (cinatra#3068).
+   *
+   * It heads the ladder because it heads the rail: a run standing at its input
+   * form is standing at the step the drawing highlights, and the form is that
+   * step's screen. `null` — which is every moment no form is open, including a
+   * run that has not been dispatched yet — leaves the S9d/S9f ladder below
+   * exactly as it was.
+   */
+  openInputStepKey?: RunInputStepKey | null;
+  /**
+   * IS THE RUN STOPPED AT A GATE THAT ARRIVES AS A TRAILING ENTRY?
+   * (cinatra#3221, acceptance item 1.) Read by `runParkedAtTrailingGate` below,
+   * and passed in rather than re-derived so the step the rail ELECTS and the
+   * entry the rail DRAWS are one answer.
+   */
+  parkedGateStep?: boolean;
 }): RunStepSelection {
+  // THE RUN'S FIRST GATE OPENS FIRST (cinatra#3047 fix leg 8). The rail lists
+  // the Skills entry above the run's own input forms because the drawing puts
+  // it there, and the step the detail opens on is the step the rail
+  // highlights — so a held Skills question wins over an open form, exactly as
+  // it wins the place above it. Once that question is no longer held the form
+  // opens as cinatra#3068 shipped it.
   if (params.hasRecommendationStep && params.recommendationHeld) return "recommendation";
+  if (params.openInputStepKey) return params.openInputStepKey;
+  // AND THE GATE THE RUN IS STOPPED AT, WHERE NO ENTRY ABOVE IS THAT GATE
+  // (cinatra#3221, fix leg 2). The ratified drawing: "The step the run is paused
+  // on is highlighted." The two rungs above are themselves gates and each has an
+  // entry of its own; a human-in-the-loop screen the agent opened mid-run had
+  // none, so this ladder fell through to "detail" -- a selection no row carries
+  // -- and the rail elected nothing at all while the gate's own card stood in
+  // the detail beside it. It ranks BELOW those two for the same reason they
+  // rank above each other: a run is stopped at one place, and where two gates
+  // could both read as open the one the rail draws first is the one the reader
+  // is standing on.
+  if (params.parkedGateStep) return "gate";
   if (
     runDetailOpensOnSchedule({
       hasScheduleStep: params.hasScheduleStep,
@@ -575,10 +975,238 @@ export function runDetailInitialStep(params: {
   return "detail";
 }
 
-type ScreenProps = {
+/**
+ * IS THE RUN STOPPED AT A GATE THE RAIL CARRIES NOWHERE ELSE? (cinatra#3221.)
+ *
+ * The ratified drawing names four gate entries -- the skills question, the
+ * schedule, a review to decide, and "a list to pick one thing from". The first
+ * three head the rail under a word of their own and are elected by the ladder
+ * above; the fourth is a human-in-the-loop screen the agent opens MID-RUN, and
+ * it had no entry, so nothing was elected on it.
+ *
+ * THE DISCRIMINATOR IS THE RECORDED MOMENT, NEVER THE STATUS -- a setup pause, a
+ * review gate and a mid-run screen are all `pending_approval`, so the status
+ * alone would put this entry under a reviewer's decision and draw a second row
+ * for a gate the spine already carries. The moment itself is READ BY THE ONE
+ * CLASSIFIER and only asked here (`runStandsAtMidRunScreenMoment`, fix leg 3):
+ * this rule composes the rail's own facts -- the status, a usable gate context,
+ * and the two entries that outrank it -- with the classifier's answer, and it
+ * never learns how a moment is spelled. PLAN (B) section 6: "no screen
+ * re-derives a moment."
+ *
+ * AND ONLY WHERE NO ENTRY ABOVE IS ALREADY THAT GATE: a held skills question
+ * and an open input form each have their own row, and a second row for the same
+ * pause would be one gate drawn twice.
+ *
+ * Fails CLOSED: a run whose gate context could not be derived states nothing
+ * here, and the rail is exactly what it was.
+ *
+ * AND "DERIVED" MEANS USABLE, NOT MERELY NON-NULL (convergence round, fix leg
+ * 2). `deriveRunHitlContext` has a synthetic last resort for a WayFlow gate
+ * whose interrupt is gone and whose durable row lost its renderer: it returns a
+ * context with an EMPTY `xRenderer` and an empty schema. That context is not a
+ * gate anyone can answer -- the panel's own "has xRenderer" check refuses it and
+ * draws nothing -- so electing a row for it would open the empty column the
+ * ruling forbids, on the very reading this fix exists to repair. The caller
+ * passes the renderer's presence, not the context's.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function runParkedAtTrailingGate(params: {
+  runStatus: string | null | undefined;
+  lifecycleMoment: string | null | undefined;
+  gateContextUsable: boolean;
+  recommendationHeld: boolean;
+  openInputStepKey?: RunInputStepKey | null;
+}): boolean {
+  if (params.runStatus !== "pending_approval") return false;
+  if (!params.gateContextUsable) return false;
+  if (!runStandsAtMidRunScreenMoment(params.lifecycleMoment)) return false;
+  if (params.recommendationHeld) return false;
+  if (params.openInputStepKey) return false;
+  return true;
+}
+
+/**
+ * THE TWO STATUSES A RUN WAITS AT ITS SCHEDULE IN (cinatra#3221, fix leg 8).
+ *
+ * The coordinator's own park: `pending_trigger` while the person's choice is
+ * outstanding, `armed` once the choice named an instant. Named here as the
+ * statuses the RAIL reads, beside the moment it reads them with, so the screen
+ * never spells a moment of its own.
+ */
+const RUN_SCHEDULE_PARK_STATUSES: ReadonlySet<string> = new Set([
+  "pending_trigger",
+  "armed",
+]);
+
+/**
+ * IS THE RUN STOPPED AT ITS SCHEDULE STEP? (cinatra#3221, fix leg 8.)
+ *
+ * The ratified drawing, the step rail: "The step the run is paused on is
+ * highlighted; steps already passed sit above it, steps still to come below."
+ *
+ * WHAT THE FOURTH PROOF ROUND MEASURED. Two of the drawing's gate classes were
+ * closed by legs 6 and 7. The third -- the SCHEDULING gate -- still elected
+ * nothing: on the run route the reading measured zero elected entries while the
+ * schedule form stood in the detail beside the rail, and the still-to-come
+ * Skills row was drawn ABOVE the step the run was stopped at.
+ *
+ * The cause is the same shape as the other two, through a third road. The rail
+ * drew a schedule ROW only for a run that already holds a trigger row
+ * (`scheduleRailRef`), because that row is what the schedule CARD opens onto. A
+ * run parked at `pending_trigger` has not chosen its trigger yet, so it holds no
+ * such row -- and the very run standing at the schedule step was the one run
+ * with no entry for it. Its step was drawn instead as a still-to-come forecast
+ * row, which no election can elect.
+ *
+ * SO THE ROW IS READ FROM THE RUN'S OWN ROW, not from the trigger table: the
+ * moment the coordinator recorded when it parked the run there
+ * (`runStandsAtScheduleMoment`) plus the status the park uses. The step it
+ * elects opens the run detail, where the schedule form the reader is answering
+ * already stands -- never a second mount of it.
+ *
+ * AND ONLY WHERE NO ENTRY ABOVE IS ALREADY THAT GATE, for the reason the
+ * trailing-gate predicate above states: a held skills question and an open input
+ * form each have their own row, and a run standing at one of them is not
+ * standing here.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function runParkedAtScheduleGate(params: {
+  runStatus: string | null | undefined;
+  lifecycleMoment: string | null | undefined;
+  recommendationHeld: boolean;
+  openInputStepKey?: RunInputStepKey | null;
+}): boolean {
+  if (typeof params.runStatus !== "string") return false;
+  if (!RUN_SCHEDULE_PARK_STATUSES.has(params.runStatus)) return false;
+  if (!runStandsAtScheduleMoment(params.lifecycleMoment)) return false;
+  if (params.recommendationHeld) return false;
+  if (params.openInputStepKey) return false;
+  return true;
+}
+
+/**
+ * THE RAIL WITHOUT A SKILLS ENTRY THE RUN HAS ALREADY GONE PAST (cinatra#3221
+ * item 3, fix leg 8).
+ *
+ * Leg 7 wrote this rule for the run page's own forecast rows and the fourth
+ * proof round found the SCHEDULING reading still breaking it on the trigger
+ * route, where the rail is composed from the setup steps themselves rather than
+ * from the forecast list: the unreached Skills entry was drawn above the elected
+ * Schedule step, which is neither passed work above nor work still to come
+ * below.
+ *
+ * ONE RULE, ASKED WHEREVER THE ROWS ARE ASSEMBLED: an UNREACHED Skills entry is
+ * not drawn once the rail carries a later gate the run has reached. A Skills
+ * entry the run DID reach keeps its place either way -- it is the run's own
+ * history, and the drawing keeps a resolved gate on the rail.
+ */
+export function railStepsWithoutAnUnreachedSkillsEntry<
+  T extends { key: string; reached?: boolean },
+>(steps: readonly T[]): T[] {
+  const laterGateReached = !upcomingSkillsEntryHeadsTheRail(
+    steps.filter((step) => step.key !== "recommendation"),
+  );
+  if (!laterGateReached) return [...steps];
+  return steps.filter(
+    (step) => !(step.key === "recommendation" && step.reached === false),
+  );
+}
+
+/**
+ * The word the context selector's own card falls back on when the gate names
+ * neither a slot nor a field (`context-selector-renderer.tsx`). Held here so
+ * the rail row and the card fall back on ONE word.
+ */
+export const PARKED_GATE_RAIL_STEP_FALLBACK_LABEL = "Context";
+
+/**
+ * WHAT THE PARKED GATE'S ROW SAYS (cinatra#3221).
+ *
+ * "The rail lists the run's steps in order" -- so the row names what the step
+ * SHOWS, and the gate's own screen is what it shows. The card titles itself by
+ * humanizing the context slot the gate is selecting for, falling back to the
+ * gate's field name and then to one word; this reads the same three, in the same
+ * order, from the gate context the screen already derived, so the row on the
+ * rail and the title on the card cannot drift.
+ *
+ * THE WIRING PLACEHOLDER IS NOT A NAME (cinatra#2541): `hitl-field` is a
+ * DOM-id and registry key the single-field panels pass when the interrupt
+ * carries no field identity, and humanizing it produces "Hitl Field" -- the
+ * defect that issue reports. It is skipped rather than humanized.
+ */
+export function parkedGateRailStepLabel(params: {
+  values?: Record<string, unknown> | null;
+  fieldName?: string | null;
+}): string {
+  const slotId = contextSlotIdInGateValues(params.values);
+  if (slotId) return humanizeFieldName(slotId);
+  const fieldName = params.fieldName?.trim();
+  if (fieldName && fieldName !== HITL_PLACEHOLDER_FIELD_NAME) {
+    return humanizeFieldName(fieldName);
+  }
+  return PARKED_GATE_RAIL_STEP_FALLBACK_LABEL;
+}
+
+/**
+ * The context slot a gate's values are selecting for, where they carry one.
+ *
+ * READ AT THE TOP LEVEL, WHICH IS WHERE THE PAYLOAD PUTS IT (convergence round,
+ * fix leg 2). The context-selection payload is SPREAD into the interrupt's
+ * values, so `slotMeta` sits beside `candidates` and `selectedRefs` on the
+ * values record itself -- `execution.ts` recognises a context gate by exactly
+ * that shape (`parsed["slotMeta"]`), `hitl-gate-submit.ts` lifts the trusted
+ * slot from exactly that place (`vals["slotMeta"]`), and the card reads
+ * `v.slotMeta?.slotId` off the one value the panel hands it. A scan one level
+ * DOWN, through each value in the record, matches none of those: a real gate
+ * carrying `slotMeta.slotId = "draftContext"` would have found nothing, and the
+ * rail row would have said "Context" while the card beside it said "Draft
+ * Context" -- the exact drift this leaf exists to prevent.
+ */
+function contextSlotIdInGateValues(
+  values: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!values || typeof values !== "object") return null;
+  const slotMeta = (values as { slotMeta?: unknown }).slotMeta;
+  if (!slotMeta || typeof slotMeta !== "object") return null;
+  const slotId = (slotMeta as { slotId?: unknown }).slotId;
+  if (typeof slotId === "string" && slotId.trim().length > 0) return slotId.trim();
+  return null;
+}
+
+export type ScreenProps = {
   agentId: string;          // template slug from URL
   instanceId: string;       // runId or "new"
   searchParams?: Record<string, string | string[] | undefined>;
+  /**
+   * The scope base this screen is mounted under (cinatra#2809, epic #2806) —
+   * `/teams/<id>`, `/organizations/<id>`, `/projects/<id>`, `/workspace`,
+   * `/personal`, or absent on the bare global route.
+   *
+   * The screens need it for exactly two things, and for nothing else: to send a
+   * freshly created run to its own scope's address, and to decide — AFTER the
+   * access door below has cleared — whether the reader is looking at the
+   * instance's canonical home or at another address for it.
+   */
+  scopeBase?: string | null;
+  /**
+   * The scope this screen is mounted under, as the vantage itself rather than
+   * as its route (cinatra#2809). The launcher mints the run's launch anchor
+   * from it — the ONE caller that knows which vantage the person was standing
+   * on when they pressed Run.
+   */
+  launchScope?: ScopeSurfaceRef | null;
+  /**
+   * The scope's own resolved name, read by the scoped route behind that scope's
+   * read gate (cinatra#2809 fix leg 2). `null` or absent where the reader may
+   * not be told it; the crumb then falls back to the id's first eight
+   * characters plus an ellipsis, never a title-cased raw id.
+   */
+  scopeTitle?: string | null;
 };
 
 /**
@@ -641,7 +1269,13 @@ function serializeRunMessages(
   }));
 }
 
-export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
+export async function SetupScreen({
+  agentId,
+  instanceId,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
 
@@ -660,9 +1294,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       includeNonPublished: true,
     });
     if (!template) notFound();
-    const result = await createAndTriggerRunWithContext(actorUserId, actorOrgId, template);
+    // STAMPED FROM THE EXACT LAUNCH ROUTE (cinatra#2809): the vantage this
+    // launcher is mounted under, minted through the one function that
+    // validates the union. A launcher on the bare global route mints nothing,
+    // and its run is unanchored — the honest record of a launch made from no
+    // vantage.
+    const result = await createAndTriggerRunWithContext(
+      actorUserId,
+      actorOrgId,
+      template,
+      launchScopeAnchorForScope(launchScope ?? null, actorUserId),
+    );
     if (result.ok) {
-      redirect(`/agents/${agentId}/${encodeURIComponent(result.runId)}`);
+      // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
+      // launched from a vantage belongs to it, so the fresh run's address is
+      // this launcher's own scope base plus the one agent-path grammar.
+      redirect(
+        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
+          scopeBase: scopeBase ?? null,
+        }),
+      );
     }
     notFound();
   }
@@ -700,6 +1351,29 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       if (err instanceof AuthzError) notFound();
       throw err;
     }
+    // ONE CANONICAL HOME (cinatra#2809, epic #2806). A run launched from a
+    // vantage lives at that vantage's address, and every other address for it —
+    // the bare global route, another scope's route — sends the reader there.
+    //
+    // AFTER THE ACCESS DOOR ABOVE, and before ANY instance content is rendered:
+    // redirecting first would tell an unauthorized reader that the run exists
+    // and where it lives, and rendering first would draw the instance twice.
+    // An unanchored, legacy, A2A or PERSONAL-anchored run answers null here and
+    // stays exactly where it is — `/personal` is actor-relative, and a run can
+    // have other authorized viewers.
+    const home = homeRedirectFor(
+      buildAgentInstancePath(agentId, instanceId, { scopeBase: scopeBase ?? null }),
+      canonicalRunPath({
+        agentPackageName: agentId,
+        instanceId,
+        // Decoded HERE, at the surface that addresses the instance: the
+        // column is surfaced as stored, and anything this build cannot vouch
+        // for — an unknown version, an unknown kind, a missing id, a workspace
+        // arm carrying one — reads UNANCHORED and stays on the bare route.
+        anchor: parseLaunchScopeAnchor(run.launchScopeAnchor),
+      }),
+    );
+    if (home) redirect(home);
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -728,7 +1402,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const policySteps = template.approvalPolicy?.steps ?? [];
   // Shared with the agent-run review surface via buildRunStepperSteps (cinatra#2063)
   // so both surfaces render the identical step list in lockstep.
-  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>);
+  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>, {
+    // The run's own record of each step, for a declaration that names nothing
+    // (cinatra#3226): a work step is named by its work, never by an ordinal.
+    stepResults: (run?.stepResults ?? null) as readonly unknown[] | null,
+  });
 
   // Batch-fetch sub-agent descriptions for tooltip content.
   const childPackages = Array.from(new Set(
@@ -787,8 +1465,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // makes it this slice's work: "no schedule step in the rail today; the armed
   // schedule has Cancel / Release on a Trigger tab → S9d makes the schedule a
   // dedicated step above '1 Review'". So the card no longer sits in the trigger
-  // screen's body — it is the first ROW of this page's left rail, and the rail
-  // renumbers itself around it (`stepOffset`).
+  // screen's body — it is a ROW of this page's left rail, the first of the rows
+  // that carry a NUMERAL (the Skills entry heads the rail ahead of it and takes
+  // none, cinatra#3047), and the rail renumbers itself around it (`stepOffset`).
   //
   // ONLY FOR A RUN THAT HAS A SCHEDULE. A run with no trigger row has nothing
   // for the step to open onto — the card would resolve `absent` and draw no DOM
@@ -841,6 +1520,29 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       completedRunMessages.length > 0 ||
       (run.streamedText ?? "") !== "");
 
+  // HAS THE AGENT RUN AT ALL? A gate step is the run detail's first paint while
+  // it has not (cinatra#2788, S9d; cinatra#2790, S9f) -- there is no progress to
+  // show, and plan (A) SS7.2 step 5 forbids showing one with the schedule.
+  // READ ONCE, ASKED THREE TIMES (cinatra#3068 fix leg 3; cinatra#3184 fix leg
+  // 4): the step the run detail opens on, whether the rail still owes the run's
+  // later steps, and -- since leg 4 -- whether the run is still inside its own
+  // setup span at all are questions about ONE fact, so the fact is read here,
+  // above every reading that asks it, rather than derived apart and able to
+  // disagree.
+  const runHasExecution = runHasExecutionRecord({
+    runStatus: run?.status ?? null,
+    stepResultCount: run?.stepResults?.length ?? 0,
+    runMessageCount: completedRunMessages.length,
+    streamedTextLength: (run?.streamedText ?? "").length,
+  });
+  // AND THE SECOND OR TWO IN WHICH IT HAS BEEN DISPATCHED AND DONE NOTHING --
+  // the moment the page is rendered at right after the skills question is
+  // answered (cinatra#3184 fix leg 4).
+  const runBetweenSetupQuestions = runInDispatchHandoff({
+    runStatus: run?.status ?? null,
+    hasExecutionRecord: runHasExecution,
+  });
+
   // THE GATE, DERIVED BEFORE THE PAGE IS SERVED (cinatra#2729 defect 2).
   //
   // A paused run's form used to appear only after the client's first stream
@@ -857,6 +1559,72 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const initialHitlContext = run
     ? await deriveRunHitlContext(run, { template }).catch(() => null)
     : null;
+
+  // ── THE RUN'S OWN INPUT STEPS (cinatra#3068) ─────────────────────────────
+  //
+  // The first step a person meets on this page is the agent's own input form,
+  // and it was the ONE moment of the run that did not read as a step: it was
+  // drawn inside a step-less "Agentic Run Progress" panel with no step list
+  // beside it, while every later moment is an entry in the rail with its own
+  // screen in the detail column. The forms are named here, from the template's
+  // declared inputs and what the run already carries — the same walk the setup
+  // loop makes — so the rail can carry them from this page's FIRST render.
+  //
+  // WHICH form is open is the run's own answer, and the discriminator is the
+  // interrupt rather than the status: a setup-loop pause and a mid-run review
+  // gate are both `pending_approval`.
+  //
+  // AND THE WHOLE DESCRIPTOR IS HANDED OVER, not the task id alone (cinatra#2928).
+  // The moment is read by the one classifier every other surface asks, and that
+  // reader needs the run's own recorded moment beside the derived gate context
+  // — the same pair the status badge is handed. Narrowing this to a review-task
+  // id would leave the rail re-deriving the moment from the retired `setup-`
+  // prefix, so a run that STATES it waits at a field, and a setup payload
+  // carried as a field name, would draw no first step while the badge beside it
+  // already read "Awaiting input".
+  //
+  // THE RESOLVED SCHEMA, not the stored one: `execution.ts` walks
+  // `resolveTemplateInputSchema(template)`, which derives the fields from the
+  // installed agent's OAS when the row's own schema is empty. Reading
+  // `template.inputSchema` here would name no step for precisely the agents
+  // whose form the loop still asks (cinatra#3068 convergence).
+  const resolvedInputSchema = await resolveTemplateInputSchema(template);
+  const runLifecycleMoment = run?.lifecycleMoment ?? null;
+  const atInputMoment = runAtInputMoment({
+    runStatus: run?.status ?? null,
+    interrupt:
+      initialHitlContext === null && runLifecycleMoment === null
+        ? null
+        : { ...(initialHitlContext ?? {}), lifecycleMoment: runLifecycleMoment },
+  });
+  const runInputSteps = buildRunInputSteps({
+    required: resolvedInputSchema.required,
+    properties: resolvedInputSchema.properties,
+    inputParams,
+    atInputMoment,
+  });
+  // AND ONLY WHILE THE RUN IS AT ITS INPUT. Once every form is answered the run
+  // has left its first step behind and this rail is the schedule /
+  // recommendation / review rail it has always been — and a run that never
+  // answered its form but failed, was cancelled, or is paused at a mid-run
+  // review gate is not at its input either, so it keeps the surface it had.
+  // AND ACROSS THE DISPATCH HANDOFF (cinatra#3184 fix leg 4): a run released by
+  // its skills question and not yet parked at the next one has answered no form
+  // and is asked none, so both clauses above said the rail carries nothing --
+  // and the row the drawing keeps "still to come" went with them.
+  const inputStepsInRail = runCarriesInputSteps(
+    runInputSteps,
+    atInputMoment,
+    runBetweenSetupQuestions,
+  );
+  const openInputStepKey = openRunInputStepKey(runInputSteps);
+  // TWO FACTS, NOT ONE (cinatra#3068 fix leg 2). Since the rail keeps an
+  // ANSWERED form as read-only history, "the rail carries an input row" and
+  // "this panel is drawing the input form" stopped being the same fact. The
+  // panels are told the SECOND one: the step-less heading and the run-progress
+  // reading retire only while the form is the step being drawn, so a run that
+  // has moved on keeps the progress panel -- and its status badge -- it had.
+  const inputStepIsOpen = openInputStepKey !== null;
 
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
@@ -1051,8 +1819,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
   const recommendationHeld = recommendationPark?.status === "parked";
 
-  // WHICH panel the right column mounts — and therefore whether the card is
-  // hosted by this screen or by the panel. See `runDetailPanelKind`.
+  // WHICH panel the right column mounts. See `runDetailPanelKind`.
   const runDetailPanel = runDetailPanelKind({
     runStatus: run?.status ?? null,
     templateType: template.type,
@@ -1063,49 +1830,195 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     hasTriggerRow: trigger !== null,
   });
 
-  // Does the SCREEN own the recommendation card on this branch? On the
-  // `agentic` branch the panel inside the run detail mounts the card itself
-  // (`screenHostsRecommendationCard`), and a step opening onto a card another
-  // module draws would be a second mount of the one renderer.
-  const hostsRecommendationCard = screenHostsRecommendationCard(runDetailPanel);
-
-  // IS THERE AN ENTRY, AND HOW DOES IT READ? That is not the same question as
-  // "who draws the card" (cinatra#2790, S9f — R6). The ratified run-surface
-  // drawing: "A resolved gate stays on the rail as read-only history — its entry
-  // keeps its place and records how it was settled." Tying the ENTRY to the host
-  // gate made a decided run lose it on this branch — a decided run has been
-  // dispatched, so it is no longer `pending_input`, the panel takes the card
-  // over, and the row vanished from the rail with the whole frame behind it. A
-  // history row does not need a surface of its own to justify its place, so the
-  // settled entry survives every branch — on THIS one by opening nothing, and on
-  // the branch this screen hosts by opening the same read-only card as before.
+  // IS THERE AN ENTRY, AND HOW DOES IT READ? The ratified run-surface drawing:
+  // "A resolved gate stays on the rail as read-only history — its entry keeps
+  // its place and records how it was settled." The run's own park row is the
+  // whole reading (cinatra#2790, S9f — R6; cinatra#3047): a live hold is the
+  // step the run is paused on, a decided one is the history row, and both open
+  // the ONE card this screen mounts.
   const recommendationEntry = recommendationRailEntry({
     hasPark: recommendationPark !== null,
     held: recommendationHeld,
-    hostsCard: hostsRecommendationCard,
   });
   const hasRecommendationStep = recommendationEntry !== "none";
+
+  /**
+   * IS THE TWO-COLUMN RUN FRAME DRAWN BESIDE THE DETAIL COLUMN?
+   * (cinatra#3047 fix leg 8.)
+   *
+   * The frame is drawn whenever the rail has an entry to list, which is the
+   * same facts the rail is built from below -- FOUR of them since cinatra#3221
+   * fix leg 2 added the trailing gate entry. A parked context gate mounts the
+   * rail on its own, so a frame answer that did not count it told both panel
+   * branches "no frame" while the frame was standing, and the panel drew its own
+   * section plate around a gate card that already has the page: the second
+   * stacked card this very contract forbids. The panels in that column
+   * need it because the drawing gives the step's own card the whole page —
+   * "One page per gate — the step's own card, and nothing else ... two cards
+   * are never stacked in one detail" — so a panel that draws its own section
+   * plate inside the frame stacks a second card around the gate. Read once
+   * here rather than re-derived in each panel.
+   */
+  // THE GATE THE RUN IS STOPPED AT, AS A TRAILING RAIL ENTRY (cinatra#3221, fix
+  // leg 2). READ ONCE, ASKED THREE TIMES: the frame the panels are told about,
+  // the step the rail ELECTS and the row the rail DRAWS are three questions
+  // about one fact, so the fact is read here -- above the frame answer, which is
+  // why it stands this early -- and handed to all three rather than derived
+  // separately and able to disagree, which is exactly how a rail comes to elect
+  // a step it never drew.
+  const parkedGateStep = runParkedAtTrailingGate({
+    runStatus: run?.status ?? null,
+    lifecycleMoment: runLifecycleMoment,
+    // A gate with no renderer is not a gate a reader can answer; see the
+    // predicate's own note.
+    gateContextUsable: (initialHitlContext?.xRenderer ?? "").length > 0,
+    recommendationHeld,
+    openInputStepKey,
+  });
+  const parkedGateStepLabel = parkedGateStep
+    ? parkedGateRailStepLabel({
+        values: initialHitlContext?.currentValues ?? null,
+        fieldName: initialHitlContext?.fieldName ?? null,
+      })
+    : null;
+  // THE SCHEDULE STEP THE RUN IS STOPPED AT (cinatra#3221, fix leg 8). READ
+  // ONCE, ASKED THREE TIMES, exactly as the trailing gate above: the frame, the
+  // step the rail ELECTS and the row the rail DRAWS are three questions about
+  // one fact.
+  const parkedScheduleStep = runParkedAtScheduleGate({
+    runStatus: run?.status ?? null,
+    lifecycleMoment: runLifecycleMoment,
+    recommendationHeld,
+    openInputStepKey,
+  });
+  const railFramesTheRunDetail =
+    inputStepsInRail ||
+    hasRecommendationStep ||
+    scheduleRailRef !== null ||
+    parkedScheduleStep ||
+    parkedGateStep;
+  // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
+  // skill picker inside itself for a run whose skills were decided on the card
+  // ("The agentic run progress card appears once the skills are decided; no
+  // skill inside it can be selected"). The panel used to read this off a
+  // recommendation card of its own; that mount is gone (cinatra#3047), so the
+  // host that draws the card answers for it — here, from the run's own row.
+  //
+  // ASKED OF THE CARD'S OWN MODULE, not derived here. "Decided" is defined by
+  // one ladder — a selection set on file, or a skip record, behind a terminal
+  // park — and that ladder lives beside the resolver that draws the settled
+  // reading (`recommendationDecidedForRun`). A screen that read the park's
+  // STATUS alone would be a second definition and a wrong one: the status and
+  // the evidence are not written atomically, so a confirm or skip that races the
+  // TTL sweeper leaves a `policy_unresolved` park with a real decision behind it
+  // — decided to the card, undecided to a status test, and the forbidden picker
+  // back on the page.
+  const recommendationDecided = run
+    ? recommendationDecidedForRun({
+        runId: run.id,
+        parkStatus: recommendationPark?.status ?? null,
+      })
+    : false;
+
+  // AND WHAT DOES THE SETTLED STEP SAY? — the page's OWN reading of the run's
+  // recorded decision (cinatra#3047, review point C, the re-shoot round).
+  //
+  // WHAT WAS MISSING, precisely. This page projected the decision as ONE BOOLEAN
+  // and nothing else: `recommendationDecided` above, which the run panel needs
+  // and which says only THAT the question was answered. The decision's ROWS —
+  // which skill the run kept and which the reader cleared — were never projected
+  // to this page at all, so the settled Skills step had exactly one source: a
+  // client round trip the card makes for itself after hydration, drawing NO DOM
+  // until it lands. A round trip that does not land therefore left the step's
+  // column EMPTY, which is what the re-shoot photographed, and the frame around
+  // it cannot catch that — a surface that is an ELEMENT is a non-null value
+  // however the component later resolves (`run-surface-rail-step.ts`).
+  //
+  // So the page resolves the settled reading itself, through the SAME core the
+  // card resolves with and behind the access door this screen already cleared,
+  // and hands it to the card as its first paint. The card still resolves for
+  // itself and its own answer still wins the moment it lands — this is the
+  // reading a person sees until then, and after a fresh page load.
+  //
+  // ONLY ON THE SETTLED BRANCH. A live hold's offer is the card's own read and
+  // is not duplicated here; a run that never held resolves nothing at all, so an
+  // ordinary run page pays for none of this.
+  const recommendationSettledReading =
+    run && recommendationEntry === "settled" && actorUserId
+      ? await resolveRecommendationHoldStateForActor({
+          runId: run.id,
+          who: { actor: setupActor, roleHints: setupRoles },
+        })
+          // ONE RETRY, THEN THE READING IS GIVEN UP (cinatra#3047,
+          // convergence). A refusal is an answer and it repeats; a torn read of
+          // the run, the park or the offer is a moment, and a page that gives
+          // the whole reading up on the first of those puts the reader back in
+          // front of the empty column this leg exists to close. A second ask
+          // costs one round trip on a path that already failed, never the page.
+          .catch(async () =>
+            resolveRecommendationHoldStateForActor({
+              runId: run.id,
+              who: { actor: setupActor, roleHints: setupRoles },
+            }).catch(() => null),
+          )
+      : null;
+
+  // CAN THE SKILLS ROW BE OPENED? ONE answer, read once and handed to the rail
+  // AND to the row (cinatra#3047, convergence): the row is this page own, so the
+  // frame refusal does not reach it by itself.
+  const recommendationRailStepReached = recommendationRailStepOpens({
+    entry: recommendationEntry,
+    parkStatus: recommendationPark?.status,
+    decided: recommendationDecided,
+    // AND THE READING THIS PAGE NOW HOLDS. A hold released with no selection and
+    // no skip on file resolves to `none` — the card draws no DOM for it — and
+    // the park status alone would open that step over the empty column this leg
+    // exists to close. A reading that failed to resolve states nothing here.
+    settledReadingIsEmpty: recommendationSettledReading?.state === "none",
+  });
 
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
   // show, and plan (A) §7.2 step 5 forbids showing one with the schedule.
+  // READ ONCE, ASKED TWICE (cinatra#3068 fix leg 3): the step the run detail
+  // opens on, and whether the rail still owes the run's later steps, are two
+  // questions about the same fact -- so the fact is read here and handed to
+  // both, rather than derived twice and able to disagree.
+  // WHAT THIS RUN MADE (cinatra#3029, acceptance item 5). Read HERE, in the
+  // screen's async body, because the rail below is composed synchronously and
+  // the step's rows are a database read. A run that is not over yet has not
+  // finished making anything, so the step is drawn only on a TERMINAL run — and
+  // it is drawn even when the run made nothing, because the drawing gives the
+  // empty case its own reading rather than an empty panel.
+  const runMadeRows: RunMadeArtifactRow[] =
+    run && isTerminalRunStatus(run.status)
+      ? await (async () => {
+          const { listRunMadeArtifacts } = await import(
+            "@/lib/artifacts/run-made-artifacts"
+          );
+          return listRunMadeArtifacts({ orgId: run.orgId, runId: run.id });
+        })()
+      : [];
+
   const initialStep = runDetailInitialStep({
+    openInputStepKey,
     hasRecommendationStep,
     recommendationHeld,
-    hasScheduleStep: scheduleRailRef !== null,
-    hasExecution: runHasExecutionRecord({
-      runStatus: run?.status ?? null,
-      stepResultCount: run?.stepResults?.length ?? 0,
-      runMessageCount: completedRunMessages.length,
-      streamedTextLength: (run?.streamedText ?? "").length,
-    }),
+    // THE STEP EXISTS WHEN THE RUN IS STANDING AT IT (cinatra#3221, fix leg 8),
+    // not only when the run already holds a trigger row: a run parked at
+    // `pending_trigger` has not chosen its trigger yet and is exactly the run
+    // whose schedule step the reader is looking at.
+    hasScheduleStep: scheduleRailRef !== null || parkedScheduleStep,
+    hasExecution: runHasExecution,
+    parkedGateStep,
   });
 
   // The scheduling step's duration banner, computed ONLY on the branch that
   // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
   // analysis when a template has too little run history, so the ordinary run
-  // page must never pay for it. Best-effort: the form states "Unavailable."
-  // for a null estimate, which is a better page than a failed render.
+  // page must never pay for it. Best-effort: the form draws NO duration line at
+  // all for a null estimate (cinatra#3182 item 5), which is a better page than
+  // a failed render.
   const triggerStepDurationEstimate =
     runDetailPanel === "trigger"
       ? await estimateRunDuration({
@@ -1120,7 +2033,25 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab="setup"
+        // THE SCOPE THIS PAGE IS READ UNDER (cinatra#2809). The layout owns the
+        // page's one crumb publish, so the scope base and the scope's own
+        // crumbs are handed to it rather than published beside it: the bus
+        // keeps ONE route-scoped snapshot and every publish replaces it whole.
+        scopeBase={scopeBase ?? null}
+        scopeCrumbEntries={
+          launchScope
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            : undefined
+        }
+        activeTab={runPageActiveTab({
+          inputStepIsOpen,
+          inputStepsInRail,
+          scheduleStepInFrame: runDetailPanel === "trigger",
+          gateStepInFrame: runGateStepInFrame({
+            gateStepOpens: recommendationRailStepReached,
+            hasExecution: runHasExecution,
+          }),
+        })}
         templateName={template.name}
         initialRunName={runName}
         runId={run?.id ?? null}
@@ -1154,127 +2085,56 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
-              // THE ONE `recommendation_hold` MOUNT THIS SCREEN MAKES. It is
-              // used in two mutually exclusive slots — the rail step's surface
-              // above, and the run detail below — so the interaction still has
-              // exactly one renderer on this host at any moment. See the comment
-              // on the detail slot for why this screen is a host at all.
-              const recommendationCardNode = hostsRecommendationCard ? (
+              // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
+              // and it is used in exactly ONE slot: the Skills step's own
+              // surface. No branch of `runDetailPanelKind` withholds it and none
+              // adds one — the run-progress panel used to mount a second copy on
+              // the `agentic` branch, and the run detail carried a third
+              // placement of the same node under every later card, so the row
+              // had three homes between them. Both of those are gone: the step
+              // opens the row, the detail column draws the step the reader
+              // selected, and there is no moment at which the two are on screen
+              // together.
+              const recommendationCardNode = (
                 <LifecycleCardSurfaceProvider host="run_card">
                   <RecommendationHoldCard
                     runId={run.id}
                     agentPackageName={template.packageName ?? ""}
                     wireRef={null}
+                    // THE PAGE'S OWN READING OF A SETTLED STEP — see
+                    // `recommendationSettledReading`. `null` for a live hold and
+                    // for a run that never held, which leaves the card's own
+                    // resolve as the only reading, exactly as before.
+                    initialState={recommendationSettledReading}
                   />
                 </LifecycleCardSurfaceProvider>
-              ) : null;
-              // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
-              // them: the recommendation at the trigger position (plan (A) §6.2
-              // — "the top entry on the step rail, ahead of the work steps it
-              // would authorize"), then the schedule "above '1 Review'" (§7.2
-              // step 5). Built before the rail below, because the rail renumbers
-              // around however many there are.
-              const railSteps: RunSurfaceRailStep[] = [];
-              if (hasRecommendationStep) {
-                railSteps.push({
-                  key: "recommendation",
-                  row: (
-                    <RecommendationRailStepRow
-                      displayStep={railSteps.length + 1}
-                      settled={recommendationEntry === "settled"}
-                    />
-                  ),
-                  // THE SAME MOUNT the run detail draws below — not a second
-                  // one. Only one of the two slots is ever rendered, so the chip
-                  // row the step opens is the chip row this screen hosts. It is
-                  // handed over BARE: the card is the whole surface of this step
-                  // (§V — "the row is the whole card"), and a wrapper would be a
-                  // new anchor on a surface whose closed set is ratified.
-                  //
-                  // It is NULL on the branch whose panel draws the card —
-                  // there `recommendationCardNode` is null because this screen
-                  // mounts no card at all — so that step opens nothing, the run
-                  // detail stays as this screen composed it, and the decided
-                  // summary the row stands for is the one already in that panel
-                  // (`RunSurfaceRailStep.surface`). On every other branch this
-                  // IS the surface, settled or live alike.
-                  surface: recommendationCardNode,
-                });
-              }
-              if (scheduleRailRef) {
-                railSteps.push({
-                  key: "schedule",
-                  row: (
-                    <ScheduleRailStepRow host="run_card" displayStep={railSteps.length + 1} />
-                  ),
-                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
-                  // — "The run page's prompt window shows below the scheduler"
-                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
-                  // none: the plan names the run page.
-                  surface: (
-                    <ScheduleStepSurface
-                      host="run_card"
-                      cardRef={scheduleRailRef}
-                      promptWindowTemplateId={template.id}
-                      // cinatra#2933 -- the window under this scheduler is the
-                      // RUN's conversation, gated on the run's own access.
-                      runId={run?.id ?? null}
-                      canRespondInWindow={canRespondInWindow}
-                    />
-                  ),
-                });
-              }
-              // The page's OWN rail rows. The gate rows above are drawn by
-              // their own step components rather than by this rail, because the
-              // live orchestrator column is the rail on the flow branch
-              // (`screenHostsStepRail`) and the plan puts both gate steps above
-              // the run's steps on every branch — not only the one where the
-              // server-rendered rail happens to draw.
-              const railDraws = screenDrawsPageRail({
-                runStatus: run.status,
-                railEntryCount: rail.entries.length,
-                gateStepCount: railSteps.length,
-                panel: runDetailPanel,
-                stepperStepCount: stepperSteps.length,
-              });
-              const railNode = railDraws ? (
-                <RunStepRailPanel
-                  entries={rail.entries}
-                  activeOrdinal={rail.activeOrdinal}
-                  reviewHrefBase={reviewHrefBase}
-                  stepOffset={railSteps.length}
-                />
-              ) : null;
-              // A COLUMN with a GAP, not a margin on the row above. The card
-              // below resolves its own state on the client and renders NO DOM at
-              // all when there is no hold — the overwhelmingly common case — so a
-              // wrapper carrying `mb-4` would leave a 1rem hole above the panel on
-              // every ordinary run. A flex gap only ever applies BETWEEN rendered
-              // children, which is the spacing that was actually meant.
+              );
+              // A COLUMN with a GAP, not a margin on the row above. A flex gap
+              // only ever applies BETWEEN rendered children, which is the
+              // spacing that was actually meant for a column whose members each
+              // decide for themselves whether they draw anything.
+              //
+              // THE SKILLS ROW IS NOT IN IT (cinatra#3047, review point D).
+              // "Every HITL shows on its own dedicated page. Do not show skills
+              // on top of a HITL card. Do not show the skills on top of the
+              // review card or the schedule card or any other card either."
+              //
+              // The row used to stand HERE as well as on its own step, so the
+              // detail column drew it above whatever else the run's moment put
+              // in that column — the HITL card, the review card, the scheduling
+              // step. It is now ONLY the Skills step's own surface: the detail
+              // column shows the selected step and nothing else, and the rail
+              // still carries the Skills step, settled, for a reader who wants
+              // to see what was decided. Selecting that step is what opens the
+              // row, which is the same press every other step answers to.
+              //
+              // AND IT IS COMPOSED BEFORE THE RAIL (cinatra#3068). The rail's
+              // own steps are asked whether they can be opened, and that
+              // question is answered against the run detail they fall back to —
+              // so the detail has to exist before the steps are built. It reads
+              // nothing from them, so the move is an ordering only.
               const detailNode = (
                 <>
-              {/* Run-start recommendation hold, through the ONE card
-                  (cinatra#2573, epic #2564 D-1). A held run draws the interactive
-                  confirm/adjust/skip row at the run-start position, before any
-                  work; a decided hold draws the read-only summary; an unheld run
-                  draws nothing at all.
-
-                  THIS SCREEN IS A HOST because a HELD run is `pending_input`, and
-                  the panel that carries the card below (`AgenticRunPanel`, via
-                  `SetupCompletionWatcher`) renders only for
-                  `status !== "pending_input"`. Without this mount the hold would
-                  be invisible on the very page the human is asked to decide it
-                  on. On the branch where that panel DOES render it declares
-                  `run_card` and draws the card itself, so this mount stands down
-                  — see `screenHostsRecommendationCard`.
-
-                  `wireRef` is NULL: this server-rendered mount has no run stream
-                  of its own. It costs nothing here — the card resolves on mount,
-                  on focus and when its own decision lands, the hold is already
-                  parked before this page is served, and the confirm/skip taken IN
-                  the row is the only transition out of it (which also fires
-                  `router.refresh()`, re-rendering this tree). */}
-              {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the
                   SAME component the chat transcript and the review page mount.
@@ -1325,6 +2185,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     properties={properties}
                     setupComplete={setupComplete}
                     durationEstimate={triggerStepDurationEstimate}
+                    // The declared step count, for the Estimated run duration
+                    // line of a run with no history (cinatra#3224).
+                    declaredStepCount={policySteps.length}
                     // WHAT THE ROW STATES, FOR THE RUNNER'S SCHEDULE DEFAULT
                     // (cinatra#2936). The step opens on the row that decision
                     // names, and presence is one of its two inputs. The reading
@@ -1378,6 +2241,8 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // instead of being drawn by a second column beside it.
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
+                    inputStepInRail={inputStepIsOpen}
+                    railDrawsTheFrame={railFramesTheRunDetail}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -1413,11 +2278,373 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     initialStreamedText={run.streamedText ?? ""}
                     initialHitlContext={initialHitlContext}
                     initialReviewGate={initialReviewGate}
+                    // WHAT THE PANEL NEEDS FROM THE SKILLS ROW, now that it
+                    // draws none (cinatra#3047): whether the question was
+                    // answered, so no pressable skill list appears inside it for
+                    // a run whose skills were already decided. Read above, from
+                    // the run's own park row, before the first paint.
+                    recommendationDecided={recommendationDecided}
+                    inputStepInRail={inputStepIsOpen}
+                    railDrawsTheFrame={railFramesTheRunDetail}
                   />
                 )
               )}
                 </>
               );
+              // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
+              // them: the recommendation at the trigger position (plan (A) §6.2
+              // — "the top entry on the step rail, ahead of the work steps it
+              // would authorize"), then the schedule "above '1 Review'" (§7.2
+              // step 5). Built before the rail below, because the rail renumbers
+              // around however many there are.
+              const railSteps: RunSurfaceRailStep[] = [];
+              if (hasRecommendationStep) {
+                railSteps.push({
+                  key: "recommendation",
+                  row: (
+                    <RecommendationRailStepRow
+                      settled={recommendationEntry === "settled"}
+                      // AND THE ROW SAYS THE SAME THING THE FRAME DOES
+                      // (cinatra#3047, convergence). `reached` below refuses the
+                      // SELECTION, and this row is the page own custom row — the
+                      // rail decorates only its generic rows on the way through.
+                      // Handed nothing, it named `open-recommendation-step` and
+                      // carried a click handler for a step the frame would
+                      // refuse, so one row stated two different things about
+                      // itself. ONE answer, read once, given to both.
+                      openable={recommendationRailStepReached}
+                    />
+                  ),
+                  // THE SAME MOUNT the run detail draws below — not a second
+                  // one. Only one of the two slots is ever rendered, so the chip
+                  // row the step opens is the chip row this screen hosts. It is
+                  // handed over BARE: the card is the whole surface of this step
+                  // (§V — "the row is the whole card"), and a wrapper would be a
+                  // new anchor on a surface whose closed set is ratified.
+                  //
+                  // AND ON EVERY BRANCH (cinatra#3047), settled or live alike:
+                  // this step used to open onto NOTHING where the run-progress
+                  // panel drew a copy of the row inside itself, which is how one
+                  // row came to have two placements. There is one owner now, so
+                  // the step always opens the row it names.
+                  surface: recommendationCardNode,
+                  // AND IT DOES NOT OPEN OVER NOTHING (cinatra#3047, review
+                  // point C). A terminal park is not the same as a DECIDED one:
+                  // the TTL sweeper's fail-closed `policy_unresolved` leaves a
+                  // park behind that nobody answered, and the reading for such a
+                  // run is `none` — no rows to draw, and no page reading either.
+                  // The setup run page has refused to open that row since
+                  // cinatra#2970; this page did not, and a row that opens onto a
+                  // card with nothing to say is the empty column the ruling
+                  // forbids. ONE definition of "opens", asked here rather than
+                  // restated: `recommendationRailStepOpens`, with the same
+                  // `decided` ladder the panel above is handed.
+                  reached: recommendationRailStepReached,
+                });
+              }
+              // AND THE RUN'S OWN INPUT FORMS BENEATH IT (cinatra#3068, order
+              // corrected by cinatra#3047 fix leg 8). One entry per form the
+              // agent asks, in the order it asks them; each opens the run
+              // detail beside it, where the panel draws the form itself, and a
+              // form the run has not reached yet is drawn muted and opens
+              // nothing. cinatra#3068 put these AHEAD of the Skills entry on
+              // the strength of a sentence in its own issue. The ratified
+              // drawing says the opposite in the section that governs this
+              // rail: the Skills question "is the run's first gate — the first
+              // entry on the step rail, where it is named Skills, ahead of the
+              // work steps it would authorize", and an input form is one of
+              // the work steps it would authorize. The drawing carves out no
+              // exception for it — it names no input step anywhere — so there
+              // is no second drawn sentence to weigh, and the Skills entry
+              // stands above these.
+              if (inputStepsInRail) {
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
+              }
+              if (scheduleRailRef) {
+                railSteps.push({
+                  key: "schedule",
+                  row: (
+                    <ScheduleRailStepRow
+                      host="run_card"
+                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
+                      // (cinatra#3047). The Skills entry above draws the
+                      // drawing's own glyph and consumes no numeral, so the
+                      // schedule is "1" whether or not it is the second gate
+                      // row — which is exactly what the drawing shows.
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                    />
+                  ),
+                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
+                  // — "The run page's prompt window shows below the scheduler"
+                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
+                  // none: the plan names the run page.
+                  surface: (
+                    <ScheduleStepSurface
+                      host="run_card"
+                      cardRef={scheduleRailRef}
+                      promptWindowTemplateId={template.id}
+                      // cinatra#2933 -- the window under this scheduler is the
+                      // RUN's conversation, gated on the run's own access.
+                      runId={run?.id ?? null}
+                      canRespondInWindow={canRespondInWindow}
+                    />
+                  ),
+                });
+              }
+              // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
+              // TRIGGER ROW YET (cinatra#3221, fix leg 8).
+              //
+              // The block above draws the schedule step for a run whose trigger
+              // row the step's CARD opens onto. A run parked at its schedule has
+              // not chosen a trigger yet, so it holds no such row -- and the one
+              // run standing at the schedule step was therefore the one run with
+              // no entry for it: the fourth proof round measured zero elected
+              // entries on that reading, with the schedule drawn as a
+              // still-to-come forecast row below a Skills row it had already
+              // gone past.
+              //
+              // IT OPENS ONTO THE RUN DETAIL, for the reason the gate row below
+              // states: the schedule form the reader is answering already stands
+              // there, and a surface of its own would be a second mount of it.
+              // A nullish surface falls back to that detail.
+              if (!scheduleRailRef && parkedScheduleStep) {
+                const parkedScheduleRailStep: RunSurfaceRailStep = {
+                  key: "schedule",
+                  reached: true,
+                  settled: false,
+                  surface: null,
+                  row: null,
+                };
+                railSteps.push({
+                  ...parkedScheduleRailStep,
+                  row: (
+                    <RunSurfaceRailRow
+                      selectionKey="schedule"
+                      label={RUN_SURFACE_RAIL_LABELS.schedule}
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                      reached
+                      settled={false}
+                      selectable={isRunSurfaceStepSelectable(parkedScheduleRailStep, detailNode)}
+                      conformanceId="run-surface-rail-step"
+                      indicatorConformanceId="run-surface-rail-indicator"
+                      action="open-schedule-step"
+                    />
+                  ),
+                });
+              }
+              // AND THE GATE THE RUN IS STOPPED AT, AT THE RUN'S LIVE TIP
+              // (cinatra#3221, fix leg 2).
+              //
+              // The ratified drawing, the step rail: the rail lists "the
+              // ordinary work steps, and -- inline at the point the run reached
+              // it -- a gate entry (a Skills step to answer, a list to pick one
+              // thing from, a review to decide). The step the run is paused on
+              // is highlighted; steps already passed sit above it, steps still
+              // to come below."
+              //
+              // The three gate entries above are the first, the second and the
+              // fourth of those. The THIRD -- a human-in-the-loop screen the
+              // agent opens mid-run -- was on no rail at all, so a run stopped
+              // in front of its Continue drew a rail with nothing highlighted:
+              // the first proof round photographed exactly that, in both
+              // palettes. It is pushed HERE, after the steps the run has passed
+              // and before the ones still to come, because that is where the run
+              // reached it.
+              //
+              // IT OPENS ONTO THE RUN DETAIL, not a surface of its own: the
+              // gate's card is already what the detail beside this rail draws
+              // ("a gate step opens the gate's own surface in place ... right
+              // here in the run detail, under the same rail"), so handing this
+              // step a surface would be a second mount of the one renderer. A
+              // nullish surface falls back to that detail, which is the right
+              // thing and not an empty column.
+              if (parkedGateStep && parkedGateStepLabel) {
+                const parkedGateRailStep: RunSurfaceRailStep = {
+                  key: "gate",
+                  reached: true,
+                  settled: false,
+                  surface: null,
+                  row: null,
+                };
+                railSteps.push({
+                  ...parkedGateRailStep,
+                  row: (
+                    <RunSurfaceRailRow
+                      selectionKey="gate"
+                      label={parkedGateStepLabel}
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                      reached
+                      settled={false}
+                      selectable={isRunSurfaceStepSelectable(parkedGateRailStep, detailNode)}
+                      conformanceId="run-surface-rail-step"
+                      indicatorConformanceId="run-surface-rail-indicator"
+                      action="open-gate-step"
+                    />
+                  ),
+                });
+              }
+              // THE STEPS STILL TO COME (cinatra#3068 fix leg 2). The
+              // ratified drawing puts the run's later steps BELOW the
+              // highlighted one -- "so the rail is the run's whole lifecycle at
+              // a glance, not just its live tip" -- and the graded picture of
+              // the input moment drew ONE row with nothing beneath it. These
+              // are the setup flow's own three steps, the same three the
+              // schedule screen's rail names, drawn as steps the run has NOT
+              // reached: muted, opening nothing, because the plan draws no "not
+              // reached yet" screen and none is invented for them.
+              //
+              // FOR AS LONG AS THE RAIL CARRIES THE RUN'S INPUT STEPS (fix
+              // leg 3), which includes the ANSWERED form the drawing keeps --
+              // "its entry keeps its place ... steps already passed sit above
+              // it, steps still to come below". Leg 2 drew them only while the
+              // form was open, so answering it collapsed four rows to one. They
+              // stop where the run's own history starts, and never draw twice:
+              // both answers are `railDrawsUpcomingRunSteps` and
+              // `upcomingRunRailStepKeys` above.
+              const upcomingRailStepKeys = upcomingRunRailStepKeys({
+                drawUpcoming: railDrawsUpcomingRunSteps({
+                  inputStepIsOpen,
+                  inputStepsInRail,
+                  gateStepInRail: hasRecommendationStep,
+                  hasExecution: runHasExecution,
+                }),
+                drawnKeys: railSteps.map((step) => step.key),
+              });
+              // AND THE SKILLS PLACEHOLDER KEEPS THE HEAD OF THE RAIL, LIKE
+              // THE STEP IT STANDS FOR (cinatra#3047 fix leg 8, convergence).
+              //
+              // An upcoming row is drawn where its step will stand, and the
+              // drawing stands the Skills question first — "the first entry on
+              // the step rail ... ahead of the work steps it would authorize".
+              // Ordering the KEYS was not enough: this whole block runs after
+              // the input forms were pushed, so a run with no live park drew
+              // Setup, then Skills — the Skills entry second, which is exactly
+              // what the eighth proof round photographed. The row that draws
+              // the glyph goes to the FRONT; the numbered ones continue the
+              // series beneath, and because the glyph row carries no numeral
+              // the series is unchanged by the move.
+              const upcomingHeadKeys = upcomingRailStepKeys.filter((key) =>
+                runSurfaceStepDrawsGlyph(key),
+              );
+              const upcomingNumberedKeys = upcomingRailStepKeys.filter(
+                (key) => !runSurfaceStepDrawsGlyph(key),
+              );
+              const asUpcomingStep = (key: UpcomingRunRailStepKey) => ({
+                key,
+                reached: false,
+                settled: false,
+                surface: null,
+              });
+              // AND ONLY WHILE THE RUN HAS NOT PASSED IT (cinatra#3221 item 3,
+              // fix leg 7). The head row is the drawing's own placement for the
+              // run's FIRST gate; once the rail carries a later gate the run has
+              // reached — its schedule, or the gate it is stopped at — the
+              // question is behind the reader and the forecast row is not drawn
+              // at all. See `upcomingSkillsEntryHeadsTheRail`.
+              if (upcomingHeadKeys.length > 0 && upcomingSkillsEntryHeadsTheRail(railSteps)) {
+                railSteps.unshift(
+                  ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
+                );
+              }
+              if (upcomingNumberedKeys.length > 0) {
+                railSteps.push(
+                  ...buildSetupRailSteps(
+                    upcomingNumberedKeys.map(asUpcomingStep),
+                    // THE OFFSET IS THE RAIL'S OWN NUMERAL RULE (cinatra#3047),
+                    // not this list's length. The Skills entry above draws the
+                    // drawing's glyph and consumes no numeral, so the steps
+                    // still to come continue the series the rows above actually
+                    // carry rather than counting a row that shows no number.
+                    runSurfaceRailNumberedCount(railSteps.map((step) => step.key)),
+                  ),
+                );
+              }
+              // The page's OWN rail rows. The gate rows above are drawn by
+              // their own step components rather than by this rail, because the
+              // live orchestrator column is the rail on the flow branch
+              // (`screenHostsStepRail`) and the plan puts both gate steps above
+              // the run's steps on every branch — not only the one where the
+              // server-rendered rail happens to draw.
+              const railDraws = screenDrawsPageRail({
+                runStatus: run.status,
+                railEntryCount: rail.entries.length,
+                gateStepCount: railSteps.length,
+                panel: runDetailPanel,
+                stepperStepCount: stepperSteps.length,
+              });
+              const railNode = railDraws ? (
+                <RunStepRailPanel
+                  entries={rail.entries}
+                  activeOrdinal={rail.activeOrdinal}
+                  reviewHrefBase={reviewHrefBase}
+                  // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS
+                  // ONLY (cinatra#3047). The Skills entry is unnumbered, so a
+                  // run paused on its skills question numbers its first work
+                  // step "1" — the drawing's own rail — instead of the "2" the
+                  // re-shoot photographed.
+                  stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
+                />
+              ) : null;
+              // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
+              //
+              // The ratified drawing's artifact review, section I.2: "The
+              // rail's last entry is the run's own record." It is composed
+              // AFTER the page's own rail above, and its row is marked `tail`,
+              // for two reasons the first proof round measured together:
+              //
+              //   • the row itself has to stand LAST. Pushed with the gate
+              //     steps it was drawn above the page's rows, so the trailing
+              //     Review row landed BENEATH the run's record and the rail
+              //     read as two rails, one of them ending on somebody else's
+              //     step;
+              //   • and its NUMERAL has to continue the series the reader can
+              //     see. Composed first, this step consumed a numeral the
+              //     page's own rows were then offset by, which numbered the
+              //     work steps after the record they come before.
+              //
+              // Nothing else moves with the reorder: `screenDrawsPageRail`
+              // reads `gateStepCount` only to keep a pre-dispatch run's rail
+              // suppressed (`pending_input`), and a run at a TERMINAL status —
+              // the only run that carries this step at all — is never at that
+              // status.
+              if (run && isTerminalRunStatus(run.status)) {
+                const madeRailStep: RunSurfaceRailStep = {
+                  key: "made",
+                  reached: true,
+                  settled: true,
+                  tail: true,
+                  surface: (
+                    <RunMadeStepSurface rows={runMadeRows} reading={runMadeReading(runMadeRows)} />
+                  ),
+                  row: null,
+                };
+                railSteps.push({
+                  ...madeRailStep,
+                  row: (
+                    <RunSurfaceRailRow
+                      selectionKey="made"
+                      label={RUN_MADE_STEP_LABEL}
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
+                        (railDraws ? rail.entries.length : 0) +
+                        1
+                      }
+                      reached
+                      settled
+                      selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
+                      conformanceId="run-surface-rail-step"
+                      indicatorConformanceId="run-surface-rail-indicator"
+                      action="open-made-step"
+                    />
+                  ),
+                });
+              }
               // THE TWO COLUMNS. With a gate step, the frame owns them: the
               // steps head the rail and they open ON THE RIGHT, in the run
               // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,
@@ -1762,11 +2989,18 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   );
 }
 
-export async function DataScreen({ agentId, instanceId }: ScreenProps) {
+export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps) {
   const agentPath = agentId.includes("/")
     ? agentId.split("/").map(encodeURIComponent).join("/")
     : encodeURIComponent(agentId);
-  redirect(`/agents/${agentPath}/${encodeURIComponent(instanceId)}`);
+  // Stays INSIDE the scope it was reached from (cinatra#2809): a retired
+  // sub-route that walked the reader out to the global route would be a
+  // silent scope change dressed up as a redirect.
+  redirect(
+    buildAgentInstancePath(agentPath, encodeURIComponent(instanceId), {
+      scopeBase: scopeBase ?? null,
+    }),
+  );
 }
 
 export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
@@ -1915,10 +3149,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationEntry = recommendationRailEntry({
     hasPark: recommendationPark !== null,
     held: recommendationPark?.status === "parked",
-    // THIS screen hosts the card here. The setup surface draws no run-detail
-    // panel at all — the run has not run — so there is no other module that
-    // could mount it, and the step's surface is this screen's own mount.
-    hostsCard: true,
   });
   // AND CAN IT BE OPENED? A terminal park is not the same as a DECIDED one: the
   // TTL sweeper's fail-closed `policy_unresolved` leaves a park behind that
@@ -1928,6 +3158,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const recommendationStepOpens = recommendationRailStepOpens({
     entry: recommendationEntry,
     parkStatus: recommendationPark?.status,
+    // AND A DECISION THAT RACED THE SWEEPER IS STILL A DECISION (cinatra#3047,
+    // convergence). `policy_unresolved` with evidence on file is a run the card
+    // draws a settled row for; the status alone would close this step over it.
+    // One definition of "decided", asked here rather than restated.
+    decided: run
+      ? recommendationDecidedForRun({ runId: run.id, parkStatus: recommendationPark?.status })
+      : false,
   });
   // AND HOW DOES THE ROW READ once the question has been answered
   // (cinatra#2975)? The ratified drawing: "A resolved gate stays on the rail as
@@ -2067,6 +3304,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         properties={properties}
         setupComplete={setupComplete}
         durationEstimate={durationEstimate}
+        declaredStepCount={template.approvalPolicy?.steps?.length ?? 0}
         readOnly={scheduleFrozen || scheduleTabSurface}
       />
     </AgentPanelBody>
@@ -2146,6 +3384,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
                 schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
                 ref: gateRef,
               }}
+              // §VI — the gate's conversational prompt window keeps its exchange
+              // with the RUN (cinatra#3141 item 1), so the mount that names the
+              // gate names the run it opened on too.
+              runId={run.id}
             />
           </LifecycleCardSurfaceProvider>
         ) : (
@@ -2167,7 +3409,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // instead.
   //
   // THE THREE STEPS ARE THE SETUP FLOW'S OWN, and no fourth is invented: the
-  // schedule (plan (A) §7), the skills recommendation (§6) and the review (§4).
+  // skills recommendation (plan (A) §6), the schedule (§7) and the review (§4).
   // Each keeps EXACTLY the surface it has today — the scheduling form, and the
   // one shipped renderer of the recommendation card. A step the run has not
   // reached draws nothing: the plan draws no "not reached yet" screen, so none
@@ -2182,22 +3424,17 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // a second rule written here (`setup-run-surface-steps.tsx`).
   const setupSteps: SetupRailStep[] = run
     ? [
-        {
-          key: "schedule",
-          // AND NO SETTLED READING FOR THIS ONE (cinatra#2975), which is a
-          // finding rather than an omission. The drawing's history row is a
-          // resolved GATE's, and a schedule is not a gate: plan (A) §7.2 step 5
-          // opens this step "to see the configuration or change it", and draws
-          // the line itself — "a trigger decides *when* the agent runs, and a
-          // review card exists only after the agent has run". Nor is a fired
-          // schedule finished: §7.2 keeps a recurring one editable after it
-          // fires, and puts the fired one-off's read-only reading in the FORM —
-          // "the form stays as a read-only reading with no controls at all",
-          // which the step's own surface above already draws. The run page's
-          // schedule row draws no settled reading either, and inventing one here
-          // would make the same step read two ways on two screens.
-          surface: scheduleStepSurface,
-        },
+        // THE SKILLS QUESTION IS THE RAIL'S FIRST ENTRY (cinatra#3047, the
+        // standing review point). The ratified drawing at the capture
+        // contract's pin puts it at "the top entry on the step rail, ahead of
+        // the work steps it would authorize" (plan (A) 6.2), and acceptance 2
+        // of the issue states it in one line: "the recommendation entry stays
+        // first on the rail". The run page's rail and the review page's
+        // composition already build the series that way; this screen listed the
+        // schedule first, so one series read two ways in one product and the
+        // re-shoot photographed "1 Schedule / Skills / 2 Review" here. The
+        // NUMERALS follow on their own: the entry draws its own glyph and takes
+        // none, so the schedule stays "1" and the review stays "2".
         {
           key: "recommendation",
           // HAS THIS RUN GOT A RECOMMENDATION AT ALL? A live hold opens the
@@ -2226,6 +3463,22 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             ),
         },
         {
+          key: "schedule",
+          // AND NO SETTLED READING FOR THIS ONE (cinatra#2975), which is a
+          // finding rather than an omission. The drawing's history row is a
+          // resolved GATE's, and a schedule is not a gate: plan (A) §7.2 step 5
+          // opens this step "to see the configuration or change it", and draws
+          // the line itself — "a trigger decides *when* the agent runs, and a
+          // review card exists only after the agent has run". Nor is a fired
+          // schedule finished: §7.2 keeps a recurring one editable after it
+          // fires, and puts the fired one-off's read-only reading in the FORM —
+          // "the form stays as a read-only reading with no controls at all",
+          // which the step's own surface above already draws. The run page's
+          // schedule row draws no settled reading either, and inventing one here
+          // would make the same step read two ways on two screens.
+          surface: scheduleStepSurface,
+        },
+        {
           key: "review",
           // The run's own review slot, read by the same reader the run page's
           // panel reads it with. A run with nothing to review has nothing for
@@ -2245,14 +3498,56 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // word, and the closed treatment for a step that has nothing to open. The
   // schedule and recommendation steps on the RUN page draw their own rows
   // instead, because those carry anchors of their own; these three carry none.
-  const setupRailSteps: RunSurfaceRailStep[] = buildSetupRailSteps(setupSteps);
+  //
+  // ── THE RUN'S ANSWERED INPUT STEPS, KEPT ON THE RAIL (cinatra#3068 fix leg 2)
+  //
+  // The run's FIRST step is the agent's own input form, and this screen is
+  // where a run arrives once that form has been answered. The ratified drawing:
+  // "A resolved gate stays on the rail as read-only history -- its entry keeps
+  // its place and records how it was settled ... so the rail is the run's whole
+  // lifecycle at a glance, not just its live tip." It did not keep its place:
+  // the answered entry left the rail and the schedule renumbered to 1, so the
+  // step the person had just taken was drawn nowhere at all. It stays now,
+  // settled, opening its own read-only reading, and the three steps below it
+  // renumber around however many stand above them.
+  //
+  // THE RESOLVED SCHEMA, the same one the run page reads and the setup loop
+  // walks: a stored schema that is empty names no step for exactly the agents
+  // whose form the loop still asks.
+  const triggerInputSchema = await resolveTemplateInputSchema(template);
+  const runInputSteps = run
+    ? buildRunInputSteps({
+        required: triggerInputSchema.required,
+        properties: triggerInputSchema.properties,
+        inputParams,
+        // This screen is never the input moment -- a run reaches it by having
+        // answered -- so no form is open here and every answered one is history.
+        atInputMoment: false,
+      })
+    : [];
+  const inputRailSteps: RunSurfaceRailStep[] = runCarriesInputSteps(
+    runInputSteps,
+    false,
+  )
+    ? buildRunInputRailSteps(runInputSteps, null)
+    : [];
+  // AND NO SKILLS ENTRY THE RUN HAS ALREADY GONE PAST (cinatra#3221 item 3, fix
+  // leg 8). This screen composes its rail from the setup steps themselves, so
+  // leg 7's rule -- written for the run page's forecast rows -- never reached
+  // it: the fourth proof round measured the unreached Skills entry drawn ABOVE
+  // the elected Schedule step here, on the very route the schedule is elected
+  // on. One rule, asked wherever the rows are assembled.
+  const setupStepsOnTheRail: SetupRailStep[] =
+    railStepsWithoutAnUnreachedSkillsEntry(setupSteps);
+  const setupRailSteps: RunSurfaceRailStep[] = buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length);
+  const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];
 
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
-        activeTab="trigger"
+        activeTab={scheduleRouteActiveTab({ persistentScheduleTab: showPersistentTab })}
         templateName={template.name}
         initialRunName={run?.title ?? ""}
         runId={run?.id ?? null}
@@ -2267,8 +3562,9 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         // strip carries no Trigger tab, so no tab renders selected. That form is
         // a step in the run-start flow rather than a persistent tab, and the
         // documented product rule for the tab is unchanged: it appears only for
-        // a scheduled/recurring trigger. Hoisting that transient step out of the
-        // tab frame entirely is the cleaner end state and is left as follow-up.
+        // a scheduled/recurring trigger. The frame says so now too: see
+        // `scheduleRouteActiveTab` above, which stops this route naming a tab
+        // the strip does not carry.
         showTriggerTab={showPersistentTab}
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
@@ -2308,7 +3604,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
               data-run-detail-contract=""
               data-conformance-id="run-surface"
             >
-              <RunSurfaceRail steps={setupRailSteps} initialSelection="schedule" />
+              <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
             </div>
           </AgentPanelBody>
         ) : (

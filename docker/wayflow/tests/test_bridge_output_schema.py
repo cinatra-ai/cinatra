@@ -568,23 +568,241 @@ def test_a_narrower_authored_required_is_widened_to_every_declared_member():
 
 
 # ---------------------------------------------------------------------------
-# A declaration that names no members stays free-form — and says so
+# A declaration that names no members is CLOSED for the strict contract — and
+# is still said out loud
 # ---------------------------------------------------------------------------
 
 
-def test_free_form_members_stay_exactly_as_declared():
-    """`{"type": "object"}` is what the agent declared: nothing about what is
-    inside. The pass does not invent members, so the request keeps asking for a
-    free-form object — and the answer can carry nothing the pass can promise.
+def test_a_free_form_object_member_is_closed_for_the_strict_contract():
+    """cinatra#3133 — `{"type": "object"}` says nothing about what is inside,
+    and the strict structured-output contract has no way to ask for that: it
+    requires `additionalProperties: false` on EVERY object node, so there is no
+    open map to request and ONE node missing the keyword makes the provider
+    refuse the whole schema ("'additionalProperties' is required to be supplied
+    and to be false").
+
+    The pass therefore emits the CLOSED EMPTY object — it asks for an object and
+    promises nothing inside it, which is exactly what the declaration said. It
+    still invents no member, and it still names the path in the report so the
+    load-time note can ask for the one declaration in the AGENT's own OAS that
+    gives an answer somewhere to put its content.
     """
     doc = _bridge_oas(
         [{"title": "ideas", "type": "array", "json_schema": {"items": {"type": "object"}}}]
     )
     agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
     prop = _write_node(doc)["data"]["output_schema"]["properties"]["ideas"]
-    assert prop["items"] == {"type": "object"}
-    assert "required" not in prop["items"]
-    assert "additionalProperties" not in prop["items"]
+    assert prop["items"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def test_a_free_form_object_output_is_closed_for_the_strict_contract():
+    """The OTHER branch, one level up: a whole declared OUTPUT of type `object`
+    that names no members goes through `_output_property_json_schema`, not
+    `_strict_declared_subschema`, and has to reach the provider just as closed.
+    """
+    doc = _bridge_oas([{"title": "draft", "type": "object"}])
+    agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
+    assert _write_node(doc)["data"]["output_schema"]["properties"]["draft"] == {
+        "type": "object",
+        "title": "draft",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def test_a_memberless_object_cannot_keep_a_contradictory_authored_shape():
+    """The two keywords are SUPPLIED, not merely defaulted (cinatra#3133).
+
+    An author can write a `required` naming keys the node never declares, or an
+    `additionalProperties: true`; both are refused by the strict contract, and
+    both used to ride through untouched because this branch set nothing at all.
+    The emitted node now says the same thing its (empty) member map says.
+    """
+    doc = _bridge_oas(
+        [
+            {
+                "title": "draft",
+                "type": "object",
+                "json_schema": {
+                    "items": None,
+                },
+            }
+        ]
+    )
+    _write_node(doc)["outputs"][0] = {
+        "title": "draft",
+        "type": "object",
+        "required": ["headline"],
+        "additionalProperties": True,
+    }
+    agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
+    assert _write_node(doc)["data"]["output_schema"]["properties"]["draft"] == {
+        "type": "object",
+        "title": "draft",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def test_an_object_node_behind_a_branch_or_a_nullable_type_is_closed_too():
+    """cinatra#3133 — `properties` and a single `items` are not the only roads
+    to an object node. A branch list (`anyOf` / `oneOf` / `allOf`), the nullable
+    `["object", "null"]` spelling and the tuple spelling of `items` all put an
+    object where the provider validates one, and ONE such node without
+    `additionalProperties` refuses the whole schema just as loudly. None of the
+    shipped agents writes these forms today; the pass closes them anyway,
+    because the cost of missing one is the entire request.
+    """
+    doc = _bridge_oas(
+        [
+            {
+                "title": "branches",
+                "type": "array",
+                "json_schema": {
+                    "items": {"anyOf": [{"type": "object"}, {"type": "null"}]}
+                },
+            },
+            {
+                "title": "rows",
+                "type": "array",
+                "json_schema": {"items": {"type": ["object", "null"]}},
+            },
+            {
+                "title": "pairs",
+                "type": "array",
+                "json_schema": {"items": [{"type": "object"}, {"type": "string"}]},
+            },
+        ]
+    )
+    agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
+    props = _write_node(doc)["data"]["output_schema"]["properties"]
+
+    closed = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+    assert props["branches"]["items"]["anyOf"] == [closed, {"type": "null"}]
+    assert props["rows"]["items"] == dict(closed, type=["object", "null"])
+    assert props["pairs"]["items"] == [closed, {"type": "string"}]
+
+
+def test_a_reference_is_carried_as_written_because_the_pass_resolves_none():
+    """The other half of the same decision, pinned so it is a decision and not
+    an oversight: a `$ref` names a level this pass never emits — it resolves no
+    references — so it rides through byte-for-byte. Closing what a reference
+    points at is the AGENT's own declaration to make.
+    """
+    declared = {"$defs": {"Idea": {"type": "object"}}, "$ref": "#/$defs/Idea"}
+    doc = _bridge_oas(
+        [{"title": "ideas", "type": "array", "json_schema": {"items": declared}}]
+    )
+    agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
+    assert (
+        _write_node(doc)["data"]["output_schema"]["properties"]["ideas"]["items"]
+        == declared
+    )
+
+
+def _object_nodes(node, path="$"):
+    """Every object-typed node in an emitted schema, with the path it sits at.
+
+    Follows every road the provider's validator follows: member maps, list and
+    tuple `items`, and the `anyOf` / `oneOf` / `allOf` branch lists — and reads
+    the nullable `["object", "null"]` spelling as the object level it is. A
+    walker that followed fewer roads could call a schema strict that the
+    provider refuses.
+    """
+    if not isinstance(node, dict):
+        return
+    declared = node.get("type")
+    types = (
+        [declared]
+        if isinstance(declared, str)
+        else [entry for entry in declared if isinstance(entry, str)]
+        if isinstance(declared, list)
+        else []
+    )
+    if "object" in types:
+        yield path, node
+    members = node.get("properties")
+    if isinstance(members, dict):
+        for name, member in members.items():
+            yield from _object_nodes(member, f"{path}.{name}")
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        branches = node.get(keyword)
+        if isinstance(branches, list):
+            for index, branch in enumerate(branches):
+                yield from _object_nodes(branch, f"{path}|{keyword}[{index}]")
+    items = node.get("items")
+    if isinstance(items, list):
+        for index, item in enumerate(items):
+            yield from _object_nodes(item, f"{path}[{index}]")
+    elif items is not None:
+        yield from _object_nodes(items, f"{path}[]")
+
+
+def test_every_object_node_in_an_emitted_schema_is_strict():
+    """The WHOLE emitted tree, not one branch (cinatra#3133): walk it and demand
+    both strict keywords on every object node — the root, declared member maps
+    and free-form levels alike — because that is what the provider validates and
+    a single node without `additionalProperties` refuses the entire request.
+    """
+    doc = _bridge_oas(
+        [
+            {"title": "ideas", "type": "array", "json_schema": {"items": {"type": "object"}}},
+            {"title": "draft", "type": "object"},
+            {"title": "sheets", "type": "array", "json_schema": {"items": IDEA_ITEM}},
+            {
+                "title": "meta",
+                "type": "object",
+                "json_schema": {"properties": {"lang": {"type": "string"}}},
+            },
+            {"title": "notes", "type": "string"},
+            {
+                "title": "branches",
+                "type": "array",
+                "json_schema": {
+                    "items": {"anyOf": [{"type": "object"}, {"type": "null"}]}
+                },
+            },
+            {
+                "title": "rows",
+                "type": "array",
+                "json_schema": {"items": {"type": ["object", "null"]}},
+            },
+        ]
+    )
+    agent_loader._derive_bridge_output_schemas(doc, "fixture/bridge")
+    schema = _write_node(doc)["data"]["output_schema"]
+
+    walked = list(_object_nodes(schema))
+    # Every object node the fixture can produce is actually reached, so a green
+    # run cannot mean the walk simply found nothing to check.
+    assert [path for path, _ in walked] == [
+        "$",
+        "$.ideas[]",
+        "$.draft",
+        "$.sheets[]",
+        "$.meta",
+        "$.branches[]|anyOf[0]",
+        "$.rows[]",
+    ]
+    for path, node in walked:
+        assert node.get("additionalProperties") is False, (
+            f"{path}: an object node the provider will refuse"
+        )
+        assert sorted(node.get("required", [])) == sorted(node.get("properties", {})), (
+            f"{path}: `required` does not name every property declared under it"
+        )
 
 
 def test_an_array_with_no_declared_items_keeps_asking_for_an_unconstrained_list(capsys):
@@ -744,9 +962,12 @@ def test_every_shipped_agent_asks_for_exactly_the_members_it_declares(package_di
                 for name, sub in members.items():
                     check(derived["properties"][name], sub, f"{path}.{name}")
             elif derived.get("type") == "object":
-                # Nothing declared inside: the request keeps it free-form, and
-                # the pass must have SAID so rather than inventing members.
-                assert "properties" not in derived
+                # Nothing declared inside: the request asks for the CLOSED EMPTY
+                # object the strict contract can carry (cinatra#3133) — no member
+                # invented — and the pass must still have SAID so.
+                assert derived["properties"] == {}
+                assert derived["required"] == []
+                assert derived["additionalProperties"] is False
                 assert path in free_form
             declared_items = _declared_items(declared)
             if declared_items is not None:

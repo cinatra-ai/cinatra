@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 // The guard composes four real pieces (session resolve, platform-admin check,
 // org-role resolve, dev-admin bypass). We mock the SESSION + ROLE sources and
-// run the REAL `isTrustedDevHost` / `shouldGrantDevAdminBypass` policy so the
-// loopback bypass path is exercised end-to-end, not stubbed.
+// run the REAL `grantDevAdminBypassForRequest` policy so the local-operator
+// bypass path is exercised end-to-end, not stubbed — including its refusal of
+// a request that merely CLAIMS to be local in its headers.
 
 const getSessionMock = vi.fn();
 const resolveOrgRoleMock = vi.fn();
@@ -39,6 +43,27 @@ vi.mock("next/headers", () => ({
 }));
 
 import { authorizeCliRequest } from "../route-guard";
+import { DEV_LOCAL_TOKEN_HEADER } from "@cinatra-ai/mcp-server/dev-admin-bypass";
+import {
+  mintDevLocalToken,
+  resetDevLocalTokenForTest,
+} from "@cinatra-ai/mcp-server/dev-local-token";
+import { runWithLocalConnection } from "@cinatra-ai/mcp-server/local-connection";
+
+let tokenDir: string;
+let bootToken: string;
+
+/**
+ * Run the guard as the LOCAL OPERATOR would reach it: over a loopback socket
+ * peer. The peer comes from the runtime's connection info, never a header, so
+ * a test that wants the bypass has to stand in that position deliberately.
+ */
+function asLocalOperator<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithLocalConnection(
+    { remoteAddress: "127.0.0.1", forwardedHeaderPresent: false },
+    fn,
+  );
+}
 
 function fakeHeaders(map: Record<string, string> = {}) {
   return {
@@ -51,6 +76,21 @@ function req(url = "https://instance.cinatra.ai/api/cli/status"): Request {
 }
 
 describe("authorizeCliRequest", () => {
+  beforeAll(() => {
+    tokenDir = mkdtempSync(path.join(tmpdir(), "cinatra-cli-guard-"));
+    resetDevLocalTokenForTest();
+    bootToken = mintDevLocalToken({
+      NODE_ENV: "development",
+      CINATRA_MCP_DEV_ADMIN_BYPASS: "true",
+      CINATRA_DATA_DIR: tokenDir,
+    } as NodeJS.ProcessEnv) as string;
+  });
+
+  afterAll(() => {
+    rmSync(tokenDir, { recursive: true, force: true });
+    resetDevLocalTokenForTest();
+  });
+
   beforeEach(() => {
     getSessionMock.mockReset();
     resolveOrgRoleMock.mockReset();
@@ -60,8 +100,8 @@ describe("authorizeCliRequest", () => {
     headersMock.mockResolvedValue(fakeHeaders());
     // Default: no bypass.
     vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "");
-    vi.stubEnv("CINATRA_MCP_DEV_TRUSTED_HOSTS", "");
     vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("CINATRA_DATA_DIR", tokenDir);
   });
 
   afterEach(() => {
@@ -131,12 +171,15 @@ describe("authorizeCliRequest", () => {
     if (!result.ok) expect(result.status).toBe(403);
   });
 
-  it("grants the dev-admin loopback bypass when all three guards pass", async () => {
+  it("grants the local operator: loopback socket peer + this boot's credential", async () => {
     getSessionMock.mockResolvedValue(null);
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
-    const result = await authorizeCliRequest(
-      req("http://localhost:3000/api/cli/status"),
+    headersMock.mockResolvedValue(
+      fakeHeaders({ [DEV_LOCAL_TOKEN_HEADER]: bootToken }),
+    );
+    const result = await asLocalOperator(() =>
+      authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -146,10 +189,21 @@ describe("authorizeCliRequest", () => {
     }
   });
 
-  it("does NOT grant the bypass in production even on loopback", async () => {
+  // THE DEFECT. A caller anywhere can write `Host: localhost` and the
+  // development server synthesises the forwarded chain from it. Neither the
+  // URL nor a header is read any more, so this request is refused.
+  it("REFUSES a request that only CLAIMS to be local in its headers", async () => {
     getSessionMock.mockResolvedValue(null);
-    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    headersMock.mockResolvedValue(
+      fakeHeaders({
+        host: "localhost",
+        "x-forwarded-host": "localhost",
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-proto": "http",
+      }),
+    );
     const result = await authorizeCliRequest(
       req("http://localhost:3000/api/cli/status"),
     );
@@ -157,7 +211,106 @@ describe("authorizeCliRequest", () => {
     if (!result.ok) expect(result.status).toBe(401);
   });
 
-  it("does NOT grant the bypass for a non-loopback host", async () => {
+  it("REFUSES a loopback socket peer with no credential, and with a wrong one", async () => {
+    getSessionMock.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    const noCredential = await asLocalOperator(() =>
+      authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+    );
+    expect(noCredential.ok).toBe(false);
+    headersMock.mockResolvedValue(
+      fakeHeaders({ [DEV_LOCAL_TOKEN_HEADER]: "b".repeat(64) }),
+    );
+    const wrongCredential = await asLocalOperator(() =>
+      authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+    );
+    expect(wrongCredential.ok).toBe(false);
+  });
+
+  it("REFUSES the credential over a REMOTE socket peer", async () => {
+    getSessionMock.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    headersMock.mockResolvedValue(
+      fakeHeaders({ [DEV_LOCAL_TOKEN_HEADER]: bootToken }),
+    );
+    const result = await runWithLocalConnection(
+      { remoteAddress: "203.0.113.7", forwardedHeaderPresent: false },
+      () => authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  // The forwarded-header refusal is keyed on what arrived AT INGRESS, because
+  // the development server synthesises the chain on the way into a handler —
+  // reading it off the handler's own headers would refuse the local operator on
+  // every real boot. So the hop is stated on the connection, where it is true.
+  it("REFUSES a credentialed local operator whose CONNECTION carried a forwarded header", async () => {
+    getSessionMock.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    for (const name of [
+      "x-forwarded-for",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+      "forwarded",
+    ]) {
+      headersMock.mockResolvedValue(
+        fakeHeaders({
+          [DEV_LOCAL_TOKEN_HEADER]: bootToken,
+          [name]: "127.0.0.1",
+        }),
+      );
+      const result = await runWithLocalConnection(
+        { remoteAddress: "127.0.0.1", forwardedHeaderPresent: true },
+        () => authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+      );
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  // The other half of that rule, and the one a real dev boot depends on: the
+  // framework's OWN synthesised chain is on every handler's headers, and it
+  // must not be read as a proxy hop the caller made.
+  it("GRANTS the local operator whose handler headers carry the framework's synthesised chain", async () => {
+    getSessionMock.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    headersMock.mockResolvedValue(
+      fakeHeaders({
+        [DEV_LOCAL_TOKEN_HEADER]: bootToken,
+        host: "localhost:3000",
+        "x-forwarded-host": "localhost:3000",
+        "x-forwarded-for": "127.0.0.1",
+        "x-forwarded-proto": "http",
+      }),
+    );
+    const result = await asLocalOperator(() =>
+      authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.actor.via).toBe("dev-admin-bypass");
+      expect(result.actor.userId).toBeNull();
+    }
+  });
+
+  it("does NOT grant the bypass in production even for the local operator", async () => {
+    getSessionMock.mockResolvedValue(null);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
+    headersMock.mockResolvedValue(
+      fakeHeaders({ [DEV_LOCAL_TOKEN_HEADER]: bootToken }),
+    );
+    const result = await asLocalOperator(() =>
+      authorizeCliRequest(req("http://localhost:3000/api/cli/status")),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(401);
+  });
+
+  it("does NOT grant the bypass for a non-loopback request", async () => {
     getSessionMock.mockResolvedValue(null);
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
@@ -191,13 +344,18 @@ describe("authorizeCliRequest", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("the loopback dev-admin bypass still satisfies the platform-admin tier", async () => {
+  it("the local-operator dev-admin bypass still satisfies the platform-admin tier", async () => {
     getSessionMock.mockResolvedValue(null);
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true");
-    const result = await authorizeCliRequest(
-      req("http://localhost:3000/api/cli/agents/export?query=x"),
-      { minTier: "platform-admin" },
+    headersMock.mockResolvedValue(
+      fakeHeaders({ [DEV_LOCAL_TOKEN_HEADER]: bootToken }),
+    );
+    const result = await asLocalOperator(() =>
+      authorizeCliRequest(
+        req("http://localhost:3000/api/cli/agents/export?query=x"),
+        { minTier: "platform-admin" },
+      ),
     );
     expect(result.ok).toBe(true);
   });

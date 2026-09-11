@@ -21,6 +21,7 @@ import {
 } from "@cinatra-ai/org-write-kernel/testing";
 import type { OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 import { resumeRunFromSetupApproval } from "../resume-run-from-setup-approval";
+import { classifyGateRejection } from "../hitl-gate-submit";
 
 const ORG = "org-1";
 const RUN = "run-1";
@@ -130,6 +131,28 @@ describe("resumeRunFromSetupApproval — guarded setup-resume CAS (#1939 §7.1)"
     await expect(
       resumeRunFromSetupApproval(RUN, null, SESSION, { db }),
     ).rejects.toMatchObject({ name: "RunTransitionError", code: "stale_from_status" });
+  });
+
+  // cinatra#3219 regression case 2 — the status was still pending_approval at
+  // the read, and the compare-and-swap lost the race before the write. What the
+  // REAL writer throws has to be classifiable as the review surface's blocked
+  // reason from its TYPE alone: by the time the client is involved the message
+  // is a masked framework string, so nothing may depend on reading it.
+  it("the real 0-row CAS refusal classifies as the surface's no-longer-pending block", async () => {
+    const { db, rec } = activeDb();
+    rec.returningRows = [[]];
+    let thrown: unknown = null;
+    try {
+      await resumeRunFromSetupApproval(RUN, null, SESSION, { db });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeTruthy();
+    // Stand in for production delivery: the original text is gone.
+    (thrown as Error).message =
+      "An error occurred in the Server Components render. The specific message " +
+      "is omitted in production builds to avoid leaking sensitive details.";
+    expect(classifyGateRejection(thrown)).toBe("no-longer-pending");
   });
 
   it("org-scope fail-closed (0-row for a runId in another org): stale_from_status", async () => {

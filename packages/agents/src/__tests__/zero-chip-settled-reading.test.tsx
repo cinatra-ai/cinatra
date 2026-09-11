@@ -94,6 +94,12 @@ vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => {
     readRunSelectedSkillRevisions: (...a: unknown[]) => readRunSelectedSkillRevisions(...a),
     readRunRejectedRecommendations: (...a: unknown[]) => readRunRejectedRecommendations(...a),
     hasRunRecommendationSkip: (...a: unknown[]) => hasRunRecommendationSkip(...a),
+    // The pre-start selection clear (cinatra#3047) is a STORE write — stubbed
+    // like the rest of them, though the spread keeps the pure exports real.
+    clearRunSelectedSkillRevisionsBeforeStart: vi.fn(() => 0),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: vi.fn(() => true),
   };
 });
 vi.mock("../store", () => ({
@@ -141,11 +147,23 @@ type Decision = Parameters<
   typeof import("../run-recommendation-chip-row").RunRecommendationChipRow
 >[0]["decision"];
 
-async function renderRow(decision: Decision) {
+/**
+ * THE HOST THIS READING LIVES ON, since cinatra#3047 review point 2.
+ *
+ * The outcome panel is §V's zero-chip settled face, and it is drawn by the hosts
+ * that draw §V's chip row — the conversation, the widget, the review page's gate
+ * region. It is NOT drawn on the run page any more: with checkboxes there is no
+ * skip ACT for an outcome word to report, so the run page's settled all-clear
+ * reading is the row itself with every box clear, and its own suite
+ * (`skills-step-all-clear-is-the-skip.test.tsx`) pins that. Everything this file
+ * measures about the PANEL is unchanged and is measured where the panel is, plus
+ * one arm below that pins its absence on the run page.
+ */
+async function renderRow(decision: Decision, host: "chat_thread" | "run_card" = "chat_thread") {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   return render(
-    <LifecycleCardSurfaceProvider host="run_card">
+    <LifecycleCardSurfaceProvider host={host}>
       <RunRecommendationChipRow
         runId={RUN_ID}
         agentPackageName="@cinatra-test/agent"
@@ -168,7 +186,7 @@ describe("§V — the settled reading for an empty decided set (cinatra#2893)", 
     const root = container.querySelector("[data-run-recommendation-chip-row]");
     expect(root).not.toBeNull();
     expect(root!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
-    expect(root!.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    expect(root!.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
     expect(root!.getAttribute("data-lifecycle-card-state")).toBe("decided");
     expect(root!.getAttribute("data-run-recommendation-settled")).toBe("true");
 
@@ -184,6 +202,23 @@ describe("§V — the settled reading for an empty decided set (cinatra#2893)", 
     expect(container.querySelectorAll("[data-recommendation-chip]")).toHaveLength(0);
     expect(container.querySelectorAll("button")).toHaveLength(0);
     expect(container.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+  });
+
+  it("is NOT drawn on the run page — its Skills step states an all-clear row instead", async () => {
+    // Review point 2 (cinatra#3047): no skip outcome, no decider naming, and
+    // none of the panel's visuals on the run page's skills step.
+    const { container } = await renderRow(
+      { kind: "skipped", decided: [], decidedByName: "Dana Okafor" },
+      "run_card",
+    );
+    expect(panel()).toBeNull();
+    expect(container.textContent).not.toContain("Dana Okafor");
+    expect(container.textContent).not.toContain("Skipped");
+    // The card itself is still there, still declaring what it is.
+    const root = container.querySelector("[data-run-recommendation-chip-row]");
+    expect(root).not.toBeNull();
+    expect(root!.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    expect(root!.getAttribute("data-run-recommendation-settled")).toBe("true");
   });
 
   it("names the decider only when it can be named — and never invents one", async () => {

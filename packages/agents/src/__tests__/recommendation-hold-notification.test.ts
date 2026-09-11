@@ -41,6 +41,7 @@ const maybeParkCheckpoint = vi.fn();
 const sweepParks = vi.fn();
 const readContinuationParksForRun = vi.fn();
 const resolveAssignedSkillsActorForRun = vi.fn();
+const publishAgUiEvent = vi.fn();
 
 vi.mock("@cinatra-ai/skills/recommendation-server", () => ({
   recommendSkillsForAgentTask: (...a: unknown[]) => recommendSkillsForAgentTask(...a),
@@ -59,6 +60,36 @@ vi.mock("../lifecycle-continuation-park-store", () => ({
   maybeParkCheckpoint: (...a: unknown[]) => maybeParkCheckpoint(...a),
   sweepParks: (...a: unknown[]) => sweepParks(...a),
   readContinuationParksForRun: (...a: unknown[]) => readContinuationParksForRun(...a),
+}));
+
+// THE TRANSPORT IS STUBBED HERMETICALLY, AND THE FACTORY NEVER CALLS `orig()`.
+//
+// `maybeHoldRunForRecommendation` announces a new hold on the run wire before it
+// notifies, and `publishHoldEvent` reaches that wire through a DYNAMIC import of
+// `@cinatra-ai/agent-ui-protocol/server` — deliberately, so the pure seams stay
+// transport-free and testable without a Redis stub (see the comment on that
+// seam). This file leaned on the dynamic import without stubbing it, and the
+// import still RESOLVED the real transport: its graph runs through the a2a
+// executor and the agents barrel into `@/lib/background-jobs`, which imports
+// `@/lib/register-run-wait-notifier` — a module whose entire job is to call
+// `setRunWaitNotifier` at import time.
+//
+// So the FIRST test that actually held a run paid `11 s to transform that graph
+// and then watched the host registrar overwrite the notifier wired in
+// `beforeEach`, MID-CALL, between the park and the dispatch: the enter landed on
+// the real host notifier and this file's spy recorded nothing. Only the first
+// such test could fail — every later `beforeEach` re-wires on top of the
+// now-loaded registrar, which is why the re-hold case passed while this one did
+// not. The notifier lives in a global-symbol slot precisely so ONE holder
+// survives bundle duplication, and that is also what let a boot-time module
+// reach across into this suite.
+//
+// The sibling suites partial-mock this module with `await orig()`. That shape is
+// wrong HERE, because evaluating the real module is the whole problem. The hold
+// path destructures exactly one export, so this factory returns exactly that one
+// and the host graph is never evaluated.
+vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({
+  publishAgUiEvent: (...a: unknown[]) => publishAgUiEvent(...a),
 }));
 
 import {
@@ -326,6 +357,12 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(true);
 
+    // NOT asserted here: whether the wire announcement fired. It is gated by the
+    // chip-row activation flag, so a checkout carrying a repo-root env file sees
+    // the publish and a clean CI checkout does not — an assertion on it would
+    // pass locally and fail on the runner, which is exactly what it did. The
+    // stub above exists to keep the real transport's graph out of this suite,
+    // not to pin the wire; the wire is pinned where the activation is fixed.
     expect(onEnterRecommendationHold).toHaveBeenCalledTimes(1);
     // The park id it JUST INSERTED — not one re-read afterwards. The re-read used
     // to be the liveness check; it is gone because it could never have been one

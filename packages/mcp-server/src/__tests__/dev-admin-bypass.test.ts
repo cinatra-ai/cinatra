@@ -2,415 +2,256 @@
  * Hermetic test for the dev-admin-bypass policy.
  *
  * The policy is intentionally a pure function — testing the boundaries
- * matters more than testing the call site. The three guards (NODE_ENV,
- * opt-in env flag, trusted-dev-host detection) must ALL hold; missing any
- * one must keep the bypass off.
+ * matters more than testing the call site. Every guard (NODE_ENV, the opt-in
+ * env flag, forwarded-header absence, a loopback SOCKET PEER, and the per-boot
+ * local credential) must hold; missing any one must keep the bypass off.
  *
- * The host helpers cover:
- *   - `isTrustedDevHost()` — unified trust tier (loopback OR env allowlist)
- *   - `parseTrustedHosts()` — comma-separated allowlist parsing
- *   - `normalizeHost()` / `effectiveRequestHost()` — host normalization
- *
- * `shouldGrantDevAdminBypass()` keeps its three-guard shape; the
- * `isTrustedDevHost` argument reflects the widened trust tier.
+ * The trust decision reads NO hostname. The host helpers below
+ * (`normalizeHost` / `urlRequestHost` / `forwardedRequestHost` /
+ * `effectiveRequestHost` / `parseTrustedHosts`) survive for request shaping and
+ * diagnostics, and their behaviour is pinned here so a later change cannot
+ * quietly re-introduce a host-derived trust path.
  */
 import { describe, it, expect } from "vitest";
 import {
+  DEV_LOCAL_TOKEN_HEADER,
+  FORWARDED_HEADER_NAMES,
   effectiveRequestHost,
   forwardedRequestHost,
-  isTrustedDevHost,
+  hasForwardedHeader,
+  isLoopbackPeerAddress,
+  isTrustedDevPeer,
+  localTokensMatch,
   normalizeHost,
   parseTrustedHosts,
   shouldGrantDevAdminBypass,
   urlRequestHost,
 } from "../dev-admin-bypass";
 
+const TOKEN = "a".repeat(64);
+
+/** Header bag with the read-only shape the policy consumes. */
+function headers(map: Record<string, string>): { get(name: string): string | null } {
+  const lower = new Map(
+    Object.entries(map).map(([key, value]) => [key.toLowerCase(), value]),
+  );
+  return { get: (name: string) => lower.get(name.toLowerCase()) ?? null };
+}
+
 describe("shouldGrantDevAdminBypass — dev admin bypass policy", () => {
-  it("grants when all three guards pass (NODE_ENV != production, flag=true, trusted host)", () => {
+  it("grants when all guards pass (NODE_ENV != production, flag=true, trusted dev peer)", () => {
     expect(
       shouldGrantDevAdminBypass({
         nodeEnv: "development",
         envBypassFlag: "true",
-        isTrustedDevHost: true,
+        isTrustedDevPeer: true,
       }),
     ).toBe(true);
   });
 
-  it("denies in NODE_ENV=production even with flag + trusted host", () => {
+  it("grants in test env (NODE_ENV=test is not production)", () => {
+    expect(
+      shouldGrantDevAdminBypass({
+        nodeEnv: "test",
+        envBypassFlag: "true",
+        isTrustedDevPeer: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("refuses in production even with flag and trusted peer", () => {
     expect(
       shouldGrantDevAdminBypass({
         nodeEnv: "production",
         envBypassFlag: "true",
-        isTrustedDevHost: true,
+        isTrustedDevPeer: true,
       }),
     ).toBe(false);
   });
 
-  it("denies when flag is absent / not 'true'", () => {
-    for (const flag of [undefined, "", "false", "1", "yes", "TRUE"]) {
-      expect(
-        shouldGrantDevAdminBypass({
-          nodeEnv: "development",
-          envBypassFlag: flag,
-          isTrustedDevHost: true,
-        }),
-      ).toBe(false);
-    }
-  });
-
-  it("denies when request is not a trusted dev host", () => {
+  it("refuses when the peer is not trusted", () => {
     expect(
       shouldGrantDevAdminBypass({
         nodeEnv: "development",
-        envBypassFlag: "true",
-        isTrustedDevHost: false,
+        envBypassFlag: "false",
+        isTrustedDevPeer: false,
       }),
     ).toBe(false);
   });
 
-  it("NODE_ENV=undefined treated as non-production (only literal 'production' denies)", () => {
+  it("refuses when the opt-in flag is absent or not exactly 'true'", () => {
     expect(
       shouldGrantDevAdminBypass({
-        nodeEnv: undefined,
-        envBypassFlag: "true",
-        isTrustedDevHost: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldGrantDevAdminBypass({
-        nodeEnv: undefined,
+        nodeEnv: "development",
         envBypassFlag: undefined,
-        isTrustedDevHost: true,
+        isTrustedDevPeer: true,
       }),
     ).toBe(false);
-  });
-
-  it("production denies even when flag is mis-set", () => {
     expect(
       shouldGrantDevAdminBypass({
-        nodeEnv: "production",
-        envBypassFlag: "true",
-        isTrustedDevHost: true,
+        nodeEnv: "development",
+        envBypassFlag: "TRUE",
+        isTrustedDevPeer: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGrantDevAdminBypass({
+        nodeEnv: "development",
+        envBypassFlag: "1",
+        isTrustedDevPeer: true,
       }),
     ).toBe(false);
   });
 });
 
-describe("isTrustedDevHost — trusted host policy", () => {
-  // Convenience defaults for the env-flag + nodeEnv guards.
-  const ok = { nodeEnv: "development", envBypassFlag: "true" } as const;
-  function call(extra: {
-    trustedHostsEnv: string | undefined;
-    urlHost: string | null;
-    forwardedHostRaw?: string | null;
-  }) {
-    return isTrustedDevHost({
-      ...ok,
-      trustedHostsEnv: extra.trustedHostsEnv,
-      urlHost: extra.urlHost,
-      forwardedHostRaw: extra.forwardedHostRaw ?? null,
+describe("isTrustedDevPeer — socket peer + per-boot credential", () => {
+  function call(
+    over: Partial<Parameters<typeof isTrustedDevPeer>[0]> = {},
+  ): boolean {
+    return isTrustedDevPeer({
+      nodeEnv: "development",
+      envBypassFlag: "true",
+      peerAddress: "127.0.0.1",
+      forwardedHeaderPresent: false,
+      presentedToken: TOKEN,
+      expectedToken: TOKEN,
+      ...over,
     });
   }
 
-  it("loopback `localhost` urlHost is trusted when env flags pass", () => {
-    expect(call({ trustedHostsEnv: undefined, urlHost: "localhost" })).toBe(true);
+  it("grants a loopback socket peer presenting the per-boot credential", () => {
+    expect(call()).toBe(true);
+    expect(call({ peerAddress: "::1" })).toBe(true);
+    expect(call({ peerAddress: "::ffff:127.0.0.1" })).toBe(true);
   });
 
-  it("loopback denied in production regardless of env flag", () => {
-    expect(
-      isTrustedDevHost({
-        nodeEnv: "production",
-        envBypassFlag: "true",
-        trustedHostsEnv: undefined,
-        urlHost: "localhost",
-        forwardedHostRaw: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("denied when CINATRA_MCP_DEV_ADMIN_BYPASS not 'true'", () => {
-    for (const flag of [undefined, "", "false", "1", "TRUE"]) {
-      expect(
-        isTrustedDevHost({
-          nodeEnv: "development",
-          envBypassFlag: flag,
-          trustedHostsEnv: "foo.ts.net",
-          urlHost: "foo.ts.net",
-          forwardedHostRaw: null,
-        }),
-      ).toBe(false);
+  // THE DEFECT THIS SUITE EXISTS FOR. A caller anywhere on the network can
+  // write `Host: localhost`, and the development server then synthesises the
+  // forwarded chain from that very header — so a request whose HEADERS all say
+  // "local" proves nothing at all. None of these inputs is a hostname any more,
+  // and the presence of a forwarded header refuses on its own.
+  it("REFUSES a request carrying any forwarded header, at any value", () => {
+    for (const name of FORWARDED_HEADER_NAMES) {
+      expect(name).toBeTypeOf("string");
     }
-  });
-
-  it("env-allowlisted urlHost trusted when flags pass", () => {
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: "foo.ts.net" })).toBe(true);
-  });
-
-  it("allowlist match is exact — does NOT trust suffix hosts", () => {
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: "bar.foo.ts.net" })).toBe(false);
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: "xfoo.ts.net" })).toBe(false);
-  });
-
-  it("allowlist match is case-insensitive (helper normalizes signals)", () => {
-    expect(call({ trustedHostsEnv: "FOO.ts.NET", urlHost: "foo.ts.net" })).toBe(true);
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: "FOO.TS.NET" })).toBe(true);
-  });
-
-  it("allowlist is comma-separated, whitespace-tolerant, multi-host", () => {
-    const env = "a.com, b.com , c.com";
-    for (const host of ["a.com", "b.com", "c.com"]) {
-      expect(call({ trustedHostsEnv: env, urlHost: host })).toBe(true);
-    }
-  });
-
-  it("host not in allowlist is denied", () => {
-    expect(call({ trustedHostsEnv: "a.com,b.com", urlHost: "c.com" })).toBe(false);
-  });
-
-  it("empty / whitespace allowlist grants no extra trust beyond loopback", () => {
-    for (const env of [undefined, "", "   ", ",", ", ,"]) {
-      expect(call({ trustedHostsEnv: env, urlHost: "foo.ts.net" })).toBe(false);
-      // Loopback urlHost still works
-      expect(call({ trustedHostsEnv: env, urlHost: "127.0.0.1" })).toBe(true);
-    }
-  });
-
-  it("scheme-prefixed allowlist entry does NOT match plain hostname", () => {
-    // Operator typo guard. `https://foo.ts.net` is rejected by `normalizeHost`
-    // (contains `://`), so the allowlist set is effectively empty.
-    expect(call({ trustedHostsEnv: "https://foo.ts.net", urlHost: "foo.ts.net" })).toBe(false);
-    // Specifically: the bare `https` token (which a buggy port-strip would
-    // have produced) MUST NOT match — otherwise a request with
-    // `Host: https` (e.g. attacker probing) could gain admin.
-    expect(call({ trustedHostsEnv: "https://foo.ts.net", urlHost: "https" })).toBe(false);
-  });
-
-  it("null/empty hosts are denied even if env flags pass", () => {
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: null })).toBe(false);
-    expect(call({ trustedHostsEnv: "foo.ts.net", urlHost: "" })).toBe(false);
-  });
-
-  it("production wins even with valid allowlist + matching host", () => {
+    expect(call({ forwardedHeaderPresent: true })).toBe(false);
+    // Even with a loopback peer AND the real credential.
     expect(
-      isTrustedDevHost({
-        nodeEnv: "production",
-        envBypassFlag: "true",
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "foo.ts.net",
-        forwardedHostRaw: null,
+      call({
+        forwardedHeaderPresent: true,
+        peerAddress: "127.0.0.1",
+        presentedToken: TOKEN,
+        expectedToken: TOKEN,
       }),
     ).toBe(false);
   });
 
-  it("all four loopback hosts are trusted by default (urlHost only)", () => {
-    for (const host of ["localhost", "127.0.0.1", "::1", "host.docker.internal"]) {
-      expect(call({ trustedHostsEnv: undefined, urlHost: host })).toBe(true);
-    }
+  it("REFUSES a remote socket peer however local the request claims to be", () => {
+    expect(call({ peerAddress: "203.0.113.7" })).toBe(false);
+    expect(call({ peerAddress: "10.1.2.3" })).toBe(false);
+    expect(call({ peerAddress: "172.17.0.4" })).toBe(false);
+    expect(call({ peerAddress: "::ffff:203.0.113.7" })).toBe(false);
   });
 
-  // Spoofing defenses for `x-forwarded-host`.
-  it("allowlist path ignores forwardedHost — spoof does not grant trust", () => {
-    // Attacker on a non-loopback URL spoofs forwarded-host to an
-    // allowlisted hostname. Allowlist path consults urlHost only → reject.
-    expect(
-      isTrustedDevHost({
-        nodeEnv: "development",
-        envBypassFlag: "true",
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "attacker.example.com",
-        forwardedHostRaw: "foo.ts.net",
-      }),
-    ).toBe(false);
+  it("REFUSES when the socket peer is unknown (fail closed, no header fallback)", () => {
+    expect(call({ peerAddress: null })).toBe(false);
+    expect(call({ peerAddress: "" })).toBe(false);
   });
 
-  it("legit Tailscale Serve topology (Host preserved end-to-end) is trusted", () => {
-    expect(
-      isTrustedDevHost({
-        nodeEnv: "development",
-        envBypassFlag: "true",
-        trustedHostsEnv: "my-box.tailnet000.ts.net",
-        urlHost: "my-box.tailnet000.ts.net",
-        forwardedHostRaw: null,
-      }),
-    ).toBe(true);
+  it("REFUSES when no credential was minted (unset means off)", () => {
+    expect(call({ expectedToken: null })).toBe(false);
+    expect(call({ expectedToken: "" })).toBe(false);
   });
 
-  // Loopback path requires urlHost to be loopback. The
-  // forwarded-host header is a VETO signal only (must agree or be absent).
-  it("loopback path — urlHost=loopback + forwardedHost=loopback → trust", () => {
-    expect(
-      call({ trustedHostsEnv: undefined, urlHost: "localhost", forwardedHostRaw: "localhost" }),
-    ).toBe(true);
+  it("REFUSES when the presented credential is absent or wrong", () => {
+    expect(call({ presentedToken: null })).toBe(false);
+    expect(call({ presentedToken: "" })).toBe(false);
+    expect(call({ presentedToken: "b".repeat(64) })).toBe(false);
+    // A prefix of the real credential is not the credential.
+    expect(call({ presentedToken: TOKEN.slice(0, 32) })).toBe(false);
+    // Nor is the credential plus anything.
+    expect(call({ presentedToken: `${TOKEN}x` })).toBe(false);
   });
 
-  it("loopback path — urlHost=loopback + forwardedHost=non-loopback → reject (veto)", () => {
-    expect(
-      call({
-        trustedHostsEnv: undefined,
-        urlHost: "localhost",
-        forwardedHostRaw: "foo.ts.net",
-      }),
-    ).toBe(false);
+  it("REFUSES in production and without the opt-in flag", () => {
+    expect(call({ nodeEnv: "production" })).toBe(false);
+    expect(call({ envBypassFlag: undefined })).toBe(false);
+    expect(call({ envBypassFlag: "TRUE" })).toBe(false);
+  });
+});
+
+describe("hasForwardedHeader — presence, never value", () => {
+  it("names exactly the four forwarded headers", () => {
+    expect([...FORWARDED_HEADER_NAMES]).toEqual([
+      "x-forwarded-for",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+      "forwarded",
+    ]);
   });
 
-  it("spoof defense — urlHost=non-loopback + forwardedHost=loopback → reject", () => {
-    // `X-Forwarded-Host: localhost:3000` while request.url is
-    // `http://attacker.example.com/api/mcp` must NOT produce loopback trust.
-    expect(
-      call({
-        trustedHostsEnv: undefined,
-        urlHost: "attacker.example.com",
-        forwardedHostRaw: "localhost",
-      }),
-    ).toBe(false);
+  it("is false only when none of them is present", () => {
+    expect(hasForwardedHeader(headers({}))).toBe(false);
+    expect(hasForwardedHeader(headers({ host: "localhost:3000" }))).toBe(false);
   });
 
-  it("Turbopack dev-proxy compat — urlHost=localhost + forwardedHostRaw=`localhost:3000` (loopback) → trust", () => {
-    // Turbopack's dev server sets x-forwarded-host to localhost:<port>,
-    // which is still a loopback address and is treated as local.
-    // normalizeHost strips the port, so forwardedHost ends up as
-    // `localhost` → veto agrees.
-    expect(
-      call({ trustedHostsEnv: undefined, urlHost: "localhost", forwardedHostRaw: "localhost:3000" }),
-    ).toBe(true);
+  it("is true for each of them, including a chain that names only loopback", () => {
+    expect(hasForwardedHeader(headers({ "x-forwarded-for": "127.0.0.1" }))).toBe(true);
+    expect(hasForwardedHeader(headers({ "x-forwarded-host": "localhost" }))).toBe(true);
+    expect(hasForwardedHeader(headers({ "x-forwarded-proto": "http" }))).toBe(true);
+    expect(hasForwardedHeader(headers({ forwarded: "for=127.0.0.1" }))).toBe(true);
+    // Empty string is still PRESENT.
+    expect(hasForwardedHeader(headers({ "x-forwarded-for": "" }))).toBe(true);
   });
 
-  // Malformed-but-PRESENT forwarded-host veto. Present-but-unparseable
-  // headers must not collapse to "absent" and silently bypass the veto.
-  it("malformed forwarded-host with loopback urlHost → reject (veto present)", () => {
-    for (const raw of [
-      "https://evil.example", // URL-shaped → normalizeHost returns null
-      "[::1]evil.com",        // malformed IPv6 bracket suffix
-      "   ",                  // whitespace only
-      "",                     // empty string (header present but empty value)
-    ]) {
-      expect(
-        call({ trustedHostsEnv: undefined, urlHost: "localhost", forwardedHostRaw: raw }),
-      ).toBe(false);
-    }
+  it("reads the credential header by its published name", () => {
+    expect(DEV_LOCAL_TOKEN_HEADER).toBe("x-cinatra-dev-local-token");
+  });
+});
+
+describe("isLoopbackPeerAddress — socket peer classification", () => {
+  it("accepts the loopback forms a runtime actually reports", () => {
+    expect(isLoopbackPeerAddress("127.0.0.1")).toBe(true);
+    expect(isLoopbackPeerAddress("127.1.2.3")).toBe(true);
+    expect(isLoopbackPeerAddress("::1")).toBe(true);
+    expect(isLoopbackPeerAddress("[::1]")).toBe(true);
+    expect(isLoopbackPeerAddress("0:0:0:0:0:0:0:1")).toBe(true);
+    expect(isLoopbackPeerAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackPeerAddress("::FFFF:127.0.0.1")).toBe(true);
   });
 
-  it("header absent (null) is distinct from header present-but-malformed", () => {
-    // Absent → veto inactive → trust based on urlHost alone.
-    expect(
-      call({ trustedHostsEnv: undefined, urlHost: "localhost", forwardedHostRaw: null }),
-    ).toBe(true);
+  it("refuses everything else, including absent and hostname-shaped input", () => {
+    expect(isLoopbackPeerAddress(null)).toBe(false);
+    expect(isLoopbackPeerAddress(undefined)).toBe(false);
+    expect(isLoopbackPeerAddress("")).toBe(false);
+    expect(isLoopbackPeerAddress("   ")).toBe(false);
+    // A NAME is not a socket peer address — the peer is always numeric.
+    expect(isLoopbackPeerAddress("localhost")).toBe(false);
+    expect(isLoopbackPeerAddress("host.docker.internal")).toBe(false);
+    expect(isLoopbackPeerAddress("192.0.2.10")).toBe(false);
+    expect(isLoopbackPeerAddress("10.0.0.1")).toBe(false);
+    expect(isLoopbackPeerAddress("172.18.0.2")).toBe(false);
+    expect(isLoopbackPeerAddress("203.0.113.7")).toBe(false);
+    expect(isLoopbackPeerAddress("fe80::1%en0")).toBe(false);
+    expect(isLoopbackPeerAddress("::ffff:10.0.0.1")).toBe(false);
+    // Not a 127-block address, merely prefixed by one.
+    expect(isLoopbackPeerAddress("127.0.0.1.evil.example")).toBe(false);
+  });
+});
+
+describe("localTokensMatch — constant-time credential compare", () => {
+  it("matches only an exact credential", () => {
+    expect(localTokensMatch(TOKEN, TOKEN)).toBe(true);
+    expect(localTokensMatch(TOKEN, `${TOKEN}x`)).toBe(false);
+    expect(localTokensMatch(`${TOKEN}x`, TOKEN)).toBe(false);
+    expect(localTokensMatch(TOKEN.slice(0, 63), TOKEN)).toBe(false);
   });
 
-  it("multi-value forwarded with first-value malformed → reject", () => {
-    // We pick the first comma-separated value (HTTP convention). If the
-    // first parses to non-loopback OR fails to parse, the veto fires.
-    expect(
-      call({
-        trustedHostsEnv: undefined,
-        urlHost: "localhost",
-        forwardedHostRaw: "evil.example, localhost",
-      }),
-    ).toBe(false);
-  });
-
-  it("non-numeric port suffix in forwarded value → veto (malformed)", () => {
-    // A single-colon suffix that isn't all digits (e.g.
-    // `localhost:notaport`) must not be stripped and normalized to
-    // `localhost`, which would silently pass the veto. Reject it as
-    // present-but-invalid.
-    for (const raw of [
-      "localhost:notaport",
-      "127.0.0.1:bad",
-      "::1:foo", // multi-colon w/o brackets — kept literal, fails loopback match
-    ]) {
-      expect(
-        call({ trustedHostsEnv: undefined, urlHost: "localhost", forwardedHostRaw: raw }),
-      ).toBe(false);
-    }
-  });
-
-  // Reverse-proxy topology: public-edge proxies can rewrite Host to
-  // `localhost:3000` and put the public hostname in `X-Forwarded-Host`.
-  // The same shape applies to named Cloudflare Tunnel, cloudflared
-  // named-tunnel mode, and any other reverse proxy that terminates TLS
-  // at the public edge and forwards to the localhost listener. Loopback
-  // path must trust forwarded-host values that match the operator-defined
-  // allowlist.
-  it("Funnel topology — urlHost=loopback + forwardedHost=allowlisted → trust", () => {
-    expect(
-      call({
-        trustedHostsEnv: "localhost-0.tailnet000.ts.net",
-        urlHost: "localhost",
-        forwardedHostRaw: "localhost-0.tailnet000.ts.net",
-      }),
-    ).toBe(true);
-  });
-
-  it("spoof — urlHost=loopback + forwardedHost=non-loopback-non-allowlisted → reject", () => {
-    expect(
-      call({
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "localhost",
-        forwardedHostRaw: "attacker.example.com",
-      }),
-    ).toBe(false);
-  });
-
-  it("non-loopback urlHost cannot be rescued by allowlisted forwarded-host", () => {
-    // The allowlist path consults urlHost ONLY. Even if forwardedHost
-    // matches the allowlist, a non-loopback urlHost that is not in the
-    // allowlist must reject.
-    expect(
-      call({
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "attacker.example.com",
-        forwardedHostRaw: "foo.ts.net",
-      }),
-    ).toBe(false);
-  });
-
-  it("urlHost=loopback + forwardedHost=malformed → reject (veto preserved)", () => {
-    // Sanity check that adding the allowlist branch did not weaken the
-    // malformed-veto path.
-    for (const raw of [
-      "https://evil.example",
-      "[::1]evil.com",
-      "localhost:notaport",
-    ]) {
-      expect(
-        call({ trustedHostsEnv: "foo.ts.net", urlHost: "localhost", forwardedHostRaw: raw }),
-      ).toBe(false);
-    }
-  });
-
-  it("comma-separated forwarded — first value drives the veto/trust decision", () => {
-    // First-value-wins is the HTTP convention. If the first value is
-    // allowlisted, trust; if the first value is malformed/non-loopback/
-    // non-allowlisted, reject (even when a later value would have matched).
-    expect(
-      call({
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "localhost",
-        forwardedHostRaw: "foo.ts.net, attacker.example.com",
-      }),
-    ).toBe(true);
-    expect(
-      call({
-        trustedHostsEnv: "foo.ts.net",
-        urlHost: "localhost",
-        forwardedHostRaw: "attacker.example.com, foo.ts.net",
-      }),
-    ).toBe(false);
-  });
-
-  it("URL-shaped allowlist entries do NOT widen the loopback forwarded path", () => {
-    // Explicit guard for the loopback-forwarded branch. If the operator writes a URL into env
-    // (`https://foo.ts.net`), `parseTrustedHosts` drops it (because
-    // `normalizeHost` rejects `://`). A request with forwarded-host
-    // `foo.ts.net` must therefore NOT match.
-    expect(
-      call({
-        trustedHostsEnv: "https://foo.ts.net",
-        urlHost: "localhost",
-        forwardedHostRaw: "foo.ts.net",
-      }),
-    ).toBe(false);
+  it("refuses when either side is absent or empty", () => {
+    expect(localTokensMatch(null, TOKEN)).toBe(false);
+    expect(localTokensMatch(TOKEN, null)).toBe(false);
+    expect(localTokensMatch(undefined, undefined)).toBe(false);
+    expect(localTokensMatch("", "")).toBe(false);
   });
 });
 

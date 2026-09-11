@@ -79,6 +79,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
 
 import { mountSurface } from "./conversation-column-harness";
+import { COMPOSER_RESERVED_SPACE_FLOOR_PX } from "../composer-reserved-space";
 
 afterEach(cleanup);
 
@@ -93,8 +94,13 @@ const CHAT_COLUMN_SKELETON = [
   { depth: 0, className: "relative flex min-h-0 flex-1 flex-col" },
   {
     depth: 1,
+    // THE RESERVATION MOVED OFF THE CLASS STRING (cinatra#3044). `pb-24` was a
+    // constant standing in for the composer's real height, so everything the
+    // composer grew past it covered the newest content in the stream. The
+    // reservation is now MEASURED from the composer's own box and applied as an
+    // inline style; the constant survives as its floor, asserted just below.
     className:
-      "min-h-0 flex-1 overflow-y-auto pb-24 pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+      "min-h-0 flex-1 overflow-y-auto pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
   },
   { depth: 1, className: "relative mx-auto w-full max-w-3xl px-4" },
   { depth: 2, className: "absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0" },
@@ -120,6 +126,12 @@ describe("/chat's conversation column is byte-identical after the extraction (#2
     // The scroll container and the composer anchor are the column's two children.
     expect((column!.children[0] as HTMLElement).className).toBe(
       CHAT_COLUMN_SKELETON[1].className,
+    );
+    // …and the room the composer stands in is still reserved, as the measured
+    // style that replaced the constant. jsdom lays nothing out, so what is read
+    // here is the floor — which is exactly the constant that used to be a class.
+    expect((column!.children[0] as HTMLElement).style.paddingBottom).toBe(
+      `${COMPOSER_RESERVED_SPACE_FLOOR_PX}px`,
     );
     expect((column!.children[1] as HTMLElement).className).toBe(
       CHAT_COLUMN_SKELETON[2].className,
@@ -223,8 +235,11 @@ describe("/chat's conversation column is byte-identical after the extraction (#2
     // React runs effects in definition order: the lock must already be clear
     // when scrollToBottom fires for the new thread's messages.
     const resetIdx = column.search(/userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/);
+    // The pin's dependency list also carries the composer reservation now
+    // (cinatra#3044): a reservation that moves moves the bottom the stream is
+    // pinned to.
     const scrollIdx = column.search(
-      /scrollToBottom\(\);\s*\}, \[messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom\]\);/,
+      /scrollToBottom\(\);\s*\}, \[\s*messages,\s*streamingCount,\s*pendingExternalHandle,\s*typingIndicators,\s*scrollToBottom,\s*composerReservedSpace,\s*\]\);/,
     );
     expect(resetIdx).toBeGreaterThan(-1);
     expect(scrollIdx).toBeGreaterThan(-1);

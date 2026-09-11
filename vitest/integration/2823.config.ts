@@ -80,6 +80,15 @@ export default defineConfig({
       // test workers).
       SUPABASE_DB_URL: testDbUrl,
       SUPABASE_SCHEMA: process.env.SUPABASE_SCHEMA ?? "cinatra",
+      // The schedule carriage now persists the REAL run-scoped card reference
+      // (cinatra#3044), and the ref codec derives its key from the app secret —
+      // no secret, no ref, and a carriage that would silently prove nothing.
+      // Nothing in this tier signs or verifies anything: no session is created
+      // and no token is minted, so a fixed placeholder is what belongs here. It
+      // is not a credential and must never be treated as one. Same reasoning,
+      // same shape as the lifecycle-moment tier's own placeholder.
+      BETTER_AUTH_SECRET:
+        process.env.BETTER_AUTH_SECRET ?? "x2823-placeholder-not-a-credential",
     },
   },
 });

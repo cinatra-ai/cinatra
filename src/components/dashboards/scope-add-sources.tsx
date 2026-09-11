@@ -43,10 +43,18 @@ export type ScopeAddSources = {
   readonly reference: ScopeReferenceSource | null;
   /** Concept B's section node (cinatra#2474 PR4); `null` until then.
    *
+   *  NOT currently offered by the tab's Add affordance: a catalog copy is
+   *  written into the acting USER's collection, which this tab's scope read
+   *  never returns, so offering it here would report success and then show
+   *  nothing (fix leg 3, convergence round). The landings keep building and
+   *  handing down the node so the surface, its builder and its gates stay whole
+   *  and one line from being re-offered once the maintainer rules on where it
+   *  belongs on this drawing; only the mount inside the popup is withdrawn.
+   *
    *  Deliberately `ReactElement | null`, not `ReactNode`: `ReactNode` admits
    *  `false` / `""` / `0`, which render NOTHING while still reading as "a
    *  catalog is available" to a `!= null` test — a slot that is present and
-   *  empty at the same time (codex convergence). */
+   *  empty at the same time (the convergence round). */
   readonly catalog: ReactElement | null;
 };
 

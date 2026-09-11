@@ -582,6 +582,10 @@ function main(argv) {
         specCommit: manifest.specCommit,
         domExpectations: anchorContract.domExpectations,
         captureAnchors: captureAnchorExpectations(),
+        // The fourth input, RECORDED since the pin was adopted at the current
+        // revision (cinatra#3144, cinatra#3175). It is absent from the digest
+        // only while the contract carries no such array.
+        anchorsUnresolvedAtPin: anchorContract.anchorsUnresolvedAtPin,
       }),
     );
     console.log(`[${LABEL}] design pin  : ${manifest.specCommit}`);

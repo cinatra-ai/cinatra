@@ -1,61 +1,20 @@
 import type { Metadata } from "next";
-import { sql } from "drizzle-orm";
 
-import {
-  getAuthSession,
-  isPlatformAdmin,
-  resolveOrgRoleForUser,
-} from "@/lib/auth-session";
-import { betterAuthDb } from "@/lib/better-auth-db";
-import { canManageTeamMembers } from "./settings/team-member-authority";
+import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
-// title repeats the screen's own gates (tenant alignment + member-or-manager)
-// before disclosing the team name; any failure yields the generic title.
+// title repeats the page's read gate before disclosing the team name; any
+// failure yields the generic title. The gate and the read live in ONE place
+// (cinatra#2807 fix leg 2) so this tab title and the page heading beneath it
+// can never disagree about what the viewer may be told.
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ teamId: string }>;
 }): Promise<Metadata> {
-  try {
-    const { teamId } = await params;
-    // Non-throwing session read: requireAuthSession() redirects (throws
-    // NEXT_REDIRECT), which this try/catch would swallow.
-    const session = await getAuthSession();
-    if (!session) return { title: "Team" };
-    const rows = await betterAuthDb.execute<{
-      name: string;
-      organizationId: string;
-      is_member: boolean;
-    }>(sql`
-      SELECT
-        t.name,
-        t."organizationId",
-        EXISTS (
-          SELECT 1 FROM public."teamMember" tm
-           WHERE tm."teamId" = t.id AND tm."userId" = ${session.user.id}
-        ) AS is_member
-      FROM public."team" t
-      WHERE t.id = ${teamId}
-      LIMIT 1
-    `);
-    const team = rows.rows?.[0];
-    if (!team) return { title: "Team" };
-    // Tenant-alignment gate (mirrors the screen).
-    const activeOrgId = session.session?.activeOrganizationId ?? null;
-    if (activeOrgId !== team.organizationId) return { title: "Team" };
-    // Member-or-manager (a non-member has no team role — the light form is
-    // authorization-equivalent to the screen's predicate).
-    const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
-    const canManage = canManageTeamMembers({
-      platformAdmin: isPlatformAdmin(session),
-      orgRole,
-    });
-    if (!team.is_member && !canManage) return { title: "Team" };
-    return { title: team.name };
-  } catch {
-    return { title: "Team" };
-  }
+  const { teamId } = await params;
+  const name = await readScopeSurfaceEntityName({ kind: "team", id: teamId });
+  return { title: name || "Team" };
 }
 
 // /teams/[teamId] renders the per-team dashboards surface (read-only Overview

@@ -198,6 +198,54 @@ describe("parseSchemaConfig — extended DSL (#658)", () => {
     if (r.ok) expect(collectActionIds(r.surface).sort()).toEqual(["deleteServer", "listServers"]);
   });
 
+  // cinatra#2368: a record-list badge may NAME the row's own value (the
+  // calendar's name) instead of repeating a static schema word. Opt-in, so
+  // every existing flag-style badge keeps rendering its static label.
+  it("parses a record-list badge that shows the row's own value (showsValue)", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        {
+          kind: "record-list",
+          label: "Appointment schedules",
+          listActionId: "listAppointmentSchedules",
+          emptyState: "None yet.",
+          itemTitleKey: "title",
+          itemBadges: [
+            { key: "calendarSummary", label: "Calendar", variant: "outline", showsValue: true },
+            { key: "disabled", label: "Disabled", variant: "secondary" },
+          ],
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const field = r.surface.fields[0];
+      expect(field.kind).toBe("record-list");
+      if (field.kind === "record-list") {
+        expect(field.itemBadges[0].showsValue).toBe(true);
+        // Omitted stays omitted — the static-label default is untouched.
+        expect(field.itemBadges[1].showsValue).toBeUndefined();
+      }
+    }
+  });
+
+  it("rejects a non-boolean showsValue on a badge", () => {
+    expect(
+      parseSchemaConfig({
+        fields: [
+          {
+            kind: "record-list",
+            label: "L",
+            listActionId: "list",
+            emptyState: "e",
+            itemTitleKey: "t",
+            itemBadges: [{ key: "k", label: "L", variant: "outline", showsValue: "yes" }],
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects an unknown badge variant", () => {
     expect(
       parseSchemaConfig({
@@ -361,5 +409,54 @@ describe("parseSchemaConfig — field-kind vocabulary expansion (#782)", () => {
     ]) {
       expect(parseSchemaConfig({ fields: [field] }).ok, `${field.kind} must reject ${evil}`).toBe(false);
     }
+  });
+});
+
+// cinatra#3231 — the additive `emptyStateDetail` declaration: the helper line
+// and the primary action's label the record-list empty state draws beside the
+// `emptyState` headline. Optional (a field declaring only `emptyState` still
+// parses), fail-closed inside (unknown keys, non-string values, an empty object).
+describe("record-list emptyStateDetail (cinatra#3231)", () => {
+  const base = {
+    kind: "record-list",
+    label: "L",
+    listActionId: "list",
+    emptyState: "Nothing yet.",
+    itemTitleKey: "t",
+    itemBadges: [],
+  };
+  const parse = (extra: Record<string, unknown>) => parseSchemaConfig({ fields: [{ ...base, ...extra }] });
+
+  it("parses the helper and the action label, and carries them on the field", () => {
+    const r = parse({ emptyStateDetail: { helper: "Paste a link below.", actionLabel: "Add one" } });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const f = r.surface.fields[0];
+      expect(f.kind).toBe("record-list");
+      if (f.kind === "record-list") {
+        expect(f.emptyStateDetail).toEqual({ helper: "Paste a link below.", actionLabel: "Add one" });
+      }
+    }
+  });
+
+  it("accepts either half alone", () => {
+    expect(parse({ emptyStateDetail: { helper: "h" } }).ok).toBe(true);
+    expect(parse({ emptyStateDetail: { actionLabel: "a" } }).ok).toBe(true);
+  });
+
+  it("a field declaring only emptyState still parses (back-compat) and carries no detail", () => {
+    const r = parse({});
+    expect(r.ok).toBe(true);
+    if (r.ok && r.surface.fields[0].kind === "record-list") {
+      expect(r.surface.fields[0].emptyStateDetail).toBeUndefined();
+    }
+  });
+
+  it("FAIL-CLOSED: rejects an unknown key, a non-string value, a non-object and an empty object", () => {
+    expect(parse({ emptyStateDetail: { helper: "h", onClick: "x" } }).ok).toBe(false);
+    expect(parse({ emptyStateDetail: { helper: 3 } }).ok).toBe(false);
+    expect(parse({ emptyStateDetail: { actionLabel: "" } }).ok).toBe(false);
+    expect(parse({ emptyStateDetail: "helper text" }).ok).toBe(false);
+    expect(parse({ emptyStateDetail: {} }).ok).toBe(false);
   });
 });

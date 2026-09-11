@@ -27,6 +27,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import React from "react";
 import type { ReactElement, ReactNode } from "react";
 
+// The answer held in the operator's own browser (a cookie read on the server).
+// Default: nothing held, which is what a first visit looks like.
+const readBootstrapRegistrationChoice = vi.fn(async () => null as "open" | "closed" | null);
+vi.mock("@/lib/bootstrap-registration-choice", () => ({
+  readBootstrapRegistrationChoice: () => readBootstrapRegistrationChoice(),
+}));
+
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new Error(`NEXT_REDIRECT:${url}`);
@@ -210,5 +217,54 @@ describe("state 3: zero humans + sessionless — renders the bootstrap step", ()
     await mockState({ hasUsers: false, session: null });
     const html = await renderPage("/");
     expect(html).toMatch(/data-redirect-to="\/setup"/);
+  });
+});
+
+describe("state 3: the registration choice — closed by default, an opt-in to open", () => {
+  it("renders the opt-in control alongside the sign-up form", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage();
+    expect(html).toMatch(/data-testid="bootstrap-registration-choice"/);
+    expect(html).toMatch(/Let anyone create an account/);
+  });
+
+  it("the control starts NOT opted in — the instance is closed unless the operator says otherwise", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage();
+    expect(html).toMatch(/data-registration-open="false"/);
+    expect(html).not.toMatch(/data-registration-open="true"/);
+  });
+
+  it("says plainly what happens when the operator leaves it alone", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage();
+    expect(html).toMatch(/Only people you invite/);
+  });
+
+  it("the sign-up form still rides inside the choice control with its redirect intact", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage("/artifacts");
+    const choiceAt = html.indexOf('data-testid="bootstrap-registration-choice"');
+    const formAt = html.indexOf('data-testid="sign-up-form"');
+    expect(choiceAt).toBeGreaterThanOrEqual(0);
+    expect(formAt).toBeGreaterThan(choiceAt);
+    expect(html).toMatch(/data-redirect-to="\/artifacts"/);
+  });
+});
+
+describe("state 3: the held answer is shown back to the operator", () => {
+  it("a held 'open' answer renders the control already opted in — a reload never lies about it", async () => {
+    await mockState({ hasUsers: false, session: null });
+    readBootstrapRegistrationChoice.mockResolvedValueOnce("open");
+    const html = await renderPage();
+    expect(html).toMatch(/data-registration-open="true"/);
+  });
+
+  it("a held 'closed' answer keeps the control off", async () => {
+    await mockState({ hasUsers: false, session: null });
+    readBootstrapRegistrationChoice.mockResolvedValueOnce("closed");
+    const html = await renderPage();
+    expect(html).toMatch(/data-registration-open="false"/);
+    expect(html).not.toMatch(/data-registration-open="true"/);
   });
 });

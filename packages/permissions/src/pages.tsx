@@ -32,9 +32,11 @@ export async function PermissionsAuthPage({
     getAuthSession(),
     hasAnyBetterAuthUsers(),
     // DISPLAY-side read only (the real gate is the auth.ts hook — D1/D2).
-    // Fail-soft to false (open) so a transient read error never wrongly shows
-    // the "closed" notice on an otherwise-open instance (D7).
-    isRegistrationClosed().catch(() => false),
+    // Falls back to CLOSED, matching the reader itself: an instance whose
+    // registration setting cannot be read does not advertise an open door.
+    // The first account is unaffected — the bootstrap redirect above runs
+    // before this value is used.
+    isRegistrationClosed().catch(() => true),
   ]);
 
   // SECURITY: only a same-origin relative path is ever honored — see

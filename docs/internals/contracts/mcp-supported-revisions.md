@@ -56,6 +56,34 @@ Two consequences that are easy to get wrong:
 
 ### CURRENT
 
+**The status an unauthenticated probe is answered with (CURRENT).** This runs
+before any era routing below, so it is stated first. Verified against
+`origin/main` @ `06bc554` (cinatra#3130): `packages/mcp-server/src/index.tsx`
+(`transportHandler`, `createUnauthorizedResponse`) and
+`packages/mcp-server/src/dev-admin-bypass.ts` (`grantDevAdminBypassThroughPort`).
+
+The fixture is the DEFAULT posture and only that: `CINATRA_MCP_DEV_ADMIN_BYPASS`
+unset, and no `Authorization` header. `grantDevAdminBypassThroughPort`
+returns false unless that variable is exactly `"true"`, before it consults the
+installed bypass port at all — and it refuses again when nothing has filled that
+port. The bypass decision reads no hostname in any case, so the answer below
+does not depend on which host the probe arrives on.
+
+| Method | Status | Answered by |
+| --- | --- | --- |
+| `OPTIONS` | **204** | `transportHandler`'s preflight branch, before the auth gate — a preflight is never gated on a credential. |
+| `GET` / `POST` / `DELETE` | **401** | `createUnauthorizedResponse`: JSON `{ "error": "unauthorized", "message": "Authentication is required to access the Cinatra MCP server." }` plus `WWW-Authenticate: Bearer resource_metadata="…"`. Answered before any method-specific transport handling, so all three are identical. |
+| any other method | **405** | Next.js's own route dispatch — `src/app/api/mcp/route.ts` exports only the four methods above, so an unsupported one never reaches `transportHandler`. `transportHandler` answers 405 separately at the mount boundary when invoked directly with one. |
+
+This is a statement of what the code already does; cinatra#3130 changed no
+behaviour. It is pinned by `src/app/api/mcp/__tests__/route.test.ts`, so a change
+to any of the three statuses has to change that test — and this paragraph — too.
+
+Two 405s are easy to confuse. The one above is the top-level METHOD gate,
+reached with no credential. The one in the legacy-leg row further down is what an
+AUTHENTICATED `GET` / `DELETE` gets as an unsupported 2025-era session
+operation, reached only after authentication has already passed.
+
 **Inbound posture: row A.** The recorded product ruling on cinatra#2218
 (2026-07-29) selected `legacy: 'stateless'` — the accepted inbound set is
 `2026-07-28` **plus** all five previously-accepted revisions. Landed by

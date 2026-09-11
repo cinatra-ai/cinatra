@@ -21,7 +21,7 @@
  * lists need synchronous data); the published fetch is a runtime assertion.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 export type ManifestField = { field: string; source: string };
@@ -107,4 +107,32 @@ export function loadPinnedManifests(pins: SpecPins): PinnedManifest[] {
       manifest,
     };
   });
+}
+
+/**
+ * Load every committed manifest that is NOT yet pinned (cinatra#3156).
+ *
+ * A drawing joins the pin gate only when EVERY one of its surfaces is covered
+ * (epic cinatra#3155 — independent pinning). Coverage, though, is landed one
+ * wave at a time, so between the first wave and the pin there is a manifest
+ * whose committed bytes are the contract the drivers are written against and
+ * which conformance-pins.json deliberately does not name yet.
+ *
+ * This reads exactly those files: the directory listing minus the pinned ones.
+ * It ADDS a reading; it changes nothing about the pinned set. The pinned gate
+ * keeps meaning what it has always meant — a PINNED manifest surface with no
+ * driver and no allowlist entry is red, full stop — and an unpinned manifest is
+ * not a staged-adoption mechanism inside the pin format: it is a file on its way
+ * to one, whose already-written drivers run so a wave can prove itself before
+ * the pin exists to prove it.
+ *
+ * Sorted by file name so the generated test list is deterministic.
+ */
+export function loadUnpinnedManifests(pins: SpecPins): PinnedManifest["manifest"][] {
+  const dir = path.join(CONFORMANCE_DIR, "manifests");
+  const pinnedFiles = new Set(pins.manifests.map((pin) => pin.file));
+  return readdirSync(dir)
+    .filter((file) => file.endsWith(".json") && !pinnedFiles.has(file))
+    .sort()
+    .map((file) => JSON.parse(readFileSync(path.join(dir, file), "utf8")) as ConformanceManifest);
 }

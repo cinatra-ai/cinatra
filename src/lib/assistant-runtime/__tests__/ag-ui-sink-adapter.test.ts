@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { describeStartedRun } from "@cinatra-ai/agents/run-status";
 import {
   createAgUiSinkAdapter,
   extractAgentRunIdFromResult,
@@ -33,9 +34,21 @@ function collectingAdapter(overrides?: {
 // asserted against the answer's REAL shape rather than trusted to be additive.
 describe("the run-card pin, once a start's answer carries the platform's report", () => {
   const RUN_ID = "06a703fe-e779-4ba5-852c-73c41c513924";
-  const REPORT =
-    "Dispatched `@cinatra-ai/blog-draft-writer-agent` " +
-    `(runId: \`${RUN_ID}\`, status: \`queued\`). The run started.`;
+  // Minted by the platform rather than copied, so this pin tracks the real
+  // sentence a queued start answers with (cinatra#3147).
+  const REPORT = describeStartedRun({
+    packageName: "@cinatra-ai/blog-draft-writer-agent",
+    runId: RUN_ID,
+    status: "queued",
+  });
+
+  it("carries the platform's TRUE sentence for a queued run, not a claim that it started", () => {
+    expect(REPORT).toBe(
+      "Dispatched `@cinatra-ai/blog-draft-writer-agent` " +
+        `(runId: \`${RUN_ID}\`, status: \`queued\`). ` +
+        "The run is queued and will start on its own.",
+    );
+  });
 
   it("reads the SAME run out of an answer with the report as one without it", () => {
     const withReport = JSON.stringify({ runId: RUN_ID, status: "queued", message: REPORT });

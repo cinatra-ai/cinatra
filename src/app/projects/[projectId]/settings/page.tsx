@@ -222,6 +222,10 @@ export default async function ProjectSettingsPage({ params }: Props) {
             scope's BARE landing route — not a `/dashboards` sibling. */}
         <EntityScopeTabs
           dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
+          assistantsHref={`/projects/${encodeURIComponent(project.id)}/assistants`}
+          agentsHref={`/projects/${encodeURIComponent(project.id)}/agents`}
+          artifactsHref={`/projects/${encodeURIComponent(project.id)}/artifacts`}
+          skillsHref={`/projects/${encodeURIComponent(project.id)}/skills`}
           settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
           active="settings"
         />

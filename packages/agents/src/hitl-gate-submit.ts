@@ -72,6 +72,54 @@ export function isAlreadyResolvedError(message: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// The stale-gate rejection, as a TYPED outcome (cinatra#3219)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a gate submit did. The `blocked` arm names a reason from the review
+ * surface's closed blocked set, so the caller renders the state the surface
+ * already draws (`ReviewGateBlocked`) rather than deciding what to say.
+ *
+ * It is a RETURNED result, not a thrown error, because that is the only shape
+ * that survives the Server Action boundary in production: an ordinary thrown
+ * error arrives masked, message replaced by an opaque digest.
+ */
+export type GateSubmitOutcome =
+  | { ok: true }
+  | { ok: false; blocked: "no-longer-pending" };
+
+/**
+ * Classify a gate-submit rejection from its TYPE, never from its message.
+ *
+ * The two shapes the approval path refuses with are both this one thing —
+ * "the gate you opened is gone":
+ *   - `GateNotPendingError` — the run had already left `pending_approval` by
+ *     the time the status was read (`review-task-actions.ts`, both the setup
+ *     and the WayFlow guard);
+ *   - `RunTransitionError` with `code: "stale_from_status"` — the status was
+ *     still `pending_approval` at that read, and the compare-and-swap lost the
+ *     race before the write (`resume-run-from-setup-approval.ts`).
+ *
+ * Anything else is a real failure and stays on the error path.
+ *
+ * DUCK-TYPED ON PURPOSE, and structural for the same reason the outcome is:
+ * `instanceof` is an identity check across module instances, and this runs on
+ * whatever shape reaches it. `name` + `code` are the discriminant, and they
+ * survive a structured clone.
+ */
+export function classifyGateRejection(err: unknown): "no-longer-pending" | null {
+  if (typeof err !== "object" || err === null) return null;
+  const { name, code } = err as { name?: unknown; code?: unknown };
+  if (name === "GateNotPendingError" && code === "gate_not_pending") {
+    return "no-longer-pending";
+  }
+  if (name === "RunTransitionError" && code === "stale_from_status") {
+    return "no-longer-pending";
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Setup-loop primitive wrap
 // ---------------------------------------------------------------------------
 

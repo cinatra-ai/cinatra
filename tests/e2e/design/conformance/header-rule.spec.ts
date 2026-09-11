@@ -143,3 +143,67 @@ test.describe("tab-row rule position — the rule closes the row on its baseline
     });
   }
 });
+
+/**
+ * cinatra#3216 — the trailing rule starts IMMEDIATELY to the right of the last
+ * tab.
+ *
+ * The ratified drawing pins the horizontal start of the rule as firmly as
+ * cinatra#3106 pinned its vertical one. Dividers: "If a tablist is present in
+ * the same row, the rule starts immediately to the right of the last tab and
+ * runs to the page edge — never overlap a tablist with the rule, and never
+ * stack them." Tabs: "the tablist takes the left portion of the row, the rule
+ * the right." Neither section allows a gap.
+ *
+ * The row was laid out with a 28 px grid gap between the tablist column and the
+ * rule column, so the row read as two separate marks with a hole punched
+ * between them instead of one continuous line. Class-level coverage lives in
+ * src/components/ui/__tests__/tabs-list-row-rule-gap.test.tsx; the rendered
+ * distance is only measurable here, on the real boot.
+ */
+test.describe("tab-row rule start — the rule begins immediately right of the last tab", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`no gap between the last tab and the start of the rule (${theme} theme)`, async ({
+      page,
+    }) => {
+      await page.goto(FIXTURE);
+      await page.evaluate((t) => {
+        document.documentElement.classList.toggle("dark", t === "dark");
+      }, theme);
+
+      const row = page.getByTestId("fixture-tabs-row");
+      const rule = row.locator('[data-slot="separator"][data-major]');
+      const tabs = row.locator('[data-slot="tabs-trigger"]');
+
+      await expect(rule).toBeVisible();
+      const tabCount = await tabs.count();
+      expect(tabCount, "the fixture row must render tabs").toBeGreaterThan(0);
+
+      const ruleBox = await rule.boundingBox();
+      const lastTabBox = await tabs.nth(tabCount - 1).boundingBox();
+      expect(ruleBox && lastTabBox, "the tab row must be laid out").toBeTruthy();
+
+      const lastTabRight = lastTabBox!.x + lastTabBox!.width;
+      const gap = ruleBox!.x - lastTabRight;
+
+      expect(
+        Math.abs(gap),
+        `the rule starts at x=${ruleBox!.x} while the last tab ends at x=${lastTabRight} — ` +
+          `${gap} px of blank between them; the drawing has the rule start immediately beside the tab`,
+      ).toBeLessThanOrEqual(1);
+
+      // …and it must not have closed the gap by sliding UNDER the tablist.
+      expect(
+        gap,
+        "the rule must not overlap the tablist — it begins where the tabs end",
+      ).toBeGreaterThanOrEqual(-1);
+
+      // It still runs on to the edge of the content column.
+      const rowBox = await row.boundingBox();
+      expect(
+        Math.abs(rowBox!.x + rowBox!.width - (ruleBox!.x + ruleBox!.width)),
+        "the rule must run from the last tab to the edge of the content column",
+      ).toBeLessThanOrEqual(1);
+    });
+  }
+});

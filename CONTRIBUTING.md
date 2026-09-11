@@ -41,6 +41,8 @@ make refresh
 
 Other useful targets: `make check` (verify supporting services are reachable), `make down` (stop infrastructure, keep data), `make reset` (soft reset of app data), and `make logs` (tail infrastructure logs).
 
+**No credential is ever left behind in your checkout.** The knowledge-graph indexer gets its provider key through the environment of the `docker compose` command that creates it, so `docker/graphiti/.graphiti.env` is **never present** and nothing under `docker/` may contain a key-shaped value — a CI gate fails the build if it does. There is nothing to delete after a dev session. See [`docs/internals/contracts/no-provider-key-at-rest.md`](docs/internals/contracts/no-provider-key-at-rest.md).
+
 ### Verifying the toolchain
 
 ```bash

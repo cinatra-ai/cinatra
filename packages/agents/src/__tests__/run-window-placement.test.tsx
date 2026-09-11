@@ -132,11 +132,12 @@ describe("§VI — the review page's window stands beneath the decision bar", ()
     expect(rel & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeFalsy();
   });
 
-  it("the other four windows keep the floating reading they were drawn with", () => {
+  it("no window docks any more — cinatra#3188 item 3 put every one of them in the flow, under the work", () => {
     for (const surface of SURFACES.filter((s) => s !== "review")) {
       const { panel } = mount(surface);
-      expect(panel!.className).toContain("sticky");
-      expect(panel!.className).toContain("bottom-0");
+      expect(panel!.className).not.toContain("sticky");
+      expect(panel!.className).not.toContain("bottom-0");
+      expect(panel!.getAttribute("style") ?? "").toBe("");
       cleanup();
       document.body.innerHTML = "";
     }

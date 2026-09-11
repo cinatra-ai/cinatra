@@ -121,10 +121,17 @@ function renderStep(overrides: Partial<TriggerScreenClientProps> = {}) {
 }
 
 /** The option row a label sits in — the bordered row itself, not its inner
- *  layout div, so "which row is chosen" is read off the one element that
- *  carries the chosen edge. */
+ *  radio head, so "which row is chosen" is read off the one element that
+ *  carries the chosen edge.
+ *
+ *  READ OFF `data-schedule-option`, NOT OFF A CLASS. Every row now nests a
+ *  focusable radio head that carries the row radius for its own focus ring, so
+ *  a class the two elements share no longer names one of them: `.closest()`
+ *  answered the HEAD for a nested row and the head never carries the chosen
+ *  edge. The row marker is on exactly one element per option, which is the
+ *  element this reading is about. */
 function row(label: string): HTMLElement | null {
-  return screen.getByText(label).closest(".rounded-control") as HTMLElement | null;
+  return screen.getByText(label).closest("[data-schedule-option]") as HTMLElement | null;
 }
 
 function chosen(label: string): boolean {
@@ -205,8 +212,15 @@ describe("the scheduling step draws the row the decision named", () => {
     renderStep({ statedSchedule: STATED_ONE_OFF });
     expect(chosen(SCHEDULED)).toBe(true);
     expect(chosen(IMMEDIATE)).toBe(false);
-    const runAt = screen.getByLabelText("Run at") as HTMLInputElement;
-    expect(runAt.value).toBe("2031-03-04T09:30");
+    // "Run at" is the drawing's date picker now, not the browser's own
+    // date-time input, so the moment is read off the field the form submits —
+    // the stated moment still has to arrive there unchanged.
+    expect(screen.getByText("Run at")).toBeTruthy();
+    const runAt = document.querySelector(
+      'input[name="scheduledAt"]',
+    ) as HTMLInputElement | null;
+    expect(runAt).not.toBeNull();
+    expect(runAt!.value).toBe("2031-03-04T09:30");
   });
 
   it("a STATED recurring schedule opens on Recurring", () => {

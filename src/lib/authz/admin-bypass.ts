@@ -20,12 +20,33 @@ import { logAuditEventStrict } from "./audit";
 import type { ActorContext } from "./actor-context";
 import type { ResourceRef } from "./resource-ref";
 
+/**
+ * The exceptional purposes a platform admin may act for.
+ *
+ * The two CONFIGURATION members (cinatra#2813 S1, epic #2812) widen this
+ * union deliberately, and the argument is worth stating because the others
+ * all answer an emergency. Per-scope assignment has a tier — the true
+ * workspace tier — that applies to every organization on the instance, and
+ * nothing below the platform can decide it: no organization role grants
+ * authority over all organizations, and inventing one would be a far larger
+ * widening than this. So the workspace tier has NO grant road at all, and a
+ * platform admin reaches it only here, where the audit row is written BEFORE
+ * the mutation.
+ *
+ *  - `workspace_configuration` — a workspace-tier assignment row.
+ *  - `scope_configuration` — a platform-admin write at organization, team,
+ *    project or user scope. Separate from the above because the two are
+ *    different acts with different blast radii, and an auditor reading one
+ *    shared reason could not tell them apart.
+ */
 export type AdminBypassReason =
   | "moderation"
   | "gdpr_request"
   | "ownership_transfer"
   | "incident_response"
-  | "compliance_audit";
+  | "compliance_audit"
+  | "workspace_configuration"
+  | "scope_configuration";
 
 export async function withPlatformAdminBypass(
   actor: ActorContext,

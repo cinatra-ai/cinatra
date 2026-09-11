@@ -35,11 +35,37 @@ import {
 } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  brokerRequestInit,
   useConversationCredential,
   type ConversationCredential,
 } from "./conversation-credential";
+import { runSeedRequest } from "./run-seed-request";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
+
+/**
+ * THE SLUG THE RUN ROUTE IS BUILT FROM (cinatra#3002, fix leg 4).
+ *
+ * "Start new run" calls `createAndTriggerRun({templateSlug})` and then routes to
+ * `/agents/{vendor}/{packageName}/{runId}` — a TWO-segment path. The run's
+ * package name yields that slug once its npm scope marker is dropped, but only
+ * when the package actually carries a vendor segment. An unscoped package name
+ * ("blog-draft-writer-agent") strips to ONE segment: the lookup would then read
+ * it as a bare name rather than a package identity, and even a successful
+ * create would navigate to a path with no page behind it.
+ *
+ * So the shape is CHECKED, not assumed (convergence finding, 2026-09-05). A
+ * name that cannot produce the route's two non-empty segments yields no slug at
+ * all, and the card leaves the control out rather than mount one that routes
+ * nowhere — the documented behaviour for a caller without a slug.
+ */
+export function runRouteSlugFromPackageName(
+  packageName: string | null | undefined,
+): string | undefined {
+  const stripped = (packageName ?? "").replace(/^@/, "");
+  const segments = stripped.split("/");
+  if (segments.length !== 2) return undefined;
+  if (segments.some((segment) => segment.trim() === "")) return undefined;
+  return stripped;
+}
 
 // THE RUN-PAGE LINK IS GONE (cinatra#2997), AND SO IS THE BUILDER IT NEEDED.
 //
@@ -126,47 +152,12 @@ function classifyStatus(status: number): LoadFailureReason {
   return "transient";
 }
 
-/** The seed's address. One definition, so the two branches cannot drift apart. */
-const SEED_ROUTE = "/api/agents/runs";
-
-/**
- * THE REQUEST THE SEED IS MADE WITH (cinatra#2902).
- *
- * The panel's first act is to read the run it must draw, and until this slice it
- * could only ask one way: with whatever cookie the browser happened to hold. On
- * the embedded widget — a frame same-origin to the Cinatra app on a page served
- * by another site — that request carried no cookie at all (a `Lax` session cookie
- * does not travel cross-site), so the guard answered it before the handler ran
- * and the panel drew its failure line for ever.
- *
- * It now asks with whichever credential the host declared, and this is the ONE
- * place that reads it. The three answers are the column's own three:
- *
- *   · COOKIE — a first-party host. The request is UNCHANGED, to the byte: the
- *     same URL, the same `Accept`, the same `cache: "no-store"`, and no
- *     `credentials` field, so the ambient session rides it exactly as it always
- *     has. A preservation control pins this.
- *   · BROKER — the widget. The broker headers travel on the request and
- *     `credentials` is `"omit"`, both supplied by the one shared builder so a
- *     caller cannot forget the mode and send a cookie it must not send.
- *   · REFUSED — a host that cannot say who is asking. It asks NOTHING. A run is
- *     somebody's work, and an unclear surface must not learn about one by
- *     issuing the request that would answer as whoever else is signed in.
- */
-function seedRequest(
-  credential: ConversationCredential,
-  runId: string,
-): { url: string; init: RequestInit } | null {
-  if (credential.kind === "refused") return null;
-  const url = `${SEED_ROUTE}/${encodeURIComponent(runId)}`;
-  const base: RequestInit = {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-  };
-  if (credential.kind === "cookie") return { url, init: base };
-  return { url, init: brokerRequestInit(credential.auth, base) };
-}
+// THE SEED'S ADDRESS AND THE CREDENTIAL IT TRAVELS ON now live in
+// `./run-seed-request` (cinatra#3044): the
+// transcript reads the SAME route to learn which lifecycle moment a run stands
+// at, and two copies of "how a run is read" is how the two reads drift into two
+// credentials. The rules are unchanged and are documented at the definition.
+const seedRequest = runSeedRequest;
 
 /**
  * THE SLOT READER THIS SURFACE ASKS WITH (cinatra#2997).
@@ -354,6 +345,16 @@ export function InlineAgentRunCard({
         agentPackageName={seed.agentPackageName ?? undefined}
         traceId={seed.traceId ?? undefined}
         inputParams={seed.inputParams}
+        // THE SLUG "START NEW RUN" NEEDS (cinatra#3002, fix leg 4). The panel
+        // draws that control from `agentId`, and this wrapper used to pass none
+        // — so the conversation had nothing to give it even once the panel
+        // stopped withholding it. The value is the run's package name in the
+        // form the run route (`/agents/{vendor}/{packageName}`) and
+        // `createAndTriggerRun`'s template lookup both read, and its shape is
+        // checked before it is handed over (see the helper above).
+        // `templateId` beside it is the BUILDER's identifier for the
+        // HITL-assist endpoints and is not a slug.
+        agentId={runRouteSlugFromPackageName(seed.agentPackageName)}
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}

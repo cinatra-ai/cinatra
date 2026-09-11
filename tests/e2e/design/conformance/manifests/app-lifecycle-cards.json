@@ -1,0 +1,751 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-lifecycle-cards.html",
+  "contentHash": "sha256:218bf86ae8e105d9279aaf8f6e8ecfc8612ec70b5f7d982aecd94491f728ca10",
+  "surfaces": [
+    {
+      "id": "chat-thread",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "chat-composer",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-composer-bound-card",
+      "fields": [],
+      "actions": [
+        {
+          "action": "comment-review",
+          "outcome": "annotated"
+        },
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-composer-focus",
+      "fields": [],
+      "actions": [
+        {
+          "action": "release-review-composer",
+          "outcome": "unbound"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "review-composer-bound",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-note-field-subordinate",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "chat-composer-primary",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-composer-unbound-card",
+      "fields": [],
+      "actions": [
+        {
+          "action": "focus-review-composer",
+          "outcome": "bound"
+        },
+        {
+          "action": "focus-review-composer",
+          "outcome": "bound"
+        }
+      ],
+      "states": [
+        "empty",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-composer-ambiguous",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-composer-unbound",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-target-in-thread",
+      "fields": [
+        {
+          "field": "name",
+          "source": "type.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-decision-floor-in-thread",
+      "fields": [],
+      "actions": [
+        {
+          "action": "comment-review",
+          "outcome": "annotated"
+        },
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "run-progress-placeholder-in-thread",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-post-with-featured-image",
+      "fields": [
+        {
+          "field": "prompt",
+          "source": "picture.prompt"
+        }
+      ],
+      "actions": [
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "tier-build-time",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "tier-runtime",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "tier-metadata-floor",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "state-loading",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "state-restricted",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "state-no-longer-open",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "state-absent",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "recommendation-row-paused",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "kind:skill",
+        "loading"
+      ]
+    },
+    {
+      "id": "recommendation-in-thread",
+      "fields": [],
+      "actions": [
+        {
+          "action": "continue",
+          "outcome": "selection-saved"
+        }
+      ],
+      "states": [
+        "empty",
+        "kind:skill",
+        "loading"
+      ]
+    },
+    {
+      "id": "recommendation-chip-enrich",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-draft",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-schedule",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-row-readings",
+      "fields": [],
+      "actions": [
+        {
+          "action": "continue",
+          "outcome": "selection-saved"
+        }
+      ],
+      "states": [
+        "kind:skill",
+        "loading"
+      ]
+    },
+    {
+      "id": "recommendation-chip-before-start-enrich",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-before-start-draft",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-before-start-schedule",
+      "fields": [],
+      "actions": [
+        {
+          "action": "toggle-skill",
+          "outcome": "selection-changed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-running-enrich",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-running-draft",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-running-schedule",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "recommendation-chip-restricted",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "schedule-card-first-shown",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "schedule-card-confirm-floor",
+      "fields": [],
+      "actions": [
+        {
+          "action": "confirm-schedule",
+          "outcome": "scheduled"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "schedule-card-configured",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "schedule-card-save-floor",
+      "fields": [],
+      "actions": [
+        {
+          "action": "save-schedule",
+          "outcome": "rearmed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "schedule-card-expired",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "schedule-card-expired-floor",
+      "fields": [],
+      "actions": [
+        {
+          "action": "confirm-schedule",
+          "outcome": "scheduled"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "schedule-card-fired",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "schedule-card-fired-recurring",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "schedule-card-fired-recurring-floor",
+      "fields": [],
+      "actions": [
+        {
+          "action": "save-schedule",
+          "outcome": "rearmed"
+        },
+        {
+          "action": "cancel-schedule",
+          "outcome": "stopped"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "verification-verified",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "verification-drift",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "verification-findings-not-met",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "verification-in-thread",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "suggestion-accepted",
+      "fields": [],
+      "actions": [
+        {
+          "action": "dismiss-suggestion",
+          "outcome": "dismissed"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "suggestion-dismissed",
+      "fields": [],
+      "actions": [
+        {
+          "action": "accept-suggestion",
+          "outcome": "accepted"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "suggestion-floor",
+      "fields": [],
+      "actions": [
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "presence-matrix",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "reader-state-matrix",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "composer-bound-acting",
+      "fields": [],
+      "actions": [
+        {
+          "action": "release-review-composer",
+          "outcome": "unbound"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "bound-card-in-flight",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "relayed-refusal-ambiguous",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "relayed-refusal-restricted",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "composer-cannot-act",
+      "fields": [],
+      "actions": [
+        {
+          "action": "focus-review-composer",
+          "outcome": "bound"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "composer-cannot-act-reason",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "decision-floor-live-under-limit",
+      "fields": [],
+      "actions": [
+        {
+          "action": "comment-review",
+          "outcome": "annotated"
+        },
+        {
+          "action": "regenerate-review",
+          "outcome": "successor-gate-opened"
+        },
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "toolless-said-in-turn",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "review-card-email-body",
+      "fields": [
+        {
+          "field": "body",
+          "source": "representation.body-markdown"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-states-outside-chat",
+      "fields": [],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-mixed-kind",
+      "fields": [
+        {
+          "field": "form",
+          "source": "representation.content-form"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-screenshot",
+      "fields": [
+        {
+          "field": "source",
+          "source": "representation.captured-url"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-slide-deck",
+      "fields": [],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-dashboard",
+      "fields": [
+        {
+          "field": "layout",
+          "source": "representation.pinned-configuration"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-portlet",
+      "fields": [
+        {
+          "field": "entry",
+          "source": "representation.portlet-instance-id"
+        }
+      ],
+      "actions": [
+        {
+          "action": "continue-review",
+          "outcome": "resolved"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "review-card-cms-page",
+      "fields": [
+        {
+          "field": "excerpts",
+          "source": "representation.changed-excerpts"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-in-cms",
+          "outcome": "cms-opened"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "drupal-pointer-never-a-review-target",
+      "fields": [
+        {
+          "field": "target",
+          "source": "representation.node-id"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-in-cms",
+          "outcome": "cms-opened"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:artifact",
+        "loading"
+      ]
+    }
+  ]
+}

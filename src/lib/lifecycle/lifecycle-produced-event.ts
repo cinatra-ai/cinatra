@@ -61,13 +61,29 @@ export type ProducedEventEmitter =
    * the closed set is the audit surface, and one emitter standing for both
    * would make "which road produced this" unanswerable.
    */
-  | "object_snapshot_mint";
+  | "object_snapshot_mint"
+  /**
+   * THE SAME-ARTIFACT REVISION APPEND (enabler 0.30 of `PLAN: Agents Lifecycle
+   * (C)`, cinatra#3030 / epic #3023).
+   *
+   * item 0.30, verbatim: "a mid-run write may name an existing artifact and
+   * append its next revision instead of creating a new one [...] The append's
+   * produced event carries the live-generator origin, which the review policy
+   * maps to intermediate and skips by default."
+   *
+   * SEPARATE from `createSemanticArtifact`, which mints an artifact and its
+   * FIRST revision. Two roads, two emitters: the closed set is the audit
+   * surface, and one emitter standing for both would make "was this artifact
+   * created here or revised here" unanswerable on the row.
+   */
+  | "artifact_revision_append";
 
 export const PRODUCED_EVENT_EMITTERS: readonly ProducedEventEmitter[] = [
   "createSemanticArtifact",
   "dashboard_twin_writer",
   "object_cms_snapshot_capture",
   "object_snapshot_mint",
+  "artifact_revision_append",
 ] as const;
 
 const EMITTER_SET: ReadonlySet<string> = new Set(PRODUCED_EVENT_EMITTERS);

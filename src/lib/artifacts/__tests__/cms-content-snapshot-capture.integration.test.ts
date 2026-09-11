@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -33,7 +34,7 @@ vi.mock("@/lib/database", async () => {
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_cms_capture_2043";
 const ORG = "org-cms-2043";
 

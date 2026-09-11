@@ -31,6 +31,7 @@
 import {
   cpSync,
   existsSync,
+  realpathSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -56,6 +57,110 @@ const STAGE_PREFIX = ".cinatra-stage-";
 
 // The image-baked seed location (mirrors the Dockerfile COPY destination).
 export const DEFAULT_REQUIRED_OAS_SEED_DIR = "/app/.cinatra-required-oas-seed";
+
+/**
+ * The deploy-owned override for the seed directory this reconcile reads.
+ * Deploy tooling that projects the pinned required-extension
+ * fleet's OAS seed OUTSIDE the image (a served checkout, whose seed cannot live
+ * at the image-baked path) exports this variable into the served process; before
+ * this change nothing in this repository read it, so the reconcile always read
+ * the image path and the projected fleet was silently the wrong one. The image
+ * road is unchanged: unset ⇒ `DEFAULT_REQUIRED_OAS_SEED_DIR`.
+ */
+export const REQUIRED_OAS_SEED_DIR_ENV = "CINATRA_REQUIRED_OAS_SEED_DIR";
+
+/** Where the boot reconcile reads its seed from, and why. */
+export type RequiredOasSeedDirResolution = {
+  seedDir: string;
+  /** `env` when the override named it; `image-default` when it is the baked path. */
+  source: "env" | "image-default";
+};
+
+/**
+ * Resolve the seed directory for a boot reconcile: the directory the override
+ * names when it passes the guards below, otherwise the image-baked default.
+ *
+ * WHAT IS ACTUALLY ENFORCED (stated exactly, because the seed is authoritative —
+ * its trees are copied verbatim into the runtime mount as the REQUIRED set and
+ * its manifest bounds the prune): the value must be absolute, free of '.'/'..'
+ * segments and of a NUL byte, and neither it NOR its symlink-canonical form may
+ * be at or under the durable user store — the same boundary `isUnderUserStore`
+ * already draws for the materialize target, so user-installed content can never
+ * masquerade as required/bundled. Relative and dot-segmented values are refused
+ * because the boot's working directory is not the deploy's, so such a value
+ * would silently resolve somewhere else entirely (the producer side refuses it
+ * by the same rule).
+ *
+ * This is NOT a positive allow-list of one fixed root: the deploy legitimately
+ * places the seed in its own state directory, which no path constant in this
+ * repository could name. The variable is deploy-owned — a process that can set
+ * it can already set `CINATRA_EXTENSION_DATA_ROOT` and everything else in the
+ * served environment — so the guard's job is to stop a MISCONFIGURED value from
+ * crossing the one boundary the module owns, not to authenticate the deploy.
+ *
+ * Refusal THROWS — the boot phase decides what a refusal costs (fail-closed in
+ * production, warned and swallowed in development), exactly as it already does
+ * for a missing or corrupt seed.
+ */
+export function resolveRequiredOasSeedDir(
+  env: Record<string, string | undefined> = process.env,
+): RequiredOasSeedDirResolution {
+  const rawValue = env[REQUIRED_OAS_SEED_DIR_ENV];
+  const raw = typeof rawValue === "string" ? rawValue.trim() : "";
+  if (!raw) return { seedDir: DEFAULT_REQUIRED_OAS_SEED_DIR, source: "image-default" };
+
+  const refuse = (why: string): never => {
+    throw new Error(
+      `[required-extension-materialize] refusing the seed directory named by ` +
+        `${REQUIRED_OAS_SEED_DIR_ENV} (${raw}): ${why}.`,
+    );
+  };
+  if (raw.includes("\0")) refuse("it contains a NUL byte");
+  if (!path.isAbsolute(raw)) {
+    refuse(
+      "it is not an absolute path, and the boot's working directory is not the deploy's, " +
+        "so a relative value would resolve somewhere else entirely",
+    );
+  }
+  if (raw.split(/[\\/]+/).some((segment) => segment === "." || segment === "..")) {
+    refuse("it carries a '.' or '..' segment");
+  }
+  // Canonicalize before the store check: a lexical comparison alone is escaped by
+  // an ANCESTOR symlink pointing into the store (`/srv/seed -> <store>/agents`).
+  const canonical = canonicalizeDeepest(raw);
+  const canonicalStore = canonicalizeDeepest(resolveUserStoreRoot());
+  const underCanonicalStore =
+    canonical === canonicalStore || canonical.startsWith(canonicalStore + path.sep);
+  if (isUnderUserStore(raw) || underCanonicalStore) {
+    refuse(
+      `it is at or under the durable user store (${resolveUserStoreRoot()})` +
+        (canonical === path.resolve(raw) ? "" : ` (via ${canonical})`) +
+        " — user-owned content must never be projected as the required set",
+    );
+  }
+  return { seedDir: path.resolve(raw), source: "env" };
+}
+
+/**
+ * The symlink-resolved form of `dir`, resolving as much of it as exists (a seed
+ * directory the deploy has not created yet must still be guarded on its existing
+ * ancestors). Never throws: an unresolvable path falls back to the lexical form,
+ * and the lexical check runs alongside this one either way.
+ */
+function canonicalizeDeepest(dir: string): string {
+  let current = path.resolve(dir);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(dir);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
 
 // The durable user-install store — NEVER a valid materialize target. Exported so the
 // boot-time user-store-mount-check (cinatra#789 item 5) validates the SAME path this
@@ -214,7 +319,9 @@ function copyPlainTree(src: string, dest: string): void {
  * Reconcile the required-extension OAS seed into the live install dir.
  *
  * @param opts.installDir   resolved agent-install dir (the WayFlow-mounted tree)
- * @param opts.seedDir      image-baked seed dir
+ * @param opts.seedDir      seed dir to reconcile from (the image-baked default,
+ *                          or the directory `resolveRequiredOasSeedDir` read from
+ *                          `CINATRA_REQUIRED_OAS_SEED_DIR`)
  * @param opts.failClosed   throw on a missing/unreadable seed (prod); dev passes
  *                          false so a minimal checkout with no seed is a no-op.
  */

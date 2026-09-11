@@ -7,10 +7,10 @@
     "class-variance-authority"
   ],
   "registryDependencies": [
-    "utils",
-    "button",
-    "input",
-    "textarea"
+    "@cinatra-ai/utils",
+    "@cinatra-ai/button",
+    "@cinatra-ai/input",
+    "@cinatra-ai/textarea"
   ],
   "files": [
     {
