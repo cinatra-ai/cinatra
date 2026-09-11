@@ -139,6 +139,7 @@ import {
   CONNECTOR_SHARING_CONNECTION,
   CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,
   CONNECTOR_SHARING_LOCKED_SCOPES,
+  CONNECTOR_SHARING_LOCKED_VALUE,
   CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
   CONNECTOR_SHARING_LOCK_NOTE,
   CONNECTOR_SHARING_OWNER,
@@ -1153,6 +1154,24 @@ async function clickUntil(
 ): Promise<void> {
   await expect(async () => {
     await target.click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/**
+ * Retry a hydration-sensitive click-and-type until `reacted` observes the
+ * outcome. A keystroke that lands before the island hydrates is dropped and
+ * React re-renders the controlled input back to its state value, so the whole
+ * interaction — not only the assertion — has to be retried.
+ */
+async function fillUntil(
+  target: Locator,
+  value: string,
+  reacted: () => Promise<void>,
+): Promise<void> {
+  await expect(async () => {
+    await target.click();
+    await target.fill(value);
     await reacted();
   }).toPass({ timeout: 30_000 });
 }
@@ -4875,12 +4894,16 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
       outcome: "people-listed",
       run: async (page, root) => {
         const search = root.getByPlaceholder("Search by name or email…");
-        await search.click();
-        await search.fill(CONNECTOR_SHARING_SEARCH_QUERY);
-        // The listbox is portalled, so it is asserted at the page level.
-        await expect(
-          page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.name) }),
-        ).toBeVisible({ timeout: 10_000 });
+        // Hydration-sensitive: under a loaded box the click and the keystrokes
+        // can land before this island hydrates, and React then re-renders the
+        // controlled field back to empty with the popover shut, so the typing
+        // is retried until the listbox answers (the same road as `clickUntil`).
+        await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
+          // The listbox is portalled, so it is asserted at the page level.
+          await expect(
+            page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.name) }),
+          ).toBeVisible({ timeout: 5_000 });
+        });
         await expect(
           page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.email) }),
         ).toBeVisible();
@@ -4978,9 +5001,34 @@ const CONNECTOR_SHARING_LOCKED_DRIVER: SurfaceDriver = {
     });
     const lockedOptions = page.locator('[role="option"][aria-disabled="true"]');
     await expect(lockedOptions).toHaveCount(CONNECTOR_SHARING_LOCKED_SCOPES.length);
+    // WHICH options are locked, not merely how many: every scope above the
+    // ceiling is identified by its own value, is drawn non-selectable, and
+    // carries the ceiling sentence as its reason. The sentence is the
+    // product's own composition and carries a literal double quote, so it can
+    // never be spliced into a raw CSS attribute selector: it travels as DATA
+    // through the framework's own title road instead.
+    for (const scope of CONNECTOR_SHARING_LOCKED_SCOPES) {
+      const option = page.locator(`[role="option"][data-value="${scope}"]`);
+      await expect(option).toHaveAttribute("aria-disabled", "true");
+      await expect(
+        page
+          .getByTitle(CONNECTOR_SHARING_LOCK_NOTE, { exact: true })
+          .filter({ has: page.locator(`[role="option"][data-value="${scope}"]`) }),
+      ).toHaveCount(1);
+    }
+    // The ceiling value itself, and the narrower personal floor, stay open —
+    // a ceiling narrows the choice, it does not freeze the picker.
     await expect(
-      page.locator(`[title="${CONNECTOR_SHARING_LOCK_NOTE}"]`).first(),
-    ).toBeVisible();
+      page.locator(`[role="option"][data-value="${CONNECTOR_SHARING_LOCKED_VALUE}"]`),
+    ).toHaveAttribute("aria-disabled", "false");
+    // …and a locked option cannot be taken: pressing one leaves the value where
+    // it was.
+    await page
+      .locator(`[role="option"][data-value="${CONNECTOR_SHARING_LOCKED_SCOPES[0]}"]`)
+      .click({ force: true });
+    await expect(trigger).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_LOCKED_VALUE_LABEL),
+    );
     await page.keyboard.press("Escape");
     // …and the same sentence sits under the picker with a lock.
     const note = root.locator(SHARING_SCOPE_NOTE).filter({

@@ -70,6 +70,28 @@ describe("ConnectorSharingPanels", () => {
     ).toBeTruthy();
   });
 
+  it('keeps the plural-only roll-up on a `multiple` mount (the pages with no tab strip)', async () => {
+    // The bundled-react setup pages and the §II error treatments mount the
+    // section directly. This issue does not change them: one connection there
+    // still heads no roll-up, exactly as before.
+    await render(<ConnectorSharingPanels panels={[panel(0)]} rollup="multiple" />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    expect(container.querySelector('[data-slot="connection-row"]')).toBeTruthy();
+  });
+
+  it('heads a `multiple` mount once it holds more than one connection', async () => {
+    await render(
+      <ConnectorSharingPanels panels={[panel(0), panel(1)]} rollup="multiple" />,
+    );
+    const rollup = container.querySelector(
+      '[data-conformance-id="connector-sharing-rollup"]',
+    );
+    expect(rollup).toBeTruthy();
+    expect(rollup!.textContent).toContain("2");
+  });
+
   it("draws one panel per connection: the row (no badge, no action) over the permissions card", async () => {
     await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} />);
     const panels = container.querySelectorAll('[data-conformance-id="connector-sharing"]');

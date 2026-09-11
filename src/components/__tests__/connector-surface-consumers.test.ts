@@ -98,7 +98,8 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
       'import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list"',
     );
     // …and the section still mounts them, through the panels component.
-    expect(SHARING_SECTION).toContain("<ConnectorSharingPanels panels={panelViews} />");
+    expect(SHARING_SECTION).toContain("<ConnectorSharingPanels");
+    expect(SHARING_SECTION).toContain("panels={panelViews}");
   });
 
   it("wraps its panels in the real ConnectionsList — the surface emitter", () => {
@@ -127,12 +128,16 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     );
   });
 
-  it("heads the list with the roll-up card, unconditionally, and gives it NO action", () => {
+  it("heads the tab's list with the roll-up card, unconditionally, and gives it NO action", () => {
     // §II, the Sharing tab: "The roll-up card is the Connections status card of
     // the Setup tab, with no Check and no All connections link: the list it
     // counts is directly beneath it." The Setup tab's plural-only rule is its
     // own; this card heads the list whenever there is a list (cinatra#3374).
-    expect(SHARING_PANELS).not.toContain("panels.length > 1");
+    // The tab mount asks for the unconditional card; the mounts that draw no
+    // tab strip (bundled-react, the error treatments) keep the plural-only rule
+    // they had before this issue — the section chooses by its variant.
+    expect(SHARING_PANELS).toContain('rollup === "always" || panels.length > 1');
+    expect(SHARING_SECTION).toContain('rollup={variant === "tab" ? "always" : "multiple"}');
     const cardStart = SHARING_PANELS.indexOf("<ConnectionsStatusCard");
     expect(cardStart).toBeGreaterThan(-1);
     const card = SHARING_PANELS.slice(cardStart, SHARING_PANELS.indexOf("/>", cardStart));

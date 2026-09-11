@@ -56,11 +56,21 @@ export type ConnectorSharingPanelsProps = {
   panels: ConnectorSharingPanelView[];
   /** `loading` renders the declared loading treatment in the list's place. */
   state?: "ready" | "loading";
+  /**
+   * When the roll-up card heads the list. `always` is the SHARING TAB's rule
+   * (§II: "the list it counts is directly beneath it"), the tab this issue
+   * draws. `multiple` is the rule the pages that draw NO tab strip already
+   * had — the invalid-schema-config and rebuild treatments and the
+   * bundled-react setup pages, which this change leaves exactly as they were:
+   * a single connection there heads no roll-up, as before.
+   */
+  rollup?: "always" | "multiple";
 };
 
 export function ConnectorSharingPanels({
   panels,
   state = "ready",
+  rollup = "always",
 }: ConnectorSharingPanelsProps) {
   if (state === "loading") {
     return (
@@ -78,11 +88,15 @@ export function ConnectorSharingPanels({
   return (
     <>
       {/* The roll-up card, ABOVE the list it counts. No Check, no "All
-          connections" link — the list is directly beneath it. */}
-      <ConnectionsStatusCard
-        data-conformance-id="connector-sharing-rollup"
-        counts={{ connected: panels.length }}
-      />
+          connections" link — the list is directly beneath it. On the Sharing
+          tab it heads the list whenever there IS a list; a mount that kept the
+          plural-only rule (`rollup="multiple"`) is unchanged by this issue. */}
+      {rollup === "always" || panels.length > 1 ? (
+        <ConnectionsStatusCard
+          data-conformance-id="connector-sharing-rollup"
+          counts={{ connected: panels.length }}
+        />
+      ) : null}
       <ConnectionsList>
         {panels.map((panel) => (
           <div
