@@ -46,6 +46,14 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", () => ({
   materializeRunArtifacts: materializeRunArtifactsSpy,
 }));
 
+// The run's transcript receipt (cinatra#3002) is a database write on the same
+// terminal path; it has its own suite
+// (wayflow-run-transcript-receipt.test.ts) and is stubbed here for the same
+// reason every other host-side write in this harness is.
+vi.mock("../run-final-response-receipt", () => ({
+  recordRunFinalResponseMessage: vi.fn(async () => null),
+}));
+
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(async () => null),

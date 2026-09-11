@@ -181,6 +181,12 @@ export default defineConfig({
     },
   },
   test: {
+    // The wholesale package suite runs on the same constrained self-hosted
+    // runner as the root suite and hits the same starvation under load —
+    // imports and hooks alone can cross vitest's 5s/10s defaults. Give
+    // tests and hooks the same 30s headroom as the root suite.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     environment: "node",
     // The UNIT tier. `src/**/*.test.ts` is the discovery set the whole-package
     // CI runner executes (cinatra#2439); every non-unit tier below is carved

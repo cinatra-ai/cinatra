@@ -406,6 +406,12 @@ export default defineConfig({
     // load on a constrained CI runner and trips the 5s vitest default. 30s gives
     // those scanners headroom without masking a genuinely hung unit test.
     testTimeout: 30_000,
+    // The wholesale root suite also runs beforeAll/beforeEach hooks that
+    // import large slices of the app's module graph. Under the same
+    // constrained-runner load, that import time crosses vitest's 10s hook
+    // default even though the hook logic itself is trivial. Give hooks the
+    // same headroom as tests; a genuinely hung hook still fails at 30s.
+    hookTimeout: 30_000,
     include: [
       "src/**/__tests__/**/*.test.{ts,tsx}",
       "src/components/**/*.test.{ts,tsx}",

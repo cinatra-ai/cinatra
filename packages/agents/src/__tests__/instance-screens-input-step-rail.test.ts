@@ -192,12 +192,18 @@ describe("the screen's JSX composes the input step and retires the step-less pan
     );
   });
 
-  it("carries the steps only while the run is AT its input", () => {
+  it("carries the steps only while the run is AT its input, or in the handoff", () => {
     // `runCarriesInputSteps`, never `runOwesInputStep` alone: a failed or
     // cancelled run with an unanswered input is not an input moment, and
     // retiring the panel heading there would take its status badge with it.
-    expect(SCREEN_SRC).toContain(
-      "const inputStepsInRail = runCarriesInputSteps(runInputSteps, atInputMoment);",
+    //
+    // AND THE THIRD ARGUMENT IS THE DISPATCH HANDOFF (cinatra#3184 fix leg 4):
+    // the second or two between the skills question just answered and the
+    // question the run is walking to, in which the run has answered no form and
+    // is asked none. The page is rendered at exactly that moment, so without it
+    // the run's own next step left the rail the drawing keeps it on.
+    expect(SCREEN_SRC).toMatch(
+      /const inputStepsInRail = runCarriesInputSteps\(\s*\n\s*runInputSteps,\s*\n\s*atInputMoment,\s*\n\s*runBetweenSetupQuestions,\s*\n\s*\);/,
     );
   });
 });

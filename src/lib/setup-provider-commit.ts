@@ -755,7 +755,7 @@ export async function maybeMigrateReceiptCommitment(deps?: {
 
   const receipt = readSetupReadinessReceipt();
   if (!receipt) return;
-  const readiness = readSetupReadinessState();
+  const readiness = await readSetupReadinessState();
   if (!readiness.ready || readiness.receipt?.provider !== receipt.provider) return;
 
   const readFingerprint =

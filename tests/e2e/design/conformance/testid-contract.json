@@ -94,7 +94,8 @@
         {
           "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
           "literals": [
-            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+            "typeLabel: artifact.objectType",
+            "clamp(artifactKindLabelFor(artifact.objectType), \"Artifact\")"
           ]
         },
         {
@@ -123,7 +124,8 @@
         {
           "file": "src/lib/lifecycle/lifecycle-target-headers.ts",
           "literals": [
-            "typeLabel: artifact.objectType ? clamp(reviewTypeLabel(artifact.objectType), \"Artifact\") : \"Artifact\""
+            "typeLabel: artifact.objectType",
+            "clamp(artifactKindLabelFor(artifact.objectType), \"Artifact\")"
           ]
         },
         {

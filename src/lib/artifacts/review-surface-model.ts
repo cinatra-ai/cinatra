@@ -323,32 +323,10 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 // so the header exposes NO edit control and NO revision picker.
 // ---------------------------------------------------------------------------
 
-/** Prettify an artifact object-type id into a short type label for the header
- * type tag (§II) — `@cinatra-ai/email:draft` → "Email". Local (not imported
- * from the library client surface) so the review route grows no client-graph
- * coupling. */
-export function reviewTypeLabel(objectType: string): string {
-  const afterScope = objectType.includes("/")
-    ? objectType.slice(objectType.indexOf("/") + 1)
-    : objectType;
-  const base = (afterScope.split(":")[0] ?? afterScope).trim();
-  const words = base.split("-").filter(Boolean);
-  // THE PILL READS THE KIND ALONE (cinatra#3080, fix leg 7). Two things made it
-  // read the type id back instead. The packaging noun — a type packaged as
-  // `blog-post-artifact` is still a blog post, and the drawing's pills say so:
-  // `@cinatra-ai/screenshot-artifact` draws "Screenshot",
-  // `@cinatra-ai/slide-deck-artifact` draws "Slide deck",
-  // `@cinatra-ai/brand-voice-artifact` draws "Brand voice". And the CASE: every
-  // pill the drawing draws is SENTENCE case — "Blog post", "Blog image", "Email
-  // body", "Slide deck" — never the Title Case the eighth proof round measured
-  // ("Blog Post Artifact").
-  const kind = words.filter((w) => w !== "artifact" && w !== "artifacts");
-  const spoken = kind.length > 0 ? kind : words;
-  const pretty = spoken
-    .map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
-    .join(" ");
-  return pretty || objectType;
-}
+// The header's type tag (§II) reads the pack's DECLARED kind label through the
+// one host function (`@/lib/artifacts/artifact-kind-label`, import-free data so
+// the review route still grows no client-graph coupling). The former local
+// derivation is deleted — it was the third copy of the same string surgery.
 
 /**
  * The read-only row facts the header's meta line carries (§IV) — the ones the

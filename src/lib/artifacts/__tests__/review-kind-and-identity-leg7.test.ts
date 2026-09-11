@@ -17,24 +17,46 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { reviewTypeLabel, reviewTargetRowFacts, reviewSettledCopy } from "../review-surface-model";
+import { artifactKindLabelFor, resolveArtifactKindLabel } from "../artifact-kind-label";
+import { reviewTargetRowFacts, reviewSettledCopy } from "../review-surface-model";
 
 describe("the kind pill", () => {
-  it("drops the packaging noun — a blog-post-artifact is a blog post", () => {
-    expect(reviewTypeLabel("@cinatra-ai/blog-post-artifact:post")).toBe("Blog post");
-    expect(reviewTypeLabel("@cinatra-ai/screenshot-artifact:artifact")).toBe("Screenshot");
-    expect(reviewTypeLabel("@cinatra-ai/slide-deck-artifact:artifact")).toBe("Slide deck");
-    expect(reviewTypeLabel("@cinatra-ai/brand-voice-artifact:artifact")).toBe("Brand voice");
+  // THE PILL READS THE PACK'S OWN DECLARED KIND (the forward merge onto main,
+  // 2026-09-11). This leg was written against a local derivation in the review
+  // surface model, `reviewTypeLabel`. Main deleted that derivation -- it was the
+  // third host copy of the same string surgery -- and the pill now reads the ONE
+  // declared-first label, `artifactKindLabelFor`, which the artifact page header
+  // and the library already read, so a pack cannot be named two ways.
+  //
+  // The leg's own assertion survives as its subject: the pill names the KIND,
+  // never the type id, and never the packaging noun. Under the core/extension
+  // border the SPELLING of that name is the pack's, declared in the pack's own
+  // repository -- so the case of a declared label is not asserted here, and a
+  // pack that declares nothing is the only one the host floors.
+  it("names the kind from the pack's own declaration, never the type id", () => {
+    expect(artifactKindLabelFor("@cinatra-ai/blog-post-artifact:post")).toBe("Blog Post");
+    expect(artifactKindLabelFor("@cinatra-ai/screenshot-artifact:artifact")).toBe("Screenshot");
+    expect(artifactKindLabelFor("@cinatra-ai/slide-deck-artifact:artifact")).toBe("Slide Deck");
+    expect(artifactKindLabelFor("@cinatra-ai/brand-voice-artifact:artifact")).toBe("Brand Voice");
   });
 
-  it("reads in sentence case, never Title Case", () => {
-    expect(reviewTypeLabel("@cinatra-ai/blog:post")).toBe("Blog");
-    expect(reviewTypeLabel("@cinatra-ai/cms-content-snapshot:page")).toBe("Cms content snapshot");
-    expect(reviewTypeLabel("@cinatra-ai/blog-post-artifact:post")).not.toContain("Post");
+  it("drops the packaging noun, because the pack's declaration carries none", () => {
+    for (const id of [
+      "@cinatra-ai/blog-post-artifact:post",
+      "@cinatra-ai/screenshot-artifact:artifact",
+      "@cinatra-ai/slide-deck-artifact:artifact",
+      "@cinatra-ai/brand-voice-artifact:artifact",
+    ]) {
+      const resolved = resolveArtifactKindLabel(id);
+      expect(resolved.source).toBe("declared");
+      expect(resolved.label.toLowerCase()).not.toContain("artifact");
+    }
   });
 
-  it("keeps saying something for a type that is only its packaging noun", () => {
-    expect(reviewTypeLabel("@cinatra-ai/artifact:artifact")).toBe("Artifact");
+  it("keeps saying something for a pack that has declared nothing", () => {
+    const resolved = resolveArtifactKindLabel("@acme/support-desk:case");
+    expect(resolved.source).toBe("floor");
+    expect(resolved.label).toBe("Support Desk");
   });
 });
 
