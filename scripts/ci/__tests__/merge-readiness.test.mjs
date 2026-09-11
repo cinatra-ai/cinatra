@@ -538,3 +538,85 @@ describe("inventory validation fails closed", () => {
     expect(validateInventory(bad).problems.join("\n")).toMatch(/malformed 'timeoutMinutes'/);
   });
 });
+
+describe("a check run's source is the workflow that produced it, not its check suite", () => {
+  // A draft-to-ready flip runs every `ready_for_review` workflow a second time
+  // at ONE head: two check suites, one workflow, one context. Keying the source
+  // on the check-suite id read that as two sources (cinatra#3391).
+  const suiteIndex = () =>
+    readiness.workflowPathsBySuite([
+      { check_suite_id: 93602180530, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966667, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966999, path: ".github/workflows/source-leak-gate.yml" },
+    ]);
+
+  const suiteRun = (id, suiteId, over = {}) => ({
+    id,
+    name: "build",
+    status: "completed",
+    conclusion: "success",
+    completedAt: "2026-09-11T01:55:00Z",
+    app: "github-actions",
+    checkSuiteId: suiteId,
+    workflow: `check_suite:${suiteId}`,
+    ...over,
+  });
+
+  it("indexes the head's workflow runs by check-suite id", () => {
+    const index = readiness.workflowPathsBySuite([
+      { check_suite_id: 93602180530, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966667, path: ".github/workflows/gates.yml" },
+      { check_suite_id: null, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 7, path: "" },
+    ]);
+    expect(index.get(93602180530)).toBe(".github/workflows/gates.yml");
+    expect(index.get(93601966667)).toBe(".github/workflows/gates.yml");
+    expect(index.get(7)).toBeUndefined();
+    expect(index.size).toBe(2);
+  });
+
+  it("resolves a check run to its workflow path, and keeps the check-suite id when no run maps", () => {
+    const [resolved, unmapped] = readiness.resolveCheckWorkflows(
+      [suiteRun(1, 93602180530), suiteRun(2, 4242)],
+      suiteIndex(),
+    );
+    expect(readiness.sourceOf(resolved)).toBe("github-actions:.github/workflows/gates.yml");
+    expect(readiness.sourceOf(unmapped)).toBe("github-actions:check_suite:4242");
+  });
+
+  it("reads two check suites of ONE workflow at one head as one source, the latest run deciding", () => {
+    const draftStub = suiteRun(103124792060, 93602180530, { conclusion: "failure", completedAt: "2026-09-11T01:49:00Z" });
+    const ready = suiteRun(103124792061, 93601966667);
+    const checks = readiness.resolveCheckWorkflows([draftStub, ready], suiteIndex());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), ...checks]);
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reports.join("\n")).toMatch(/re-run \(the latest of 2 runs from one source decides\): 'build'/);
+  });
+
+  it("keeps duplicate-source when two DIFFERENT workflow paths report one context", () => {
+    const checks = readiness.resolveCheckWorkflows(
+      [suiteRun(1, 93602180530), suiteRun(2, 93601966999)],
+      suiteIndex(),
+    );
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), ...checks]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(/duplicate-source: 'build' was reported 2 times from 2 source/);
+  });
+
+  it("reports untrusted-source when the resolved workflow path is not the inventory's for that context", () => {
+    const [run] = readiness.resolveCheckWorkflows([suiteRun(1, 93601966999)], suiteIndex());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), run]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(
+      /untrusted-source: 'build' was reported by workflow '\.github\/workflows\/source-leak-gate\.yml', but the inventory expects '\.github\/workflows\/gates\.yml'/,
+    );
+  });
+
+  it("leaves an unresolved check run judged exactly as before", () => {
+    const [run] = readiness.resolveCheckWorkflows([suiteRun(1, 4242)], new Map());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), run]);
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+  });
+});

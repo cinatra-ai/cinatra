@@ -314,8 +314,47 @@ export function pathsApply(globs, changedPaths) {
  * The source string a check run is attributed to. Two check runs sharing an
  * expected context name but not this string are a DUPLICATE SOURCE: which one
  * the branch protection would match is ambiguous, so the job fails closed.
+ *
+ * `workflow` is the WORKFLOW the run came from once `resolveCheckWorkflows`
+ * has resolved it (see below); the check-suite id stands in for a run no
+ * workflow owns.
  */
 export const sourceOf = (c) => `${c.app ?? "?"}:${c.workflow ?? "?"}`;
+
+/**
+ * Index one head's workflow-run listing (`GET /repos/{repo}/actions/runs?head_sha=`)
+ * by check-suite id: `check_suite_id` -> the run's repo-relative workflow `path`.
+ * Several runs of one workflow at one head (a re-run, a draft-to-ready flip, a
+ * synchronize) carry DIFFERENT check-suite ids and the SAME path, so the index
+ * is what collapses them to one source.
+ */
+export function workflowPathsBySuite(runs) {
+  const bySuite = new Map();
+  for (const r of runs ?? []) {
+    const id = typeof r?.check_suite_id === "number" && Number.isFinite(r.check_suite_id) ? r.check_suite_id : null;
+    const wfPath = typeof r?.path === "string" && r.path !== "" ? r.path : null;
+    if (id === null || wfPath === null) continue;
+    if (!bySuite.has(id)) bySuite.set(id, wfPath);
+  }
+  return bySuite;
+}
+
+/**
+ * Resolve every check run's check-suite id to the workflow that produced it.
+ * A check-run payload carries no workflow identity, only its check suite, so a
+ * suite that maps to a workflow run becomes the source `<app>:<workflow path>`
+ * (cinatra#3391: the draft stub and the ready-for-review run of ONE workflow
+ * are two suites and were read as two sources); a suite no workflow run owns
+ * (an app outside Actions) keeps the check-suite-id source it already had.
+ */
+export function resolveCheckWorkflows(checks, suiteWorkflows) {
+  const bySuite = suiteWorkflows instanceof Map ? suiteWorkflows : new Map();
+  return (checks ?? []).map((c) => {
+    const wfPath = c?.checkSuiteId != null ? bySuite.get(c.checkSuiteId) : undefined;
+    if (typeof wfPath !== "string" || wfPath === "") return { ...c, workflowResolved: false };
+    return { ...c, workflow: wfPath, workflowResolved: true };
+  });
+}
 
 /**
  * Which of several check runs of ONE name from ONE source branch protection
@@ -400,6 +439,15 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
     }
     if (run.app !== e.app) {
       failures.push(`untrusted-source: '${e.context}' was reported by app '${run.app}', but the inventory trusts '${e.app}'`);
+      continue;
+    }
+    // The inventory records the workflow path of every expected context, so a
+    // RESOLVED path that is not that one is a foreign workflow claiming the
+    // context (a tightening; an unresolved run is judged exactly as before).
+    if (run.workflowResolved === true && typeof e.workflow === "string" && run.workflow !== e.workflow) {
+      failures.push(
+        `untrusted-source: '${e.context}' was reported by workflow '${run.workflow}', but the inventory expects '${e.workflow}'`,
+      );
       continue;
     }
     if (run.status !== "completed") {
@@ -541,12 +589,25 @@ async function listChecks(token, repo, sha) {
         conclusion: c.conclusion,
         completedAt: c.completed_at ?? null,
         app: c.app?.slug ?? null,
+        checkSuiteId: typeof c.check_suite?.id === "number" ? c.check_suite.id : null,
         workflow: c.check_suite?.id != null ? `check_suite:${c.check_suite.id}` : (c.html_url ?? "?"),
       });
     }
     if ((body.check_runs ?? []).length < 100) break;
   }
   return out;
+}
+
+/** The workflow runs of one head, indexed by check-suite id (see workflowPathsBySuite). */
+async function listWorkflowPaths(token, repo, sha) {
+  const runs = [];
+  for (let page = 1; page <= 10; page++) {
+    const body = await api(token, `/repos/${repo}/actions/runs?head_sha=${sha}&per_page=100&page=${page}`);
+    const got = body.workflow_runs ?? [];
+    for (const r of got) runs.push(r);
+    if (got.length < 100) break;
+  }
+  return workflowPathsBySuite(runs);
 }
 
 async function listChangedPaths(token, repo, prNumber) {
@@ -610,6 +671,10 @@ async function main() {
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+
+  // A check run names its check suite, never its workflow: resolve the suites
+  // of this head to workflows before the sources are judged.
+  checks = resolveCheckWorkflows(checks, await listWorkflowPaths(token, repo, lookupSha));
 
   let queue;
   if (eventName === "merge_group") {

@@ -34,6 +34,9 @@ permissions:
   contents: read
   checks: read
   pull-requests: read
+  # the evaluator resolves each check suite to its workflow through the
+  # actions runs listing of the head
+  actions: read
 
 jobs:
   merge-readiness:
