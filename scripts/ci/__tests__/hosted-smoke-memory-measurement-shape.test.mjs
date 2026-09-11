@@ -85,9 +85,15 @@ const SAMPLE_LOOP = (s) =>
   !/Stop the memory sampler/i.test(s.name);
 const SMOKE_CMD = "pnpm test:e2e:dashboards";
 
-// The ONE step that carries the sampler loop — the same step that boots the
-// app and runs the smoke.
-const SAMPLED_SMOKE = () => step(SAMPLE_LOOP, "sampler-carrying");
+// The step that carries the sampler loop AND boots the app and runs the smoke.
+// A second carrier exists on purpose (the production build below): a step's
+// background process dies with the step, so one loop cannot serve two steps.
+const SAMPLED_SMOKE = () =>
+  step(
+    (s) => SAMPLE_LOOP(s) && s.text.includes(SMOKE_CMD),
+    "sampler-carrying smoke",
+  );
+const BUILD_CMD = "pnpm build";
 const REPORT = () =>
   step((s) => /Stop the memory sampler/i.test(s.name), "sampler-stop/report");
 const UPLOAD = () =>
@@ -119,12 +125,22 @@ describe("the sampler runs inside the step that boots the app and runs the smoke
 
   it("leaves NO separate sampler-only step behind", () => {
     const carriers = steps().filter(SAMPLE_LOOP);
-    expect(carriers).toHaveLength(1);
+    // exactly two carriers: the production build and the boot+smoke — every
+    // sampler loop lives inside a step that does the work it measures.
+    expect(carriers.map((s) => s.name)).toEqual([
+      "Build app (production)",
+      SAMPLED_SMOKE().name,
+    ]);
     for (const s of carriers) {
       expect(
         s.text,
-        `sampler step "${s.name}" does not run the smoke`,
-      ).toContain(SMOKE_CMD);
+        `sampler step "${s.name}" does no work of its own`,
+      ).toMatch(
+        new RegExp(
+          `${SMOKE_CMD.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|^\\s*${BUILD_CMD}$`,
+          "m",
+        ),
+      );
     }
     expect(
       steps().map((s) => s.name),
@@ -141,6 +157,10 @@ describe("the sampler runs inside the step that boots the app and runs the smoke
 
   it("writes its samples under the runner temp directory", () => {
     expect(runBlock(SAMPLED_SMOKE())).toContain("${RUNNER_TEMP}/");
+  });
+
+  it("APPENDS to the shared file instead of truncating the build's samples", () => {
+    expect(runBlock(SAMPLED_SMOKE())).not.toMatch(/^\s*: > "\$SAMPLE_FILE"/m);
   });
 
   it("samples the clock, the free -m available column and the top three by RSS, every 5 seconds", () => {
@@ -189,6 +209,59 @@ describe("the sampler runs inside the step that boots the app and runs the smoke
 
   it("runs after the production build whose boot it measures", () => {
     expect(SAMPLED_SMOKE().index).toBeGreaterThan(BUILD().index);
+  });
+});
+
+describe("the sampler runs inside the production build step as well", () => {
+  // The runner's shutdown signal arrived INSIDE this step on all three
+  // attempts at this head (01:33:58Z after 7.7 min, 01:43:23Z after 6.7 min,
+  // 01:57:18Z after 8.5 min, during page-data collection), so the boot+smoke
+  // step never started and its sampler captured nothing. The measurement
+  // therefore belongs to the build step too.
+  it("starts the loop and runs the build in ONE run block", () => {
+    const block = runBlock(BUILD());
+    expect(block).toMatch(/while true; do/);
+    expect(block).toMatch(new RegExp(`^\\s*${BUILD_CMD}$`, "m"));
+    // the build runs in the foreground, after the loop is backgrounded
+    expect(block.indexOf("while true; do")).toBeLessThan(
+      block.indexOf(BUILD_CMD),
+    );
+  });
+
+  it("kills the loop by pid in the same script, and on error through a trap", () => {
+    const block = runBlock(BUILD());
+    expect(block).toMatch(/SAMPLER_PID=\$!/);
+    expect(block).toMatch(/trap '.*kill "\$SAMPLER_PID".*' EXIT/);
+    expect(block).toMatch(/^\s*kill "\$SAMPLER_PID"/m);
+  });
+
+  it("appends to the SAME sample file the boot+smoke step appends to", () => {
+    const block = runBlock(BUILD());
+    expect(block).toContain(
+      'SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"',
+    );
+    expect(block).toMatch(/\}\s*\|\s*stdbuf -oL tee -a "\$SAMPLE_FILE"/);
+    expect(block).toMatch(
+      new RegExp(`echo "${FILE_VAR}=\\$\\{SAMPLE_FILE\\}" >> "\\$GITHUB_ENV"`),
+    );
+  });
+
+  it("samples the same fields on the same 5 second cadence", () => {
+    const block = runBlock(BUILD());
+    expect(block).toContain("date -u +%T");
+    expect(block).toMatch(/mem_used_mb=" \$3/);
+    expect(block).toMatch(/mem_available_mb=" \$7/);
+    expect(block).toContain("ps -eo rss=,comm= --sort=-rss | head -3");
+    expect(block).toMatch(/^\s*sleep 5$/m);
+  });
+
+  it("takes a one-line free -m and nproc reading before the loop starts", () => {
+    const block = runBlock(BUILD());
+    expect(block).toMatch(/^\s*free -m \|\| true$/m);
+    expect(block).toMatch(/^\s*nproc \|\| true$/m);
+    expect(block.search(/^\s*nproc \|\| true$/m)).toBeLessThan(
+      block.indexOf("while true; do"),
+    );
   });
 });
 

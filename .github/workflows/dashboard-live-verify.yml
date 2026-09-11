@@ -354,7 +354,45 @@ jobs:
           # route set makes that phase long enough; the knob maps to
           # experimental.cpus in next.config.ts.
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
+        # THE BUILD IS SAMPLED TOO (cinatra#3382). The runner's shutdown signal
+        # arrived three times INSIDE this step at this head (attempt 1 cancelled
+        # at 01:33:58Z after 7.7 min, attempt 2 at 01:43:23Z after 6.7 min,
+        # attempt 3 at 01:57:18Z after 8.5 min — 53 s after "Compiled
+        # successfully in 7.5min", during "Collecting page data using 1
+        # worker"), so the boot+smoke step below never ran and its sampler
+        # captured nothing. The same ten-line loop therefore runs here as well:
+        # a step's background process dies with the step and its stdout belongs
+        # to the step that started it, so one shared sampler step cannot serve
+        # two steps — the loop is duplicated on purpose. It appends to the same
+        # file in RUNNER_TEMP that the boot+smoke step keeps appending to, and
+        # is killed by pid at the end of this script and on every error path
+        # through the EXIT trap.
+        run: |
+          # set -e: the trailing kill must never mask a failed build; the EXIT
+          # trap stops the sampler on that path.
+          set -eu
+          SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
+          : > "$SAMPLE_FILE"
+          echo "AGENTS_SMOKE_MEMORY_FILE=${SAMPLE_FILE}" >> "$GITHUB_ENV"
+          free -m || true
+          nproc || true
+          (
+            while true; do
+              {
+                date -u +%T
+                free -m | awk '/^Mem:/ { print "  mem_used_mb=" $3 " mem_available_mb=" $7 }'
+                ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ print "  rss_kb=" $1 " " $2 }'
+              } | stdbuf -oL tee -a "$SAMPLE_FILE"
+              sleep 5
+            done
+          ) &
+          SAMPLER_PID=$!
+          trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
+          echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
+
+          pnpm build
+
+          kill "$SAMPLER_PID" 2>/dev/null || true
 
       - name: Boot the app and run the dashboard live-verify smoke (memory sampled)
         if: ${{ needs.detect.outputs.run_real == 'true' }}
@@ -397,7 +435,7 @@ jobs:
         run: |
           set -u
           SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
-          : > "$SAMPLE_FILE"
+          touch "$SAMPLE_FILE"
           echo "AGENTS_SMOKE_MEMORY_FILE=${SAMPLE_FILE}" >> "$GITHUB_ENV"
           (
             while true; do
