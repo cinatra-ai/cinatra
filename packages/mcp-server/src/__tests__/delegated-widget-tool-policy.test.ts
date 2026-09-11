@@ -3,6 +3,7 @@ import { isCoreDelegatedChatAdmitted } from "../core-delegated-chat-surface";
 import {
   DELEGATED_WIDGET_BOUND_CARD_ACTION,
   DELEGATED_WIDGET_NAMED_AGENT_START,
+  DELEGATED_WIDGET_BOUND_SCREEN_FILL,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -142,7 +143,7 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
   });
 
   it.each(KINDS)(
-    "%s: the WHOLE declared set is the editor, the reads, the ONE lent action and the ONE start",
+    "%s: the WHOLE declared set is the editor, the reads, the ONE lent action, the ONE start and the fill",
     (kind) => {
       // The complete contents, asserted as a set: an addition fails as loudly as
       // a removal, so widening this policy cannot happen quietly.
@@ -166,6 +167,11 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
           ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
           DELEGATED_WIDGET_BOUND_CARD_ACTION,
           DELEGATED_WIDGET_NAMED_AGENT_START,
+          // AMENDED again for cinatra#2934 (lifecycle-b W5c): one more entry, the
+          // FILL, for the same parity reason and with less authority than any
+          // other on this list — it resolves nothing at all. The assertion stays
+          // exhaustive, so a third addition fails here as loudly as this one did.
+          DELEGATED_WIDGET_BOUND_SCREEN_FILL,
         ].sort(),
       );
     },

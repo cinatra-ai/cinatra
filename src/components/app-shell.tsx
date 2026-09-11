@@ -27,14 +27,18 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  PAGE_NOT_FOUND_CRUMB_LABEL,
   agentInstanceTabLabel,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
   isIdLikeSegment,
   type BreadcrumbCrumb,
+  documentTitleLabelFromTrail,
+  documentTitleLabelForAgentInstance,
 } from "@/lib/breadcrumb-trail";
 import {
+  isPageNotFound,
   selectCrumbContributions,
   CRUMB_CONTRIBUTIONS_EVENT,
 } from "@/lib/breadcrumb-contributions";
@@ -620,14 +624,23 @@ export function AppShell({
     [pathname, crumbEpoch, crumbBusVersion],
   );
 
+  // The 404 boundary's own mark (cinatra#2934, fix leg 10) — read off the same
+  // bus, and invalidated by the same version counter the contributions are.
+  const pageNotFound = useMemo(
+    () => isPageNotFound(pathname),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathname, crumbBusVersion],
+  );
+
   const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
     () =>
       buildBreadcrumbTrail(pathname, {
         pageTitle,
         chatThreadTitle,
         contributions: crumbContributions,
+        notFound: pageNotFound,
       }),
-    [pathname, chatThreadTitle, pageTitle, crumbContributions],
+    [pathname, chatThreadTitle, pageTitle, crumbContributions, pageNotFound],
   );
 
   const refreshRoute = useCallback(() => router.refresh(), [router]);
@@ -657,20 +670,56 @@ export function AppShell({
     const segments = pathname.split("/").filter(Boolean);
     // THE AGENT INSTANCE'S OWN LABEL (cinatra#2809): read through the trail's
     // own rule, so the tab mirrors the trail on the bare tree and under every
-    // scope base alike. A null leaves the title to the branches below.
+    // scope base alike. A null leaves the title to the branches below. This
+    // reader REPLACES the pair this branch carried (the published-contribution
+    // label and the trail reader beside it): it reads the very trail already
+    // drawn above the page, guards the id abbreviation the same way, and does
+    // it under every scope base rather than the bare tree alone — so cinatra#2934
+    // fix leg 9's rule (the tab mirrors the trail's LEAF, never the run's name
+    // on a sub-route) is the rule it applies.
+    // THE ID GUARD STANDS IN FRONT OF THE LEAF (forward resolution, main
+    // merged). Main's reader gave this branch the scope bases and reads the
+    // trail's own leaf, which is the rule this slice wanted. What it does not
+    // carry is this slice's second rule — the drawing's "an id-bearing route
+    // never shows a raw id in the tab", under which the eight characters of an
+    // id and an ellipsis are still an id. So the leaf is read through the one
+    // guarded helper, which answers null where nothing can be said without an
+    // identifier and leaves the route's own server title standing.
     const agentLabel = agentInstanceTabLabel(pathname, breadcrumbSegments);
+    const agentTabLabel =
+      agentLabel === null
+        ? null
+        : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
     let resolved: string | null = null;
-    if (isChatThread && chatThreadTitle) {
+    if (pageNotFound) {
+      // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 11).
+      // Its trail is the single crumb "Page not found", so the tab is that one
+      // word too - before every branch below, because none of them can name a
+      // page the reader never reached.
+      resolved = `${PAGE_NOT_FOUND_CRUMB_LABEL} | Cinatra`;
+    } else if (isChatThread && chatThreadTitle) {
       resolved = `${chatThreadTitle} | Cinatra`;
-    } else if (agentLabel) {
-      resolved = `${agentLabel} | Cinatra`;
+    } else if (agentTabLabel) {
+      resolved = `${agentTabLabel} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
       // correct server title with humanized hex. Deliberately no write.
       resolved = null;
     } else {
-      resolved = deriveDocumentTitle(pathname, activeHeader?.title);
+      // THE TAB MIRRORS THE RESOLVED TRAIL HERE TOO (cinatra#2934, fix leg 11).
+      // This branch derived its own words from the PATH, which is a second
+      // reading of the same route and drifts from the first the moment the two
+      // disagree: on the run-starting page the trail appends the page's own
+      // title beneath the area crumb ("Agents > Agent run") while the derived
+      // word stayed the area segment ("Agents"), and the proof round measured
+      // exactly that. So the trail already drawn above the page decides, and the
+      // path-derived word remains only as the floor for a trail with nothing
+      // safe to say.
+      const mirrored = documentTitleLabelFromTrail(breadcrumbSegments);
+      resolved = mirrored
+        ? `${mirrored} | Cinatra`
+        : deriveDocumentTitle(pathname, activeHeader?.title);
     }
     if (!resolved) return;
     const apply = () => {
@@ -690,7 +739,7 @@ export function AppShell({
     const observer = new MutationObserver(apply);
     observer.observe(head, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
-  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments]);
+  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments, pageNotFound]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.
@@ -876,13 +925,27 @@ export function AppShell({
             data-testid="app-shell-topbar-row"
             className="flex h-full w-full items-center gap-3 px-5 sm:gap-4 sm:px-8"
           >
+            {/* cinatra#2934 — the drawing names the top-bar's left element and
+                it is this one: "The breadcrumb is the top-bar's left element
+                and moves with the bar — it anchors at that far-left edge."
+                The row carries only the standard edge gutters, so the trail
+                begins at the gutter and nothing is drawn to its left. The
+                sidebar toggle and its divider used to sit here and pushed the
+                trail 92px inside the sidebar's inner edge where 32px is drawn;
+                they now lead the right-hand cluster instead, so the control is
+                still one click away at every viewport while the left edge
+                belongs to the trail alone. Desktop collapse also remains on
+                the sidebar's own rail. */}
+            {/* Below `sm` the trail is not drawn, so there is nothing for the
+                toggle to push: it stays at the left edge, where the primary
+                navigation control has always been. At `sm` and up it is
+                `sm:hidden` here and leads the right-hand cluster instead, so
+                the trail alone sits at the gutter the drawing names. */}
             <SidebarTrigger
-              data-testid="app-shell-topbar-left"
               variant="outline"
-              className="max-md:scale-125"
+              className="max-md:scale-125 sm:hidden"
             />
-            <Separator orientation="vertical" className="h-6 shrink-0" />
-            <Breadcrumb className="hidden sm:flex">
+            <Breadcrumb data-testid="app-shell-topbar-left" className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
                   <Fragment key={breadcrumbCrumbKey(crumb, i)}>
@@ -907,6 +970,11 @@ export function AppShell({
               </BreadcrumbList>
             </Breadcrumb>
             <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
+            <SidebarTrigger
+              variant="outline"
+              className="max-md:scale-125 max-sm:hidden"
+            />
+            <Separator orientation="vertical" className="h-6 shrink-0 max-sm:hidden" />
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {
               setDevToolsOpen(open);
               if (open) {

@@ -11,9 +11,15 @@
  * What is proved here, without a browser:
  *   1. a declared text form (markdown, plain text) resolves to the FORM rung
  *      instead of the floor;
- *   2. the rung sits BELOW every package renderer and ABOVE the fallback;
+ *   2. the rung sits BELOW every package renderer and ABOVE the fallback — with
+ *      the ONE exception fix leg 12 added, recorded here so this preamble does
+ *      not out-promise the suite: on a REVIEW TARGET a text/markdown row is
+ *      drawn by the host's own markdown display, because the ratified drawing
+ *      assigns that slot outright (Artifact review §IV/§V.1). Plain text and
+ *      every other MIME keep the order below unchanged;
  *   3. the card and the page resolve the SAME tier for the same row — one
- *      resolution, called rather than copied;
+ *      resolution, called rather than copied, with the review target's single
+ *      added rule composed over it rather than a second ladder;
  *   4. the card resolves off the PRESENTATION identity, the identity the page
  *      resolves off, so the two can no longer diverge per row;
  *   5. the floor is reached only when nothing renders the row at all.
@@ -109,20 +115,19 @@ afterEach(() => {
 });
 
 describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
-  it("a markdown draft under review mounts the markdown BASE — a package renderer, which the rung sits below", async () => {
-    // Item 0.19 of the readiness plan gave markdown its own base, and this
-    // change pins it into the required set. A base that claims text/markdown is
-    // a package renderer, and rung (3) of this suite's own contract puts the form
-    // rung BELOW every package renderer — so the card mounts the base, which is
-    // exactly the drawing §8.5's resolution proof looks for on this surface. The
-    // rung's first-party arm is still proved, by the plain-text case below, and
-    // the host's markdown handler stays in the tree as the defensive floor.
+  // RE-PINNED (cinatra#2934, fix leg 12). This case used to assert the opposite:
+  // that a markdown draft under review mounts the bundled markdown BASE, on the
+  // reasoning that a MIME-bound base is a package renderer and the form rung
+  // sits below every package renderer. The ratified drawing decides against it
+  // for a REVIEW TARGET — "For a text/markdown target the renderer that mounts
+  // here is the markdown display" (Artifact review §IV), and that display is the
+  // one with the two tabs (§V.1) — and the dev-boot round of 2026-09-04 measured
+  // the cost of the old order: a target panel with no tab strip in it at all.
+  // Only the MIME-bound rung gives way; the whole of rung (3) below is otherwise
+  // unchanged, and a type's OWN display still wins.
+  it("a markdown draft under review mounts the markdown DISPLAY — the host's own, with its two tabs", async () => {
     const mount = await mountFor(summary(`${PKG}:post`, { kind: "no-primary" }), MARKDOWN);
-    expect(mount).toEqual({
-      kind: "build-map",
-      packageName: "@cinatra-ai/markdown-artifact",
-      generatedKey: "@cinatra-ai/markdown-artifact::detail",
-    });
+    expect(mount).toEqual({ kind: "form", arm: "first-party", form: "markdown" });
   });
 
   it("a plain-text target resolves to the form rung's text arm", async () => {
@@ -154,7 +159,24 @@ describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
     expect(withoutWinner.kind).toBe("form");
   });
 
-  it("an extension REPRESENTATION provider for the same MIME still beats the rung", async () => {
+  it("an extension REPRESENTATION provider still beats the rung — where the MIME has no declared host form", async () => {
+    // RE-PINNED (fix leg 12). The rung still sits below the representation
+    // viewer; what changed is that on a REVIEW TARGET a representation the host
+    // itself declares a text form for is drawn by the host's display (§IV/§V.1),
+    // so the MIME this case proves the order on is one with no declared form.
+    representationProviderRegistry.registerProvider(ORG, {
+      packageName: PKG,
+      pattern: OPAQUE,
+      slot: "detail",
+      generation: 1,
+    });
+    await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate });
+
+    const mount = await mountFor(summary(`${PKG}:post`, { kind: "no-primary" }), OPAQUE);
+    expect(mount.kind).toBe("runtime");
+  });
+
+  it("a MIME-bound provider for MARKDOWN gives way to the markdown display", async () => {
     representationProviderRegistry.registerProvider(ORG, {
       packageName: PKG,
       pattern: MARKDOWN,
@@ -164,7 +186,7 @@ describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
     await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate });
 
     const mount = await mountFor(summary(`${PKG}:post`, { kind: "no-primary" }), MARKDOWN);
-    expect(mount.kind).toBe("runtime");
+    expect(mount).toEqual({ kind: "form", arm: "first-party", form: "markdown" });
   });
 
   it("the floor is reached ONLY when nothing renders the row — no package, no declared form", async () => {

@@ -39,14 +39,10 @@ import {
 import {
   resolveMessageRouting,
   setAssistantPauseState,
-  extractHitlGateValuesAction,
 } from "./actions";
 // Chat prompt-window HITL drive.
 import {
-  classifyPromptForGate,
   createChatGateRegistry,
-  resolveComposerRouting,
-  resolveExtractedGateValues,
 } from "./inline-hitl-classify";
 // cinatra#2566's composer focus: the store the review cards register with, and
 // the pure resolver that says which gate (if any) the composer is bound to.
@@ -859,112 +855,44 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // a CLAIM the server re-checks under the reader's own access.
     // -----------------------------------------------------------------------
     const composerSnapshot = composerFocusStore.getSnapshot();
+    // THE WAITING SCREEN TRAVELS TOO (cinatra#2934). A review card carries a
+    // server-minted ref this page can claim; a waiting HITL screen carries none
+    // on any client, so the page names the RUN it is looking at and the server
+    // mints the screen's ref from that run's own durable row, under this
+    // reader's access. Read at SEND time for the same reason the review binding
+    // is: a gate can open or close while the reader is typing.
+    const waitingGate = getLatestOpenGate();
+    const screenRunIds =
+      waitingGate && waitingGate.kind !== "review_comment" ? [waitingGate.runId] : [];
     const boundCardClaim =
-      composerSnapshot.eligible.length > 0
+      composerSnapshot.eligible.length > 0 || screenRunIds.length > 0
         ? {
             refs: [...composerSnapshot.eligible],
             focused:
               resolveComposerTarget(composerSnapshot).kind === "target"
                 ? composerSnapshot.focused
                 : null,
+            ...(screenRunIds.length > 0 ? { screenRunIds } : {}),
           }
         : null;
-    {
-      // Append an assistant ack AND persist it, mirroring the immediate
-      // user-message save above. Without the explicit save the gate path's
-      // early returns leave the ack reliant on the generic no-stream
-      // persistence effect; persisting here removes the timing inconsistency
-      // so the ack survives an immediate reload.
-      const persistAck = (content: string): void => {
-        const ackMsg: Message = {
-          id: generateId(),
-          role: "assistant",
-          content,
-        };
-        const messagesWithAck = [...currentMessages, ackMsg];
-        setMessages((prev) => [...prev, ackMsg]);
-        const now = new Date().toISOString();
-        const title =
-          threads.find((t) => t.id === threadId)?.title ??
-          deriveThreadTitle(trimmed);
-        // createdAt is immutable: prefer the summary, then the loaded
-        // thread's createdAt, then now for a genuinely new thread (#283).
-        const createdAt =
-          threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-        saveChatThreadInOrder({
-          id: threadId,
-          title,
-          messages: messagesWithAck,
-          createdAt,
-          updatedAt: now,
-          activeAssistantHandle,
-          taggedAssistantUserIds,
-          slackMode: isSlackMode,
-          ownerUserId: userId,
-        } as Record<string, unknown> & { id: string }).catch((err) =>
-          console.error("[chat] saveChatThread (gate ack) failed:", err),
-        );
-      };
-      // Read the FIELD GATE at SEND time, not at render time: a gate can open or
-      // close while the reader is typing. A bound review is no longer read here
-      // at all — it travels with the message as `boundCardClaim` above.
-      const composerRouting = resolveComposerRouting({
-        latestOpenGate: getLatestOpenGate(),
-      });
-
-      const gate = composerRouting.kind === "field-gate" ? composerRouting.gate : undefined;
-      if (gate) {
-        const verdict = classifyPromptForGate(trimmed, {
-          fields: gate.fields,
-          fieldName: gate.fieldName,
-        });
-        const finishGateSubmit = async (
-          value: Record<string, unknown> | string | number | boolean,
-        ): Promise<void> => {
-          try {
-            await gate.submit(value);
-            persistAck(
-              `Submitted to the agent's \`${gate.xRenderer}\` step.`,
-            );
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "unknown";
-            persistAck(`Could not submit to the agent gate: ${msg}`);
-          }
-        };
-        if (verdict.kind === "submit") {
-          await finishGateSubmit(verdict.value);
-          return;
-        }
-        if (verdict.kind === "llm") {
-          let extracted: Record<string, unknown> = {};
-          try {
-            const raw = await extractHitlGateValuesAction(trimmed, gate.fields);
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              extracted = parsed as Record<string, unknown>;
-            }
-          } catch {
-            extracted = {};
-          }
-          // The required-field policy is pure and unit-tested — see
-          // resolveExtractedGateValues in inline-hitl-classify.ts.
-          const resolution = resolveExtractedGateValues(extracted, gate.fields);
-          if (resolution.kind === "submit") {
-            await finishGateSubmit(resolution.value);
-            return;
-          }
-          if (resolution.kind === "partial") {
-            // Partial — keep the gate open, tell the user what's missing,
-            // do NOT route to the LLM (the message was a gate attempt).
-            persistAck(
-              `Got ${resolution.presentKeys.join(", ")}. Still need: ${resolution.missing.join(", ")}. Fill the form or reply with the remaining value(s).`,
-            );
-            return;
-          }
-          // Nothing extracted → fall through to normal chat routing.
-        }
-      }
-    }
+    // THE FIELD-GATE READER IS GONE (cinatra#2934, lifecycle-b W5c), and with it
+    // the last arm on this page that acted on a sentence before the assistant
+    // saw it. The plan's replacement table, row three: "The guesswork that read
+    // a form value out of your sentence, and the second, hidden model that
+    // guessed when the guessing failed" → "The HITL screen lends its own fill
+    // and submit controls. The assistant fills what the form asks for and asks
+    // you about what it cannot work out, in the conversation, where you can
+    // answer."
+    //
+    // What went, exactly: the deterministic ladder (`classifyPromptForGate`),
+    // the LLM fallback it deferred to (`extractHitlGateValuesAction` with
+    // `resolveExtractedGateValues`), the page-composed acknowledgements they
+    // wrote, and the routing arm that reached them. What replaced them, in this
+    // same change: the run whose screen is waiting travels with the message as
+    // `screenRunIds` below, the server mints that screen's own reference under
+    // this reader's access, and the conversation's assistant fills the screen's
+    // fields — and presses its button when asked in so many words — through the
+    // card's own paths. One road, one model, the person's own permissions.
 
     // Routing: broadcast to all non-paused participants when there is no @mention.
     const routing = await resolveMessageRouting(

@@ -102,6 +102,12 @@ type SubmitReviewDecisionAction = typeof import(
 type ApproveReviewTaskInternal = typeof import(
   "@cinatra-ai/agents/review-task-actions"
 )["approveReviewTaskInternal"];
+/** The ARMED schedule's own Save changes — the function the card's endpoint
+ *  calls (cinatra#2934, the armed-trigger tab). Deferred for the same
+ *  route-graph reason as the two above. */
+type DecideTriggerScheduleProposal = typeof import(
+  "@/lib/lifecycle/trigger-schedule-proposal-card"
+)["decideTriggerScheduleProposal"];
 
 async function loadSubmitReviewDecision(): Promise<SubmitReviewDecisionAction> {
   const mod = await import(
@@ -114,14 +120,34 @@ async function loadApproveScreen(): Promise<ApproveReviewTaskInternal> {
   const mod = await import("@cinatra-ai/agents/review-task-actions");
   return mod.approveReviewTaskInternal;
 }
+
+async function loadDecideSchedule(): Promise<DecideTriggerScheduleProposal> {
+  const mod = await import("@/lib/lifecycle/trigger-schedule-proposal-card");
+  return mod.decideTriggerScheduleProposal;
+}
+
+/** The one function that says what a placed value does to a §VI selection —
+ *  deferred with the rest of this arm, for the same route-graph reason. */
+type ApplyArmedScheduleFill = typeof import(
+  "@cinatra-ai/agents/trigger-recurrence"
+)["applyArmedScheduleFill"];
+
+async function loadApplyArmedScheduleFill(): Promise<ApplyArmedScheduleFill> {
+  const mod = await import("@cinatra-ai/agents/trigger-recurrence");
+  return mod.applyArmedScheduleFill;
+}
 import { LIFECYCLE_REF_MAX_LENGTH } from "@/lib/assistant-runtime/lifecycle-view-envelope";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
 import {
   controlsLentBy,
   resolveBoundReference,
 } from "@/lib/lifecycle/bound-reference-resolver";
+// THE REF DECODER, statically — and that costs no route budget: the resolver
+// above already puts this leaf on every graph this module is on.
+import { decodeScheduleRunRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   LENT_ACTION_CONTROLS,
+  isLentActionControl,
   matchLentActionGrant,
   verifyLentActionGrant,
   type LentActionControl,
@@ -149,6 +175,42 @@ export const LENT_ACTION_NO_AUTHORITY =
 export const LENT_ACTION_CARD_UNAVAILABLE =
   "That card is not available to you. Nothing was done.";
 
+/**
+ * THE ANSWER WHEN THE FORM IS THERE, IS THIS PERSON'S, AND HOLDS NOTHING NEW
+ * (cinatra#2934, the armed-schedule change road).
+ *
+ * WHY IT IS NOT THE SENTENCE ABOVE, said plainly. The graded re-shoot caught
+ * "That card is not available to you" going to the card's OWN OWNER with their
+ * own **Save changes** live in the same frame: the reason stated was not the
+ * reason, and the reader could disprove it by looking at the screen. The fixed
+ * sentence exists to keep an unauthorized caller from learning WHICH of four
+ * authority failures they hit; a person whose card resolved, whose predicate
+ * says the form can still be saved and who simply has nothing placed on it is
+ * none of those, and telling them so discloses nothing they cannot already see.
+ *
+ * It says what to do next, because there is something to do: the rows they can
+ * see are theirs to place, and the form's own button is right there.
+ */
+/**
+ * THE SAME TRUTH FOR THE WAITING SCREEN'S SUBMIT (convergence round 2, finding 4).
+ *
+ * That arm answered the fixed authorization sentence to a person whose screen
+ * had resolved, whose grant matched and whose Continue button was live in front
+ * of them — the same false reason the graded re-shoot caught on the form. WHAT
+ * IT MUST NOT CHANGE is the behaviour: a press with nothing placed in THIS
+ * message still presses nothing, because that is what keeps an induced bare
+ * press inert. Only the sentence changes, and it is reached after identity, the
+ * grant, the live card and what the card lends have all been checked, so it
+ * discloses nothing a caller could not already see.
+ */
+export const LENT_ACTION_NOTHING_PLACED_TO_SEND =
+  "Nothing has been placed in that screen to send, so nothing was submitted. " +
+  "Say what to put in its fields, or press the screen's own button yourself.";
+
+export const LENT_ACTION_NOTHING_PLACED_TO_SAVE =
+  "Nothing has been placed in that form to save, so nothing was changed. " +
+  "Describe the change first, or press Save changes on the form yourself.";
+
 type McpToolResult = {
   content: { type: "text"; text: string }[];
   structuredContent: Record<string, unknown>;
@@ -161,7 +223,37 @@ function say(payload: Record<string, unknown>): McpToolResult {
   };
 }
 
-function refuseNoAuthority(): McpToolResult {
+/**
+ * WHY A CALL WAS REFUSED — on the SERVER'S OWN LOG, never in the answer.
+ *
+ * The sentence the caller gets stays one sentence for every cause; that is the
+ * property, and it is not weakened here. But an operator reading a run could not
+ * tell a forged grant from a spent one either, and a road that refuses cannot be
+ * repaired from a sentence designed to say nothing. So the cause is written
+ * where only the operator can read it: a fixed token, the control the call
+ * asked for, and nothing else — no ref, no words, no identity.
+ */
+type LentActionRefusal =
+  | "input-shape"
+  | "no-grant-on-frame"
+  | "grant-does-not-verify"
+  | "grant-names-another-card-or-control"
+  | "grant-already-spent";
+
+export function noteLentActionRefusal(
+  cause: LentActionRefusal,
+  control: string | null,
+): void {
+  console.warn(
+    `[lent-action] refused: cause=${cause} control=${control ?? "-"}`,
+  );
+}
+
+function refuseNoAuthority(
+  cause: LentActionRefusal,
+  control: string | null = null,
+): McpToolResult {
+  noteLentActionRefusal(cause, control);
   return say({ ok: false, message: LENT_ACTION_NO_AUTHORITY });
 }
 
@@ -173,15 +265,37 @@ const inputSchema = z
   .object({
     /** The bound card's opaque ref — the one the turn was told about. */
     ref: z.string().min(1).max(LIFECYCLE_REF_MAX_LENGTH),
-    /** The ONE control to press. The grant names it too; both must agree. */
-    control: z.enum(LENT_ACTION_CONTROLS),
+    /**
+     * The control to press — OPTIONAL, and that is the repair (cinatra#2934,
+     * after the graded picture leg).
+     *
+     * WHY IT WAS A REQUIRED ARGUMENT, AND WHY THAT WAS WRONG. It was required so
+     * the call and the grant could be made to agree. But WHICH control this
+     * message may press is not a question the model answers: the SERVER decided
+     * it at send time, alone, from the card's own kind — `primaryControlFor` —
+     * and minted a grant naming that one. Gate 3 then compares the model's
+     * answer to the server's own. A free variable whose only correct value the
+     * server already holds cannot add safety; it can only ever produce a
+     * refusal, and it did: a message that plainly asked to be filled and sent
+     * came back "This message is not allowed to operate that control" while the
+     * FILL of that same message applied — which is only possible when the grant
+     * was live and matched the card, and the run's own rows show no spend, so
+     * what did not agree was the ARGUMENT.
+     *
+     * OMITTED NOW MEANS "the control this message was granted", which is the
+     * only control it could ever have pressed. A call that NAMES a different one
+     * is refused exactly as before — asking for Reject on a comment grant is
+     * still an authority this turn does not hold, and gate 3 still says so.
+     */
+    control: z.enum(LENT_ACTION_CONTROLS).optional(),
   })
   .strict();
 
 export const LENT_ACTION_TOOL_DESCRIPTION =
   "Press ONE control of the ONE lifecycle card this message is bound to, as the person who typed it, with their permissions. " +
   "Usable ONLY when this turn was given the matching single-use grant; without it the call does nothing and says so. " +
-  "The control must be one your grant names AND one the card actually offers; a grant naming anything else is refused. " +
+  "You do NOT choose WHICH control: the grant names the one control this message may press, and calling with the ref alone presses that one. " +
+  "Naming a different control is refused, and a control the card does not offer is refused too. " +
   "You do NOT supply the text: what lands on the card is the person's own message, held on the server with the grant. " +
   "It fires at most once per message. Report the answer that comes back and add nothing to it.";
 
@@ -219,28 +333,89 @@ export async function handleLentAction(
     readonly resolveActor?: typeof resolveBoundTurnActor;
     readonly submitReviewDecision?: SubmitReviewDecisionAction;
     readonly approveScreen?: ApproveReviewTaskInternal;
+    /** The armed schedule's own save op (cinatra#2934). */
+    readonly decideSchedule?: DecideTriggerScheduleProposal;
+    readonly applyFill?: ApplyArmedScheduleFill;
+    /** This message's own fills + its own attachments (cinatra#2934). */
+    readonly readFills?: (
+      runId: string,
+      ref: string,
+      messageId: string,
+    ) => Promise<{ ref: string; values: Record<string, unknown> }[]>;
+    readonly readAttachments?: (
+      runId: string,
+      messageId: string,
+    ) => Promise<readonly Record<string, unknown>[] | null>;
+    /**
+     * What is placed on ONE form and not yet saved (cinatra#2934, the
+     * armed-schedule change road) — this message's own fills plus the ones this
+     * person placed since the form's row was last written.
+     */
+    readonly readPlacedFills?: (
+      runId: string,
+      ref: string,
+      opts: {
+        messageId: string;
+        placedBy?: string | null;
+        since?: Date | null;
+        resolveSince?: () => Promise<Date | null>;
+        refMatches?: (rowRef: string) => boolean;
+      },
+    ) => Promise<
+      { ref: string; values: Record<string, unknown>; sequence?: number }[]
+    >;
+    /** The form's own row, read for ONE field: when it was last written. */
+    readonly readTrigger?: (runId: string) => Promise<{ updatedAt?: Date } | null>;
+    /**
+     * Record which placements a save consumed (cinatra#2934, the fourth graded
+     * capture) — the identity boundary that replaced a comparison between two
+     * different clocks.
+     */
+    readonly recordSaved?: (input: {
+      runId: string;
+      surface: "armed-trigger";
+      ref: string;
+      messageId?: string | null;
+      savedBy?: string | null;
+      sequences: readonly number[];
+    }) => Promise<void>;
+    readonly buildPayload?: BuildChatGateSubmitPayload;
     readonly now?: () => Date;
   } = {},
 ): Promise<McpToolResult> {
   const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) return refuseNoAuthority();
+  if (!parsed.success) {
+    return refuseNoAuthority(
+      "input-shape",
+      typeof (input as { control?: unknown } | null)?.control === "string"
+        ? ((input as { control: string }).control)
+        : null,
+    );
+  }
 
   // GATE 1 — a grant on the frame.
   const frame = readFrameGrant();
-  if (!frame) return refuseNoAuthority();
+  if (!frame) return refuseNoAuthority("no-grant-on-frame", parsed.data.control ?? null);
 
   // GATE 2 — the grant verifies.
   const claims = verifyLentActionGrant(frame.grant, { now: deps.now });
-  if (!claims) return refuseNoAuthority();
+  if (!claims) return refuseNoAuthority("grant-does-not-verify", parsed.data.control ?? null);
+
+  // THE CONTROL IS THE GRANT'S. A call that named one must still agree with it
+  // (gate 3 below refuses otherwise); a call that named none presses the one
+  // this message was granted, which is the only one it could have pressed.
+  const control = parsed.data.control ?? claims.control;
 
   // GATE 3 — the grant matches THIS call.
   const matches = matchLentActionGrant(claims, {
     userId: frame.userId,
     orgId: frame.orgId,
     cardRef: parsed.data.ref,
-    control: parsed.data.control,
+    control,
   });
-  if (!matches) return refuseNoAuthority();
+  if (!matches) {
+    return refuseNoAuthority("grant-names-another-card-or-control", control);
+  }
 
   // GATE 4 — the person's own credential, resolved live.
   const resolveActor = deps.resolveActor ?? resolveBoundTurnActor;
@@ -252,7 +427,25 @@ export async function handleLentAction(
   const bound = await resolve({ ref: parsed.data.ref, actorCtx });
   if (bound.kind === "absent") return refuseCardUnavailable();
   const lent = controlsLentBy(bound);
-  if (!lent.includes(parsed.data.control)) return refuseCardUnavailable();
+  if (!isLentActionControl(control) || !lent.includes(control)) {
+    return refuseCardUnavailable();
+  }
+
+  // AND, FOR AN ARMED SCHEDULE, THE FORM'S OWN PREDICATE — ASKED BEFORE THE
+  // SPEND (cinatra#2934, the armed-trigger tab). `canSave` is the boolean the
+  // card's **Save changes** is gated by, carried by the resolve rather than
+  // re-derived: a schedule the button is withheld from is a schedule this road
+  // refuses, in the server's own words. It is asked HERE, above gate 6, because
+  // a grant spent on a refusal buys the person nothing and costs them their one
+  // press — and the write's own guard is asked twice again below regardless, so
+  // nothing is authorized by this being a snapshot.
+  if (bound.kind === "armed_schedule_form" && !bound.canSave) {
+    return say({
+      ok: false,
+      outcome: { kind: "refused" },
+      message: bound.refusal ?? "This schedule can no longer be changed.",
+    });
+  }
 
   // GATE 6 — spend the grant. Before the effect, atomically, once.
   //
@@ -268,16 +461,18 @@ export async function handleLentAction(
     userId: frame.userId,
     orgId: frame.orgId,
     cardRefFingerprint: claims.cardRefFingerprint,
-    control: parsed.data.control,
+    control,
   });
-  if (spend.outcome !== "consumed") return refuseNoAuthority();
+  if (spend.outcome !== "consumed") {
+    return refuseNoAuthority("grant-already-spent", control);
+  }
 
   const text = spend.messageText;
 
   // THE CARD'S OWN PATH.
   if (bound.kind === "review") {
     const submit = deps.submitReviewDecision ?? (await loadSubmitReviewDecision());
-    const disposition = reviewDisposition(parsed.data.control);
+    const disposition = reviewDisposition(control);
     if (!disposition) return refuseCardUnavailable();
     const outcome = await submit(
       bound.runId,
@@ -292,29 +487,333 @@ export async function handleLentAction(
     return say({ ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested", outcome });
   }
 
+  // THE ARMED SCHEDULE'S **Save changes** (cinatra#2934, the armed-trigger tab).
+  //
+  // ONE ROAD FOR THE PRESS AND FOR THE ASK, and it is the same function, with
+  // the same argument: `decideTriggerScheduleProposal` with the card's own ref
+  // and its `save` op — which is what `/api/lifecycle-views/decide` calls when
+  // the button is pressed. Nothing about the write is re-implemented and nothing
+  // is relaxed: the selections go through the same closed-vocabulary parse, the
+  // run is re-derived from the ref rather than named, and
+  // `updateRunTriggerScheduleForActor` asks its guard before it delegates and
+  // again inside the setter, against the row the cancel and the upsert act on.
+  //
+  // WHAT IS SAVED IS WHAT THE FORM WAS SHOWN HOLDING — the card's own rows with
+  // every fill THIS MESSAGE placed applied over them, in order, read back here
+  // on the server. The model supplies none of it.
+  //
+  // AND A MESSAGE THAT PLACED NOTHING SAVES NOTHING, for exactly the reason the
+  // screen's Continue does: a press with nothing placed has no "what was sent"
+  // to show, and an induced bare press must do nothing at all.
+  if (bound.kind === "armed_schedule_form") {
+    // WHAT THE FORM IS SHOWING, ACROSS THE TWO TURNS IT TAKES TO ASK
+    // (cinatra#2934, the armed-schedule change road).
+    //
+    // ISSUE 2934'S OWN WORDING IS TWO TURNS: the person places the change, and
+    // then asks for it to be saved. Reading only THIS message's fills — which
+    // is the right read for a waiting screen's submit, whose whole bound is
+    // that an induced bare press does nothing — answered "nothing placed" to a
+    // person looking at a full form, and the road lost the turn. So the read is
+    // "what is placed on this form and not yet saved": this message's own
+    // fills, plus the ones THIS PERSON placed since the trigger row was last
+    // written. Another person's placement is never carried, and a placement
+    // that has already been saved is not re-applied over rows that moved on.
+    //
+    // THE FORM IS NAMED BY WHAT IT ADDRESSES, NOT BY ITS BYTES. The armed
+    // schedule's ref is minted fresh on every turn and its encoding is
+    // randomised, so the ref on the row the earlier turn placed and the ref
+    // this turn presents are DIFFERENT STRINGS for one form. Matching them on
+    // equality found nothing across turns and answered "nothing placed" to a
+    // person looking at a full form — the same lost turn in a new place
+    // (convergence round 2, finding 1). Two refs are the same form when one
+    // decodes, under the run-scoped schedule ref's own key, to the run this
+    // card resolved to; no other ref family decodes under that key, so nothing
+    // else on the run can be mistaken for this form.
+    //
+    // THE FORM'S OWN ROW IS READ ONLY IF A LOOK-BACK ACTUALLY HAPPENS, and a
+    // read that fails carries NOTHING rather than everything.
+    // WHAT THE CARRY COSTS, SAID PLAINLY AND NOT SMOOTHED OVER (convergence
+    // round 2, finding 3). Requiring the fill to come from THIS message was
+    // also what made an induced bare press do nothing at all: with nothing
+    // placed in the message, there was nothing for an induced call to commit.
+    // A carry re-opens that by exactly one step — a placement this person made
+    // and did not save can be committed by a later turn of theirs that a
+    // sentence in the run's own content induced. It cannot reach another
+    // person's placement, another form, or anything already saved, and it
+    // presses nothing the person had not already typed into their own form.
+    // The bound that remains is the ANSWER: what was saved is relayed back from
+    // the platform's own outcome, so an induced save is visible in the window
+    // the moment it happens, and the same form undoes it. Closing it properly
+    // means reading whether the sentence ASKED — the typed actions per card
+    // kind (cinatra#2853) — and not narrowing the road issue #2934 describes.
+    const readers = await loadRunWindowFillReaders();
+    const readPlaced = deps.readPlacedFills ?? readers.readRunWindowPlacedFills;
+    const readTrigger = deps.readTrigger ?? (await loadRunTriggerReader());
+    const placed = await readPlaced(bound.runId, parsed.data.ref, {
+      messageId: claims.messageId,
+      placedBy: frame.userId,
+      refMatches: (rowRef: string) =>
+        rowRef === parsed.data.ref ||
+        decodeScheduleRunRef(rowRef)?.runId === bound.runId,
+      resolveSince: async () => (await readTrigger(bound.runId))?.updatedAt ?? null,
+    }).catch(
+      () => [] as { ref: string; values: Record<string, unknown>; sequence?: number }[],
+    );
+
+    // AND A FORM WITH NOTHING PLACED SAYS SO, in its own words rather than in
+    // the card's fixed authorization sentence. The card resolved, the predicate
+    // above says it can still be saved, and this person holds the grant: none
+    // of the four authority failures happened, so none of them is stated.
+    if (placed.length === 0) {
+      return say({
+        ok: false,
+        outcome: { kind: "nothing-placed" },
+        message: LENT_ACTION_NOTHING_PLACED_TO_SAVE,
+      });
+    }
+    const apply = deps.applyFill ?? (await loadApplyArmedScheduleFill());
+    // EACH FILL, IN THE ORDER IT WAS PLACED — the browser's own arithmetic.
+    //
+    // The card applies every accepted fill to its draft ONE AT A TIME
+    // (`applyArmedScheduleFill(prev, values)`), and the placement rule reads the
+    // selection it is given to decide what a row means: recurrence rows placed
+    // without naming a kind ARE the recurring row. Folding the fills into the
+    // card's CURRENT row values first would hand that rule a `triggerType` the
+    // person never typed — so a one-off asked to repeat would SHOW recurring in
+    // the rows and SAVE the one-off. Same function, same order, same result on
+    // both sides.
+    let shown = bound.schedule;
+    for (const f of placed) shown = apply(shown, f.values) as typeof shown;
+    const decide = deps.decideSchedule ?? (await loadDecideSchedule());
+    const outcome = await decide({
+      ref: parsed.data.ref,
+      op: "save",
+      schedule: shown,
+      userId: frame.userId,
+      orgId: frame.orgId,
+      // THE ROLE THE ACTOR WAS RESOLVED WITH — the SAME expression the card's
+      // own endpoint uses, so the ask is neither wider nor narrower than the
+      // press. The service re-checks it against the run it reaches.
+      role: actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null,
+      access: {
+        actor: actorCtx.actor,
+        ...(actorCtx.roleHints ? { roles: actorCtx.roleHints } : {}),
+      },
+    });
+    if (outcome.kind !== "saved") {
+      // The service's own words, relayed. A state refusal is copy the reader
+      // needs; an authorization refusal is the card's one fixed sentence.
+      return say({
+        ok: false,
+        outcome,
+        message:
+          "message" in outcome && typeof outcome.message === "string"
+            ? outcome.message
+            : LENT_ACTION_CARD_UNAVAILABLE,
+      });
+    }
+    // AND THE PLACEMENTS THIS SAVE COMMITTED ARE RECORDED AS COMMITTED
+    // (cinatra#2934, the FOURTH graded capture).
+    //
+    // WHY IT IS A RECEIPT AND NOT A CLOCK. "Not already saved" was a comparison
+    // between the fill row's `created_at`, stamped by the database, and the
+    // trigger row's `updated_at`, stamped by this process — two clocks, and any
+    // disagreement in the wrong direction re-applies a placement this very call
+    // just committed to rows that have moved on. The receipt names the ROWS, so
+    // the boundary stops being a race; the timestamp bound stays beside it as
+    // the abandonment cut-off it honestly is.
+    //
+    // WRITTEN AFTER THE WRITE LANDED, and never allowed to fail the turn: a
+    // receipt written first would discard a change nobody saved, and a receipt
+    // that will not append costs this one save its identity bound and leaves
+    // the timestamp bound standing — exactly where the road was before it.
+    const consumedSequences = placed
+      .map((f) => (f as { sequence?: number }).sequence)
+      .filter((n): n is number => typeof n === "number");
+    if (consumedSequences.length > 0) {
+      await (deps.recordSaved ?? readers.recordRunWindowPlacementsSaved)({
+        runId: bound.runId,
+        surface: "armed-trigger",
+        ref: parsed.data.ref,
+        messageId: claims.messageId,
+        savedBy: frame.userId,
+        sequences: consumedSequences,
+      }).catch(() => undefined);
+    }
+
+    // AND THE ROWS STILL SHOW WHAT WAS SAVED. The trigger row is read back
+    // through the resolver's own arm — the same read the card re-resolves with,
+    // under the same access — rather than reported from what was sent.
+    const after = await resolve({ ref: parsed.data.ref, actorCtx }).catch(() => null);
+    // AND ONLY A REAL READ-BACK IS REPORTED AS ONE. A read that failed, or a
+    // card that is no longer an armed form, has no rows to show: answering with
+    // the values the card held BEFORE the write would be what was SENT dressed
+    // as what was ARMED, which is the one thing this read-back exists to rule
+    // out. The write stands either way — it is the reading that is missing, and
+    // the answer says so rather than inventing it.
+    if (!after || after.kind !== "armed_schedule_form") {
+      return say({ ok: true, outcome: { kind: "saved", rows: null } });
+    }
+    return say({ ok: true, outcome: { kind: "saved", rows: after.form.values } });
+  }
+
+  // ONLY A HITL SCREEN HAS A CONTINUE (cinatra#2934, repaired after the picture
+  // leg). The UNARMED scheduler form is a bound screen too, and its button is
+  // the person's: gate 5 above already refuses it — it lends `fill` and no
+  // pressable control — and this states the same thing where the effect is, so a
+  // card kind added later cannot fall into a resume path that was never written
+  // for it.
+  if (bound.kind !== "hitl_screen") return refuseCardUnavailable();
+
   // The HITL screen's Continue. `approveReviewTaskInternal` is the gate's own
   // actor-checked resume entry — the door the plan says the submit side already
   // has — and it enforces run execute + approveHitl against the run it resolves
-  // before any write. No values are passed: pressing Continue submits the form
-  // as it stands, and FILLING the form by asking is the plan's separate road
-  // (cinatra#2934).
+  // before any write.
+  //
+  // WHAT IS SENT IS WHAT THE SCREEN WAS SHOWN HOLDING (cinatra#2934, lifecycle-b
+  // W5c). The plan: "the assistant submits through the same checked, server-side
+  // action the button uses — one road for the press and for the ask — and the
+  // fields still show what was sent." So the values come from the FILL ROW this
+  // run recorded for THIS screen, read back here on the server, and the files
+  // attached beside the person's own message come from their own row: the model
+  // supplies neither, and neither is left behind by the press. A screen nobody
+  // filled submits exactly what it submitted before this slice — the form as it
+  // stands.
   const approve = deps.approveScreen ?? (await loadApproveScreen());
+  const readers = deps.readFills && deps.readAttachments
+    ? null
+    : await loadRunWindowFillReaders();
+  const readFills = deps.readFills ?? readers!.readRunWindowFillsForMessage;
+  const readAttachments =
+    deps.readAttachments ?? readers!.readRunWindowAttachmentsForMessage;
+  const fills = await readFills(bound.runId, parsed.data.ref, claims.messageId).catch(
+    () => [] as { ref: string; values: Record<string, unknown> }[],
+  );
+
+  // A PRESS SENDS WHAT THIS MESSAGE PLACED — and a message that placed nothing
+  // presses nothing (convergence round 1, finding 2).
+  //
+  // THE PLAN'S OWN SENTENCE IS WHY. "When you plainly ask, IN THE SAME MESSAGE,
+  // for it to be submitted, the assistant submits through the same checked,
+  // server-side action the button uses — one road for the press and for the ask
+  // — AND THE FIELDS STILL SHOW WHAT WAS SENT." The press the plan describes is
+  // the second half of a fill: the person said what the form should say and
+  // asked for it to go. A press with nothing placed in this message has no
+  // "what was sent" to show — the person's own browser edits are not on the
+  // server — and would resume a run on values nobody was shown.
+  //
+  // IT IS ALSO WHAT BOUNDS THE RESIDUAL. Whether a sentence ASKED for the press
+  // is the model's judgement, so text reaching the model — the run's own content
+  // included — can induce a call. Requiring a fill from the SAME message means
+  // an induced bare press does nothing at all, and the fill it would have to
+  // make first is itself visible to the person in their own fields.
+  //
+  // The person presses the screen's own button for everything else, which is
+  // what the refusal tells the assistant to say.
+  if (fills.length === 0) {
+    return say({
+      ok: false,
+      outcome: { kind: "nothing-placed" },
+      message: LENT_ACTION_NOTHING_PLACED_TO_SEND,
+    });
+  }
+
+  const attachments = await readAttachments(bound.runId, claims.messageId).catch(
+    () => null,
+  );
+  const submitValues = await buildScreenSubmitValues({
+    reviewTaskId: bound.screenRef,
+    fieldName: bound.form.fieldName,
+    // THE SCREEN'S OWN CURRENT VALUES FIRST, then every fill this message placed
+    // in order (finding 4). A turn that filled the subject and then the body
+    // left BOTH in the fields, and a field the person never mentioned still
+    // holds what the screen already had — so what is sent is what the screen
+    // shows, not the last thing the assistant said.
+    current: bound.form.values,
+    fills: fills.map((f) => f.values),
+    attachments: attachments ?? [],
+    buildPayload: deps.buildPayload,
+  });
   try {
     await approve(
       bound.screenRef,
       actorCtx.actor.userId ?? frame.userId,
-      undefined,
+      submitValues,
       bound.form.fieldName,
       null,
       actorCtx.actor,
       actorCtx.roleHints,
     );
-    return say({ ok: true, outcome: { kind: "submitted" } });
+    return say({
+      ok: true,
+      outcome: { kind: "submitted", placed: Object.keys(Object.assign({}, ...fills.map((f) => f.values))) },
+    });
   } catch {
     // The gate's own refusal shape is not a message this surface may invent, and
     // the grant is already spent, so the honest answer is that nothing landed.
     return say({ ok: false, outcome: { kind: "error" }, message: LENT_ACTION_CARD_UNAVAILABLE });
   }
+}
+
+type BuildChatGateSubmitPayload = typeof import(
+  "@cinatra-ai/agents/hitl-gate-submit"
+)["buildChatGateSubmitPayload"];
+
+/** The form's own row, for ONE field: when it was last written. Deferred for the
+ *  same route-graph reason as the rest of this arm. */
+async function loadRunTriggerReader(): Promise<
+  (runId: string) => Promise<{ updatedAt?: Date } | null>
+> {
+  const mod = await import("@cinatra-ai/agents/trigger-store");
+  return mod.readRunTriggerByRunId;
+}
+
+async function loadRunWindowFillReaders() {
+  return import("@cinatra-ai/agents/run-window-conversation-store");
+}
+
+async function loadBuildChatGateSubmitPayload(): Promise<BuildChatGateSubmitPayload> {
+  const mod = await import("@cinatra-ai/agents/hitl-gate-submit");
+  return mod.buildChatGateSubmitPayload;
+}
+
+/**
+ * The resume payload for a screen submitted by asking.
+ *
+ * It is the SAME pure builder the browser's own Continue uses — the setup-loop
+ * wrap, the grouped-setup merge and the WayFlow approve/userResponse envelope
+ * with its attachment wrap all come from there, so a submit that was asked for
+ * and a submit that was pressed produce the same shape. `undefined` when there
+ * is nothing to say: the gate's own default then applies, byte-identically to
+ * the press this road replaces for a screen nobody filled and nobody attached
+ * anything to.
+ */
+export async function buildScreenSubmitValues(input: {
+  readonly reviewTaskId: string;
+  readonly fieldName: string | undefined;
+  /** The screen's OWN current values — what the fields held before this turn. */
+  readonly current: Record<string, unknown>;
+  /** Every fill this message placed, oldest first. */
+  readonly fills: ReadonlyArray<Record<string, unknown>>;
+  readonly attachments: readonly Record<string, unknown>[];
+  readonly buildPayload?: BuildChatGateSubmitPayload;
+}): Promise<Record<string, unknown> | undefined> {
+  // WHAT THE SCREEN SHOWS: its own values, with every fill applied over them in
+  // the order they were placed.
+  const shown: Record<string, unknown> = { ...input.current };
+  for (const fill of input.fills) Object.assign(shown, fill);
+  if (Object.keys(shown).length === 0 && input.attachments.length === 0) {
+    return undefined;
+  }
+  const build = input.buildPayload ?? (await loadBuildChatGateSubmitPayload());
+  const { payload } = build({
+    reviewTaskId: input.reviewTaskId,
+    ...(input.fieldName ? { fieldName: input.fieldName } : {}),
+    value: shown,
+    buffered: {},
+    pendingAttachments: input.attachments as never,
+  });
+  return payload;
 }
 
 /** The review card's three buttons, as the decision core names them. */

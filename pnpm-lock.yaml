@@ -2078,6 +2078,9 @@ importers:
       libnpmpublish:
         specifier: ^12.0.0
         version: 12.0.0
+      marked:
+        specifier: ^18.0.5
+        version: 18.0.5
       pacote:
         specifier: ^22.0.0
         version: 22.0.0

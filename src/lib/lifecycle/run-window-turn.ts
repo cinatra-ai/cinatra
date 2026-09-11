@@ -42,6 +42,7 @@ import {
   readRunWindowMessages,
   type RunWindowMessage,
   type RunWindowSurface,
+  type RunWindowFill,
 } from "@cinatra-ai/agents/run-window-conversation-store";
 import {
   actorFromSession,
@@ -54,6 +55,7 @@ import { getAuthSession, resolveUserContextForUserId } from "@/lib/auth-session"
 // window is typed in by people who hold their access through a TEAM or a
 // PROJECT grant as often as by an owner, and hand-built hints would deny them.
 import { resolveBoundTurnActor } from "./bound-turn-actor";
+import { encodeScheduleFormRef, encodeScheduleRunRef } from "./lifecycle-card-ref";
 
 // THE ASSISTANT RUNTIME IS REACHED LAZILY, and that is load-bearing rather
 // than a style choice. `canRespondInRunWindow` below is called by the SERVER
@@ -95,6 +97,16 @@ export const RUN_WINDOW_TOOL_LESS_NOTICE =
   "answer, but it cannot fill a form, comment, or take a decision. Use the " +
   "buttons on this screen for that.";
 
+/**
+ * The lent action's tool name, SPELLED here rather than imported, and that is a
+ * measurement rather than a style choice: `canRespondInRunWindow` below is
+ * called by the SERVER COMPONENTS that draw five screens, and importing
+ * `lent-action-mcp.ts` for one string would pull the MCP server's whole module
+ * graph onto each of them. A test pins this literal equal to
+ * `LENT_ACTION_PRIMITIVE`, so the two cannot drift.
+ */
+const LENT_ACTION_TOOL_NAME = "lifecycle_bound_card_decide";
+
 /** The one answer this module gives to a caller it will not serve. */
 export class RunWindowAccessDenied extends Error {
   constructor() {
@@ -114,12 +126,66 @@ export type RunWindowTurnInput = {
    * concludes nothing from it.
    */
   boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  /**
+   * The files attached beside this message (cinatra#2934, lifecycle-b W5c).
+   *
+   * Opaque refs the upload route minted. They are recorded with the person's own
+   * row so they reach the waiting agent whether the person presses the screen's
+   * button themselves or asks the assistant to press it — the plan's "the new
+   * road must not swallow it into an ordinary chat message, and must not leave
+   * it behind when the answer is finally sent".
+   */
+  attachments?: readonly Record<string, unknown>[];
 };
+
+/**
+ * The fills ONE turn placed, selected by that turn's own identity
+ * (cinatra#2934, convergence round 1, finding 1).
+ *
+ * PURE, and the whole of the rule. Every row a turn writes carries its
+ * `messageId` — the person's message, the fills the assistant placed, the files
+ * that travelled with it — so which fills are THIS turn's is a fact about the
+ * rows, not an arithmetic about how many the run held before.
+ *
+ * WHY IT IS NOT A COUNT. The window applies "only a fill this turn placed", and
+ * that used to be decided by comparing counts across a turn. A count is only as
+ * good as its starting point, and the client's was wrong in four ways at once:
+ * it began at zero on every mount, the load never seeded it (measured — a
+ * reloaded screen's first turn re-applied an earlier message's values into three
+ * fields it had not touched), a turn sent before the load returned would have
+ * out-run any seeding, a load that failed soft reports nothing to seed from, and
+ * a second tab filling in between moves the count under both. Naming the turn
+ * answers all of them and needs no ordering at all.
+ */
+export function fillsPlacedByMessage(
+  rows: readonly RunWindowMessage[],
+  messageId: string,
+): RunWindowFill[] {
+  const out: RunWindowFill[] = [];
+  for (const row of rows) {
+    if (row.fill && row.messageId === messageId) out.push(row.fill);
+  }
+  return out;
+}
 
 export type RunWindowTurnResult = {
   entries: RunWindowMessage[];
+  /**
+   * The fills THIS turn placed, oldest first — never another message's, and
+   * never the run's whole history. See {@link fillsPlacedByMessage}.
+   */
+  fills: RunWindowFill[];
   /** True when the turn ran on a model that could not use tools. */
   toolLess: boolean;
+  /**
+   * True when the turn actually PRESSED a control of the bound card — the lent
+   * action ran and the platform's own path reported success.
+   *
+   * The plan: "After the action fires, the card re-reads its state from the
+   * server and settles in place." A window that learns this re-reads its screen;
+   * one that does not is an ordinary answer and moves nothing.
+   */
+  acted: boolean;
 };
 
 /** The longest message a window accepts, matched to the chat composer's own bound. */
@@ -151,6 +217,57 @@ function boundedClaim(
   // the page can have seen; it is dropped rather than repaired.
   if (refs.length === 0) return undefined;
   return { candidateRefs: refs, focusedRef: refs.includes(focused ?? "") ? focused : null };
+}
+
+/**
+ * WHICH CARD THE WINDOW'S OWN SURFACE IS SITTING UNDER (cinatra#2934, repaired
+ * after the picture leg).
+ *
+ * THE DEFECT THIS REPAIRS, measured on the real screen: for a run waiting on its
+ * trigger, the schedule screen's window bound the run's HITL GATE row — the
+ * setup step's schema — while the surface in front of the person is the
+ * SCHEDULER FORM, whose rows are not in that schema at all. The assistant
+ * answered "This screen can't schedule the run. It only has these fields: title
+ * / summary / outline", and nothing was filled.
+ *
+ * THE THREE READINGS, and each is the plan's own:
+ *
+ *   · the REVIEW page keeps its own claim — its card carries a ref on the client
+ *     and the run behind it is parked at the review, not at a fillable screen;
+ *   · the SCHEDULE screen binds the SCHEDULER FORM, whose ref this mints from
+ *     the run the box sits under, server-side, exactly as a parked screen's is
+ *     minted; it lends a fill and no press at all;
+ *   · the ARMED-TRIGGER tab — and the run page's schedule STEP, which mounts the
+ *     same window — binds the ARMED scheduler form, addressed by the RUN-SCOPED
+ *     schedule ref its own card is already drawn from, so the box and the form
+ *     it is about name one thing. It lends a fill AND the card's own Save
+ *     changes, which is the second half of the plan's sentence
+ *     (cinatra#2934, the armed-trigger tab — this pull request's Deviation 1,
+ *     closed);
+ *   · every other window sits under the run's own waiting screen and names the
+ *     RUN, so the binder mints that screen's ref.
+ *
+ * PURE and exported so the reading is one readable line under test rather than a
+ * condition buried in a turn.
+ */
+export function boundScreenClaimForSurface(
+  surface: RunWindowSurface,
+  runId: string,
+  mintScheduleFormRef: (runId: string) => string | null = (id) =>
+    encodeScheduleFormRef({ runId: id }),
+  mintArmedScheduleRef: (runId: string) => string | null = (id) =>
+    encodeScheduleRunRef({ runId: id }),
+): { readonly screenRunIds: readonly string[]; readonly candidateRefs: readonly string[] } {
+  if (surface === "review") return { screenRunIds: [], candidateRefs: [] };
+  if (surface === "schedule") {
+    const ref = mintScheduleFormRef(runId);
+    return { screenRunIds: [], candidateRefs: ref ? [ref] : [] };
+  }
+  if (surface === "armed-trigger") {
+    const ref = mintArmedScheduleRef(runId);
+    return { screenRunIds: [], candidateRefs: ref ? [ref] : [] };
+  }
+  return { screenRunIds: [runId], candidateRefs: [] };
 }
 
 /** The rows the access check read, handed back rather than read a second time. */
@@ -238,6 +355,47 @@ async function requireRunWindowAccess(
 }
 
 /**
+ * May THIS ACTOR answer this run's screen?
+ *
+ * The same rule `requireRunWindowAccess` applies, for a caller that already
+ * holds the person's resolved standing rather than a cookie session — the fill
+ * road, which runs on the tool server under the person's own live credential
+ * (cinatra#2934, convergence round 1, finding 3). Reading a run and OPERATING
+ * one are two different permissions: the bound-reference resolver authorizes a
+ * screen on run READ, which is right for reading it and is NOT enough to place
+ * values on it.
+ *
+ * Fail-CLOSED: any failure answers `false`.
+ */
+export async function canActorRespondToRun(
+  runId: string,
+  actor: Parameters<typeof enforceRunAccess>[1],
+  roleHints: ActorRoleHints,
+): Promise<boolean> {
+  try {
+    const run = await readAgentRunById(runId);
+    if (!run) return false;
+    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map(
+      (r) => r.userId,
+    );
+    await enforceRunAccess(
+      {
+        ...run,
+        effectivePolicy: resolveEffectivePolicy(run, template),
+        coOwnerUserIds,
+      },
+      actor,
+      "respondToHitl",
+      roleHints,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * May this person type in this run's window? The windows ask this to decide
  * whether to SHOW the box at all — the plan's "no window shown to a person whose
  * message it would refuse".
@@ -285,6 +443,26 @@ export async function runWindowTurn(
     "respondToHitl",
   );
   const claim = boundedClaim(input.boundCard);
+  // ONE IDENTITY FOR THE TURN, minted before anything is written. The runtime
+  // mints the lent-action grant against `turnIdentity.turnId`, so naming it here
+  // is what lets the person's own row, the fills this turn places and the press
+  // it may ask for all be the SAME message.
+  const messageId = `run-window:${input.runId}:${Date.now()}:${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  // THE WINDOW IS THE SCREEN'S (cinatra#2934, lifecycle-b W5c). The windows
+  // outside the chat sit directly under the surface the person is looking at,
+  // and that surface has no ref on any client — one is minted at gate emission
+  // only for the marked review gate. So the page claims nothing here: the turn
+  // names the RUN, and the server mints the surface's own ref and re-checks it
+  // under this person's access, exactly as it re-checks a page's claim. Which
+  // surface gets which is `boundScreenClaimForSurface` above.
+  const surfaceBinding = boundScreenClaimForSurface(input.surface, input.runId);
+  const screenRunIds = surfaceBinding.screenRunIds;
+  const candidateRefs = [
+    ...(claim?.candidateRefs ?? []),
+    ...surfaceBinding.candidateRefs,
+  ];
 
   // The person's message is committed BEFORE the model runs. A turn that dies
   // in the model still leaves what the person typed on the run.
@@ -293,6 +471,14 @@ export async function runWindowTurn(
     role: "user",
     surface: input.surface,
     text: prompt,
+    ...(input.attachments && input.attachments.length > 0
+      ? { attachments: input.attachments }
+      : {}),
+    // THE TURN'S OWN IDENTITY, and it is the same string the grant is minted
+    // against below — so the submit can read back THIS message's files rather
+    // than whatever the run's newest ones happen to be (convergence round 1,
+    // finding 5).
+    messageId,
   });
 
   // The history is read AFTER that row lands, and cut at it. Two turns sent at
@@ -357,6 +543,7 @@ export async function runWindowTurn(
 
   let text = "";
   let toolLess = false;
+  let acted = false;
   let runtimeError: string | null = null;
   try {
     const { runAssistantTurn, buildCinatraAssistantRuntimeConfig } =
@@ -371,13 +558,21 @@ export async function runWindowTurn(
       platformRole: userCtx.platformRole,
       sessionOrgId: userCtx.sessionOrgId,
       turnIdentity: {
-        turnId: `run-window:${input.runId}:${Date.now()}`,
+        turnId: messageId,
         runId: `run-window:${input.runId}`,
       },
       // W5a's claim, bounded and then passed through. The runtime re-resolves
       // it under this person's access and mints the single-use grant, or does
       // not; nothing here concludes anything from it.
-      ...(claim ? { boundCard: claim } : {}),
+      ...(candidateRefs.length > 0 || screenRunIds.length > 0
+        ? {
+            boundCard: {
+              candidateRefs,
+              focusedRef: claim?.focusedRef ?? null,
+              ...(screenRunIds.length > 0 ? { screenRunIds } : {}),
+            },
+          }
+        : {}),
       // The run the window sits under (cinatra#3016). Read state only — the
       // runtime composes it into the turn's system context and grants nothing
       // for it.
@@ -388,6 +583,12 @@ export async function runWindowTurn(
           if (typeof d.content === "string") text += d.content;
         } else if (event === "turn_capability") {
           if (d.conversationOnly === true) toolLess = true;
+        } else if (event === "tool_result") {
+          // DID THE CARD MOVE? Read off the turn's own relayed result rather
+          // than inferred from the assistant's sentence — "where your sentence
+          // and the card disagree, the card is right", so the sentence is not
+          // the evidence. Only the lent ACTION counts: a fill presses nothing.
+          if (d.name === LENT_ACTION_TOOL_NAME && didPress(d.result)) acted = true;
         } else if (event === "error") {
           if (typeof d.message === "string" && d.message) runtimeError = d.message;
         }
@@ -405,6 +606,7 @@ export async function runWindowTurn(
       role: "assistant",
       surface: input.surface,
       text: answer,
+      messageId,
       // Recorded, never inferred from adjacency: with two turns in flight the
       // rows can land interleaved, and an answer must say which message it
       // answered.
@@ -418,8 +620,7 @@ export async function runWindowTurn(
       `[run-window] the answer for run ${input.runId} could not be stored`,
       err,
     );
-    return {
-      entries: [
+    const unstoredEntries = [
         ...(await readRunWindowMessages(input.runId)),
         {
           id: `unstored:${userRow.id}`,
@@ -429,14 +630,48 @@ export async function runWindowTurn(
           surface: input.surface,
           text: answer,
           replyToSequence: userRow.sequence,
+          fill: null,
+          attachments: null,
+          savedPlacement: null,
+          messageId,
+          placedBy: null,
           createdAt: new Date(),
         },
-      ],
+      ];
+    return {
+      acted,
+      entries: unstoredEntries,
+      fills: fillsPlacedByMessage(unstoredEntries, messageId),
       toolLess,
     };
   }
 
-  return { entries: await readRunWindowMessages(input.runId), toolLess };
+  const entries = await readRunWindowMessages(input.runId);
+  return {
+    entries,
+    toolLess,
+    acted,
+    fills: fillsPlacedByMessage(entries, messageId),
+  };
+}
+
+/**
+ * Did the lent action's relayed result say a control was actually pressed?
+ *
+ * PURE and DEFENSIVE: the result reaches this module as the transport's own text
+ * and may be truncated, absent or something else entirely. Anything that is not
+ * an unambiguous `"ok":true` is read as "nothing moved" — a window that wrongly
+ * believed the card had settled would re-read a screen that had not changed,
+ * and a window that wrongly believed it had not is simply one reload behind.
+ */
+export function didPress(result: unknown): boolean {
+  if (typeof result !== "string" || result.length === 0) return false;
+  try {
+    const parsed: unknown = JSON.parse(result);
+    return (parsed as { ok?: unknown } | null)?.ok === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

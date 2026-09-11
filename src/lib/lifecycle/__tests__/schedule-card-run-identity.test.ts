@@ -151,6 +151,12 @@ describe("the run-scoped resolve", () => {
       arming: false,
       firedOnce: true,
       stopped: false,
+      // AND THIS READER MAY ACT ON IT (cinatra#2934, the convergence round of
+      // the fourth fix leg). Cancel schedule is the run owner's control or an
+      // administrator's, plan (A) §7.1 — the resolver answers that question
+      // once and both floor controls read it, so the fixture has to say who
+      // the reader is rather than leaving it unsaid.
+      mayAct: true,
     });
 
     const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });

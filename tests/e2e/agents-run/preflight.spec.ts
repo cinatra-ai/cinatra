@@ -59,7 +59,9 @@ test.describe("preflight", () => {
     await page.goto("/agents");
 
     // Confirm the page mounted.
-    await expect(page.getByRole("heading", { name: /Run agent|Run an agent/i }).first())
+    // The run-starting page's own heading (cinatra#2934, fix leg 10): the
+    // ratified drawing reads it "Agents > Agent run", never "Run agent" alone.
+    await expect(page.getByRole("heading", { name: /Agent run|Run an agent/i }).first())
       .toBeVisible({ timeout: 30_000 });
 
     // Each visible agent's package name appears somewhere on the page.

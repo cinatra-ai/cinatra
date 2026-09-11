@@ -109,7 +109,10 @@ vi.mock("../agent-ui-override-registry", () => ({
 // tiers); here it only has to answer so the controller can settle.
 vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
-  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [] })),
+  // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
+  // reports the fills it placed and whether it PRESSED a control, and the one
+  // controller reads both. A mock that omits them lies about the contract.
+  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [], fills: [], acted: false })),
 }));
 
 // The run is parked on a gate with a form — the state the window exists for.

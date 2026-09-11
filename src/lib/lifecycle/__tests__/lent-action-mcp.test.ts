@@ -372,6 +372,33 @@ describe("using the action IS pressing the button", () => {
     expect(said(out).outcome).toEqual({ kind: "blocked", reason: "gate-moved" });
   });
 
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5a asserted the press with NO
+  // values, because filling a form had no road yet. It now has one, and the
+  // press carries what the screen was shown holding: the screen's own values
+  // with THIS MESSAGE's fills over them. Two consequences are asserted here —
+  // a press with nothing filled in this message is REFUSED (it would resume a
+  // run on values nobody was shown), and a press that follows a fill sends
+  // exactly what the fields showed.
+  it("the HITL screen's Continue is refused when this message filled nothing", async () => {
+    setFrame(grantFor({ control: "submit" }));
+    const out = await handleLentAction(
+      { ref: REF, control: "submit" },
+      deps({
+        resolve: vi.fn(async () => ({
+          kind: "hitl_screen",
+          runId: RUN,
+          screenRef: GATE,
+          xRenderer: "setup-field",
+          form: { schema: {}, values: { url: "x" }, fieldName: "url" },
+        })),
+        readFills: vi.fn(async () => []),
+        readAttachments: vi.fn(async () => null),
+      }),
+    );
+    expect(said(out).ok).toBe(false);
+    expect(approveScreen).not.toHaveBeenCalled();
+  });
+
   it("the HITL screen's Continue runs the gate's OWN actor-checked resume entry", async () => {
     setFrame(grantFor({ control: "submit" }));
     const out = await handleLentAction(
@@ -384,13 +411,19 @@ describe("using the action IS pressing the button", () => {
           xRenderer: "setup-field",
           form: { schema: {}, values: { url: "x" }, fieldName: "url" },
         })),
+        readFills: vi.fn(async () => [{ ref: REF, values: { url: "https://example.test" } }]),
+        readAttachments: vi.fn(async () => null),
+        buildPayload: ((args: { value: Record<string, unknown> }) => ({
+          payload: { ...args.value },
+          payloadFieldName: undefined,
+        })) as never,
       }),
     );
     expect(said(out).ok).toBe(true);
     expect(approveScreen).toHaveBeenCalledWith(
       GATE,
       PERSON.userId,
-      undefined,
+      { url: "https://example.test" },
       "url",
       null,
       OWN_CREDENTIAL.actor,

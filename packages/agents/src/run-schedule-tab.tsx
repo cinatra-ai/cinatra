@@ -38,10 +38,13 @@
 // a fired one-off, or a recurring schedule cancelled after a fire.
 // ---------------------------------------------------------------------------
 
-import { useState, type ReactElement } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
-import { ScheduleProposalCard } from "./schedule-proposal-card";
+import {
+  ScheduleProposalCard,
+  type ArmedScheduleFill,
+} from "./schedule-proposal-card";
 import { SchedulePromptWindow } from "./schedule-prompt-window";
 import { useScheduleSurfaceReading } from "./schedule-rail-step";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
@@ -68,6 +71,17 @@ export function RunScheduleTab({
 }): ReactElement {
   const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
   const scheduler = useScheduleSurfaceReading(cardHost);
+  // THE WINDOW AND THE FORM ARE SIBLINGS, so this host carries what one says to
+  // the other (cinatra#2934, the armed-trigger tab). A FILL moves the card's
+  // rows; a PRESS re-mounts the card so it re-resolves and shows what the server
+  // actually armed — "whatever it did, the server is the only thing that knows
+  // what the card now shows".
+  const [armedFill, setArmedFill] = useState<ArmedScheduleFill | null>(null);
+  const [cardGeneration, setCardGeneration] = useState(0);
+  const onActed = useCallback(() => {
+    setArmedFill(null);
+    setCardGeneration((n) => n + 1);
+  }, []);
 
   return (
     <div
@@ -78,11 +92,13 @@ export function RunScheduleTab({
       <div data-schedule-card-host="" ref={setCardHost}>
         <LifecycleCardSurfaceProvider host="run_card">
           <ScheduleProposalCard
+            key={cardGeneration}
             view={{
               viewType: "trigger_schedule_proposal",
               schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
               ref: cardRef,
             }}
+            armedFill={armedFill}
           />
         </LifecycleCardSurfaceProvider>
       </div>
@@ -92,6 +108,8 @@ export function RunScheduleTab({
           runId={runId}
           canRespondInWindow={canRespondInWindow}
           readOnly={!scheduler.changeable}
+          onFill={(values) => setArmedFill({ values })}
+          onActed={onActed}
         />
       ) : null}
     </div>

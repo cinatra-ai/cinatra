@@ -151,7 +151,15 @@
 // already have.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { CalendarClock, Check, Repeat, Zap } from "lucide-react";
 
 import type {
@@ -170,7 +178,6 @@ import type {
 // The recurring reading a read-only row draws is the SAME renderer the
 // settled card's own plain-language line comes from (cinatra#3174 fix leg
 // 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
-import { describeRecurrence } from "./trigger-recurrence";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -191,7 +198,27 @@ import {
   useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
-import { WEEKDAY_LABELS } from "./trigger-recurrence";
+import {
+  WEEKDAY_LABELS,
+  applyArmedScheduleFill,
+  // The SERVER'S OWN sentences for a schedule that can no longer be changed
+  // (cinatra#2934), from the leaf both sides already share — so this card draws
+  // the words the write guard answers with and no second wording exists.
+} from "./trigger-recurrence";
+
+/**
+ * A FILL THE WINDOW UNDER THIS CARD PLACED (cinatra#2934, the armed-trigger
+ * tab).
+ *
+ * THE OBJECT IS THE TURN. Its host mints a NEW one per accepted turn and never
+ * mutates it, so the same values placed twice are two fills and the rows move
+ * both times. It carries no timestamp: a clock reading is not an identity — two
+ * turns landing in one millisecond would read as one and the second change
+ * would be silently dropped.
+ */
+export type ArmedScheduleFill = {
+  readonly values: Record<string, unknown>;
+};
 
 /**
  * THE EMPTY READING'S WORD, KEPT WHERE THE ONE SURFACE THAT DRAWS IT LIVES
@@ -463,8 +490,18 @@ export function stoppedRecurringSchedule(body: TriggerScheduleProposalViewBody):
  */
 export function ScheduleProposalCard({
   view,
+  armedFill = null,
 }: {
   view: { viewType: "trigger_schedule_proposal"; schemaVersion: number; ref: string };
+  /**
+   * WHAT THE PROMPT WINDOW UNDER THIS CARD PLACED IN ITS ROWS (cinatra#2934).
+   *
+   * The window is a SIBLING of this card, not a child of it, so a fill reaches
+   * the rows the only way it can: through the host that draws both. It moves the
+   * SETTLED phase's draft and nothing else — a proposal's rows are the
+   * conversation's, and a frozen card has no draft at all.
+   */
+  armedFill?: ArmedScheduleFill | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
@@ -595,6 +632,7 @@ export function ScheduleProposalCard({
       firedOnce={firedOnce}
       durationCopy={resolved?.aside?.durationCopy ?? null}
       onDecide={decide}
+      armedFill={armedFill}
       onAdjustAndConfirm={async (schedule) => {
         const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
         if (outcome.kind === "confirmed") refresh();
@@ -646,6 +684,7 @@ export function ScheduleProposalCardBody({
   onDecide,
   onAdjustAndConfirm,
   onRepropose,
+  armedFill = null,
 }: {
   state: LifecycleCardState;
   body: TriggerScheduleProposalViewBody;
@@ -665,6 +704,11 @@ export function ScheduleProposalCardBody({
   ) => Promise<ScheduleDecisionOutcome>;
   onAdjustAndConfirm: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
   onRepropose: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  /** WHAT THE PROMPT WINDOW UNDER THIS CARD PLACED IN ITS ROWS (cinatra#2934) —
+   *  handed down from the card that owns the ref, because the window is a
+   *  SIBLING of the card rather than a child of it. It moves the SETTLED
+   *  phase's draft and nothing else. */
+  armedFill?: ArmedScheduleFill | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   if (host === null) return null;
@@ -698,6 +742,7 @@ export function ScheduleProposalCardBody({
       <SettledPhase
         body={body}
         onDecide={onDecide}
+        armedFill={armedFill}
         firedOnce={firedOnce}
         durationCopy={durationCopy}
       />
@@ -934,11 +979,13 @@ function ExpiredPhase({
 function SettledPhase({
   body,
   onDecide,
+  armedFill = null,
   firedOnce,
   durationCopy,
 }: {
   body: TriggerScheduleProposalSettledView;
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
+  armedFill?: ArmedScheduleFill | null;
   /** The server's durable firing reading, off the answer's own aside. The ONE
    *  signal this phase's frozen rows and absent floor are decided by
    *  (cinatra#3174 fix leg 1). */
@@ -990,6 +1037,29 @@ function SettledPhase({
     [draft, baseline],
   );
 
+  // A DESCRIBED CHANGE MOVES THESE ROWS (cinatra#2934, the armed-trigger tab).
+  //
+  // It is written into `draft` — the SAME state every control on this card
+  // writes — through `applyArmedScheduleFill`, the one function that says what a
+  // placed value does to a selection, so a change typed into the window under
+  // this card and the same change made with the mouse leave the form in the same
+  // place. Nothing is saved by it: **Save changes** lights up because the draft
+  // now differs from what is armed, and the person presses it.
+  //
+  // THE TURN IS THE KEY, and the turn is the FILL OBJECT ITSELF: the same values
+  // placed twice are two turns and must move the rows twice. Applied in an effect rather than during
+  // render because it is an event from a sibling, and only while the card can
+  // still be changed — a frozen card draws the server's schedule and keeps no
+  // draft at all.
+  const appliedFill = useRef<ArmedScheduleFill | null>(null);
+  useEffect(() => {
+    if (!armedFill || !body.canSave) return;
+    if (appliedFill.current === armedFill) return;
+    appliedFill.current = armedFill;
+    setSaved(false);
+    setDraft((prev) => applyArmedScheduleFill(prev, armedFill.values));
+  }, [armedFill, body.canSave]);
+
   // WHEN THE SCHEDULER STOPS BEING EDITABLE (plan (A) §7.2 and §7.4 as-designed
   // step 6, both as amended 2026-08-25 — cinatra#2972).
   //
@@ -1013,10 +1083,28 @@ function SettledPhase({
   // this run's, so the stamp says nothing about whether it has fired. Its
   // firing is `canCancel`'s business, read server-side off the tick's own stamp.
   //
-  // A FROZEN CARD DRAWS NO FLOOR AT ALL: not a disabled Save changes, and not a
-  // disabled Cancel schedule either. There is nothing left to change or stop,
-  // and a control that exists only to refuse is the card offering what the plan
-  // withdrew. The rows simply stand.
+  // A FROZEN CARD CARRIES NO FLOOR AT ALL (cinatra#2934, the FOURTH graded
+  // capture) — the ratified drawing at the pin this pull request records, read
+  // against §7.2's own words.
+  //
+  // THE TWO READINGS THIS STATE HAS HAD, and why neither of the first two is
+  // this one. It first drew NO floor and NO window, so a fired one-off stood
+  // with its rows locked and no sentence anywhere: the reader was told nothing
+  // rather than told why. It then drew the floor DEAD — Save changes present
+  // and disabled, the state's own sentence inside the form — which the fourth
+  // capture graded against the drawing and against §7.2 and both refuse: the
+  // drawing gives this exact state no floor, no hairline and nothing to press,
+  // and §7.2 says the surface "shows the same form and nothing else — no
+  // summary box, no status label".
+  //
+  // BOTH THINGS ARE TRUE AT ONCE, and that is the whole reading: the CARD is
+  // the form and nothing else, and the ANSWER lives in the prompt window below
+  // the scheduler, which stays present and disabled and says in its own block
+  // that the schedule can no longer be changed. Nothing is withheld from the
+  // reader; it is simply drawn where the drawing puts it.
+  //
+  // AND THE SURFACES READ THE FLOOR'S PRESENCE AGAIN, as they always did before
+  // the dead-floor reading made presence ambiguous.
   //
   // WHAT THIS DELIBERATELY DOES NOT CATCH. A one-off whose moment has passed
   // while the release job has not drained yet has NOT fired — its gate is still
@@ -1035,6 +1123,14 @@ function SettledPhase({
   // server was still authorizing. It now reads exactly what the card reports
   // and what the turn's own sentence is chosen by.
   const frozen = scheduleReadingOf(body, firedOnce) === "fired-one-off" || body.stopped === true;
+
+  // WHY **Save changes** IS WITHHELD FROM THIS READER, when the reason is about
+  // the READER (cinatra#2934, the fourth graded capture). Plan (A) §1.2: a card
+  // a person "may see but not act on" is "drawn in full with its buttons
+  // disabled and the reason on the card". The sentence is the SERVER's, carried
+  // on the body, and it is sent only for that case — a schedule that is over
+  // sends none, because that card has no floor for one to sit on.
+  const readerRefusal = body.saveRefusal ?? null;
 
   const act = async (op: "cancel") => {
     setRefusal(null);
@@ -1122,6 +1218,14 @@ function SettledPhase({
       <ScheduleOptionRows
         schedule={frozen ? body.schedule : draft}
         editable={body.canSave}
+        // A SCHEDULE THAT IS OVER IS NOT A REFUSED READER (cinatra#2934, the
+        // fifth graded proof set). Both states arrive here with `canSave: false`,
+        // and until now both drew the same DOM — every control present and
+        // greyed. The drawing gives them two different readings: the frozen
+        // card is "read-only, with no controls at all" while the refused reader
+        // keeps "its buttons disabled and the reason on the card". `frozen` is
+        // already the predicate that separates them, so it is what decides
+        // whether the rows carry controls.
         readOnly={frozen}
         onChange={(next) => {
           setSaved(false);
@@ -1130,11 +1234,27 @@ function SettledPhase({
         durationCopy={durationCopy}
       />
 
+      {/* NO FLOOR ON A SCHEDULE THAT IS OVER — see the note above `frozen`. The
+          form, locked, and nothing else; the window below the scheduler is
+          where this state says what it says. */}
       {frozen ? null : (
         <div
           data-conformance-id="schedule-proposal-floor"
           className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
         >
+          {/* THE READER-SHAPED REASON, beside the control it explains (plan (A)
+              §1.2). It stands where a live refusal would, and only one of the
+              two is ever on the floor at a time — a card that just refused a
+              press is showing that refusal. */}
+          {!refusal && readerRefusal ? (
+            <p
+              data-conformance-id="schedule-proposal-refusal"
+              role="status"
+              className="mr-auto text-sm text-muted-foreground"
+            >
+              {readerRefusal}
+            </p>
+          ) : null}
           {refusal ? (
             <p
               data-conformance-id="schedule-proposal-refusal"
@@ -1298,16 +1418,26 @@ function browserTimezone(): string {
 function ScheduleOptionRows({
   schedule,
   editable,
+  readOnly = false,
   onChange,
   durationCopy,
-  readOnly = false,
 }: {
   schedule: ProposedSchedule;
   editable: boolean;
-  onChange: (next: ProposedSchedule) => void;
-  durationCopy: string | null;
   /**
-   * THE ROWS ARE THE RECORD, NOT THE FORM (cinatra#3174 fix leg 1).
+   * THE SCHEDULE IS OVER (cinatra#2934, the fifth graded proof set) — a spent
+   * one-off, or a recurring schedule that was stopped.
+   *
+   * `editable` and `readOnly` are two different answers and the drawing draws
+   * them differently. `editable: false` alone is the reader who "may see but
+   * not act on" the card: every control stays on screen, disabled, with the
+   * reason beside it. `readOnly` is the schedule that is over: "the rows go
+   * read-only — the values still legible, the pickers gone — and the card
+   * carries no floor at all". So this flag removes the CONTROLS, not the
+   * values, and it is set only where the card is frozen.
+   *
+   * THE ROWS ARE THE RECORD, NOT THE FORM (cinatra#3174 fix leg 1), which is
+   * the same reading arrived at from the other side.
    *
    * §VI, on the reading a spent one-off settles into: "the rows go read-only —
    * the values still legible, the pickers gone". This is not `editable`
@@ -1319,6 +1449,8 @@ function ScheduleOptionRows({
    * nothing on the card to press.
    */
   readOnly?: boolean;
+  onChange: (next: ProposedSchedule) => void;
+  durationCopy: string | null;
 }): ReactElement {
   const kind = schedule.kind;
   const live = editable && !readOnly;
@@ -1368,11 +1500,15 @@ function ScheduleOptionRows({
         }
       >
         <div className="ml-7 flex flex-wrap gap-4">
+          {/* THE MOMENT IN THE READER'S OWN LOCALE (cinatra#3174 fix leg 1),
+              inside the named reading box this card's own proof set pinned
+              (cinatra#2934): the wire's naive wall clock is what the picker
+              EMITS, never what a reading shows. */}
           <Field label="Run at">
             {readOnly ? (
-              <ReadOnlyValue
-                value={schedule.kind === "scheduled" ? readableRunAt(schedule.runAt) : ""}
-              />
+              <ReadOnlyValue field="schedule-run-at">
+                {schedule.kind === "scheduled" ? readableRunAt(schedule.runAt) : ""}
+              </ReadOnlyValue>
             ) : (
               <Input
                 type="datetime-local"
@@ -1388,7 +1524,7 @@ function ScheduleOptionRows({
           </Field>
           <Field label="Timezone">
             {readOnly ? (
-              <ReadOnlyValue value={timezone} />
+              <ReadOnlyValue field="schedule-timezone">{timezone}</ReadOnlyValue>
             ) : (
               <Input
                 type="text"
@@ -1419,19 +1555,20 @@ function ScheduleOptionRows({
         onChoose={() => pick({ kind: "recurring", selection: recurring, timezone })}
       >
         <div className="ml-7 flex flex-col gap-3">
-          {readOnly ? (
-            <>
-              <Field label="Repeats">
-                <ReadOnlyValue value={describeRecurringRows(recurring)} />
-              </Field>
-              <Field label="Timezone">
-                <ReadOnlyValue value={timezone} />
-              </Field>
-            </>
-          ) : (
           <>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">Repeat every</span>
+            {readOnly ? (
+              <>
+                <ReadOnlyValue field="recurring-interval" width="w-20" label="Repeat every">
+                  {String(recurring.interval)}
+                </ReadOnlyValue>
+                <ReadOnlyValue field="recurring-frequency" width="w-32" label="Frequency">
+                  {FREQUENCY_LABELS[recurring.frequency]}
+                </ReadOnlyValue>
+              </>
+            ) : (
+              <>
             <Select
               disabled={!editable}
               value={String(recurring.interval)}
@@ -1466,6 +1603,8 @@ function ScheduleOptionRows({
                 <SelectItem value="yearly">year</SelectItem>
               </SelectContent>
             </Select>
+              </>
+            )}
           </div>
 
           {recurring.frequency === "weekly" ? (
@@ -1475,7 +1614,16 @@ function ScheduleOptionRows({
                   a fixed row clipped the last weekday chip off the right edge
                   there — a control the reader could see but not press. */}
               <div className="flex flex-wrap gap-1">
-                {WEEKDAY_LABELS.map((label, i) => (
+                {readOnly
+                  ? WEEKDAY_LABELS.map((label, i) => (
+                      <ReadOnlyWeekday
+                        key={label}
+                        label={label}
+                        weekday={i}
+                        selected={recurring.weekdays.includes(i)}
+                      />
+                    ))
+                  : WEEKDAY_LABELS.map((label, i) => (
                   <Button
                     key={label}
                     type="button"
@@ -1521,6 +1669,18 @@ function ScheduleOptionRows({
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">At</span>
+            {readOnly ? (
+              <>
+                <ReadOnlyValue field="recurring-hour" width="w-20" label="Hour">
+                  {String(recurring.hour).padStart(2, "0")}
+                </ReadOnlyValue>
+                <span className="text-muted-foreground">:</span>
+                <ReadOnlyValue field="recurring-minute" width="w-20" label="Minute">
+                  {String(recurring.minute).padStart(2, "0")}
+                </ReadOnlyValue>
+              </>
+            ) : (
+              <>
             <Select
               disabled={!editable}
               value={String(recurring.hour)}
@@ -1554,26 +1714,31 @@ function ScheduleOptionRows({
                 ))}
               </SelectContent>
             </Select>
+              </>
+            )}
           </div>
 
           <Field label="Timezone">
-            <Input
-              type="text"
-              data-field="recurring-timezone"
-              className="w-56"
-              disabled={!editable}
-              value={timezone}
-              onChange={(e) =>
-                pick({
-                  kind: "recurring",
-                  selection: recurring,
-                  timezone: e.target.value,
-                })
-              }
-            />
+            {readOnly ? (
+              <ReadOnlyValue field="recurring-timezone">{timezone}</ReadOnlyValue>
+            ) : (
+              <Input
+                type="text"
+                data-field="recurring-timezone"
+                className="w-56"
+                disabled={!editable}
+                value={timezone}
+                onChange={(e) =>
+                  pick({
+                    kind: "recurring",
+                    selection: recurring,
+                    timezone: e.target.value,
+                  })
+                }
+              />
+            )}
           </Field>
           </>
-          )}
         </div>
       </OptionRow>
 
@@ -1606,25 +1771,6 @@ function defaultRunAt(): string {
   return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
 }
 
-/**
- * A VALUE WHERE A FIELD STOOD (cinatra#3174 fix leg 1).
- *
- * §VI's fired one-off draws its two fields as plain bordered readings — the
- * same box, the same measure, the muted ink, and no control inside it. It is
- * not an input with `readonly` on it: a reader may not focus it, tab into it or
- * be offered a spinner by the platform, because there is nothing here to
- * change.
- */
-function ReadOnlyValue({ value }: { value: string }): ReactElement {
-  return (
-    <div
-      data-schedule-value
-      className="flex h-9 w-56 items-center rounded-control border border-input bg-background px-3 text-sm text-muted-foreground"
-    >
-      {value}
-    </div>
-  );
-}
 
 /**
  * THE MOMENT, STILL LEGIBLE (§VI, the fired one-off).
@@ -1662,25 +1808,6 @@ function readableRunAt(runAt: string): string {
   return at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** The recurring selection as one legible line, for the rows that have gone
- *  read-only. It is the SAME renderer the settled card's own plain-language
- *  line comes from, so the record and the prose cannot describe one schedule
- *  two ways. */
-function describeRecurringRows(recurring: RecurringSelection): string {
-  return describeRecurrence({
-    frequency: recurring.frequency,
-    interval: recurring.interval,
-    weekdays: recurring.weekdays,
-    dayOfMonth: recurring.dayOfMonth,
-    monthlyMode: recurring.monthlyMode,
-    nthWeek: recurring.nthWeek,
-    monthlyWeekday: recurring.monthlyWeekday,
-    quarterAnchor: recurring.quarterAnchor,
-    yearlyMonth: recurring.yearlyMonth,
-    hour: recurring.hour,
-    minute: recurring.minute,
-  });
-}
 
 function Field({ label, children }: { label: string; children: ReactElement }): ReactElement {
   return (
@@ -1688,6 +1815,90 @@ function Field({ label, children }: { label: string; children: ReactElement }): 
       <Label className="font-normal">{label}</Label>
       {children}
     </div>
+  );
+}
+
+/** The words the frequency picker itself draws, so a spent schedule reads back
+ *  in exactly the vocabulary the live row offered. Kept beside the picker it
+ *  mirrors — one list, two readings. */
+const FREQUENCY_LABELS: Readonly<Record<RecurringSelection["frequency"], string>> = {
+  daily: "day(s)",
+  weekly: "week(s)",
+  monthly: "month(s)",
+  quarterly: "quarter",
+  yearly: "year",
+};
+
+/**
+ * A FIELD OF A SPENT SCHEDULE — "the values still legible, the pickers gone"
+ * (cinatra#2934, the fifth graded proof set).
+ *
+ * The ratified drawing draws a schedule that is over with its value in a plain
+ * box of the field's own size and NOTHING to press: same edge, same ground,
+ * the value in the muted secondary colour. It is deliberately NOT a disabled
+ * input — a disabled input is the drawing's OTHER reading, the one a reader who
+ * "may see but not act on" the card is owed, and drawing both the same way
+ * would erase the difference between a schedule that is over and a reader who
+ * is refused. See `readOnly` on `ScheduleOptionRows`.
+ */
+function ReadOnlyValue({
+  field,
+  width,
+  label,
+  children,
+}: {
+  field: string;
+  width?: string;
+  /**
+   * The name the LIVE control carried (convergence round). Four of these boxes
+   * replace a picker whose only name was its `aria-label` — *Repeat every*,
+   * *Frequency*, *Hour*, *Minute* — and a bare box of digits says nothing about
+   * which of them it is. The two that sit in a `Field` carry its visible label
+   * already and pass none.
+   */
+  label?: string;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <div
+      data-readonly-field={field}
+      className={`flex h-9 items-center rounded-control border border-input bg-background px-3 text-sm text-muted-foreground ${width ?? "w-56"}`}
+    >
+      {label ? <span className="sr-only">{label}: </span> : null}
+      {children}
+    </div>
+  );
+}
+
+/** A weekday of a spent recurring schedule. The chip KEEPS its fill — in this
+ *  state it is the schedule being shown, not a control being offered — so the
+ *  same two paints are used, on a span rather than a button. */
+function ReadOnlyWeekday({
+  label,
+  selected,
+  weekday,
+}: {
+  label: string;
+  selected: boolean;
+  weekday: number;
+}): ReactElement {
+  return (
+    <span
+      data-readonly-field="recurring-weekday"
+      data-weekday={weekday}
+      className={`inline-flex h-8 w-10 items-center justify-center rounded-control border text-xs font-medium ${
+        selected
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-input bg-background text-muted-foreground"
+      }`}
+    >
+      {label}
+      {/* THE SAME REASON AS THE OPTION ROW (convergence round): the live chip is
+          a button carrying `aria-pressed`, and losing the button must not lose
+          the day. Seven abbreviations with nothing but a fill to tell them apart
+          is not a legible reading of which days the schedule ran on. */}
+      <span className="sr-only">{selected ? " selected" : " not selected"}</span>
+    </span>
   );
 }
 
@@ -1700,28 +1911,60 @@ function OptionRow({
   rowKind,
   chosen,
   editable,
+  readOnly = false,
   label,
   icon,
   onChoose,
   children,
-  readOnly = false,
 }: {
   rowKind: ProposedSchedule["kind"];
   chosen: boolean;
   editable: boolean;
-  label: string;
-  icon: ReactElement;
-  onChoose: () => void;
-  children?: ReactElement;
   /** The row is a reading, not a choice (§VI, the fired one-off): the marker
    *  and the label stand, and the button around them is gone rather than
    *  disabled. */
   readOnly?: boolean;
+  label: string;
+  icon: ReactElement;
+  onChoose: () => void;
+  children?: ReactElement;
 }): ReactElement {
+  // THE EDGE AND THE TINT DO NOT CHANGE WHEN THE SCHEDULE IS OVER. The drawing's
+  // spent card carries the same border, the same ground and the same radio as
+  // the live one — measured row for row against the armed card, the ONLY
+  // difference is that the row does not take a press. So nothing here is
+  // dimmed; the control itself is what goes away.
+  const marker = (
+    <>
+      <span
+        className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
+          chosen ? "border-primary" : "border-muted-foreground"
+        }`}
+      >
+        {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
+      </span>
+      {icon}
+      <span className="text-sm font-medium text-foreground">{label}</span>
+      {/* THE CHOICE IS STILL A CHOICE WHEN THE FORM IS A READING (convergence
+          round). The live row is a button carrying `aria-pressed`, so which of
+          the three options the schedule stands on is announced. Drawing the
+          spent row as a plain row took the control away and took that SEMANTIC
+          with it: a reader who cannot see the indigo edge and tint met three
+          schedule options with nothing saying which one had been armed — and a
+          spent *Run right after setup* row has no fields beneath it to give the
+          answer away. "The values still legible" has to hold for that reader
+          too, so the state is said in words where the paint says it in colour.
+          Only in the reading: the live row's `aria-pressed` already says it. */}
+      {readOnly ? (
+        <span className="sr-only">{chosen ? "Selected" : "Not selected"}</span>
+      ) : null}
+    </>
+  );
   return (
     <div
       data-schedule-option={rowKind}
       data-chosen={chosen ? "true" : "false"}
+      data-readonly={readOnly ? "true" : "false"}
       // THE CHOSEN ROW IS READABLE WITHOUT EYES (cinatra#3174 fix leg 1,
       // converge). The live row carries its state on the button's
       // `aria-pressed`; the read-only row has no button to carry it, and the
@@ -1736,18 +1979,12 @@ function OptionRow({
       }`}
     >
       {readOnly ? (
-        <div className="flex items-center gap-3 text-left">
-          <span
-            aria-hidden="true"
-            className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-              chosen ? "border-primary" : "border-muted-foreground"
-            }`}
-          >
-            {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
-          </span>
-          {icon}
-          <span className="text-sm font-medium text-foreground">{label}</span>
-        </div>
+        /* "read-only, with no controls at all" — a spent schedule's row is a
+           plain row. NOT a disabled button: a disabled button is still a
+           control, is still announced as one, and is the drawing's reading for
+           the reader who may not act rather than for the schedule that is
+           over. */
+        <div className="flex items-center gap-3 text-left">{marker}</div>
       ) : (
         <Button
           type="button"
@@ -1757,15 +1994,7 @@ function OptionRow({
           onClick={onChoose}
           className="h-auto justify-start gap-3 p-0 text-left hover:bg-transparent disabled:cursor-default disabled:opacity-100"
         >
-          <span
-            className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-              chosen ? "border-primary" : "border-muted-foreground"
-            }`}
-          >
-            {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
-          </span>
-          {icon}
-          <span className="text-sm font-medium text-foreground">{label}</span>
+          {marker}
         </Button>
       )}
       {/* The chosen row OWNS ITS FIELDS (§VI): the other rows' fields are not

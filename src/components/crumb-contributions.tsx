@@ -24,6 +24,8 @@ import { usePathname } from "next/navigation";
 
 import {
   clearCrumbContributions,
+  clearPageNotFound,
+  markPageNotFound,
   publishCrumbContributions,
   type CrumbContribution,
 } from "@/lib/breadcrumb-contributions";
@@ -75,5 +77,25 @@ export function CrumbContributionsClear() {
   useLayoutEffect(() => {
     clearCrumbContributions();
   }, []);
+  return null;
+}
+
+/**
+ * THE PAGE THAT WAS NOT FOUND (cinatra#2934, fix leg 10). Rendered by the 404
+ * boundary in place of `<CrumbContributionsClear/>`: it clears the parked
+ * labels exactly as that island does, and additionally marks THIS pathname as
+ * the one that was not found, so the shell draws the single crumb "Page not
+ * found" rather than the ancestors of a URL the reader never reached.
+ *
+ * Layout effect, and for the same reason: the boundary renders at the original
+ * pathname, so the mark must land before the browser paints.
+ */
+export function PageNotFoundCrumb() {
+  const pathname = usePathname();
+  useLayoutEffect(() => {
+    markPageNotFound(pathname);
+    // Named, so a boundary leaving cannot lift the ARRIVING page's mark.
+    return () => clearPageNotFound(pathname);
+  }, [pathname]);
   return null;
 }

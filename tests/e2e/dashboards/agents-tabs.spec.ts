@@ -8,7 +8,7 @@
  *     from the bare /agents to /agents/executions.
  *
  * What this asserts (the acceptance bar from the issue):
- *   1. /agents renders the All-Agents picker (heading "Run agent", the
+ *   1. /agents renders the All-Agents picker (heading "Agent run", the
  *      redesigned agent cards) with the tab bar showing "All Agents" active.
  *   2. /agents/executions renders the dashboard (heading "Agents", the
  *      recently-used/latest-run portlets) with the tab bar showing
@@ -27,7 +27,7 @@ test.describe("/agents tab bar + route split", () => {
     await waitForHydration(page);
 
     await expect(
-      page.getByRole("heading", { name: "Run agent", exact: true }),
+      page.getByRole("heading", { name: "Agent run", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
 
     const allAgentsTab = page.getByRole("tab", { name: "All Agents" });
@@ -77,7 +77,7 @@ test.describe("/agents tab bar + route split", () => {
     await page.getByRole("tab", { name: "All Agents" }).click();
     await page.waitForURL(/\/agents$/);
     await expect(
-      page.getByRole("heading", { name: "Run agent", exact: true }),
+      page.getByRole("heading", { name: "Agent run", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
   });
 

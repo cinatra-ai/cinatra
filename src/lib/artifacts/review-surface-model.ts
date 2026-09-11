@@ -74,60 +74,65 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
 }
 
 // ---------------------------------------------------------------------------
-// The SETTLED reading (§IV; plan §4.2) — a decided gate names what happened
+// The SETTLED reading (§IV; Lifecycle cards §XIII.1) — ONE marker, no person
 // ---------------------------------------------------------------------------
 //
 // `reviewBlockedCopy("no-longer-pending")` above is what a settled card says
 // when it knows nothing but the fact that it settled: "the gate was already
 // decided OR the run moved on", with a Refresh as the escape hatch for that
-// "or". This is the other half — the reading for a card that DOES know, which
-// states the outcome and the person who took it and needs no escape hatch,
-// because there is no longer an ambiguity for one to resolve.
+// "or". This is the other half — the reading for a card that DOES know, and
+// therefore needs no escape hatch, because there is no longer an ambiguity for
+// one to resolve.
 //
-// THE SENTENCES ARE THE SHIPPED ONES. Each body is the decision bar's own
-// post-press line (`review-decision-bar.tsx`), minus its leading verb, so the
-// card the reviewer read right after pressing and the card everyone reads
-// afterwards say the same thing about the same gate. What is deliberately NOT
-// carried over is the bar's `requested` / `escalated` split: that is a fact
-// about the repair the reviewer's own press started, not about the gate's
-// recorded outcome, and a settled card that claimed "a repair is now in flight"
-// would be asserting a live state it has not read.
+// ONE READING, AND IT IS THE DRAWING'S (cinatra#2934, fix leg 12). The
+// lifecycle-cards drawing states it outright: "Continued is the only settled
+// reading; there is no second status after it." What it draws below a decided
+// card is a marker — the word Continued, and beside it "Decided on the revision
+// above." It is the same marker in a conversation and outside one, and the same
+// marker whatever was decided: "the frame changes and nothing else does".
 //
-// THE DECIDER IS OPTIONAL AND ITS ABSENCE IS QUIET. A gate whose decider has no
-// safely displayable name reads "Approved" rather than "Approved by" and a
-// dangling nothing — and never an identifier pressed into service as a name.
+// WHAT THIS REPLACES, AND WHY. The shipped copy read the outcome back as a
+// title ("Approved" / "Rejected" / "Changes requested") and interpolated the
+// decider into it — the dev-boot proof round of 2026-09-04 measured a red
+// circled-X card reading "Rejected by Proof Admin" on both surfaces. Two
+// ratified sentences close that: §XIII.1 above, which leaves exactly one settled
+// reading, and the review drawing's §VI, which says the review "draws no card
+// that names who requested changes". The second is written about the
+// change-request outcome and the first generalises it: a settled card is not
+// where a disposition or a person is recorded.
+//
+// THE DISPOSITION IS NOT LOST. It stays exactly where a fact belongs — the run's
+// own rows, the audit trail, and (as a machine-readable record, never a drawn
+// reading) the settled element's `data-review-outcome`. The outcome therefore
+// remains this function's one argument: a caller holds it and the card records
+// it. The DECIDER's name is not a parameter at all any more, because there is
+// nowhere on this surface to put one.
 
-/** The closed outcome axis a settled review card can name.
+/** The closed outcome axis a settled review card RECORDS.
  *
  *  Kept as a local union rather than an import so this pure model stays free of
  *  the wire package; `LIFECYCLE_SETTLED_OUTCOMES` in the protocol is the same
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
+/** The ONE settled marker, in the drawing's own words (Lifecycle cards §XIII.1).
+ *  The exemplar there closes with a sentence particular to the artifact it was
+ *  drawn over ("These are the words that will be sent."); what is generic — and
+ *  therefore what a display over ANY artifact draws — is the two lines here. */
+export const REVIEW_SETTLED_MARKER = {
+  title: "Continued",
+  body: "Decided on the revision above.",
+} as const;
+
+/** The user-facing copy for a settled gate. Title + one line; NO refresh (the
+ *  component draws none) — the reading is final, and it is the same reading for
+ *  every disposition. */
 export function reviewSettledCopy(
-  outcome: ReviewSettledOutcome,
-  decidedByName?: string,
+  // The recorded disposition. Accepted because every caller holds one and the
+  // element records it; it does NOT select a reading — §XIII.1 leaves only one.
+  _outcome: ReviewSettledOutcome,
 ): { title: string; body: string } {
-  const by = decidedByName ? ` by ${decidedByName}` : "";
-  switch (outcome) {
-    case "approved":
-      return {
-        title: `Approved${by}`,
-        body: "The gate is resolved and the run has been released to continue.",
-      };
-    case "rejected":
-      return {
-        title: `Rejected${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back.",
-      };
-    case "changes_requested":
-      return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
-      };
-  }
+  return { title: REVIEW_SETTLED_MARKER.title, body: REVIEW_SETTLED_MARKER.body };
 }
 
 // ---------------------------------------------------------------------------
