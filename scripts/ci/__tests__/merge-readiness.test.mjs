@@ -111,6 +111,39 @@ describe("merge-readiness fixture matrix", () => {
     expect(r.failures.join("\n")).toMatch(/duplicate-source: 'build' was reported 2 times from 2 source/);
   });
 
+  it("PASSes when a re-run left two runs of one name from ONE source and the latest succeeded", () => {
+    const first = { id: 101, name: "build", status: "completed", conclusion: "failure", completedAt: "2026-09-10T09:00:00Z", app: "github-actions", workflow: "gates.yml" };
+    const latest = { ...first, id: 102, conclusion: "success", completedAt: "2026-09-10T10:00:00Z" };
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), first, latest]);
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reports.join("\n")).toMatch(/re-run \(the latest of 2 runs from one source decides\): 'build'/);
+  });
+
+  it("FAILs when the latest of two same-source runs of one name is the failed one", () => {
+    const first = { id: 101, name: "build", status: "completed", conclusion: "success", completedAt: "2026-09-10T09:00:00Z", app: "github-actions", workflow: "gates.yml" };
+    const latest = { ...first, id: 102, conclusion: "failure", completedAt: "2026-09-10T10:00:00Z" };
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), latest, first]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(/failed: 'build'/);
+  });
+
+  it("falls back to completedAt when two same-source runs of one name carry no id", () => {
+    const first = { name: "build", status: "completed", conclusion: "failure", completedAt: "2026-09-10T09:00:00Z", app: "github-actions", workflow: "gates.yml" };
+    const latest = { ...first, conclusion: "success", completedAt: "2026-09-10T10:00:00Z" };
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), latest, first]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.failures).toEqual([]);
+  });
+
+  it("keeps duplicate-source for two runs of one name from DIFFERENT sources, whatever their ids", () => {
+    const a = { id: 201, name: "build", status: "completed", conclusion: "failure", completedAt: "2026-09-10T09:00:00Z", app: "github-actions", workflow: "gates.yml" };
+    const b = { ...a, id: 202, conclusion: "success", completedAt: "2026-09-10T10:00:00Z", workflow: "gates-copy.yml" };
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), a, b]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(/duplicate-source: 'build' was reported 2 times from 2 source/);
+  });
+
   it("FAILs when an expected context comes from an untrusted app", () => {
     const checks = greenChecks();
     checks[0] = { ...checks[0], app: "some-other-app" };
