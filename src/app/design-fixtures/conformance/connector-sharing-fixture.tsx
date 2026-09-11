@@ -50,6 +50,7 @@ import {
   CONNECTOR_SHARING_CO_OWNER,
   CONNECTOR_SHARING_CONNECTION,
   CONNECTOR_SHARING_INITIAL_SCOPE,
+  CONNECTOR_SHARING_OWNER_SCOPE,
   CONNECTOR_SHARING_LOCKED_SCOPES,
   CONNECTOR_SHARING_LOCKED_VALUE,
   CONNECTOR_SHARING_LOCK_NOTE,
@@ -88,11 +89,17 @@ const CO_OWNER: OwnerView = {
   image: null,
 };
 
-/** The stored grant every seeded panel opens on (the owner-only floor). */
+/**
+ * The stored grant every seeded panel opens on. `runListVisibility` — the ONE
+ * field the access picker binds to — carries a scope that is neither the
+ * picker's owner floor nor any override this fixture supplies, and the other
+ * two visibility fields keep that floor: a panel that read the wrong field, or
+ * ignored the policy altogether, draws a different label and REDS.
+ */
 const INITIAL_POLICY: React.ComponentProps<typeof PermissionsForm>["initialPolicy"] = {
   runListVisibility: [CONNECTOR_SHARING_INITIAL_SCOPE],
-  runDataVisibility: [CONNECTOR_SHARING_INITIAL_SCOPE],
-  runExecuteVisibility: [CONNECTOR_SHARING_INITIAL_SCOPE],
+  runDataVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
+  runExecuteVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
   allowRunSharing: true,
 };
 
@@ -124,7 +131,12 @@ function fixtureActions() {
 /** The connection mount's own permissions card — the app's access picker + ownership card. */
 function sharingPermissions(options: {
   coOwners: OwnerView[];
-  accessValueOverride: string;
+  /**
+   * OMITTED by the unconstrained panels, so their picker resolves the stored
+   * `policy.runListVisibility` and the field driver reads a real binding. Only
+   * a panel whose connector CONSTRAINS the scope states one.
+   */
+  accessValueOverride?: string;
   accessDisabledScopes?: string[];
   accessDisabledReasons?: Record<string, string>;
   accessScopeNote?: string;
@@ -161,7 +173,6 @@ function panel(index: number, extra: Partial<ConnectorSharingPanelView> = {}): C
     scopeConstraint: null,
     permissions: sharingPermissions({
       coOwners: index === 0 ? [CO_OWNER] : [],
-      accessValueOverride: CONNECTOR_SHARING_INITIAL_SCOPE,
     }),
     ...extra,
   };
@@ -202,7 +213,10 @@ export function ConnectorSharingFixture({
         scopeConstraint: "recommended",
         permissions: sharingPermissions({
           coOwners: [],
-          accessValueOverride: CONNECTOR_SHARING_INITIAL_SCOPE,
+          // The recommending connector shares NOTHING until Save is pressed,
+          // so its picker states the owner floor its sentence names
+          // ("Currently: only you") — distinct from the stored scope above.
+          accessValueOverride: CONNECTOR_SHARING_OWNER_SCOPE,
           accessScopeNote: CONNECTOR_SHARING_RECOMMENDATION_NOTE,
         }),
       }),

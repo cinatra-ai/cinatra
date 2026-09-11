@@ -143,6 +143,7 @@ import {
   CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
   CONNECTOR_SHARING_LOCK_NOTE,
   CONNECTOR_SHARING_OWNER,
+  CONNECTOR_SHARING_OWNER_SCOPE_LABEL,
   CONNECTOR_SHARING_OWNERSHIP_HELPER,
   CONNECTOR_SHARING_PANEL_COUNT,
   CONNECTOR_SHARING_RECOMMENDATION_NOTE,
@@ -4837,8 +4838,10 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
     access: {
       source: "policy.runListVisibility",
       assert: async (_page, root) => {
-        // The picker opens on the stored grant, rendered as the picker's own
-        // `Type: Name` label — never a token echoed back.
+        // The picker opens on the STORED grant — `policy.runListVisibility`,
+        // seeded to a scope that is neither the owner floor the other two
+        // visibility fields carry nor any override — rendered as the picker's
+        // own `Type: Name` label, never a token echoed back.
         await expect(accessTrigger(root)).toHaveText(
           typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
         );
@@ -5045,7 +5048,7 @@ const CONNECTOR_SHARING_LOCKED_DRIVER: SurfaceDriver = {
     );
     await expect(recommended).toContainText(CONNECTOR_SHARING_RECOMMENDATION_NOTE);
     await expect(accessTrigger(recommended)).toHaveText(
-      typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+      typeNamePairPattern(CONNECTOR_SHARING_OWNER_SCOPE_LABEL),
     );
     await expect(recommended.getByRole("button", { name: "Save changes" })).toBeVisible();
   },

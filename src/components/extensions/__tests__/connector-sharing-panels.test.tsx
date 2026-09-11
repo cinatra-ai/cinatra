@@ -21,6 +21,14 @@ import {
   CONNECTOR_SHARING_LOADING_LABEL,
   type ConnectorSharingPanelView,
 } from "@/components/extensions/connector-sharing-panels";
+import {
+  CONNECTOR_SHARING_INITIAL_SCOPE,
+  CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,
+  CONNECTOR_SHARING_LOCKED_VALUE,
+  CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
+  CONNECTOR_SHARING_OWNER_SCOPE,
+  CONNECTOR_SHARING_OWNER_SCOPE_LABEL,
+} from "@/app/design-fixtures/conformance/connector-sharing-seed";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -51,6 +59,23 @@ async function render(node: React.ReactElement) {
     root.render(node);
   });
 }
+
+describe("the sharing conformance seed — the access binding is falsifiable (#3374)", () => {
+  it("seeds runListVisibility away from the owner floor and from every override", () => {
+    // The picker binds to `runListVisibility`. If the seed carried the owner
+    // floor there, a panel that IGNORED the policy — and fell back to the
+    // floor, or echoed an override — would pass the `access` field assertion
+    // on a lookalike. These three values are pairwise distinct, so it cannot.
+    expect(CONNECTOR_SHARING_INITIAL_SCOPE).not.toBe(CONNECTOR_SHARING_OWNER_SCOPE);
+    expect(CONNECTOR_SHARING_INITIAL_SCOPE).not.toBe(CONNECTOR_SHARING_LOCKED_VALUE);
+    expect(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL).not.toBe(
+      CONNECTOR_SHARING_OWNER_SCOPE_LABEL,
+    );
+    expect(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL).not.toBe(
+      CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
+    );
+  });
+});
 
 describe("ConnectorSharingPanels", () => {
   it("heads the list with the roll-up card even for a SINGLE owned connection", async () => {

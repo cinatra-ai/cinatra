@@ -219,6 +219,10 @@ describe("the Sharing tab move — what it must NOT change", () => {
     expect(DISPATCH_ROUTE).toMatch(
       /<ConnectionSharingSection packageId=\{packageId\} variant="tab" \/>/,
     );
+    // …and the SAME generated page's Install/Activate state — which draws no
+    // form and so no tab strip — is handed the standalone section it already
+    // had, not the tab's node (cinatra#3374).
+    expect(DISPATCH_ROUTE).toContain("sharingStandalone={sharingSection}");
   });
 
   it("leaves every self-drawn branch on the standalone section it already had", () => {

@@ -94,6 +94,13 @@ export type SchemaConfigConnectorSetupProps = {
    */
   sharing?: ReactNode;
   /**
+   * The SAME section for the Install / Activate state, which draws no form and
+   * therefore no tab strip. That state kept the standalone mount it already
+   * had before this issue — the tab-variant node is the tab's, and mounting it
+   * where there is no tab would restyle a page this issue does not change.
+   */
+  sharingStandalone?: ReactNode;
+  /**
    * The route's crumb-publisher island (cinatra#3215). The dispatch route
    * resolves the vendor / connector display names in ITS server render, after
    * its access checks, and hands the island down; this shape mounts it as the
@@ -120,6 +127,7 @@ export function SchemaConfigConnectorSetup({
   connectedLabel,
   recheck,
   sharing,
+  sharingStandalone,
   crumbTrail,
 }: SchemaConfigConnectorSetupProps) {
   return (
@@ -159,11 +167,13 @@ export function SchemaConfigConnectorSetup({
       ) : (
         <>
           {/* Not installed / not active for this actor: there is no setup form
-              here and so no tab strip. The sharing panels still mount, because
+              here and so no tab strip. The sharing section still mounts, because
               a connection saved before the install was deactivated is still the
-              owner's to hand on — and this is not the Setup tab. */}
+              owner's to hand on — and this is not the Setup tab. It mounts in
+              the STANDALONE shape it already had: this issue moves the section
+              onto a tab, it does not restyle the states that carry no tab. */}
           <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
-          {sharing}
+          {sharingStandalone}
         </>
       )}
     </ConnectorSetupPage>

@@ -280,4 +280,27 @@ describe("SchemaConfigConnectorSetup — the drawn shape for EVERY connector (#3
     expect(columns()).toBeNull();
     expect(container.querySelector('[data-testid="connection-actions"]')).toBeNull();
   });
+
+  it("gives the Install/Activate state the STANDALONE sharing node, never the tab's (#3374)", async () => {
+    // That state draws no form and so no tab strip: mounting the tab-variant
+    // node there would restyle a page this issue does not change.
+    await renderSetup({
+      surface: surfaceOf(PROBE_LESS_SURFACE),
+      installId: null,
+      sharing: <p data-testid="sharing-tab-node">tab</p>,
+      sharingStandalone: <p data-testid="sharing-standalone-node">standalone</p>,
+    });
+    expect(container.querySelector('[data-testid="sharing-standalone-node"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="sharing-tab-node"]')).toBeNull();
+  });
+
+  it("gives the installed form the TAB sharing node, never the standalone one (#3374)", async () => {
+    await renderSetup({
+      surface: surfaceOf(PROBE_LESS_SURFACE),
+      sharing: <p data-testid="sharing-tab-node">tab</p>,
+      sharingStandalone: <p data-testid="sharing-standalone-node">standalone</p>,
+    });
+    expect(container.querySelector('[data-testid="sharing-tab-node"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="sharing-standalone-node"]')).toBeNull();
+  });
 });

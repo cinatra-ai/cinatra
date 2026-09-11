@@ -365,6 +365,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           ? { recheck: recheckConnectorReadiness.bind(null, packageId) }
           : {})}
         sharing={sharingTab}
+        sharingStandalone={sharingSection}
       />
     );
   }

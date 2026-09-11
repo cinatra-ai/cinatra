@@ -59,11 +59,27 @@ export const CONNECTOR_SHARING_ORG = {
 export const CONNECTOR_SHARING_PANEL_COUNT = 2;
 
 /**
- * The UNCONSTRAINED panel's scope, and the scope the `select-scope` driver
- * moves it to. Both are picker option values (`AgentAuthPolicyVisibility`).
+ * The UNCONSTRAINED panel's stored scope, and the scope the `select-scope`
+ * driver moves it to. Both are picker option values
+ * (`AgentAuthPolicyVisibility`).
+ *
+ * ANTI-MASK (cinatra#3374): this value is NOT the picker's default and NOT the
+ * value any fixture override supplies, and it is NOT the value the other two
+ * visibility fields of the seeded policy carry. A panel that ignored
+ * `policy.runListVisibility` — falling back to the owner floor, or echoing an
+ * override, or reading a neighbouring visibility field — therefore REDS on the
+ * `access` field assertion instead of passing on a lookalike.
  */
-export const CONNECTOR_SHARING_INITIAL_SCOPE = "owner";
+export const CONNECTOR_SHARING_INITIAL_SCOPE = "project:project-fixture-ninebark";
 export const CONNECTOR_SHARING_SELECTED_SCOPE = "workspace";
+
+/**
+ * The owner floor: the value the OTHER two visibility fields of the seeded
+ * policy carry, and the scope the RECOMMENDING panel opens on (its sentence
+ * reads "Currently: only you", so that panel states it as an override — which
+ * is itself distinct from the stored `runListVisibility` above).
+ */
+export const CONNECTOR_SHARING_OWNER_SCOPE = "owner";
 
 /**
  * The CEILING panel (surface `connector-sharing-locked`). The sentence is the
@@ -106,6 +122,7 @@ export const CONNECTOR_SHARING_OWNERSHIP_HELPER =
  * type and the name as two sibling elements, so their text carries no
  * separating space — the drivers match with the suite's own pair pattern.
  */
-export const CONNECTOR_SHARING_INITIAL_SCOPE_LABEL = "Personal: Only me";
+export const CONNECTOR_SHARING_INITIAL_SCOPE_LABEL = "Project: Ninebark Rollout";
+export const CONNECTOR_SHARING_OWNER_SCOPE_LABEL = "Personal: Only me";
 export const CONNECTOR_SHARING_SELECTED_SCOPE_LABEL = "Workspace: All";
 export const CONNECTOR_SHARING_LOCKED_VALUE_LABEL = "Workspace: Admins only";
