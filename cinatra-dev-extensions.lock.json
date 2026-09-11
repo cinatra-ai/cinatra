@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "58d696740ed18ae7b9c8bf20158d44b174d78d8c"
+      "resolvedSha": "8ba710e86d0adfa15d97975f6d990b1dbac5ae0b"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -285,7 +285,7 @@
     {
       "packageName": "@cinatra-ai/list-curator-agent",
       "repo": "cinatra-ai/list-curator-agent",
-      "resolvedSha": "66ba92b01565ab3ba7e5edac06b84555ac6964b2"
+      "resolvedSha": "26bb559a9b5353f2c636690d0b26338bbe2d2f20"
     },
     {
       "packageName": "@cinatra-ai/marketing-icp-artifact",
