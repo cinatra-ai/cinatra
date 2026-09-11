@@ -76,7 +76,7 @@ const ACCENT = "olive" as const;
 
 function cardData(displayName: string): MarketplaceCardData {
   return {
-    packageName: "@cinatra-ai/google-appointment-schedules",
+    packageName: "@acme-example/appointment-planner",
     packageVersion: "0.1.0",
     displayName,
     description: "Books, moves and cancels appointments on your team calendars.",
@@ -85,7 +85,7 @@ function cardData(displayName: string): MarketplaceCardData {
     badge: { text: "Free", variant: "free" },
     freshnessAt: "2026-06-01T00:00:00Z",
     rating: { average: 4.6, count: 124 },
-    detailHref: "/configuration/marketplace/cinatra-ai/google-appointment-schedules",
+    detailHref: "/configuration/marketplace/acme-example/appointment-planner",
     installCount: 880,
     manifestLogoUrl: null,
     iconSlug: null,
