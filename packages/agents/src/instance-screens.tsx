@@ -1,5 +1,14 @@
 import { notFound, redirect } from "next/navigation";
 import { buildAgentInstancePath } from "@/lib/agent-url";
+// THE `?onComplete` RETURN CONTRACT (cinatra#3369, acceptance item 2). A leaf
+// of plain functions — no directive — so this server component and the client
+// picker spell the one contract the same way.
+import {
+  LIST_PICKER_ON_COMPLETE,
+  readOnCompleteDestination,
+  withOnCompleteDestination,
+} from "./on-complete-return";
+import { ListPickerReturnWatcher } from "./list-picker-return-watcher";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -1272,6 +1281,7 @@ function serializeRunMessages(
 export async function SetupScreen({
   agentId,
   instanceId,
+  searchParams,
   scopeBase,
   launchScope,
   scopeTitle,
@@ -1309,10 +1319,23 @@ export async function SetupScreen({
       // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
       // launched from a vantage belongs to it, so the fresh run's address is
       // this launcher's own scope base plus the one agent-path grammar.
+      // AND THE LAUNCH'S RETURN DESTINATION TRAVELS WITH IT (cinatra#3369,
+      // acceptance item 2). The list picker's "Build a list with AI" CTA opens
+      // this launcher at `?onComplete=list-picker`; this redirect is where that
+      // launch becomes a run, and a query dropped here is the run losing the
+      // only record of what it was opened for. A proof round measured exactly
+      // that: the destination URL carried no query at all.
+      //
+      // Appended BESIDE the path helper, never through it: `buildAgentInstancePath`
+      // is the grammar of an agent's address for every caller that has one, and
+      // this query belongs to this one launch road.
       redirect(
-        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
-          scopeBase: scopeBase ?? null,
-        }),
+        withOnCompleteDestination(
+          buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
+            scopeBase: scopeBase ?? null,
+          }),
+          readOnCompleteDestination(searchParams),
+        ),
       );
     }
     notFound();
@@ -2030,6 +2053,13 @@ export async function SetupScreen({
 
   return (
     <Main className="min-h-screen">
+      {/* THIS RUN WAS OPENED FOR THE LIST PICKER (cinatra#3369, acceptance item
+          2), so when it finishes it hands its finish back to the picker's own
+          tab. Drawn only for such a run, and it draws nothing: every other run
+          on this screen is byte-identical to what it was. */}
+      {run && readOnCompleteDestination(searchParams) === LIST_PICKER_ON_COMPLETE ? (
+        <ListPickerReturnWatcher runId={run.id} initialStatus={run.status} />
+      ) : null}
       <AgentPageLayout
         agentId={agentId}
         instanceId={instanceId}
