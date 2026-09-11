@@ -94,6 +94,18 @@ describe("the sampler starts before the boot", () => {
     expect(text).toMatch(/while true; do/);
   });
 
+  it("writes every sample to the job log as well as the file", () => {
+    const text = SAMPLER().text;
+    // Each sample block goes through tee: the file AND the step's own stdout, so
+    // the samples taken up to the moment the runner kills the VM survive in the
+    // job log even when the always() report and the artifact upload never run.
+    expect(text).toMatch(/\}\s*\|\s*tee -a "\$SAMPLE_FILE"/);
+    // never the file-only redirect, whose samples die with the VM
+    expect(text).not.toMatch(/\}\s*>>\s*"\$SAMPLE_FILE"/);
+    // and the log half is not thrown away
+    expect(text).not.toMatch(/tee -a "\$SAMPLE_FILE"\s*>\s*\/dev\/null/);
+  });
+
   it("records the loop's pid to $GITHUB_ENV", () => {
     expect(SAMPLER().text).toMatch(
       new RegExp(`echo "${PID_VAR}=\\$!" >> "\\$GITHUB_ENV"`),

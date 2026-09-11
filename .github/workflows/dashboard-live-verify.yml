@@ -343,8 +343,12 @@ jobs:
         # after a green run at the same head — the demand, not the change,
         # decides. Sample the VM every 5s from here (before the build + boot)
         # to the end of the job; the cleanup step below reports the peak and
-        # uploads the file. Nothing else in the job changes: the cap-or-move
-        # decision is the follow-up the issue names.
+        # uploads the file. Each sample also goes to the job log through
+        # tee: a run killed by the runner's shutdown signal never reaches
+        # the always() report or the artifact upload (run 34525213714 left
+        # no artifact at all), and the log is the only place the samples
+        # taken before the kill survive. Nothing else in the job changes:
+        # the cap-or-move decision is the follow-up the issue names.
         run: |
           set -u
           SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
@@ -356,7 +360,7 @@ jobs:
                 date -u +%T
                 free -m | awk '/^Mem:/ { print "  mem_used_mb=" $3 " mem_available_mb=" $7 }'
                 ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ print "  rss_kb=" $1 " " $2 }'
-              } >> "$SAMPLE_FILE"
+              } | tee -a "$SAMPLE_FILE"
               sleep 5
             done
           ) &
