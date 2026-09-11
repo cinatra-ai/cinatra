@@ -70,6 +70,19 @@ export type AgentRunRowModel = {
    */
   detailHref: string | null;
   /**
+   * The agent's SETTINGS surface at the scope this list is rendered in
+   * (cinatra#2808, per-scope surfaces S2), from #2809's href contract. The
+   * global /agents picker addresses no scope and carries none, so its rows
+   * render exactly as before.
+   */
+  settingsHref?: string | null;
+  /**
+   * Lifecycle status beside the version on a per-scope row (cinatra#2808).
+   * Absent on the global picker — the §IV agent card there carries no
+   * version/status row at all.
+   */
+  status?: "active" | "locked";
+  /**
    * Set when the agent CANNOT run (cinatra#2605): it is a bundled opt-in package
    * with no canonical install row, or a required dependency of its is not
    * installed. The card then renders this action in the primary slot INSTEAD of
