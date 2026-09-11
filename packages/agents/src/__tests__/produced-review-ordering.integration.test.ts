@@ -33,6 +33,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import {
   producedEventId,
@@ -43,7 +45,7 @@ import { runReviewStepReading } from "../run-review-slot-reading";
 
 const TEST_SCHEMA = "cinatra_test_produced_review_3007";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-3007";
 const USER = "user-3007";
