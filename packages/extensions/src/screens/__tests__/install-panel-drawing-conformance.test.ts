@@ -27,8 +27,11 @@
  *
  * Source-text assertions are this directory's convention for these client
  * screens; the package's vitest environment is `node`, so a computed style is
- * not expressible here. The rendered geometry, in both palettes and on a long-
- * and a short-title card, is measured on the live boot.
+ * not expressible here. The COMPOSED card — the ink `currentColor` actually
+ * resolves to on the mark, and the title's box against the mark's box — is
+ * measured on the rendered tree by
+ * `src/components/__tests__/extension-install-panel-close-control.test.tsx`,
+ * and in both palettes on the live boot.
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -98,12 +101,19 @@ describe('clause: the panel body is one centred column — eyebrow, 36px trigger
   });
 });
 
+/** The ✕'s own overlay wrapper inside the install face. */
+const CLOSE_OVERLAY =
+  CARD.match(
+    // Bounded by the overlay's OWN tag: an attribute carries no angle bracket,
+    // so the match cannot run past this element and pick up a `{closeControl}`
+    // elsewhere in the file — the direct-child pin the exact-string match gave.
+    /<div\s+className="absolute top-2\.5 right-2\.5"[^<>]*>\s*\{closeControl\}\s*<\/div>/,
+  )?.[0] ?? "";
+
 describe('clause: "A close × in the header\'s corner does the same thing as Cancel"', () => {
   it("sits at the drawn 10px corner offset, over the header band", () => {
     // top-2.5 / right-2.5 === 0.625rem === the drawing's 10px.
-    expect(CARD).toMatch(
-      /<div className="absolute top-2\.5 right-2\.5">\{closeControl\}<\/div>/,
-    );
+    expect(CLOSE_OVERLAY).toBeTruthy();
   });
 
   it("is the drawn 24px mark on the banner's own ink at 0.85", () => {
@@ -112,8 +122,33 @@ describe('clause: "A close × in the header\'s corner does the same thing as Can
     expect(close).toBeTruthy();
     expect(close).toMatch(/\bsize-6\b/); // 24×24
     expect(close).toMatch(/\brounded-control\b/); // the shared control radius
-    expect(close).toMatch(/\btext-current\b/); // inherits the banner ground's ink
+    expect(close).toMatch(/\btext-current\b/); // paints in `currentColor`
     expect(close).toMatch(/\bopacity-85\b/); // the drawing's 0.85
+    // `text-current` is the identity — it names no ink of its own. The drawing
+    // gives the mark the band's own light ink (`color: var(--surface-strong)`,
+    // the same value the name and byline take), and the control is a SIBLING of
+    // the banner, so the ink has to reach it through the overlay it sits in.
+    // Without this, `currentColor` falls through to the page's foreground,
+    // which the palette moves while the category band does not (cinatra#2737).
+    expect(CLOSE_OVERLAY).toMatch(
+      /style=\{\{ color: ACCENT_PALETTE\[accentColor\]\.fg \}\}/,
+    );
+  });
+
+  it("keeps the title's box out of the mark's own box (cinatra#2737)", () => {
+    // The drawn control — 24×24 at a 10px corner inset — stands 34px in from
+    // the band's right edge; the banner's `p-[14px]` already accounts for 14 of
+    // those, so the name column gives up the rest, plus the italic title's own
+    // 0.08em overhang. The reserve is arithmetic on those numbers, not a bare
+    // constant, so moving any one geometry moves it too.
+    expect(CARD).toMatch(/const CLOSE_CONTROL_BOX_PX = 24;/);
+    expect(CARD).toMatch(/const CLOSE_CONTROL_CORNER_INSET_PX = 10;/);
+    expect(CARD).toMatch(/const BANNER_PADDING_PX = 14;/);
+    expect(CARD).toMatch(/const NAME_ITALIC_OVERHANG_PX = 2;/);
+    expect(CARD).toMatch(
+      /const CLOSE_CONTROL_NAME_RESERVE_PX =\s*CLOSE_CONTROL_BOX_PX \+\s*CLOSE_CONTROL_CORNER_INSET_PX -\s*BANNER_PADDING_PX \+\s*NAME_ITALIC_OVERHANG_PX;/,
+    );
+    expect(CARD).toMatch(/nameTrailingReserve=\{CLOSE_CONTROL_NAME_RESERVE_PX\}/);
   });
 
   it("returns the card to idle exactly as Cancel does", () => {
