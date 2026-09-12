@@ -92,6 +92,13 @@ export function NamespaceValidationProvider({
   const [value, setValueState] = useState(initialValue);
   const [displayName, setDisplayNameState] = useState(initialDisplayName);
   const [hasBlurred, setHasBlurred] = useState(false);
+  // cinatra#3340 — "the field has been edited" signal. The Continue control
+  // follows the validator from the first keystroke, so the reason for a
+  // refusal must be visible from the first keystroke too; waiting for blur
+  // left the operator with a disabled control and nothing on screen saying
+  // why. An UNTOUCHED field stays quiet (this starts false), and the
+  // reserved-word rule itself is unchanged — only when its reason is shown.
+  const [hasEdited, setHasEdited] = useState(false);
 
   // Linked-until-first-manual-edit state (cinatra#2387). `detached` starts at
   // `initiallyDetached` — true whenever the namespace field already carries a
@@ -109,6 +116,7 @@ export function NamespaceValidationProvider({
   // link for the rest of this component's lifetime (the page's session).
   const setValue = useCallback((next: string) => {
     setDetached(true);
+    setHasEdited(true);
     setValueState(next);
   }, []);
 
@@ -149,6 +157,7 @@ export function NamespaceValidationProvider({
           setDisplayName,
           hasBlurred,
           setHasBlurred,
+          hasEdited,
           result,
         }}
       >
@@ -173,6 +182,7 @@ type InternalState = {
   setDisplayName: (next: string) => void;
   hasBlurred: boolean;
   setHasBlurred: (next: boolean) => void;
+  hasEdited: boolean;
   result: ReturnType<typeof validateInstanceNamespace>;
 };
 
@@ -235,7 +245,7 @@ export function InstanceDisplayNameInput({ defaultValue: _ }: { defaultValue: st
 // reads shared state from context and does not use the prop directly.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function InstanceNamespaceInput({ defaultValue: _ }: { defaultValue: string }) {
-  const { value, setValue, hasBlurred, setHasBlurred, result } = useInternal();
+  const { value, setValue, hasBlurred, setHasBlurred, hasEdited, result } = useInternal();
 
   const onChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -248,8 +258,13 @@ export function InstanceNamespaceInput({ defaultValue: _ }: { defaultValue: stri
     setHasBlurred(true);
   }, [setHasBlurred]);
 
-  // UX gate: pre-blur quiet state. Show neither error nor preview until first blur.
-  const showError = hasBlurred && !result.ok;
+  // UX gate: an UNTOUCHED field stays quiet. Once the field has been edited
+  // the refusal is drawn immediately — while the field is still focused —
+  // because the Continue control is already disabled by the same validator
+  // result (see SubmitContinueButton). Blur still reveals a refusal on a
+  // value the operator never touched (a prefilled one), as before. The
+  // canonical preview keeps its original blur-gated timing.
+  const showError = (hasEdited || hasBlurred) && !result.ok;
   const showPreview =
     hasBlurred && result.ok && result.canonical !== value && result.canonical !== "";
 
