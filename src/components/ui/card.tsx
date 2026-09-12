@@ -37,17 +37,15 @@ function Card({
         // border-width was 0, so a consumer that passed a `border-*` colour got
         // no stroke at all.
         //
-        // The corner is UNCHANGED, and the reading is THEME-CONDITIONAL. In the
-        // default palette the app boots in, `rounded-xl` is
-        // calc(var(--radius) + 4px) over a 0.5rem radius, so it computes to
-        // 12px — the top of the section's stated 10 to 12px band, conforming.
-        // The dark palette declares its own 0.625rem radius, so the same
-        // utility computes to 14px there, OUTSIDE the band. That is an open
-        // departure of the corner clause in the dark palette, recorded rather
-        // than fixed here: the radius rides a shared scale step, so moving it
-        // is a cross-primitive token change and not one this primitive may
-        // make on its own. Both readings are measured, not assumed, by
-        // tests/e2e/design/conformance/primitive-chrome.spec.ts.
+        // The corner clause is NOT spelled in this file, and that is
+        // deliberate. It is stated once, as a scope on this card's own DOM
+        // seam at the end of src/app/globals.css, because this file is
+        // vendored verbatim into extension repositories: a corner written
+        // here drifts every one of them the moment the band moves, and the
+        // provenance gate stays red until each has re-vendored and had its
+        // pin raised. src/components/ui/__tests__/card-drawing-conformance.test.tsx
+        // holds that boundary as a test, and the live corner is read in both
+        // palettes by tests/e2e/design/conformance/primitive-chrome.spec.ts.
         "group/card flex flex-col gap-4 overflow-hidden rounded-xl border border-border bg-card py-4 text-sm text-card-foreground has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         // The lift is a transform, so it is silenced for a reader who has asked
         // the platform for reduced motion. There is no blanket
