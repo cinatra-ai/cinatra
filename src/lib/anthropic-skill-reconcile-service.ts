@@ -314,7 +314,7 @@ export async function runAnthropicSkillUploadReconcile(options?: {
     summary.noop = claimed.length;
     return summary;
   }
-  const fp = deriveApiKeyFingerprint();
+  const fp = await deriveApiKeyFingerprint();
   if (!fp) {
     completeRows(leaseToken, claimed.map((r) => r.id), "noop-no-api-key");
     summary.noop = claimed.length;

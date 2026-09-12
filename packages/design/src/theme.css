@@ -130,6 +130,30 @@
      bracket literal. */
   --text-scope-caption: 13px;
   --text-scope-caption--line-height: 1.5;
+  /* Three ROLES the scale had no name for, named at the ratified drawing's own
+     sizes (cinatra#3029). Named by the ROLE, never by the surface that first
+     needed them, so the scale carries them anywhere the role appears -- the
+     rule --text-scope-caption follows above.
+       --text-row-title  a row's own title inside a bordered list row, one step
+                         under the 14px body baseline. --text-listing-title is
+                         the listing's title; this is a row's. No line-height
+                         pairing: the drawing gives a row title none, so the
+                         row's own rhythm decides.
+       --text-reading    a sentence a surface reports back with (role=status)
+                         and the readable control text beside it -- the step
+                         between the 12px helper and the 13px caption.
+       --text-fact-line  the mono line of facts under a title: an identifier, a
+                         revision, a media type. Its tracking rides on its own
+                         size token the way the badge tracking rides on
+                         --text-badge-2xs, so the consumer drops the bracket.
+     The drawing's 10px tags need no token of their own: text-badge-xs IS 10px.
+     A whole pixel separates each of the three from the nearest standard size,
+     and a pixel off the drawing is a departure -- so the answer is the one this
+     table already gives twice: a token, never a bracket literal. */
+  --text-row-title: 13px;
+  --text-reading: 12.5px;
+  --text-fact-line: 10px;
+  --text-fact-line--letter-spacing: 0.04em;
   --tracking-title-tight: var(--title-tracking-tight);
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);

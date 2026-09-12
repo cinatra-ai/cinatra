@@ -83,8 +83,10 @@ describe("the rows sit on the reserved surface, not on the card's own ground", (
     renderForm();
     const chosen = row("immediate");
     expect(chosen.className).toContain("bg-surface-strong");
-    expect(chosen.className).toContain("from-primary/5");
-    expect(chosen.className).toContain("to-primary/5");
+    // The 5 percent tint is the drawing's own, and it is mixed from the edge's
+    // own indigo rather than from the palette's action colour (cinatra#3279).
+    expect(chosen.className).toContain("from-indigo-ink/5");
+    expect(chosen.className).toContain("to-indigo-ink/5");
   });
 });
 
@@ -115,15 +117,32 @@ describe("an unchosen row collapses to disc, icon and label", () => {
 // ---------------------------------------------------------------------------
 // 4. "chosen row border: 1px solid var(--blue)" — in BOTH palettes
 // ---------------------------------------------------------------------------
-describe("the chosen row's border is the primary token in both palettes", () => {
-  it("carries border-primary and no dark-palette boundary override", () => {
+describe("the chosen row's border is the drawn indigo in both palettes", () => {
+  it("carries border-indigo-ink and no dark-palette boundary override", () => {
     renderForm();
     const chosen = row("immediate");
-    expect(chosen.className).toContain("border-primary");
-    // A `dark:` boundary utility outranks `border-primary` by specificity, so
-    // one on this row is exactly the dark-mode neutral edge the issue measured.
+    // THE TOKEN IS THE DRAWN COLOUR, NOT THE PALETTE'S ACTION COLOUR
+    // (cinatra#3279). `border-primary` resolved through `--accent`, which the
+    // dark palette re-declares near-white, so the edge the drawing fixes at one
+    // indigo came out as two different colours. `--indigo-ink` is re-declared
+    // by no palette. The colour each utility RESOLVES to, in both palettes, is
+    // computed out of the stylesheet in
+    // src/__tests__/schedule-card-chosen-row-indigo-3279.test.tsx.
+    expect(chosen.className).toContain("border-indigo-ink");
+    expect(chosen.className).not.toContain("border-primary");
+    // A `dark:` boundary utility outranks a plain border utility by
+    // specificity, so one on this row is exactly the dark-mode neutral edge
+    // the issue measured.
     expect(chosen.className).not.toMatch(/dark:border-/);
     expect(chosen.className).not.toMatch(/dark:bg-input-fill/);
+  });
+
+  it("fills the chosen row's radio dot with the same indigo", () => {
+    renderForm();
+    const dot = row("immediate").querySelector('[class*="rounded-full"]:not([class*="border-2"])');
+    expect(dot).not.toBeNull();
+    expect((dot as HTMLElement).className).toContain("bg-indigo-ink");
+    expect((dot as HTMLElement).className).not.toContain("bg-primary");
   });
 });
 
@@ -148,9 +167,13 @@ describe("Estimated run duration says only what the drawing draws", () => {
     expect(screen.getByText("About 2.0 hr – 4.0 hr.")).toBeTruthy();
   });
 
-  it("draws no line at all where there is no estimate — the drawing gives none", () => {
+  it("draws the line where there is no estimate too — over the declared step count, never 'Unavailable.' (cinatra#3224)", () => {
+    // "An Estimated run duration line sits above the actions" — the drawing
+    // gives the line with no condition on it, so the no-history reading is its
+    // populated shape over the agent's declared step count.
     renderForm({ durationEstimate: null });
-    expect(screen.queryByText("Estimated run duration")).toBeNull();
+    expect(screen.getByText("Estimated run duration")).toBeTruthy();
+    expect(screen.getByText("About 1 min – 10 min.")).toBeTruthy();
     expect(screen.queryByText("Unavailable.")).toBeNull();
   });
 });

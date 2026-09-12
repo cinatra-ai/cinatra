@@ -96,6 +96,20 @@ vi.mock("@/lib/objects/effective-identity", () => ({
     eligibleExtensions: [],
   }),
 }));
+// Presentation identity is a SECOND identity pass, and the live one opens a
+// Postgres session: it calls `ensurePostgresSchema()` before its batched read.
+// This is a unit suite — it must never reach a database — so the resolver is
+// mocked beside the effective-identity mock above. The empty map and the base
+// identity are what a row with no active assertion resolves to on the live
+// path, which is what every row in this suite is (cinatra#3254).
+vi.mock("@/lib/objects/presentation-identity", () => ({
+  resolveArtifactPresentationIdentities: vi.fn().mockReturnValue(new Map()),
+  resolveArtifactPresentationIdentity: vi.fn().mockReturnValue({
+    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    tier: "claim-backed",
+    suggestions: [],
+  }),
+}));
 // The assertion store still backs the extension filter + the MCP semantic
 // primitives; stubbed (registered tools are not invoked here).
 vi.mock("../semantic-assertion-store", () => ({
@@ -365,6 +379,15 @@ describe("Media route purge gate", () => {
       // ledger finalize is tx-composed INTO the writer's own transaction).
       // Part of the canonical write path, not an alternate writer.
       "run-artifact-materializer.ts",
+      // The image tool (cinatra#3032, plan (C) item 0.28) — the SERVICE-LAYER
+      // module behind acceptance item 1, "A fixture agent makes a picture filed
+      // under its declared extension with its data". It pushes the configured
+      // image provider's bytes through createSemanticArtifact under the same
+      // idempotency ledger as the materializer above (the finalize is
+      // tx-composed INTO the writer's own transaction) and appends a
+      // regeneration through the canonical revision-append road. Part of the
+      // canonical write path, not an alternate writer.
+      "artifact-image-tool.ts",
       // NOT an importer: the objects surface-inventory documents the writer
       // file in its raw-object-access allow-list as a string literal
       // ("src/lib/artifacts/artifact-creation.ts"). It contains no import of

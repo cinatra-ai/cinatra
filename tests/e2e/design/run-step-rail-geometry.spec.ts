@@ -16,7 +16,7 @@
  * component test cannot compute any of it (jsdom has no layout engine and
  * reports every box as 0×0). Assertion-based on purpose — no pixel baselines
  * here, so the spec stays platform-portable (the pixel baselines remain owned
- * by the design harness).
+ * by design-fixtures.spec.ts).
  *
  * Six claims, at a desktop AND a narrow viewport. Every one was checked against
  * pre-fix markup (the same rail with the row's `h-8 items-center` restored), so
@@ -38,31 +38,39 @@
  *   3. PUSH-DOWN — a row carrying a genuinely wrapped (≥2 line) reason is
  *      taller than an ordinary single-line row, i.e. the rail GREW rather
  *      than clamping the text away. Pre-fix every row measured 32px.
- *   4. THE DRAWN STEP BOX — a reason-free row's TRIGGER box measures exactly
- *      the 28px the rail is drawn at (".rail .step { padding: 2px 0 }" over the
- *      24px circle), on the mixed rail, the single-line lifecycle rail and the
- *      lifecycle-free control rail. This claim used to read 2rem, because the
- *      shared Button's fixed `h-8` outranked the rail's own padding and pinned
- *      every step row 4px over the drawing; the Button now draws a padding box
- *      and no height, so the rail measures what it states. See
- *      `STEP_ROW_HEIGHT` for the full reading.
+ *   4. UNCHANGED — a reason-free row's TRIGGER box still measures exactly the
+ *      2rem it always had (the `min-h-8` floor), on the mixed rail, the
+ *      single-line lifecycle rail and the lifecycle-free control rail.
  *      Read the scope precisely: it is the trigger box (`ROW_BOX`) that is
- *      28px, not the enclosing StepperItem — an item that still has a
- *      following separator measures 40px (28 + the `!h-2` separator + its
- *      margins), and only the LAST item of a rail measures 28px. And a
- *      lifecycle row is never a bare step box even when its reason does not
- *      wrap: the reason is a block beneath the label, so that row is honestly
- *      two lines (measured 38px). "Exactly 28px" is a claim about reason-free
- *      TRIGGER boxes and nothing wider.
- *   5. FIRST-LINE ALIGNMENT — a lifecycle row's indicator centres on the FIRST
- *      LINE of its title, for a wrapped reason AND for a SHORT one that does
- *      not wrap. The fix applies `items-start` to EVERY lifecycle trigger, so
- *      the non-wrapping row is the case that could regress silently, and it is
- *      the ONE claim here that catches it: measured on pre-fix markup, a
- *      single-line lifecycle row still boxes at 32px and leaves its reason
- *      flush with the row's bottom edge, so containment (1) and intrusion (2)
- *      both PASS on it — while the indicator's centre lands 1px past the end
- *      of the first line. Pre-fix the wrapped rows miss by 33px.
+ *      2rem, not the enclosing StepperItem — an item that still has a
+ *      following separator measures 44px (32 + the `!h-2` separator + its
+ *      margins), and only the LAST item of a rail measures 32px. And a
+ *      lifecycle row is never 2rem even when its reason does not wrap: the
+ *      reason is a block beneath the label, so that row is honestly two lines
+ *      (measured 38px). "Exactly 32px" is a claim about reason-free TRIGGER
+ *      boxes and nothing wider.
+ *   5. CENTRED IN ITS OWN ROW BOX — a lifecycle row's indicator centres on
+ *      the row box it sits in, for a wrapped reason AND for a SHORT one that
+ *      does not wrap. This is the drawing's own rule and nothing looser:
+ *      `.rail .step { display: flex; align-items: center; gap: 8px; padding:
+ *      2px 0; ... }` centres the 24px mark in the row's OWN box, so the mark's
+ *      centre and the row box's centre are ONE number however many line boxes
+ *      the title wraps to. Read the scope precisely: the row box is the
+ *      TRIGGER box (`ROW_BOX`), the drawn `.rail .step`, not the enclosing
+ *      StepperItem whose box also carries the following separator.
+ *        This claim REPLACES an earlier first-line reading — "the indicator
+ *      centres on the FIRST LINE of its title" — which pinned the mark to the
+ *      title's first line box and is not what the drawing composes. Measured
+ *      on this fixture with that earlier composition restored (`items-start`
+ *      on the row box, `mt-0.5 leading-5` on the title), at BOTH viewports:
+ *      the wrapped row's mark centres at 324.078 in a row box centred on
+ *      364.578 — 40.5px above its own box — and the single-line lifecycle
+ *      row's mark at 280.078 against a box centred on 288.578, 8.5px above.
+ *      Both are cases this claim catches. Only the ORDINARY STEP ROW is a
+ *      control here (mark and box centre both 236.078 either way): its box is
+ *      one line, so the two readings coincide. A lifecycle row is never a
+ *      one-line box — its reason is a block beneath the label — so the
+ *      "single-line" lifecycle arm is a real case, not a control.
  *   6. ONE EXTRA LINE — a short, non-wrapping reason grows its row by its own
  *      single line and no more: at least the 2rem floor, strictly shorter than
  *      a wrapped row. NOTE that a lifecycle row is NOT a 32px row even when the
@@ -81,43 +89,21 @@ const PLAIN_RAIL = '[data-surface-id="run-step-rail-plain"]';
 const ROW = '[data-slot="stepper-item"]';
 const ROW_BOX = '[data-slot="stepper-trigger"]';
 const INDICATOR = '[data-slot="stepper-indicator"]';
-const TITLE = '[data-slot="stepper-title"]';
 const REASON = "[data-rail-lifecycle-reason]";
 const LIFECYCLE_ROW = '[data-rail-kind="lifecycleDecision"]';
 const STEP_ROW = '[data-rail-kind="step"]';
 
 /**
- * THE ORDINARY STEP ROW'S BOX, as the ratified drawing states it:
+ * The single-line rail row box: a 24px circle with the drawing's own 2px above
+ * and below it.
  *
- *   ".rail .step { ... padding: 2px 0; ... }"
- *
- * over the 24px indicator circle is a 28px entry and nothing else.
- *
- * This constant used to read 32 and called itself "the 2rem (`h-8`) row box
- * every ordinary single-line rail row has always had". That 2rem was never the
- * drawing's number: it was the shared Button's fixed `h-8`, which outranked the
- * rail's own `py-0.5` and pinned every step row 4px taller than the drawn step.
- * The rail already states the drawn box itself — `RUN_PAGE_RAIL_ROW_CLASS` is
- * `gap-2 border-0 px-0 py-0.5`, and its own note reads "a 28px entry and
- * nothing else" — so the 2rem was the Button overriding the rail, not the rail
- * asking for it.
- *
- * This PR removes that fixed height from the Button (the components drawing
- * states a 7px 14px padding box, not a height), and the step row falls to the
- * 28px its own drawing rule always asked for. So the claim below is NOT
- * relaxed, it is RE-ANCHORED: it moves off a height the Button happened to
- * impose and onto the height the rail is drawn at, and it is now the assertion
- * that catches a height floor creeping back into the shared primitive.
+ * IT WAS 32px HERE UNTIL cinatra#3225. That was the shared button's fixed `h-8`,
+ * which the rail's row class no longer takes — the drawing's `.rail .step {
+ * padding: 2px 0 }` over the circle is 28px and nothing else — so the constant
+ * follows the drawn row rather than the primitive it used to inherit. Measured
+ * on the fixture route at both viewports: 28px.
  */
-const STEP_ROW_HEIGHT = 28;
-
-/**
- * The 2rem floor a LIFECYCLE row still keeps, and the bound a wrapped row must
- * grow past. It is no longer the Button's: `RailExtraEntry` states `h-auto
- * min-h-8` on its own trigger, so the floor survives the Button losing `h-8`.
- * Both claims that used this number keep it unchanged.
- */
-const LIFECYCLE_ROW_FLOOR = 32;
+const SINGLE_LINE_ROW_HEIGHT = 28;
 
 /** Sub-pixel slack: fractional layout values must not be read as an overlap. */
 const EPSILON = 0.5;
@@ -131,30 +117,34 @@ async function boxOf(locator: Locator): Promise<Box> {
 }
 
 /**
- * The FIRST LINE box of a row's title, and the vertical centre of that row's
- * indicator — the pair the alignment claim is made of.
+ * A row's own ROW BOX, and the vertical centre of that row's indicator — the
+ * pair the centring claim is made of.
  *
- * The first line is read as the first client rect of the title's contents
- * (`Range.getClientRects()` returns one rect per line box), so it is the real
- * laid-out first line rather than an assumption about line-height. A title with
- * a wrapped reason produces several rects; a plain step row produces one.
+ * Both rects are read in ONE evaluate so they share a single layout, and the
+ * row box read is the trigger (`ROW_BOX`) — the drawn `.rail .step` — rather
+ * than the enclosing StepperItem, whose box also spans the following
+ * separator.
+ *
+ * The row's own HEIGHT comes back with them, because that is what tells a
+ * genuinely wrapped row from a one-line one. Counting the title's client rects
+ * would NOT: the title element carries the lifecycle reason block inside it,
+ * so `Range.getClientRects()` over its contents returns one rect per nested
+ * box (measured 9 on the wrapped row and 5 on the single-line one), not one
+ * rect per line.
  */
-async function firstLineAndIndicator(row: Locator) {
+async function rowBoxAndIndicator(row: Locator) {
   return row.evaluate(
     (el, sel) => {
-      const title = el.querySelector(sel.title)!;
-      const indicator = el.querySelector(sel.indicator)!;
-      const range = document.createRange();
-      range.selectNodeContents(title);
-      const firstLine = range.getClientRects()[0];
-      const ind = indicator.getBoundingClientRect();
+      const rowBox = el.querySelector(sel.rowBox)!.getBoundingClientRect();
+      const ind = el.querySelector(sel.indicator)!.getBoundingClientRect();
       return {
-        firstLineTop: firstLine.top,
-        firstLineBottom: firstLine.bottom,
+        rowBoxTop: rowBox.top,
+        rowBoxHeight: rowBox.height,
+        rowBoxCentre: rowBox.top + rowBox.height / 2,
         indicatorCentre: ind.top + ind.height / 2,
       };
     },
-    { title: TITLE, indicator: INDICATOR }
+    { rowBox: ROW_BOX, indicator: INDICATOR }
   );
 }
 
@@ -276,14 +266,14 @@ for (const viewport of VIEWPORTS) {
       expect(
         lifecycleRowBox.height,
         "a wrapped reason must make its row grow past the old fixed row height"
-      ).toBeGreaterThan(LIFECYCLE_ROW_FLOOR);
+      ).toBeGreaterThan(SINGLE_LINE_ROW_HEIGHT);
     });
 
-    test("a lifecycle indicator centres on the first line, wrapped reason or not", async ({
+    test("a lifecycle indicator centres in its own row box, wrapped reason or not", async ({
       page,
     }) => {
-      // Both lifecycle cases, plus an ordinary step row as the control that has
-      // always had this alignment.
+      // Both lifecycle cases, plus an ordinary step row as the control whose
+      // one-line box has the same centre under either composition.
       const rowWith = (rail: string, inner: string) =>
         page
           .locator(`${rail} ${ROW}`)
@@ -291,27 +281,51 @@ for (const viewport of VIEWPORTS) {
           .first();
 
       const cases = [
-        { name: "wrapped lifecycle row", row: rowWith(WRAPPED_RAIL, REASON) },
-        { name: "single-line lifecycle row", row: rowWith(SINGLE_LINE_RAIL, REASON) },
-        { name: "ordinary step row (control)", row: rowWith(SINGLE_LINE_RAIL, STEP_ROW) },
+        {
+          name: "wrapped lifecycle row",
+          row: rowWith(WRAPPED_RAIL, REASON),
+          mustExceedOneLine: true,
+        },
+        {
+          name: "single-line lifecycle row",
+          row: rowWith(SINGLE_LINE_RAIL, REASON),
+          mustExceedOneLine: true,
+        },
+        {
+          name: "ordinary step row (control)",
+          row: rowWith(SINGLE_LINE_RAIL, STEP_ROW),
+          mustExceedOneLine: false,
+        },
       ];
 
-      for (const { name, row } of cases) {
+      for (const { name, row, mustExceedOneLine } of cases) {
         await expect(row, `${name} must exist`).toHaveCount(1);
-        const { firstLineTop, firstLineBottom, indicatorCentre } =
-          await firstLineAndIndicator(row);
+        const { rowBoxCentre, rowBoxHeight, indicatorCentre } =
+          await rowBoxAndIndicator(row);
 
-        // The indicator belongs on the FIRST line, not centred against the
-        // whole block. Pre-fix the single-line row misses by 1px and the
-        // wrapped row by 33px.
+        if (mustExceedOneLine) {
+          // Without a genuinely taller-than-one-line row box the two readings
+          // coincide and the case would prove nothing. BOTH lifecycle rows
+          // clear it — a lifecycle row carries its reason as a block beneath
+          // the label, so even the "single-line" one is a two-line box.
+          expect(
+            rowBoxHeight,
+            `${name} must be taller than a single-line row box to be a real case`
+          ).toBeGreaterThan(SINGLE_LINE_ROW_HEIGHT + EPSILON);
+        }
+
+        // `align-items: center` on the drawn row: the mark centres in the ROW
+        // BOX, not on the title's first line. With the withdrawn first-line
+        // composition restored on this fixture the wrapped row's mark lands
+        // 40.5px above this centre and the single-line lifecycle row's 8.5px.
         expect(
           indicatorCentre,
-          `${name}: the indicator must not sit above its title's first line`
-        ).toBeGreaterThanOrEqual(firstLineTop - EPSILON);
+          `${name}: the mark must not sit above its own row box's centre`
+        ).toBeGreaterThanOrEqual(rowBoxCentre - EPSILON);
         expect(
           indicatorCentre,
-          `${name}: the indicator must not sit below its title's first line`
-        ).toBeLessThanOrEqual(firstLineBottom + EPSILON);
+          `${name}: the mark must not sit below its own row box's centre`
+        ).toBeLessThanOrEqual(rowBoxCentre + EPSILON);
       }
     });
 
@@ -339,7 +353,7 @@ for (const viewport of VIEWPORTS) {
       expect(
         shortRowBox.height,
         "a single-line lifecycle row must keep the 2rem min-h-8 floor"
-      ).toBeGreaterThanOrEqual(LIFECYCLE_ROW_FLOOR - EPSILON);
+      ).toBeGreaterThanOrEqual(SINGLE_LINE_ROW_HEIGHT - EPSILON);
       // ...and it must stay strictly shorter than a row whose reason wraps,
       // i.e. the row grew by ITS OWN content and not by a shared constant.
       expect(
@@ -348,7 +362,7 @@ for (const viewport of VIEWPORTS) {
       ).toBeLessThan(wrappedRowBox.height);
     });
 
-    test("rows without a reason draw the drawing's own step box", async ({ page }) => {
+    test("rows without a reason keep the row box they always had", async ({ page }) => {
       for (const rail of [WRAPPED_RAIL, SINGLE_LINE_RAIL, PLAIN_RAIL]) {
         const stepRows = page.locator(`${rail} ${STEP_ROW} ${ROW_BOX}`);
         const count = await stepRows.count();
@@ -358,8 +372,8 @@ for (const viewport of VIEWPORTS) {
           const box = await boxOf(stepRows.nth(i));
           expect(
             box.height,
-            `${rail} step row ${i} must draw the drawing's 28px step box`
-          ).toBeCloseTo(STEP_ROW_HEIGHT, 0);
+            `${rail} step row ${i} must keep the 2rem single-line row box`
+          ).toBeCloseTo(SINGLE_LINE_ROW_HEIGHT, 0);
         }
       }
     });

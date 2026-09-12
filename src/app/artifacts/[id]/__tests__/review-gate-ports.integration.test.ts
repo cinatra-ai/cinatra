@@ -40,10 +40,11 @@ import {
   type ArtifactReviewDecision,
   type ReviewDecisionCommitPlan,
 } from "@/lib/artifacts/artifact-review-decision";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_review_ports_1795";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-1795-review-ports";
 

@@ -25,6 +25,7 @@
 // either side that is not mirrored fails the host typecheck.
 
 import type { ArtifactContentProjection } from "./artifact-content-channel";
+import type { ArtifactEditCapability } from "./artifact-edit-channel";
 
 /**
  * The props-contract ABI version this leaf describes. A renderer declares the
@@ -105,4 +106,18 @@ export interface ArtifactRendererProps {
    * host, which asserts the cap before this snapshot crosses to a renderer.
    */
   content: ArtifactContentProjection;
+  /**
+   * THE EDIT CAPABILITY (enabler 0.20 of `PLAN: Agents Lifecycle (C)`).
+   *
+   * Either a host-minted grant naming the base revision and where a change set
+   * goes, or a NAMED refusal. Every surface that mounts a display says which:
+   * the artifact page mints a grant for a reader with write rights, and every
+   * other surface — the review card above all — mints a refusal. That is what
+   * makes "the review card shows the same display read-only" a property of the
+   * props rather than of a display remembering to behave.
+   *
+   * A display switches on `edit.kind`, and never infers permission from
+   * anything else on this snapshot.
+   */
+  edit: ArtifactEditCapability;
 }

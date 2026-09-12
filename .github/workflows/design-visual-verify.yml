@@ -100,6 +100,13 @@ on:
       - "tests/e2e/config/design.config.ts"
       - "tests/e2e/config/base.ts"
       - "tests/e2e/design/**"
+      # The selector that decides WHETHER this workflow's expensive job runs
+      # and WHICH families it runs (cinatra#3268), and the suites that prove
+      # it. A change to any of them must be judged by the whole suite, so the
+      # workflow has to be triggered by it in the first place.
+      - "scripts/ci/design-select.mjs"
+      - "scripts/ci/__tests__/design-select.test.mjs"
+      - "scripts/ci/__tests__/design-select-workflow.test.mjs"
       - ".github/workflows/design-visual-verify.yml"
 
 concurrency:
@@ -107,126 +114,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pixel-diff:
-    name: /design-fixtures pixel-diff + axe
-    # Opt-in larger-runner lever (mirrors build-image's build/e2e jobs). Zero-risk
-    # no-op (stays ubuntu-latest) until the org/repo variable CI_BUILD_RUNNER is set.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
-    # Post-cutover the build compiles the app + 79 cloned extensions, so the
-    # prod build + standalone boot + suite needs more than the old 15 min.
-    timeout-minutes: 45
-
-    # The standalone PRODUCTION server runs instrumentation.node.ts register()
-    # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
-    # (LiteLLM pricing sync, audit retention, marketplace catalog sync). Those
-    # calls await queue.waitUntilReady(), and the IORedis client is configured
-    # to retry FOREVER — so with no Redis, register() never resolves and the
-    # standalone server accepts TCP connections but never responds (the
-    # /design-fixtures readiness curl then times out at 5s/poll). A throwaway
-    # Redis is enough; nothing reads the queue here. Postgres (added in
-    # cinatra#986) exists ONLY for the seeded data-contract surfaces — the
-    # boot still tolerates it being empty (core-migrations +
-    # ensurePostgresSchema bootstrap the schema; production runtime mode
-    # skips the dev-only on-disk extension fs-scans).
-    services:
-      redis:
-        image: redis:8
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      # Ephemeral Postgres for the seeded data-contract surfaces
-      # (cinatra#986): installed-extensions-list/-filter render from the REAL
-      # canonical installed_extension store, provisioned per run through the
-      # seed endpoint. Job-scoped and thrown away — per-run isolation is
-      # structural in CI; the run-id namespace (CINATRA_CONFORMANCE_RUN_ID
-      # below) additionally isolates any shared/local database. Mirrors the
-      # dashboard-live-verify service block (same image/port pattern).
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      E2E_DESIGN_PORT: "3101"
-      # /design-fixtures renders through AppShell, which redirects any non-setup
-      # route to /setup when connectionReady=false. The CI env has no
-      # encryption key / identity / Nango / OpenAI setup, so the documented
-      # bypass (src/lib/setup-wizard.ts) is required — otherwise the readiness
-      # curl gets HTTP 200 from the redirect/loading shell and Playwright
-      # snapshots /setup instead of the fixtures. Matches dashboard-live-verify.
-      # It ALSO authorizes the seeded harness route + seed endpoint under the
-      # production build (cinatra#986; same contract, src/lib/auth-route-guard.ts).
-      CINATRA_E2E_SETUP_BYPASS: "true"
-      # REAL ephemeral database (cinatra#986): the seeded data-contract
-      # surfaces read the canonical installed_extension store. Dedicated
-      # schema name so nothing collides with other suites' conventions.
-      # Boot creates the schema itself (core-migrations + ensurePostgresSchema
-      # — the migrations dir is copied next to the standalone server below).
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
-      SUPABASE_SCHEMA: cinatra_e2e_design
-      # Run-namespace for the seeded fixture kit: retries of THIS workflow run
-      # share (and converge) one namespace; a re-run attempt gets a fresh one.
-      CINATRA_CONFORMANCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
-      # required-env-preflight (app-boot deploy-robustness) refuses to boot
-      # without an encryption key; the /design-fixtures route never touches
-      # secret storage. Same 64-zero placeholder dashboard-live-verify uses.
-      CINATRA_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_APP_URL: http://localhost:3101
-      NEXT_PUBLIC_SITE_URL: http://localhost:3101
-      # next.config.ts asserts OPENAI_API_KEY at server boot
-      # (REQUIRED_ENV list). The /design-fixtures route never invokes
-      # OpenAI; the env is read only by the startup guard. Placeholder
-      # value is fine and matches the BETTER_AUTH_SECRET pattern above.
-      OPENAI_API_KEY: design-visual-verify-placeholder-not-used-by-static-route
-      # Point background-jobs at the throwaway Redis service above so
-      # register()'s enqueue waitUntilReady() resolves (the default is also
-      # 127.0.0.1:6379 — set explicitly for clarity).
-      REDIS_URL: redis://127.0.0.1:6379
-      # Run the standalone server in PRODUCTION runtime mode: this is a prod
-      # build, and production mode skips the dev-only on-disk fs-scans of the 79
-      # cloned extensions (StaticBundleLoader / skill-loader / a2a auto-connect),
-      # which would otherwise run an awaited scan against the placeholder DB. The
-      # /design-fixtures route is static + runtime-mode-independent, and the
-      # setup-bypass (setup-wizard.ts) is not gated on runtime mode.
-      CINATRA_RUNTIME_MODE: production
-      # Skip the `required-extension-materialize` boot phase (cinatra#888). In
-      # production runtime mode that phase is `fatal` + fail-closed on the absent
-      # image-baked required-extension OAS seed — a standalone `pnpm build` (vs
-      # the Docker image) never bakes it, so the phase aborts boot against the
-      # placeholder DB before the server ever serves /design-fixtures. This
-      # documented escape hatch (src/lib/boot/phases/required-extension-materialize.ts)
-      # makes the phase a clean no-op; the static fixtures route needs no required
-      # extensions. Everything else (production runtime mode, placeholder DB,
-      # redis, encryption key) is unchanged from #881 — the boot-mode fix the
-      # issue's option (b) calls for. NOTE: this fixes the boot only; the
-      # committed pixel baselines still need a refresh against a real Linux-CI
-      # render (they were never CI-validated while this gate could not boot) —
-      # tracked separately in cinatra#863.
-      CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: "true"
-
+  # THE SELECTION, TAKEN IN FRONT OF THE COST (cinatra#3268 item 2).
+  #
+  # The selector alone narrows only the PLAYWRIGHT INVOCATION: by the time it
+  # speaks inside pixel-diff, the install, the 79-extension clone, the
+  # production build and the standalone boot have already been paid — six to
+  # ten minutes on a change that renders nothing. So the decision moves in
+  # front of the cost, into a job that owns a checkout, a node and the pinned
+  # companion clone the graph cannot be read without - and nothing else: no
+  # dependency install, no build, no browser, no boot. The expensive job below
+  # runs only when that decision is not "none".
+  #
+  # The two dependency-free contract checks MOVED here with it (they are not
+  # duplicated): they need no install either, and they must keep running on a
+  # change the suite itself skips — a testid contract break or a re-widened
+  # coverage allowlist is red whether or not any pixel moved.
+  #
+  # This job publishes its plan as an artifact and pixel-diff CONSUMES that
+  # file (`--plan`). One selection, taken once, against the base commit this
+  # run's event froze — rather than a second selection below that could
+  # disagree with the first.
+  select:
+    name: design suite selection
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      families: ${{ steps.plan.outputs.families }}
+      summary: ${{ steps.plan.outputs.summary }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the selection is a DIFF against the recorded base
+          # commit, and a merge base needs both sides. Same reason (and same
+          # cheap-gate shape) as the design-pin-drift job in gates.yml.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # No `cache: pnpm` — nothing here installs a dependency. The pin
+          # keeps the two moved checks and the selector on the same node they
+          # run on inside pixel-diff today.
+          node-version: "24"
 
       # Conformance stable-id contract (cinatra#985): pin integrity of the
       # committed manifests + every covered surface still carries its stable
       # data-testid attributes. Dependency-free node script — runs before the
-      # expensive install/build so a contract break fails in seconds.
+      # expensive job is even considered, so a contract break fails in seconds.
       - name: conformance testid contract
         run: node scripts/design/check-conformance-testids.mjs
 
@@ -251,10 +185,9 @@ jobs:
       # it needs no common ancestor. A merge base would be strictly weaker here
       # (it can reintroduce an exemption the base dropped after the PR forked).
       #
-      # NO `--depth` on the fetch: the depth-1 branch re-fetch is exactly the
-      # cinatra#2212 anti-pattern, and the pinned SHA costs no more without it
-      # (measured on this repo: ~10-27 MiB / ~1.5 s either way, because the
-      # checkout is already shallow and the server only sends the delta).
+      # The fetch-by-SHA below is kept although this job checks out full
+      # history: it is what makes the step correct on its own terms rather than
+      # on a neighbouring `with:` block nobody reads when editing it.
       #
       # The script FAILS CLOSED when the ref is unresolvable; so does this step.
       - name: conformance coverage ratchet (shrink-only)
@@ -266,8 +199,8 @@ jobs:
             echo "conformance ratchet FAILED: this run's event carries no pull_request.base.sha — refusing to run the ratchet against an unknown base" >&2
             exit 1
           fi
-          # The default-depth checkout holds only the merge commit, so the
-          # recorded base commit is normally fetched here, BY SHA.
+          # The recorded base commit is normally already here (full history);
+          # it is fetched BY SHA if it is not.
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "${BASE_SHA}" \
               || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} could not be fetched — the ratchet must not fail open" >&2; exit 1; }
@@ -276,6 +209,249 @@ jobs:
             || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} is unresolvable in this checkout — the ratchet must not fail open" >&2; exit 1; }
           echo "conformance ratchet base: ${BASE_SHA} (recorded PR base commit)"
           node scripts/design/check-conformance-ratchet.mjs "${BASE_SHA}"
+
+      # THE DECISION. Bound to the SAME frozen base commit as the ratchet
+      # above, for the same reason: a live branch tip can move under a re-run
+      # and silently change what this run decided to skip. An absent base sha
+      # is refused rather than guessed — the selector's own fail-open would
+      # widen to the whole suite, but a run that cannot say what it is
+      # comparing against must not be the run that decides what to skip.
+      #
+      # A non-zero exit here fails the job and pixel-diff never starts. That is
+      # the correct direction: the only unacceptable outcome is a silent
+      # "none" — a suite that stopped running while reporting success.
+      # THE GRAPH NEEDS THE EXTENSION TREE ON DISK.
+      #
+      # extensions/ is NOT in this repository: the companion repos are cloned
+      # into it, and tsconfig maps every "@cinatra-ai/*" alias into that tree.
+      # Without it the walk hits an unresolved in-repo import the very first
+      # time it reaches src/lib/generated/extensions.server.ts, and the
+      # selector then does the only safe thing it can with a graph it cannot
+      # trust: it widens to ALL. Measured on a bare checkout of this branch's
+      # base, a docs-only diff comes back "running ALL families - the import
+      # @cinatra-ai/anthropic-connector/register ... could not be resolved".
+      # So without this step the job in front of the cost would never skip
+      # anything and the whole change would save nothing.
+      #
+      # Pure git + node - no pnpm, no dependency install, no build, no browser:
+      # the same pinned companion checkout the expensive job already performs,
+      # measured at 34s, 88s and 78s in the last three runs against the six to
+      # ten minutes of setup and the twenty-six to thirty minutes of suite that
+      # a skip avoids. It runs AFTER the two contract checks so a contract
+      # break still fails in seconds without paying for it.
+      - name: Clone companion extension repos (pinned)
+        uses: ./.github/actions/clone-extensions
+
+      - name: select the design spec families
+        id: plan
+        env:
+          DESIGN_SELECT_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DESIGN_SELECT_DIFF_BASE:-}" ]; then
+            echo "design suite selection FAILED: this run's event carries no pull_request.base.sha — refusing to select against an unknown base" >&2
+            exit 1
+          fi
+          node scripts/ci/design-select.mjs --out design-select.json
+          node -e '
+            const fs = require("node:fs");
+            const plan = JSON.parse(fs.readFileSync("design-select.json", "utf8"));
+            const line = (key, value) => key + "=" + String(value).replace(/\r?\n/g, " ") + "\n";
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              line("mode", plan.mode)
+                + line("families", JSON.stringify(plan.specs))
+                + line("summary", plan.summary),
+            );
+          '
+
+      - name: publish the selection plan
+        # The expensive job reads THIS file rather than deciding again.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: design-select-plan
+          path: design-select.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: say what will run
+        # Through `env`, never interpolated into the script: the summary and
+        # the family list carry PATHS OUT OF THE DIFF, which a pull request
+        # author chooses. A file name is not a command.
+        env:
+          PLAN_SUMMARY: ${{ steps.plan.outputs.summary }}
+          PLAN_MODE: ${{ steps.plan.outputs.mode }}
+          PLAN_FAMILIES: ${{ steps.plan.outputs.families }}
+        run: |
+          {
+            echo "### ${PLAN_SUMMARY}"
+            echo ""
+            echo "mode: \`${PLAN_MODE}\`"
+            echo ""
+            echo "families: \`${PLAN_FAMILIES}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pixel-diff:
+    name: /design-fixtures pixel-diff + axe
+    needs: select
+    # The whole point of the job above: a change that renders nothing does not
+    # pay the install, the build and the boot. A skipped job reports success,
+    # and this context is not a required one today (only design-pin-drift is,
+    # among the design contexts), so the skip changes no branch rule. Should
+    # this context ever BE required, the road is an always-running final status
+    # job that reports on behalf of the skip — not the removal of this `if`.
+    if: ${{ needs.select.outputs.mode != 'none' }}
+    # Runner-class routing (the class list lives at the top of build-image.yml).
+    # This job takes PIXEL, a class of its own: the committed goldens are DRAWN
+    # on the hosted class, and a self-hosted machine renders /design-fixtures
+    # differently, so the picture comparison never passes anywhere else. Zero-risk
+    # no-op (stays ubuntu-latest) until the org/repo variable CI_RUNNER_PIXEL is
+    # set, and it is only ever set together with a goldens re-draw on that same
+    # class (design-baselines-refresh, which takes PIXEL too).
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '"ubuntu-latest"') }}
+    # Post-cutover the build compiles the app + 79 cloned extensions, so the
+    # prod build + standalone boot + suite needs more than the old 15 min.
+    timeout-minutes: 70
+
+    # The standalone PRODUCTION server runs instrumentation.node.ts register()
+    # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
+    # (LiteLLM pricing sync, audit retention, marketplace catalog sync). Those
+    # calls await queue.waitUntilReady(), and the IORedis client is configured
+    # to retry FOREVER — so with no Redis, register() never resolves and the
+    # standalone server accepts TCP connections but never responds (the
+    # /design-fixtures readiness curl then times out at 5s/poll). A throwaway
+    # Redis is enough; nothing reads the queue here. Postgres (added in
+    # cinatra#986) exists ONLY for the seeded data-contract surfaces — the
+    # boot still tolerates it being empty (core-migrations +
+    # ensurePostgresSchema bootstrap the schema; production runtime mode
+    # skips the dev-only on-disk extension fs-scans).
+    services:
+      redis:
+        image: redis:8
+        ports:
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # Ephemeral Postgres for the seeded data-contract surfaces
+      # (cinatra#986): installed-extensions-list/-filter render from the REAL
+      # canonical installed_extension store, provisioned per run through the
+      # seed endpoint. Job-scoped and thrown away — per-run isolation is
+      # structural in CI; the run-id namespace (CINATRA_CONFORMANCE_RUN_ID
+      # below) additionally isolates any shared/local database. Mirrors the
+      # dashboard-live-verify service block (same image/port pattern).
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for one host port (cinatra#3267).
+          - "5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      E2E_DESIGN_PORT: "3101"
+      # /design-fixtures renders through AppShell, which redirects any non-setup
+      # route to /setup when connectionReady=false. The CI env has no
+      # encryption key / identity / Nango / OpenAI setup, so the documented
+      # bypass (src/lib/setup-wizard.ts) is required — otherwise the readiness
+      # curl gets HTTP 200 from the redirect/loading shell and Playwright
+      # snapshots /setup instead of the fixtures. Matches dashboard-live-verify.
+      # It ALSO authorizes the seeded harness route + seed endpoint under the
+      # production build (cinatra#986; same contract, src/lib/auth-route-guard.ts).
+      CINATRA_E2E_SETUP_BYPASS: "true"
+      # REAL ephemeral database (cinatra#986): the seeded data-contract
+      # surfaces read the canonical installed_extension store. Dedicated
+      # schema name so nothing collides with other suites' conventions.
+      # Boot creates the schema itself (core-migrations + ensurePostgresSchema
+      # — the migrations dir is copied next to the standalone server below).
+      # SUPABASE_DB_URL is set by this job's first step, not here: it names
+      # the RANDOM host port the runner mapped for the postgres container
+      # above, and a job-level `env:` cannot read `job.services.*`
+      # (cinatra#3267).
+      SUPABASE_SCHEMA: cinatra_e2e_design
+      # Run-namespace for the seeded fixture kit: retries of THIS workflow run
+      # share (and converge) one namespace; a re-run attempt gets a fresh one.
+      CINATRA_CONFORMANCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
+      # required-env-preflight (app-boot deploy-robustness) refuses to boot
+      # without an encryption key; the /design-fixtures route never touches
+      # secret storage. Same 64-zero placeholder dashboard-live-verify uses.
+      CINATRA_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_APP_URL: http://localhost:3101
+      NEXT_PUBLIC_SITE_URL: http://localhost:3101
+      # next.config.ts asserts OPENAI_API_KEY at server boot
+      # (REQUIRED_ENV list). The /design-fixtures route never invokes
+      # OpenAI; the env is read only by the startup guard. Placeholder
+      # value is fine and matches the BETTER_AUTH_SECRET pattern above.
+      OPENAI_API_KEY: design-visual-verify-placeholder-not-used-by-static-route
+      # REDIS_URL points background-jobs at the throwaway Redis service above
+      # so register()'s enqueue waitUntilReady() resolves. It too is exported
+      # by this job's first step rather than set here — the runner maps that
+      # container onto a RANDOM host port (cinatra#3267).
+      # Run the standalone server in PRODUCTION runtime mode: this is a prod
+      # build, and production mode skips the dev-only on-disk fs-scans of the 79
+      # cloned extensions (StaticBundleLoader / skill-loader / a2a auto-connect),
+      # which would otherwise run an awaited scan against the placeholder DB. The
+      # /design-fixtures route is static + runtime-mode-independent, and the
+      # setup-bypass (setup-wizard.ts) is not gated on runtime mode.
+      CINATRA_RUNTIME_MODE: production
+      # Skip the `required-extension-materialize` boot phase (cinatra#888). In
+      # production runtime mode that phase is `fatal` + fail-closed on the absent
+      # image-baked required-extension OAS seed — a standalone `pnpm build` (vs
+      # the Docker image) never bakes it, so the phase aborts boot against the
+      # placeholder DB before the server ever serves /design-fixtures. This
+      # documented escape hatch (src/lib/boot/phases/required-extension-materialize.ts)
+      # makes the phase a clean no-op; the static fixtures route needs no required
+      # extensions. Everything else (production runtime mode, placeholder DB,
+      # redis, encryption key) is unchanged from #881 — the boot-mode fix the
+      # issue's option (b) calls for. NOTE: this fixes the boot only; the
+      # committed pixel baselines still need a refresh against a real Linux-CI
+      # render (they were never CI-validated while this gate could not boot) —
+      # tracked separately in cinatra#863.
+      CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: "true"
+
+    steps:
+      # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
+      # the runner mapped: `job.services.*` is unreadable from a job-level
+      # `env:`, so they are exported here, before the first step that reads
+      # one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The plan the `select` job published, downloaded rather than recomputed.
+      # Re-running the selector here would take a SECOND decision — bound to
+      # the same frozen base, so it should agree, but "should agree" is not a
+      # binding. This binds it: what runs below is the exact file the cheap job
+      # wrote, and the run step refuses to start on a plan it cannot read.
+      - name: fetch the published selection plan
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: design-select-plan
+          path: .
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
@@ -315,12 +491,13 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). A 4G swapfile absorbs `pnpm build` page-data
+        # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
+        # its own memory and cleanup, and this step's tools are not on its
+        # path). A 4G swapfile absorbs `pnpm build` page-data
         # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
         # unresponsiveness mid page-data collection. Subshell-guarded so a
         # swap-setup failure NEVER fails the job. Mirrors the build-image jobs.
-        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build
@@ -328,7 +505,7 @@ jobs:
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show || true; free -h || true
           else
             echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
           fi
@@ -338,6 +515,12 @@ jobs:
         # 79 cloned extensions ONCE here (under the job timeout), so the server
         # then boots instantly — vs `pnpm dev` cold-compiling on first request,
         # which exceeded any practical webServer timeout post-cutover.
+        env:
+          # One page-data worker on the two-processor hosted runner: three workers
+          # starve the runner's own heartbeat during page-data collection and GitHub
+          # reclaims it ("runner received a shutdown signal"); the knob maps to
+          # experimental.cpus in next.config.ts. Same cap as the smoke build.
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
@@ -362,18 +545,52 @@ jobs:
           printf 'CINATRA_CONFORMANCE_SEED_TOKEN=%s\n' "$minted" >> "$GITHUB_ENV"
           echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
 
+      - name: Free the design port on the runner
+        # cinatra#3383: this job binds ONE fixed port (E2E_DESIGN_PORT). On a
+        # self-hosted runner an earlier job that ended without stopping its
+        # server (cancelled, timed out, or crashed after the listen) leaves the
+        # process holding that port, and every later job dies at start with
+        # EADDRINUSE. Free the port here, and only the port — nothing about the
+        # machine is touched. lsof and fuser are not both present on every
+        # runner image, so whichever the image carries is used; neither being
+        # present is not a failure (a hosted runner starts with the port free).
+        run: |
+          set -uo pipefail
+          if command -v lsof >/dev/null 2>&1; then
+            holders="$(lsof -ti "tcp:${E2E_DESIGN_PORT}" || true)"
+            if [ -n "$holders" ]; then
+              echo "port ${E2E_DESIGN_PORT} held by: ${holders}"
+              echo "$holders" | xargs -r kill || true
+              sleep 2
+              echo "$holders" | xargs -r kill -9 || true
+            else
+              echo "port ${E2E_DESIGN_PORT} is free"
+            fi
+          elif command -v fuser >/dev/null 2>&1; then
+            fuser -k "${E2E_DESIGN_PORT}/tcp" || true
+          else
+            echo "::warning::neither lsof nor fuser on this runner — port ${E2E_DESIGN_PORT} not checked"
+          fi
+
       - name: Start standalone server
         # Run server.js directly (instant boot from the prebuilt bundle).
         # migrations/ is copied next to the server exactly like the Dockerfile
         # COPYs it to /app (cinatra#986): the boot's core-migrations phase then
         # bootstraps the versioned app schema on the fresh service Postgres,
         # the same way a production image boot would.
+        #
+        # The pid is written to $GITHUB_ENV (cinatra#3383) so the always()
+        # cleanup at the end of this job stops EXACTLY this process — the node
+        # process itself, not a shell wrapping it, and never a pattern kill.
         run: |
           cp -r .next/static .next/standalone/.next/static
           [ -d public ] && cp -r public .next/standalone/public || true
           [ -d migrations ] && cp -r migrations .next/standalone/migrations || true
-          (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1) &
-          echo "standalone server launched as PID $!"
+          cd .next/standalone
+          PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1 &
+          server_pid=$!
+          echo "standalone server launched as PID ${server_pid} on port ${E2E_DESIGN_PORT}"
+          printf 'DESIGN_SERVER_PID=%s\n' "$server_pid" >> "$GITHUB_ENV"
 
       - name: Wait for /design-fixtures readiness
         run: |
@@ -382,7 +599,7 @@ jobs:
           # DB but there are dozens of them; first serve can exceed the old
           # 2-minute window. 8 minutes covers the observed fail-open boot.
           for i in $(seq 1 240); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures" --max-time 5 2>/dev/null || echo 000)
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures/conformance" --max-time 5 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "ready after ${i} polls"; exit 0; fi
             sleep 2
           done
@@ -397,9 +614,17 @@ jobs:
         # server above. Wrapped in `timeout` (above the Playwright budget) so
         # a hung run is killed, not left to the job cap; 1200s covers the
         # added conformance project on the shared boot.
+        #
+        # `--plan` is `pnpm test:e2e:design` (which is this same selector with
+        # `--run`) reading the PUBLISHED decision instead of taking its own:
+        # the families below are the families the `select` job named, and a
+        # plan file that is absent or damaged fails the step rather than
+        # quietly running nothing.
         env:
           E2E_REUSE_SERVER: "1"
-        run: timeout --kill-after=60 1200 pnpm test:e2e:design
+        run: >-
+          timeout --kill-after=60 2400
+          node scripts/ci/design-select.mjs --run --plan design-select.json
 
       - name: Dump standalone server log on failure
         # Next.js omits server-component error messages from the CLIENT response
@@ -441,3 +666,27 @@ jobs:
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Stop the standalone server
+        # cinatra#3383: the job stops the server it started, on every outcome
+        # (success, failure, cancellation) — otherwise the process survives the
+        # job on a self-hosted runner and the NEXT run of this job cannot bind
+        # the port. By the recorded pid only; a pattern kill on this shared
+        # machine could hit another job's node process.
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${DESIGN_SERVER_PID:-}" ]; then
+            kill "$DESIGN_SERVER_PID" 2>/dev/null || true
+            for _ in $(seq 1 10); do
+              kill -0 "$DESIGN_SERVER_PID" 2>/dev/null || break
+              sleep 1
+            done
+            kill -9 "$DESIGN_SERVER_PID" 2>/dev/null || true
+            echo "stopped standalone server PID ${DESIGN_SERVER_PID}"
+          else
+            echo "no standalone server pid recorded — nothing to stop"
+          fi
+          if command -v lsof >/dev/null 2>&1; then
+            echo "port ${E2E_DESIGN_PORT} holders after cleanup: $(lsof -ti "tcp:${E2E_DESIGN_PORT}" | tr '\n' ' ' || true)"
+          fi

@@ -233,14 +233,16 @@ describe("the input step's detail carries the step's own card and nothing else",
     expect(document.body.textContent).not.toMatch(/Waiting to start/i);
   });
 
-  it("keeps the run-progress line for a host that draws no rail", async () => {
-    // The chat thread's run card is unchanged: the panel there is a progress
-    // panel and says so when it has nothing to report.
+  it("draws no run-progress line for a host that draws no rail either (cinatra#3222 item 1)", async () => {
+    // The ratified drawing, §IX: "There is no panel above an empty exchange —
+    // the window is the field alone until the first message." The line used to
+    // return on the branch where the rail carries no input row; it returns
+    // nowhere now.
     const view = await renderPanel();
-
     await waitFor(() =>
       expect(view.container.querySelector("#field-idea")).not.toBeNull(),
     );
-    expect(document.body.textContent).toMatch(/No messages yet/i);
+    expect(document.body.textContent).not.toMatch(/No messages yet/i);
+    expect(document.body.textContent).not.toMatch(/Waiting to start/i);
   });
 });

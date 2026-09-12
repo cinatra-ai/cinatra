@@ -424,3 +424,29 @@ body[data-cinatra-dashboard-modal-open="true"]
     height: min(90vh, calc(100% - 2rem));
   }
 }
+
+/* The rotated x-axis labels of a bar chart clear its legend (cinatra#2773).
+ *
+ * drizzle-cube's bar chart draws every x-axis tick label rotated -45
+ * degrees inside an x-axis band of a fixed `height={60}` and puts the
+ * legend directly beneath it, so a label longer than ~16 characters
+ * descends out of the band and onto the legend row. The chart takes no
+ * margin / legend-position / label-height display option, so the host
+ * wrapper (`bar-chart-legend-clearance.tsx`) measures the labels it is
+ * about to draw and publishes the overrun as
+ * `--cinatra-bar-legend-clearance`; this rule spends it.
+ *
+ * Why a TRANSPARENT TOP BORDER on the legend wrapper: recharts sizes the
+ * plot area from that wrapper's MEASURED height, and the wrapper is
+ * positioned `bottom: <margin.bottom>` with `height: auto` — so a top
+ * border grows the measured box UPWARD, pushing the axis band and its
+ * labels up while the legend's own content stays exactly where it was.
+ *
+ * No `!important` needed: the cube sets `padding-top` inline on this
+ * wrapper (`wrapperStyle`) but no border, so this normal declaration has
+ * nothing to beat. The variable defaults to `0px`, so every bar chart
+ * outside the wrapper — and every wrapped one whose labels fit — renders
+ * with the vendored layout unchanged. */
+[data-cinatra-bar-legend-clearance] .recharts-legend-wrapper {
+  border-top: var(--cinatra-bar-legend-clearance, 0px) solid transparent;
+}

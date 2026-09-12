@@ -265,3 +265,74 @@ describe("collectArtifactMaterializeNodesFromOasDocument", () => {
     expect(result.errors[0]).toContain("node_id");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SAME-ARTIFACT REVISION's call grammar (cinatra#3030, item 0.30;
+// convergence round). The runtime shaper accepts an APPEND — a call naming the
+// artifact it revises AND the revision it read, with no title, since the
+// artifact already carries one. The compiler must accept exactly the same
+// calls, or the road is unreachable from a published package.
+// ---------------------------------------------------------------------------
+describe("the append call grammar", () => {
+  function appendInput(overrides?: Record<string, unknown>): Record<string, unknown> {
+    return {
+      extension: EXT,
+      content: "{{ picture_section }}",
+      declaredMime: "text/markdown",
+      node_id: "persist_draft",
+      artifactId: "{{ draft_artifact_id }}",
+      baseRepresentationRevisionId: "{{ draft_revision_id }}",
+      ...overrides,
+    };
+  }
+
+  it("accepts an append that names the artifact and the revision it read, without a title", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(materializeNode({ input: appendInput() })),
+      { produces: [EXT] },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.nodes).toHaveLength(1);
+  });
+
+  it("refuses an artifactId without the revision it read", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(
+        materializeNode({
+          input: appendInput({ baseRepresentationRevisionId: undefined, title: "{{ title }}" }),
+        }),
+      ),
+      { produces: [EXT] },
+    );
+    expect(result.errors.join("\n")).toMatch(/baseRepresentationRevisionId/);
+  });
+
+  it("refuses a base revision without the artifact it revises", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(
+        materializeNode({
+          input: appendInput({ artifactId: undefined, title: "{{ title }}" }),
+        }),
+      ),
+      { produces: [EXT] },
+    );
+    expect(result.errors.join("\n")).toMatch(/artifactId/);
+  });
+
+  it("still requires a title on a CREATE (the control)", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(
+        materializeNode({
+          input: {
+            extension: EXT,
+            content: "{{ draft }}",
+            declaredMime: "text/markdown",
+            node_id: "persist_draft",
+          },
+        }),
+      ),
+      { produces: [EXT] },
+    );
+    expect(result.errors.join("\n")).toMatch(/title/);
+  });
+});

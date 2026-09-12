@@ -22,9 +22,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// The harness MOUNT. The manifest surface it stands for is bound on the test
+// The harness MOUNTS. The manifest surface each stands for is bound on the test
 // side, in the driver map, because the chip anchors belong to one module only.
+// W0 landed the first; W8 (cinatra#3164) adds the row that arrives from a mark
+// the reader has already made — the same one-control shape at its other end.
 const MOUNT = "chip-row-live";
+const DISMISSED_MOUNT = "chip-row-dismissed";
 
 describe("the conformance harness mount for the suggestion chips", () => {
   it("mounts the SHIPPED chip row under the harness mount the driver addresses", () => {
@@ -65,7 +68,26 @@ describe("the conformance harness mount for the suggestion chips", () => {
     expect(row.getAttribute("data-suggestion-chips-mode")).toBe("live");
   });
 
-  it("carries exactly the one fixture row this wave lands", () => {
-    expect(LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((f) => f.mount)).toEqual([MOUNT]);
+  it("draws the row that arrives DISMISSED, and offers the way back on it", () => {
+    const { container } = render(<LifecycleSuggestionChipFixtures />);
+    const root = container.querySelector(`[data-surface-id="${DISMISSED_MOUNT}"]`);
+    expect(root, "the second fixture row draws its declared mount").not.toBeNull();
+    const row = root!.querySelector('[data-conformance-id="suggestion-chips"]')!;
+    // The marks are the harness's whole state; the READING is the component's.
+    const dismissed = row.querySelector('[data-conformance-id="suggestion-dismissed"]');
+    expect(dismissed).not.toBeNull();
+    expect(dismissed!.getAttribute("data-suggestion-state")).toBe("dismissed");
+    // Two states and no third: the other reading is not on screen at all, and
+    // the one control offered is the way back, named by the product.
+    expect(row.querySelector('[data-conformance-id="suggestion-accepted"]')).toBeNull();
+    expect(dismissed!.getAttribute("data-action")).toBe("accept-suggestion -> accepted");
+    expect(row.getAttribute("data-suggestion-chips-mode")).toBe("live");
+  });
+
+  it("carries exactly the fixture rows the waves so far land", () => {
+    expect(LIFECYCLE_SUGGESTION_CHIP_FIXTURES.map((f) => f.mount)).toEqual([
+      MOUNT,
+      DISMISSED_MOUNT,
+    ]);
   });
 });
