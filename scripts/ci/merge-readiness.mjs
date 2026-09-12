@@ -286,6 +286,26 @@ export function pathsApply(globs, changedPaths) {
  */
 export const sourceOf = (c) => `${c.app ?? "?"}:${c.workflow ?? "?"}`;
 
+/**
+ * Which of several check runs of ONE name from ONE source branch protection
+ * would match: the LATEST attempt. A re-run job leaves the first attempt's
+ * check run beside the second on the same commit, so the highest check-run id
+ * wins, with `completedAt` as the tie-breaker when ids are missing or equal.
+ */
+export function latestRun(runs) {
+  const key = (c) => {
+    const id = typeof c?.id === "number" && Number.isFinite(c.id) ? c.id : -Infinity;
+    const t = Date.parse(c?.completedAt ?? "");
+    return [id, Number.isNaN(t) ? -Infinity : t];
+  };
+  return runs.reduce((best, c) => {
+    const [bi, bt] = key(best);
+    const [ci, ct] = key(c);
+    if (ci !== bi) return ci > bi ? c : best;
+    return ct > bt ? c : best;
+  });
+}
+
 const CONCLUSION_FAIL_LABEL = {
   failure: "failed",
   cancelled: "cancelled",
@@ -302,7 +322,7 @@ const CONCLUSION_FAIL_LABEL = {
  *
  * @param {object} args
  * @param {object} args.inventory   parsed .github/merge-readiness.json
- * @param {Array}  args.checks      [{ name, status, conclusion, app, workflow }]
+ * @param {Array}  args.checks      [{ id, name, status, conclusion, completedAt, app, workflow }]
  * @param {Array|null} args.changedPaths  paths changed by the candidate (null = unknown)
  * @param {string} args.eventName
  * @param {object} [args.queue]     merge_group arm: { approvedHead, pullRequestHead, recordText }
@@ -331,13 +351,18 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
       continue;
     }
     const sources = new Set(runs.map(sourceOf));
-    if (sources.size > 1 || runs.length > 1) {
+    if (sources.size > 1) {
       failures.push(
         `duplicate-source: '${e.context}' was reported ${runs.length} times from ${sources.size} source(s) [${[...sources].join(", ")}] — which run branch protection would match is ambiguous`,
       );
       continue;
     }
-    const run = runs[0];
+    // Several runs of one name from ONE source are a re-run: branch protection
+    // matches the latest of them, so the latest one's conclusion decides here too.
+    const run = latestRun(runs);
+    if (runs.length > 1) {
+      reports.push(`re-run (the latest of ${runs.length} runs from one source decides): '${e.context}'`);
+    }
     if (run.app !== e.app) {
       failures.push(`untrusted-source: '${e.context}' was reported by app '${run.app}', but the inventory trusts '${e.app}'`);
       continue;
@@ -441,9 +466,11 @@ async function listChecks(token, repo, sha) {
     const body = await api(token, `/repos/${repo}/commits/${sha}/check-runs?per_page=100&page=${page}`);
     for (const c of body.check_runs ?? []) {
       out.push({
+        id: typeof c.id === "number" ? c.id : null,
         name: c.name,
         status: c.status,
         conclusion: c.conclusion,
+        completedAt: c.completed_at ?? null,
         app: c.app?.slug ?? null,
         workflow: c.check_suite?.id != null ? `check_suite:${c.check_suite.id}` : (c.html_url ?? "?"),
       });

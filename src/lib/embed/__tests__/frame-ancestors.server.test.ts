@@ -5,12 +5,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // the closed assistant->instancesConfigKey binding table are the REAL pure
 // modules, so the fail-closed matrix (§B7 / §B15) runs against synthetic rows.
 
-const { readConnectorConfigMock } = vi.hoisted(() => ({
-  readConnectorConfigMock: vi.fn(),
-}));
+const { readConnectorConfigMock, listActiveConnectSiteOriginsMock, readInstanceIdentityMock } =
+  vi.hoisted(() => ({
+    readConnectorConfigMock: vi.fn(),
+    listActiveConnectSiteOriginsMock: vi.fn(),
+    readInstanceIdentityMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: readConnectorConfigMock,
+}));
+
+vi.mock("@/lib/connect-sites-store", () => ({
+  listActiveConnectSiteOrigins: listActiveConnectSiteOriginsMock,
+}));
+
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentityRequiringInstanceId: readInstanceIdentityMock,
 }));
 
 import {
@@ -22,6 +33,12 @@ import {
 
 beforeEach(() => {
   readConnectorConfigMock.mockReset();
+  listActiveConnectSiteOriginsMock.mockReset();
+  readInstanceIdentityMock.mockReset();
+  // Default for the pre-existing matrix: no connect-site row, no identity —
+  // the connector-instances road answers on its own, exactly as before.
+  listActiveConnectSiteOriginsMock.mockReturnValue([]);
+  readInstanceIdentityMock.mockReturnValue(null);
 });
 
 describe("resolveInstanceFrameAncestor (§7 read-only)", () => {
@@ -212,5 +229,155 @@ describe("resolveVerifiedWidgetFrameOrigin (the policy-writable origin)", () => 
       expect(out!).not.toMatch(/[*\s"'`;,\\]/);
       expect(FRAME_ANCESTORS_NONE).not.toBe(out);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3328 — the site connected through the handshake keeps the app's OWN
+// instance identity, while "Connect site" mints a DIFFERENT id into
+// `connector_config:<client>.instances[]`. Asked for the handshake's id the
+// gate found no instance row and answered 'none', so the widget never framed
+// until the site's stored id was updated by hand. The gate now ALSO resolves
+// the origin from the `connect_sites` row the handshake itself wrote — read by
+// the connect client name, fail-closed, and ONLY when the presented id is this
+// app's own instance identity.
+// ---------------------------------------------------------------------------
+const HANDSHAKE_ID = "11111111-2222-4333-8444-555555555555";
+
+describe("cinatra#3328 — the handshake identity resolves through connect_sites", () => {
+  it("MEASURED FILED STATE: handshake id + a connector instance minted under the same origin → the site's origin (was 'none')", () => {
+    // The connector's "Connect site" road minted its own id for the same site.
+    readConnectorConfigMock.mockReturnValue({
+      instances: [{ id: "connector-minted-id", siteUrl: "https://blog.example/wp-admin" }],
+    });
+    // The handshake's row in connect_sites carries the site's own origin.
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      "https://blog.example",
+    );
+    expect(listActiveConnectSiteOriginsMock).toHaveBeenCalledWith("wordpress");
+  });
+
+  it("resolves the same way with NO connector instance row at all (handshake only)", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    expect(
+      resolveInstanceFrameAncestor({
+        instancesConfigKey: "wordpress",
+        connectSiteFallbackClient: "wordpress",
+        instanceId: HANDSHAKE_ID,
+      }),
+    ).toBe("https://blog.example");
+  });
+
+  it("routes drupal to its OWN connect client — no cross-client widening", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://cms.example:8443"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    expect(frameAncestorsDirectiveFor({ assistant: "drupal", instanceId: HANDSHAKE_ID })).toBe(
+      "https://cms.example:8443",
+    );
+    expect(listActiveConnectSiteOriginsMock).toHaveBeenCalledWith("drupal");
+  });
+
+  it("FAIL CLOSED: an id that is NOT this app's instance identity never reaches connect_sites", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: "forged" })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+    expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL CLOSED: no instance identity row → 'none'", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue(null);
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+  });
+
+  it("FAIL CLOSED: zero or SEVERAL distinct active site origins → 'none' (never the first of many)", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue([]);
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://a.example", "https://b.example"]);
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+  });
+
+  it("several rows that normalize to ONE origin still resolve (same place, spelled twice)", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue([
+      "https://blog.example",
+      "https://blog.example/",
+    ]);
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      "https://blog.example",
+    );
+  });
+
+  it("FAIL CLOSED: a wildcard-shaped stored origin is refused by the seal", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://*.example.com"]);
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+    expect(
+      resolveVerifiedWidgetFrameOrigin({ assistant: "wordpress", instanceId: HANDSHAKE_ID }),
+    ).toBeNull();
+  });
+
+  it("FAIL CLOSED: a throw from the identity read or the site read → 'none' (never escapes)", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    readInstanceIdentityMock.mockImplementation(() => {
+      throw new Error("identity row corrupt");
+    });
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    listActiveConnectSiteOriginsMock.mockImplementation(() => {
+      throw new Error("db down");
+    });
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+  });
+
+  it("a DUPLICATE connector-instance match still fails closed — the fallback never rescues ambiguity", () => {
+    readConnectorConfigMock.mockReturnValue({
+      instances: [
+        { id: HANDSHAKE_ID, siteUrl: "https://a.example" },
+        { id: HANDSHAKE_ID, siteUrl: "https://b.example" },
+      ],
+    });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      FRAME_ANCESTORS_NONE,
+    );
+    expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
+  });
+
+  it("a caller that names NO connect client keeps the old behavior (no site read)", () => {
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    expect(
+      resolveInstanceFrameAncestor({ instancesConfigKey: "wordpress", instanceId: HANDSHAKE_ID }),
+    ).toBeNull();
+    expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
   });
 });

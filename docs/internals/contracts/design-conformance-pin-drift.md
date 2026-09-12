@@ -143,21 +143,20 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**`app` and `app-components`.** The 2026-08-30 reconciliation below left all
-five pins reading `match`; three of them have moved again since. Measured again
-on 2026-09-10 for cinatra#3374: `app` and `app-components` report `drift` in
-both hashes and are adopted under the issue that owns their surfaces
-(cinatra#3189), never here — a pin moves in the issue that adopts its surfaces.
-Because `tests/e2e/design/conformance/contract.ts` is a mapped path of every
-pin, any pull request that writes a driver counts those two as touched and is
-red on them until that adoption lands. `app-connectors` reported `drift` in the
-same reading and is adopted by the 2026-09-10 record below; `app-extensions` and
-`app-notifications` read `match`.
+**None.** All five pins read `match` against the published manifests,
+including on the `push`-to-`main` arm that is red on any non-`match` outcome.
+Two adoptions got them there and both are recorded below: the 2026-09-10
+adoption of `app-connectors`, whose published body redeclares the manifest
+(three sharing surfaces gained) and therefore moves with the drivers and
+harness mounts that answer those surfaces — it landed with cinatra#3374 — and
+the 2026-09-12 hashes-only re-pin of `app`, `app-components` and
+`app-extensions`. `app-notifications` has not moved since 2026-08-30.
 
 The bodies a pin named before an adoption are kept as the checker's own drift
-input (see `superseded-pins-2026-08-28/` beside the frozen published ones, and
-every row a later frozen fetch superseded), because a gate whose drift path has
-no input is a gate whose drift path is untested.
+input (see `superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/`
+beside the frozen published ones, and every row a later frozen fetch
+superseded), because a gate whose drift path has no input is a gate whose drift
+path is untested.
 
 ## Reconciliation record
 
@@ -260,6 +259,35 @@ the 2026-08-28 rows still describe the fetch of that day, and the unit suite
 resolves a pin's adopted body from the newest directory that carries its file,
 so the `app-connectors` body of 2026-08-28 is a drift input now.
 
+## Reconciliation record — 2026-09-12
+
+Measured 2026-09-12 against the manifests published under `publishedBaseUrl`.
+Each published body was fetched into a scratch directory outside the tree and
+its `surfaces` array compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/`: for `app`, `app-components` and
+`app-extensions` the declarations are byte-identical and only the embedded
+`contentHash` moved — the second of the two cases "why a hash-only re-pin is
+refused" names, the one nothing downstream catches. The committed artifact of
+each of those three rows is now the verbatim published body, and both hashes in
+`conformance-pins.json` were re-derived from it through the checker's own
+functions, never typed. `app-connectors` keeps the artifact and the hashes it
+had.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-components` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-connectors` | `drift` | three surfaces gained (`connector-sharing`, `connector-sharing-locked`, `connector-sharing-rollup`) — adopted with its drivers by the pull request of #3374 | not this diff |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+`app-connectors` is the one pin this reconciliation does not adopt: its
+published body redeclares the manifest, so it takes the drivers and harness
+mounts with it and is adopted where those live — landed with cinatra#3374, the
+2026-09-10 record above, which pins the same body this capture froze. Until it
+landed, the `push`-to-`main` arm — red on any non-`match` outcome — reported
+that single drift; the four other pins read `match` on both arms.
+
 ## Running it locally
 
 ```sh
@@ -269,6 +297,7 @@ pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/design-pin-d
 ```
 
 The unit suite needs no network: it runs the checker against the frozen
-2026-08-28 bodies (the adopted, zero-drift set), against the superseded bodies
-beside them (the drift set), against the committed manifest copies, and against
-one fixture per failure outcome.
+published bodies, each pin served the body of the newest capture that carries
+its file (the adopted set — five `match`es), against the superseded bodies
+frozen beside each reconciliation (the drift sets), against the committed
+manifest copies, and against one fixture per failure outcome.

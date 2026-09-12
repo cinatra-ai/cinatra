@@ -368,11 +368,22 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     fireEvent.click(openCta());
 
     fireEvent.click(screen.getByTestId("extension-install-panel-submit"));
-    await waitFor(() =>
+    // Gate the REPEAT click on state, not on the first observable paint: the
+    // submit is `useFormStatus`-pending (disabled, "Installing…") for as long
+    // as the action runs, and a click that lands on it while it is pending is
+    // dropped for good — nothing re-fires it, so the second install never
+    // happens. Waiting on the announced text alone raced that flag on a loaded
+    // runner, where the announcement commit and the pending-clear commit can
+    // land separately (cinatra#3381). Wait for BOTH.
+    await waitFor(() => {
       expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(
         FAILURE_COPY.unrecoverable,
-      ),
-    );
+      );
+      expect(
+        (screen.getByTestId("extension-install-panel-submit") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
     const firstNode = screen.getByTestId("extension-install-panel-error");
 
     fireEvent.click(screen.getByTestId("extension-install-panel-submit"));

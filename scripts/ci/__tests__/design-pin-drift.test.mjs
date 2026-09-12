@@ -10,15 +10,18 @@
 // The suite is organised by the six acceptance criteria of cinatra#3057 and
 // pins each of them against REAL inputs wherever a real input exists:
 //
-//   1. OUTCOMES. The five FROZEN published manifests (fetched 2026-08-28,
-//      committed verbatim under __fixtures__) are run against the REAL
-//      conformance-pins.json. The reconciliation ADOPTED those exact bytes,
-//      so they are now the zero-drift set together with the committed
-//      manifest copies they are byte-identical to — five `match`es, and that
-//      identity IS the adoption record. The drift path keeps a real input of
-//      its own: the SUPERSEDED bodies (the artifacts the pins named before
-//      the reconciliation, frozen beside the published ones) must still
-//      report five `drift`s, in both hashes. A gate whose drift path has no
+//   1. OUTCOMES. The FROZEN published manifests (fetched 2026-09-12,
+//      2026-09-10 and 2026-08-28, committed verbatim under __fixtures__) are
+//      run against the REAL conformance-pins.json, each pin served the body of
+//      the NEWEST capture that carries its file. The 2026-09-12 reconciliation
+//      re-pinned app, app-components and app-extensions hashes-only and left
+//      app-notifications where it was; the 2026-09-10 adoption took
+//      app-connectors with its drivers. So all five are the zero-drift set
+//      together with the committed manifest copies they are byte-identical to,
+//      and that identity IS the adoption record. The drift path keeps real
+//      inputs of its own: the SUPERSEDED bodies (the artifacts the pins
+//      named before a reconciliation, frozen beside the published ones) must
+//      still report `drift`s, in both hashes. A gate whose drift path has no
 //      input is a gate whose drift path is untested.
 //      One fixture each drives `http-failure`, `invalid-json` and
 //      `schema-failure` BY NAME, because the failure a gate never names is
@@ -73,30 +76,53 @@ const FIXTURES = path.join(
   "__fixtures__",
   "design-pin-drift",
 );
-const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-08-28");
+const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-12");
 /**
- * Every capture directory, NEWEST FIRST. An adoption after the 2026-08-28
- * reconciliation freezes the body it adopted in a capture of its own beside
- * its own receipt, so the ADOPTED body of a pin is the one in the newest
- * capture that carries its file: `published-2026-09-10` holds the
- * app-connectors body cinatra#3374 adopted, `published-2026-08-28` holds the
- * other four (and the app-connectors body that adoption superseded). Freezing
- * forward instead of overwriting is what keeps each receipt re-derivable: a
- * row records a fetch that happened, and a later fetch never rewrites it.
+ * The published set frozen by the cinatra#3057 reconciliation. It is still the
+ * record of THAT adoption — the two tests that compare what a published body
+ * redeclared against what it superseded read it — and nothing about the
+ * 2026-09-12 hashes-only re-pin retires it.
+ */
+const FROZEN_PUBLISHED_2026_08_28 = path.join(FIXTURES, "published-2026-08-28");
+/**
+ * Every capture directory, NEWEST FIRST. Each reconciliation and each adoption
+ * freezes the body it adopted in a capture of its own beside its own receipt,
+ * so the ADOPTED body of a pin is the one in the newest capture that carries
+ * its file: `published-2026-09-12` holds the app, app-components and
+ * app-extensions bodies the hashes-only re-pin adopted, `published-2026-09-10`
+ * holds the app-connectors body cinatra#3374 adopted, `published-2026-08-28`
+ * holds the cinatra#3057 set. A pin whose body never moved between two fetches
+ * appears, byte-identical, in both of their captures — app-connectors in the
+ * 2026-09-10 and 2026-09-12 ones, app-notifications in the 2026-08-28 and
+ * 2026-09-12 ones — so what makes a frozen row the adopted body is its BYTES,
+ * never which directory it sits in. Freezing forward instead of overwriting is
+ * what keeps each receipt re-derivable: a row records a fetch that happened,
+ * and a later fetch never rewrites it.
  */
 const CAPTURES = [
-  path.join(FIXTURES, "published-2026-09-10"),
   FROZEN_PUBLISHED,
+  path.join(FIXTURES, "published-2026-09-10"),
+  FROZEN_PUBLISHED_2026_08_28,
 ];
 /** The capture whose body a pin's file is adopted from today. */
 const adoptedCaptureFor = (file) =>
   CAPTURES.find((dir) => existsSync(path.join(dir, file)));
+/** The bytes of the body a pin's file is adopted from today. */
+const adoptedBodyFor = (file) => readFileSync(path.join(adoptedCaptureFor(file), file));
 /**
  * The artifacts the pins named BEFORE the cinatra#3057 reconciliation. They
- * are the suite's drift input now that the published bodies are the adopted
- * ones: see the provenance receipt beside them.
+ * are the suite's EVERY-pin drift input: each of the five still differs from
+ * the pin it belongs to in both hashes, the 2026-09-12 re-pin included. See
+ * the provenance receipt beside them.
  */
 const SUPERSEDED = path.join(FIXTURES, "superseded-pins-2026-08-28");
+/**
+ * The three artifacts the pins named before the 2026-09-12 hashes-only
+ * reconciliation. Three, not five: that reconciliation moved app,
+ * app-components and app-extensions only — app-connectors and
+ * app-notifications kept the pins they had.
+ */
+const SUPERSEDED_2026_09_12 = path.join(FIXTURES, "superseded-pins-2026-09-12");
 const MALFORMED = path.join(FIXTURES, "malformed");
 
 const pins = loadPins(REPO_ROOT);
@@ -151,20 +177,29 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     // the newest capture that carries its file, so an adoption that lands
     // after 2026-08-28 is held to exactly the same bar as the five that
     // reconciliation adopted.
+    //
+    // The 2026-09-12 reconciliation asserted `app-connectors` here as the one
+    // `drift` of the five, because its published body redeclares the manifest
+    // (three sharing surfaces gained) and those surfaces had no drivers yet.
+    // That assertion described the state BEFORE this adoption landed:
+    // cinatra#3374 adopts that body together with its drivers and harness
+    // mounts, so the pin reads `match` and the push-to-main arm is green on
+    // all five again.
     const results = await runCheck({
       pins,
-      fetchManifest: fixtureFetcher((file) => ({
-        body: readFileSync(path.join(adoptedCaptureFor(file), file)),
-      })),
+      fetchManifest: fixtureFetcher((file) => ({ body: adoptedBodyFor(file) })),
     });
     expect(results).toHaveLength(5);
     expect(outcomesOf(results)).toEqual(["match", "match", "match", "match", "match"]);
+    expect(byId(results, "app-connectors").outcome).toBe("match");
     expect(decide({ event: "push-main", results, touchedPinIds: [] }).red).toBe(false);
     for (const pin of pins.manifests) {
-      const adoptedCapture = adoptedCaptureFor(pin.file);
-      expect(adoptedCapture, `${pin.id}: no capture carries the adopted body`).toBeDefined();
       expect(
-        readFileSync(path.join(adoptedCapture, pin.file)),
+        adoptedCaptureFor(pin.file),
+        `${pin.id}: no capture carries the adopted body`,
+      ).toBeDefined();
+      expect(
+        adoptedBodyFor(pin.file),
         `${pin.id}: the committed copy is not the published artifact verbatim`,
       ).toEqual(
         readFileSync(path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file)),
@@ -184,7 +219,7 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
           readFileSync(path.join(dir, "app-connectors.json"), "utf8"),
         ).surfaces.map((surface) => [surface.id, JSON.stringify(surface)]),
       );
-    const before = surfacesOf(FROZEN_PUBLISHED);
+    const before = surfacesOf(FROZEN_PUBLISHED_2026_08_28);
     const after = surfacesOf(path.join(FIXTURES, "published-2026-09-10"));
     expect([...after.keys()].filter((id) => !before.has(id))).toEqual([
       "connector-sharing",
@@ -200,7 +235,7 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     const embedded = (dir) =>
       JSON.parse(readFileSync(path.join(dir, "app-connectors.json"), "utf8")).contentHash;
     expect(embedded(path.join(FIXTURES, "published-2026-09-10"))).not.toBe(
-      embedded(FROZEN_PUBLISHED),
+      embedded(FROZEN_PUBLISHED_2026_08_28),
     );
   });
 
@@ -338,10 +373,12 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         const parsed = JSON.parse(bytes.toString("utf8"));
         expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
         expect(parsed.contentHash, row.file).toBe(row.contentHash);
-        if (adoptedCaptureFor(row.file) === capture) {
+        if (bytes.equals(adoptedBodyFor(row.file))) {
           // The adopted row IS the pin: this receipt is the provenance of the
           // adoption — the pins name bytes whose fetch is recorded, not bytes
-          // someone typed.
+          // someone typed. The row is judged by its BYTES, not by which
+          // directory it sits in, because a body that did not move between two
+          // fetches is the adopted body in both of their captures.
           expect(row.sha256, row.file).toBe(pin.manifestSha256);
           expect(row.contentHash, row.file).toBe(pin.specContentHash);
         } else {
@@ -352,14 +389,14 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         }
       }
     }
-    // The reconciliation capture still covers all five pins, so nothing was
+    // Both reconciliation captures still cover all five pins, so nothing was
     // dropped out of the record when a later adoption froze forward.
-    const reconciliation = JSON.parse(
-      readFileSync(path.join(FROZEN_PUBLISHED, "capture.json"), "utf8"),
-    );
-    expect(reconciliation.manifests.map((m) => m.file)).toEqual(
-      pins.manifests.map((p) => p.file),
-    );
+    for (const capture of [FROZEN_PUBLISHED_2026_08_28, FROZEN_PUBLISHED]) {
+      const receipt = JSON.parse(readFileSync(path.join(capture, "capture.json"), "utf8"));
+      expect(receipt.manifests.map((m) => m.file), capture).toEqual(
+        pins.manifests.map((p) => p.file),
+      );
+    }
   });
 
   it("the superseded fixtures carry a provenance receipt every row of which describes their real bytes", () => {
@@ -386,6 +423,55 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     }
   });
 
+  it("the 2026-09-12 superseded artifacts drift against the three pins that reconciliation moved", () => {
+    // The drift input of the hashes-only reconciliation: the bodies those
+    // three entries named before it. A superseded artifact that still matched
+    // its pin would mean nothing was re-pinned at all.
+    const receipt = JSON.parse(
+      readFileSync(path.join(SUPERSEDED_2026_09_12, "provenance.json"), "utf8"),
+    );
+    expect(receipt.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(receipt.manifests.map((m) => m.file)).toEqual([
+      "app.json",
+      "app-components.json",
+      "app-extensions.json",
+    ]);
+    for (const row of receipt.manifests) {
+      const bytes = readFileSync(path.join(SUPERSEDED_2026_09_12, row.file));
+      expect(row.repoPath, row.file).toBe(
+        `tests/e2e/design/conformance/manifests/${row.file}`,
+      );
+      expect(bytes.length, row.file).toBe(row.byteLength);
+      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+      expect(parsed.contentHash, row.file).toBe(row.contentHash);
+
+      const pin = pins.manifests.find((p) => p.file === row.file);
+      const result = classifyPin({
+        pin,
+        url: publishedUrlFor(pins, pin),
+        fetched: { ok: true, status: 200, body: bytes },
+      });
+      expect(result.outcome, row.file).toBe("drift");
+      expect(result.detail, row.file).toContain("manifestSha256");
+      expect(result.detail, row.file).toContain("specContentHash");
+
+      // And the whole point of that reconciliation, as an assertion: the body
+      // adopted in its place declares byte-identical surfaces. Only the two
+      // hashes moved, so only this gate could see it — a surface-shape
+      // comparison would have called these three unchanged.
+      const declarations = (buffer) => {
+        const object = JSON.parse(buffer.toString("utf8"));
+        delete object.contentHash;
+        return JSON.stringify(object);
+      };
+      expect(declarations(bytes), row.file).toBe(
+        declarations(readFileSync(path.join(FROZEN_PUBLISHED, row.file))),
+      );
+    }
+  });
+
   it("three of the five adopted drifts changed NOTHING the manifest declares — only the hashes", () => {
     // Why both hashes are compared unconditionally: for app-extensions,
     // app-connectors and app-notifications the published body and the
@@ -405,7 +491,7 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     const identical = [];
     const redeclared = [];
     for (const pin of pins.manifests) {
-      const adopted = readFileSync(path.join(FROZEN_PUBLISHED, pin.file));
+      const adopted = readFileSync(path.join(FROZEN_PUBLISHED_2026_08_28, pin.file));
       const superseded = readFileSync(path.join(SUPERSEDED, pin.file));
       // Whichever class it is, it WAS a drift: neither hash survived.
       expect(
@@ -427,7 +513,7 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
       JSON.parse(readFileSync(path.join(dir, file), "utf8")).surfaces.map((s) => s.id);
     const moved = (file) => {
       const before = new Set(surfaceIds(SUPERSEDED, file));
-      const after = new Set(surfaceIds(FROZEN_PUBLISHED, file));
+      const after = new Set(surfaceIds(FROZEN_PUBLISHED_2026_08_28, file));
       return {
         gained: [...after].filter((id) => !before.has(id)),
         retired: [...before].filter((id) => !after.has(id)),
@@ -860,13 +946,13 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
       "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
     );
     expect(message).toContain(
-      "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
+      "ddfcd50b57cea849063d6bb067c3a710169b5f48282154b6397f3ba1f6de9928",
     );
     expect(message).toContain(
       "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e",
     );
     expect(message).toContain(
-      "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add",
+      "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf",
     );
     expect(message).toContain("drift");
     expect(message).toContain(MOVE_RULE);
