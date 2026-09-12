@@ -101,15 +101,15 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['rows','prompt'] AND hidden=['sources','outputSchema'] — covers all 4 inputs", () => {
+  it("StartNode required=['rowsSource','prompt'] AND hidden=['rows','sources','outputSchema'] — covers all 5 inputs", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
     const meta = (start!.metadata as Record<string, unknown> | undefined)?.cinatra as
       | Record<string, unknown>
       | undefined;
-    expect(meta?.required).toEqual(["rows", "prompt"]);
-    expect(meta?.hidden).toEqual(["sources", "outputSchema"]);
+    expect(meta?.required).toEqual(["rowsSource", "prompt"]);
+    expect(meta?.hidden).toEqual(["rows", "sources", "outputSchema"]);
     const startInputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(startInputs.map((i) => i.title as string));
     const requiredSet = new Set(meta?.required as string[]);
@@ -118,7 +118,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 8 AND control_flow_connections.length === 2", () => {
+  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 9 AND control_flow_connections.length === 2", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -129,7 +129,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(byTitle.get("failures")).toBe("array");
     expect(byTitle.get("webChecks")).toBe("array");
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(8);
+    expect(dfc.length).toBe(9);
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(2);
   });

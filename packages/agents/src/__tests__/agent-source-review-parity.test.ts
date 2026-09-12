@@ -91,7 +91,6 @@ const AGENTS = enumerateAgents();
  * pack-internal shape (no node names, no inline instructions, no models).
  */
 const START_NODE_INPUT_BASELINE: Record<string, string[]> = {
-  "blog-pipeline-agent": ["$referenced_components.start"],
   "drupal-agent": ["$referenced_components.start"],
   "email-follow-up-agent": ["$referenced_components.start"],
   "email-outreach-agent": [
