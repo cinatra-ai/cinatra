@@ -12,9 +12,16 @@
  * `cinatra.devExtensions` drops its record from this manifest, and any surviving
  * dependent that still declares a required edge to it breaks here. Wave P3 of
  * cinatra#3034 measured exactly that — retiring `blog-image-prompt-agent` while
- * `blog-pipeline-agent` still declares a required runtime edge to it took the
- * broken-edge count from 0 to 1 — which is why the retirement waits for the
+ * `blog-pipeline-agent` still declared a required runtime edge to it took the
+ * broken-edge count from 0 to 1 — which is why the retirement waited for the
  * pipeline's own re-pin instead of shipping the break.
+ *
+ * That re-pin has LANDED: `blog-pipeline-agent` is pinned here at a commit whose
+ * own manifest no longer declares the image-prompt edge, so the generated record
+ * carries its required runtime targets without that one. The second test below is
+ * the same tripwire read from the far side — it holds the re-pinned shape, so a
+ * later re-pin that puts the edge back has to be seen and decided on rather than
+ * silently blocking the retirement again.
  *
  *   pnpm exec vitest run src/lib/__tests__/static-extension-manifest-required-closure.test.ts
  */
@@ -43,15 +50,18 @@ describe("the static extension manifest's install-blocking edges close", () => {
     expect(broken).toEqual([]);
   });
 
-  it("still carries the package the pipeline requires, until the pipeline is re-pinned", () => {
-    // The retirement's own tripwire: whoever drops this record next must move
-    // the pipeline's edge in the same change, or the assertion above goes red.
+  it("no longer requires the image-prompt agent now that the pipeline is re-pinned", () => {
+    // The retirement's tripwire, read from the far side of the re-pin: the
+    // pipeline's pinned manifest has dropped the image-prompt edge, so dropping
+    // the image-prompt record no longer breaks the closure above. A re-pin that
+    // reinstates the edge goes red here and has to be decided on.
     const pipeline = STATIC_EXTENSION_MANIFEST["@cinatra-ai/blog-pipeline-agent"];
     expect(pipeline, "the pipeline agent is pinned in this fleet").toBeDefined();
     const required = ((pipeline!.dependencies ?? []) as ExtensionDependency[])
       .filter((dep) => isInstallBlockingEdge(dep))
       .map((dep) => dep.packageName);
-    expect(required).toContain("@cinatra-ai/blog-image-prompt-agent");
+    expect(required).not.toContain("@cinatra-ai/blog-image-prompt-agent");
+    expect(required.length).toBeGreaterThan(0);
     for (const target of required) {
       expect(Object.keys(STATIC_EXTENSION_MANIFEST)).toContain(target);
     }
