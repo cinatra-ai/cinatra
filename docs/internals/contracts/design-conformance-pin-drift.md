@@ -143,16 +143,20 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**One: `app-connectors`.** Its published body redeclares the manifest (three
-sharing surfaces gained), so it moves with the drivers and harness mounts that
-answer those surfaces and is adopted where those live, not here — until that
-lands, the `push`-to-`main` arm, red on any non-`match` outcome, reports that
-single drift. The four other pins read `match` on both arms after the
-2026-09-12 reconciliation. The record of what each adoption changed is below;
-the bodies that were drifting are kept as the checker's own drift fixtures (see
-`superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/` beside the
-frozen published ones), because a gate whose drift path has no input is a gate
-whose drift path is untested.
+**None.** All five pins read `match` against the published manifests,
+including on the `push`-to-`main` arm that is red on any non-`match` outcome.
+Two adoptions got them there and both are recorded below: the 2026-09-10
+adoption of `app-connectors`, whose published body redeclares the manifest
+(three sharing surfaces gained) and therefore moves with the drivers and
+harness mounts that answer those surfaces — it landed with cinatra#3374 — and
+the 2026-09-12 hashes-only re-pin of `app`, `app-components` and
+`app-extensions`. `app-notifications` has not moved since 2026-08-30.
+
+The bodies a pin named before an adoption are kept as the checker's own drift
+input (see `superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/`
+beside the frozen published ones, and every row a later frozen fetch
+superseded), because a gate whose drift path has no input is a gate whose drift
+path is untested.
 
 ## Reconciliation record
 
@@ -214,6 +218,47 @@ pin needed to be deferred, and none was.
 `allowlist.json` gained nothing — it is shrink-only and did not move. Every
 surface in every adopted manifest has a driver.
 
+### 2026-09-10 — `app-connectors` (cinatra#3374, unblocking cinatra#3372)
+
+Adopted the published `app-connectors` manifest fetched from the pin file's
+`publishedBaseUrl` on 2026-09-10 (HTTP 200, 4821 bytes,
+`2b98802f27fb…`), byte-identical on a second fetch. The committed artifact
+under `tests/e2e/design/conformance/manifests/app-connectors.json` is that
+response verbatim and both hashes in `conformance-pins.json` were re-derived
+from it, never typed. The four other pins were not touched.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app-connectors` | `drift` | three surfaces gained: `connector-sharing`, `connector-sharing-rollup`, `connector-sharing-locked`; the eight surfaces the pin already declared are byte-identical; the embedded spec-content hash moved with them | one driver each, written against the host code cinatra#3374 lands; `allowlist.json` unchanged |
+
+What moved, surface by surface:
+
+- **`connector-sharing`** declares four field bindings (`name <- connection.connectionId`, `url <- connection.connectorKey`, `access <- policy.runListVisibility`, `co-owners <- connection.coOwners`), four actions (`select-scope -> scopes-selected`, `search-people -> people-listed`, `remove-co-owner -> co-owner-removed`, `save-access -> access-saved`) and the `loading` state.
+- **`connector-sharing-rollup`** and **`connector-sharing-locked`** declare no field, action or state of their own.
+- The eight surfaces already pinned — `connector-connection-filter`, `connector-grid`, `connector-install-cta`, `connector-empty-panel`, `connector-setup`, `connector-multi-setup`, `connector-connections`, `connector-config-tab` — are unchanged, declaration for declaration. Their part of this move is spec-content-only: the spec source changed under an unchanged drawing.
+
+**The drivers land with this adoption.** A driver reads the host code the
+surface is drawn by, and when the adoption was first prepared none of the three
+gained surfaces had any — which is why that pull request stopped at the record
+rather than buying a green with an allowlist entry the ratchet forbids.
+cinatra#3374 draws them: the setup page's fixed second tab, Sharing, and the
+per-connection panels beneath it. So each of the three now has a driver in
+`tests/e2e/design/conformance/contract.ts`, mounted on the harness by
+`src/app/design-fixtures/conformance/connector-sharing-fixture.tsx`,
+`allowlist.json` gains nothing (it is shrink-only), and this pin reads `match`.
+
+**The issue that owns those three surfaces is cinatra#3374**, which draws the
+Sharing tab and adopts this pin as part of the same change, per the rule above:
+a pin moves in the issue that validates the new contract and updates the
+drivers, harness mounts and proofs together with it.
+
+The response body is frozen beside the checker's other fixtures under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-10/` with
+its own receipt. A frozen fetch is written FORWARD, never over an earlier one:
+the 2026-08-28 rows still describe the fetch of that day, and the unit suite
+resolves a pin's adopted body from the newest directory that carries its file,
+so the `app-connectors` body of 2026-08-28 is a drift input now.
+
 ## Reconciliation record — 2026-09-12
 
 Measured 2026-09-12 against the manifests published under `publishedBaseUrl`.
@@ -238,9 +283,10 @@ had.
 
 `app-connectors` is the one pin this reconciliation does not adopt: its
 published body redeclares the manifest, so it takes the drivers and harness
-mounts with it and is adopted where those live. Until that lands, the
-`push`-to-`main` arm — red on any non-`match` outcome — reports that single
-drift; the four other pins read `match` on both arms.
+mounts with it and is adopted where those live — landed with cinatra#3374, the
+2026-09-10 record above, which pins the same body this capture froze. Until it
+landed, the `push`-to-`main` arm — red on any non-`match` outcome — reported
+that single drift; the four other pins read `match` on both arms.
 
 ## Running it locally
 
@@ -251,7 +297,7 @@ pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/design-pin-d
 ```
 
 The unit suite needs no network: it runs the checker against the frozen
-2026-09-12 bodies (the adopted set — four `match`es and the one `app-connectors`
-drift the section above names), against the superseded bodies frozen beside
-each reconciliation (the drift sets), against the committed manifest copies,
-and against one fixture per failure outcome.
+published bodies, each pin served the body of the newest capture that carries
+its file (the adopted set — five `match`es), against the superseded bodies
+frozen beside each reconciliation (the drift sets), against the committed
+manifest copies, and against one fixture per failure outcome.

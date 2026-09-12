@@ -102,12 +102,12 @@ const tabbedRaw = {
 };
 
 describe("SchemaConfigConnectorForm — tabbed surface", () => {
-  it("renders a tablist: Setup first, declared tab next, Help LAST", async () => {
+  it("renders a tablist: Setup first, Sharing SECOND, declared tab next, Help LAST", async () => {
     await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw) });
     const tablist = container.querySelector('[role="tablist"]');
     expect(tablist).toBeTruthy();
     const tabLabels = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
-    expect(tabLabels).toEqual(["Setup", "Local shell", "Help"]);
+    expect(tabLabels).toEqual(["Setup", "Sharing", "Local shell", "Help"]);
   });
 
   it("hoists the tablist ABOVE the Setup panel's two-column grid (header chrome, not content-column chrome)", async () => {
@@ -178,7 +178,8 @@ describe("SchemaConfigConnectorForm — tabbed surface", () => {
     // (the renderer hides inactive panels with `data-[state=inactive]:hidden`).
     await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw) });
     const panels = [...container.querySelectorAll('[role="tabpanel"]')];
-    expect(panels).toHaveLength(3);
+    // Setup, the fixed Sharing panel, the declared tab, Help.
+    expect(panels).toHaveLength(4);
     const active = panels.filter((p) => p.getAttribute("data-state") === "active");
     expect(active).toHaveLength(1);
     expect(active[0].querySelector('input[name="apiKey"]')).toBeTruthy();
@@ -192,11 +193,40 @@ describe("SchemaConfigConnectorForm — tabbed surface", () => {
 });
 
 describe("SchemaConfigConnectorForm — flat surface (back-compat)", () => {
-  it("renders NO tablist when the connector declares no tabs", async () => {
+  it("carries the two FIXED tabs even when the connector declares none of its own", async () => {
+    // §II: "Two tabs are fixed and every connector carries both: Setup first
+    // and Sharing second. The strip is therefore never absent; a custom tab
+    // extends it rather than introducing it."
     const surface = surfaceOf({ fields: [{ kind: "text", key: "apiKey", label: "API key" }] });
-    await renderForm({ installId: "i1", packageName: "@x/y", surface });
-    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      sharingTab: <div data-testid="sharing">sharing</div>,
+    });
+    const tabLabels = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
+    expect(tabLabels).toEqual(["Setup", "Sharing"]);
     expect(container.querySelector('input[name="apiKey"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="sharing"]')).toBeTruthy();
+  });
+
+  it("puts the sharing content on the Sharing PANEL — never inside the Setup panel", async () => {
+    // §II: "sharing is decided on its own tab, never inside Setup."
+    const surface = surfaceOf({ fields: [{ kind: "text", key: "apiKey", label: "API key" }] });
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      aside: <div data-testid="status-card">status</div>,
+      sharingTab: <div data-testid="sharing">sharing</div>,
+    });
+    const panels = [...container.querySelectorAll('[role="tabpanel"]')];
+    expect(panels.length).toBe(2);
+    const [setupPanel, sharingPanel] = panels;
+    expect(setupPanel.querySelector('input[name="apiKey"]')).toBeTruthy();
+    expect(setupPanel.querySelector('[data-testid="sharing"]')).toBeNull();
+    expect(sharingPanel.querySelector('[data-testid="sharing"]')).toBeTruthy();
+    expect(sharingPanel.querySelector('input[name="apiKey"]')).toBeNull();
   });
 
   it("renders the two-column grid when the host passes an aside (flat surface)", async () => {
@@ -206,15 +236,15 @@ describe("SchemaConfigConnectorForm — flat surface (back-compat)", () => {
       packageName: "@x/y",
       surface,
       aside: <div data-testid="status-card">status</div>,
-      setupFooter: <div data-testid="sharing">sharing</div>,
+      sharingTab: <div data-testid="sharing">sharing</div>,
     });
     const columns = container.querySelector('[data-conformance-id="connector-setup"]')!;
     expect(columns).toBeTruthy();
     expect(columns.querySelector('input[name="apiKey"]')).toBeTruthy();
     expect(columns.querySelector('[data-testid="status-card"]')).toBeTruthy();
-    // The setup footer renders with the setup surface, outside the grid.
-    const footer = container.querySelector('[data-testid="sharing"]')!;
-    expect(footer).toBeTruthy();
-    expect(columns.contains(footer)).toBe(false);
+    // The sharing content is NOT part of the setup body at all.
+    const sharing = container.querySelector('[data-testid="sharing"]')!;
+    expect(sharing).toBeTruthy();
+    expect(columns.contains(sharing)).toBe(false);
   });
 });
