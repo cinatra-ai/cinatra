@@ -199,8 +199,34 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s1" },
+      { jobId: "resume-setup-run-s1-field-name" },
     );
+  });
+
+  // cinatra#3035 REGRESSION — THE RESUME JOB ID NAMES THE DECISION, NOT THE
+  // ROAD. The setup gate mints ONE review-task identity for the whole road
+  // (`setup-<runId>`), so a job id derived from it alone was the same string for
+  // every declared field. The queue keeps its finished jobs and an id-carrying
+  // add is a no-op against an existing twin, so the SECOND field's resume was
+  // handed the FIRST field's completed job and queued no work: the run stalled
+  // `queued` at the `hitl` moment, never reached the Schedule step and never
+  // wrote a trigger row. Two fields of ONE run must ask for two job ids.
+  it("cinatra#3035: two decided fields of the SAME run enqueue under DIFFERENT job ids", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-s3035",
+      templateId: "tpl-s3035",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-s3035", "actor-1", { brief: "b" }, "brief");
+    await approveReviewTaskInternal("setup-run-s3035", "actor-1", { ideaCount: 3 }, "ideaCount");
+
+    const jobIds = vi
+      .mocked(bgJobs.enqueueBackgroundJob)
+      .mock.calls.map((call) => (call[2] as { jobId?: string } | undefined)?.jobId);
+    expect(jobIds).toEqual(["resume-setup-run-s3035-field-brief", "resume-setup-run-s3035-field-ideaCount"]);
+    expect(new Set(jobIds).size).toBe(2);
   });
 
   // Regression: assert the SQL fragment serializes only values[fieldName],
@@ -382,7 +408,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s2" },
+      { jobId: "resume-setup-run-s2-grouped" },
     );
   });
 
@@ -459,7 +485,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s6" },
+      { jobId: "resume-setup-run-s6-grouped" },
     );
   });
 
@@ -507,7 +533,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: "resume-setup-run-554a" },
+      { jobId: "resume-setup-run-554a-grouped" },
     );
   });
 

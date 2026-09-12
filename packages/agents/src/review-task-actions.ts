@@ -176,6 +176,19 @@ async function assertRunScopeOrDeny(
   }
 }
 
+/**
+ * The per-decision half of a setup resume's job id (cinatra#3035). A field name
+ * comes from the template's own inputSchema, so it is reduced to characters that
+ * are safe in a queue key; the grouped form (no single field) keeps a reserved
+ * identity of its own, and a field whose name reduces to nothing falls back to
+ * it rather than colliding with the road-wide id this replaced.
+ */
+function setupResumeDecisionKey(fieldName: string | undefined): string {
+  if (typeof fieldName !== "string") return "grouped";
+  const safe = fieldName.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 96);
+  return safe.length > 0 ? `field-${safe}` : "grouped";
+}
+
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
   actorId: string,
@@ -468,7 +481,24 @@ export async function approveReviewTaskInternal(
       // trigger step before it may dispatch — so it hands off to
       // `pending_trigger` instead of running before the user has chosen when.
       { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
+      // cinatra#3035 — THE JOB ID NAMES THE DECISION, NOT THE ROAD. The setup
+      // gate synthesizes ONE review-task identity for the whole road
+      // (`setup-<runId>`), so an id derived from it alone was the SAME id for
+      // every declared field. BullMQ's id-carrying add is HSETNX and finished
+      // jobs are KEPT (`removeOnComplete` is a count, not zero), so the second
+      // field's resume found the first field's COMPLETED job, was handed that
+      // job back, and queued no work at all: the run stayed `queued` at the
+      // `hitl` moment on its already-decided gate, never parked on the Schedule
+      // step, never wrote a trigger row and never started.
+      //
+      // Each field is decided exactly once on this road (a decided gate is
+      // closed — a second press is answered "this review is no longer open"),
+      // so the field name is the decision's own identity and the grouped form,
+      // which decides the whole road at once, keeps an identity of its own. The
+      // de-duplication the deterministic id is here for is unchanged WITHIN one
+      // decision; a double submit is refused earlier anyway, by the org-scoped
+      // status CAS above, which updates 0 rows and throws before this enqueue.
+      { jobId: `resume-${reviewTaskId}-${setupResumeDecisionKey(fieldName)}` },
     );
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
