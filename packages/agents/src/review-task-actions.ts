@@ -740,7 +740,9 @@ export async function approveReviewTaskInternal(
         schemaSnapshot: schemaSnapshot ?? null,
         excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
       }).catch((e) => {
-        console.warn(`[approveReviewTaskInternal] writeHitlPrompt failed run=${run.id}`, e);
+        // The first argument of a console call is a CONSTANT: a caller-derived
+        // value in it is read as a format string, not as text (cinatra#3423).
+        console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
       });
 
       // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
@@ -833,10 +835,12 @@ export async function approveReviewTaskInternal(
       const { handleWayflowTaskState } = await import("./execution");
       await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
 
-      console.log(
-        `[approveReviewTaskInternal] wayflow-path resumed run=${run.id} task=${taskId} ` +
-        `actor=${actorId} resultState=${task.status?.state}`,
-      );
+      console.log("[approveReviewTaskInternal] wayflow-path resumed", {
+        runId: run.id,
+        taskId,
+        actorId,
+        resultState: task.status?.state,
+      });
       return;
     } catch (e) {
       if (!dispatchStarted) {
@@ -848,7 +852,8 @@ export async function approveReviewTaskInternal(
           resumeAuthority,
         ).catch((releaseError) => {
           console.warn(
-            `[approveReviewTaskInternal] could not release the gate claim run=${run.id} task=${taskId}`,
+            "[approveReviewTaskInternal] could not release the gate claim",
+            { runId: run.id, taskId },
             releaseError,
           );
         });
