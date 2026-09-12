@@ -13,9 +13,16 @@ import "server-only";
 //     affordance); the write path re-rejects with the typed
 //     `scope_locked_by_connector` (the enforcement).
 //   • `default:<scope>` on the UNTOUCHED seed   → the recommendation is
-//     PRE-SELECTED (never auto-shares — nothing changes until the owner
-//     explicitly saves; the first explicit save clears the seed marker, so a
-//     stored owner choice is never overridden — codex round-0 finding 1).
+//     STATED, never pre-selected: the picker keeps opening on the STORED
+//     grant (the owner floor the sentence itself names, "Currently: only
+//     you.") and the recommended scope stays one enabled option among the
+//     others, so the owner can accept it — or decline it — and press Save.
+//     Pre-selecting it instead contradicted the sentence beside it and left
+//     the picker with no enabled alternative to the value already selected,
+//     so the form could never be made dirty and Save wrote nothing
+//     (cinatra#3408). Nothing is shared until the owner saves; the first
+//     explicit save clears the seed marker, so a stored owner choice is never
+//     overridden — codex round-0 finding 1.
 //
 // The option-value vocabulary is the picker's: "owner" | "workspace" |
 // "admin" | `org:<id>` | `team:<id>` | `project:<id>` — the same enforced
@@ -53,9 +60,9 @@ export type ConnectionShareSurface =
     }
   | {
       surface: "editable";
-      /** The value the picker opens on (stored, or the seed recommendation). */
+      /** The value the picker opens on — always the STORED grant. */
       value: string;
-      /** Present when the seed recommendation pre-selects a broader value. */
+      /** Present when the connector recommends a scope the stored grant is not. */
       recommendationNote?: string;
     };
 
@@ -133,7 +140,8 @@ export function decideConnectionShareSurface(input: {
   }
 
   // default / null-declaration semantics: grants govern; the RECOMMENDATION
-  // pre-selects only while the stored policy is the untouched connect seed.
+  // is stated (never pre-selected) only while the stored policy is the
+  // untouched connect seed.
   if (declaration?.mode === "default" && isUntouchedSeed(storedPolicy)) {
     const scope = declaration.scope;
     const recommended =
@@ -151,7 +159,11 @@ export function decideConnectionShareSurface(input: {
     const differs = recommended !== stored;
     return {
       surface: "editable",
-      value: differs ? recommended : stored,
+      // The picker opens on the STORED grant in every case: the line states
+      // what the connector proposes, the picker states what is current, and
+      // the proposed scope stays an enabled option the owner may choose and
+      // save (cinatra#3408).
+      value: stored,
       recommendationNote: differs
         ? `This connector recommends sharing with ${SCOPE_LABEL[scope]} — nothing is shared until you save. Currently: only you.`
         : scope === "team" || scope === "project"

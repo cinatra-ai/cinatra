@@ -229,6 +229,13 @@ describe("ConnectionSharingSection — a server registered on the MCP Servers Se
     expect(panel?.permissions.type).toBe(ExtensionPermissionsClient);
     expect(note).toContain("This connector recommends sharing with");
     expect(note).toContain("nothing is shared until you save");
+    // …and the picker the tab draws OPENS on the stored owner scope: the line
+    // states what the connector proposes, the picker states what is current
+    // ("Currently: only you") — and the proposed scope stays an enabled option
+    // the owner may choose and save (cinatra#3408).
+    expect(
+      (panel?.permissions.props as { accessValueOverride?: string }).accessValueOverride,
+    ).toBe("owner");
   });
 
   it("appears on NO other connector's Sharing tab", async () => {

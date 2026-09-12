@@ -114,3 +114,83 @@ describe("readExtensionAccessPolicies — read-time normalization (multi-scope)"
     expect(map.has("r4")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The connect-seed provenance marker (cinatra#3408).
+//
+// `registerSavedConnectionIdentity`'s one-time grant seed stores
+// `seededDefault: true` INSIDE the policy jsonb so the Sharing tab can tell an
+// untouched connect seed from an explicit owner save. The canonical
+// `AgentAuthPolicySchema` is a `z.object`, so its parse STRIPS every key it
+// does not name — the marker included. Read back through this reader the
+// marker must survive, or no real panel can ever draw the recommending
+// connector's line (§II of the ratified drawing).
+// ---------------------------------------------------------------------------
+
+describe("readExtensionAccessPolicies — the connect-seed marker (cinatra#3408)", () => {
+  const seededRow = (resourceId: string, policy: unknown) => [
+    { rows: [{ resource_id: resourceId, policy }] },
+  ];
+
+  it("preserves `seededDefault` across the canonical parse (the untouched-seed reading)", async () => {
+    runPostgresQueriesSync.mockReturnValue(
+      seededRow("s1", {
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
+        allowRunSharing: false,
+        seededDefault: true,
+      }),
+    );
+    const map = await readExtensionAccessPolicies("connection", ["s1"]);
+    const p = map.get("s1");
+    expect(p).toBeDefined();
+    expect((p as { seededDefault?: unknown }).seededDefault).toBe(true);
+    // …and the normalization the reader already owned is unchanged.
+    expect(p!.runListVisibility).toEqual(["owner"]);
+  });
+
+  it("preserves the marker on a STRINGIFIED jsonb row too", async () => {
+    runPostgresQueriesSync.mockReturnValue(
+      seededRow(
+        "s2",
+        JSON.stringify({
+          runListVisibility: "owner",
+          runDataVisibility: "owner",
+          runExecuteVisibility: "owner",
+          allowRunSharing: false,
+          seededDefault: true,
+        }),
+      ),
+    );
+    const map = await readExtensionAccessPolicies("connection", ["s2"]);
+    expect((map.get("s2") as { seededDefault?: unknown }).seededDefault).toBe(true);
+  });
+
+  it("never invents the marker on an explicitly SAVED policy", async () => {
+    runPostgresQueriesSync.mockReturnValue(
+      seededRow("s3", {
+        runListVisibility: ["workspace"],
+        runDataVisibility: ["workspace"],
+        runExecuteVisibility: ["workspace"],
+        allowRunSharing: false,
+      }),
+    );
+    const map = await readExtensionAccessPolicies("connection", ["s3"]);
+    expect("seededDefault" in (map.get("s3") as object)).toBe(false);
+  });
+
+  it("carries only the literal `true` marker (a truthy lookalike is not a seed)", async () => {
+    runPostgresQueriesSync.mockReturnValue(
+      seededRow("s4", {
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
+        allowRunSharing: false,
+        seededDefault: "yes",
+      }),
+    );
+    const map = await readExtensionAccessPolicies("connection", ["s4"]);
+    expect("seededDefault" in (map.get("s4") as object)).toBe(false);
+  });
+});

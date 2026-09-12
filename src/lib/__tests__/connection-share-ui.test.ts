@@ -3,9 +3,11 @@
 //   • only:"user" (and an unreadable ceiling) → NO sharing surface,
 //   • only:* → picker LOCKED at the only-value with every out-of-ceiling
 //     option disabled (same ceiling predicate as the read clamp),
-//   • default:* pre-selects the recommendation ONLY while the stored policy
-//     is the untouched connect seed (seededDefault marker) — an explicit
-//     owner save is never overridden (codex round-0 finding 1).
+//   • default:* STATES the recommendation ONLY while the stored policy is the
+//     untouched connect seed (seededDefault marker) — an explicit owner save
+//     is never overridden (codex round-0 finding 1) — and the picker keeps
+//     opening on the stored grant, so the recommended scope stays an enabled
+//     option the owner may choose and save (cinatra#3408).
 
 import { describe, it, expect } from "vitest";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
@@ -114,8 +116,8 @@ describe("decideConnectionShareSurface — only:* locks", () => {
   });
 });
 
-describe("decideConnectionShareSurface — default:* pre-selection (never auto-shares)", () => {
-  it("default:user pre-selects Personal (owner) on the untouched seed", () => {
+describe("decideConnectionShareSurface — default:* recommendation (never auto-shares)", () => {
+  it("default:user leaves the picker on Personal (owner) on the untouched seed", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "user"),
@@ -125,7 +127,7 @@ describe("decideConnectionShareSurface — default:* pre-selection (never auto-s
     expect(s).toMatchObject({ surface: "editable", value: "owner" });
   });
 
-  it("default:workspace pre-selects the recommendation on the untouched seed, with the not-shared-until-save note", () => {
+  it("default:workspace states the recommendation on the untouched seed and keeps the picker on the stored owner scope", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "workspace"),
@@ -134,18 +136,25 @@ describe("decideConnectionShareSurface — default:* pre-selection (never auto-s
     });
     expect(s.surface).toBe("editable");
     if (s.surface !== "editable") return;
-    expect(s.value).toBe("workspace");
+    // The sentence beside the picker reads "Currently: only you." — the picker
+    // must say the same thing, and the recommended scope must stay an option
+    // the owner can still choose and save (cinatra#3408).
+    expect(s.value).toBe("owner");
+    expect(s.value).not.toBe("workspace");
     expect(s.recommendationNote).toMatch(/nothing is shared until you save/);
   });
 
-  it("default:organization pre-selects the CONCRETE owning org", () => {
+  it("default:organization states the CONCRETE owning org without pre-selecting it", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "organization"),
       storedPolicy: policyOf("owner", true),
       scopes,
     });
-    expect(s).toMatchObject({ surface: "editable", value: `org:${ORG}` });
+    expect(s).toMatchObject({ surface: "editable", value: "owner" });
+    expect(s.surface === "editable" && s.recommendationNote).toMatch(
+      /recommends sharing with your organization/,
+    );
   });
 
   it("an id-less team/project recommendation stays on owner and only notes the recommendation", () => {
