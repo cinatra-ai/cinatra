@@ -1546,8 +1546,16 @@ function ScheduleOptionRows({
               <SelectTrigger data-field="recurring-minute" aria-label="Minute" className="w-20">
                 <SelectValue />
               </SelectTrigger>
+              {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278). The options were
+                  the twelve multiples of five, so a schedule stored at 05:12
+                  had no option to match and the segment drew blank beside an
+                  hour that drew 05. Section VI admits no raw cron field — "the
+                  schedule the reader stated is what the reader sees and
+                  confirms" — so the minute the schedule holds has to be one
+                  this control can draw. The parse and the cron are untouched;
+                  only the option set changes, on the same drawn picker. */}
               <SelectContent>
-                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                {Array.from({ length: 60 }, (_, m) => (
                   <SelectItem key={m} value={String(m)}>
                     {String(m).padStart(2, "0")}
                   </SelectItem>
