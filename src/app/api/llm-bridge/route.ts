@@ -590,6 +590,15 @@ export type VettedRunHandle = {
   id: string;
   runBy?: string | null;
   orgId?: string | null;
+  /**
+   * The run's IMMUTABLE `assignment_scope_snapshot` (cinatra#2815 S3, epic
+   * #2812), carried RAW. It is what decides which of the agent's per-scope
+   * assignments this dispatch receives, and it comes from the same vetted run
+   * handle as the owner id — so a caller cannot widen the scopes it reads
+   * assignments from by editing the intent any more than it can widen the
+   * owner.
+   */
+  assignmentScopeSnapshot?: unknown;
 } | null;
 
 /**
@@ -1508,6 +1517,7 @@ export async function POST(req: Request): Promise<Response> {
             id: runForPorts.id,
             runBy: runForPorts.runBy ?? null,
             orgId: runForPorts.orgId ?? null,
+            assignmentScopeSnapshot: runForPorts.assignmentScopeSnapshot ?? null,
           }
         : null,
       agentId: body.agent_id ?? "",
@@ -1534,9 +1544,18 @@ export async function POST(req: Request): Promise<Response> {
         const assignedSkillsActor = actorUserId
           ? await resolveAssignedSkillsActorForRun(runForPorts)
           : undefined;
+        // cinatra#2815 S3 — the FROZEN scopes ride the same vetted handle. An
+        // unattributable dispatch (no run) carries no snapshot, and the chain
+        // then resolves the sole legacy fallback rather than the package-wide
+        // set: strictly less than the run-bound path, exactly as the owner axis
+        // above already is.
+        const runScope = {
+          snapshot: runForPorts?.assignmentScopeSnapshot ?? undefined,
+          durableOrgId: runForPorts?.orgId ?? null,
+        };
         return assignedSkillsActor
-          ? getAssignedSkillIdsForAgent(body.agent_id, assignedSkillsActor)
-          : getAssignedSkillIdsForAgent(body.agent_id);
+          ? getAssignedSkillIdsForAgent(body.agent_id, assignedSkillsActor, runScope)
+          : getAssignedSkillIdsForAgent(body.agent_id, undefined, runScope);
       },
       // A3 (cinatra#1363): a personal delta whose lifecycle_state is not
       // runtime-deliverable (archived/draft/unknown) is withheld, fail-closed.

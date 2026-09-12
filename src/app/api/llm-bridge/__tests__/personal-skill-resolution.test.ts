@@ -540,7 +540,13 @@ describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () =>
     );
     await POST(req);
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledOnce();
-    expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
+    // cinatra#2815 S3 — the third argument is the run's FROZEN assignment scopes,
+    // read off the SAME vetted handle as the owner id (none for an unattributable
+    // dispatch, which therefore stays on the chain's narrow answer).
+    expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x", undefined, {
+      snapshot: undefined,
+      durableOrgId: "org-1",
+    });
     expect(deliveredCatalogSkillIds()).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
   });
 
@@ -549,7 +555,10 @@ describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () =>
     // byte-identically regardless of whether a personal owner resolved.
     const req = makeRequest({ user: "hi", agent_id: "agent-x" });
     await POST(req);
-    expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
+    expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x", undefined, {
+      snapshot: undefined,
+      durableOrgId: null,
+    });
     expect(deliveredCatalogSkillIds()).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
     expect(deliveredDeltaContent()).toBeUndefined();
   });
