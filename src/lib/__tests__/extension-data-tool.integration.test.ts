@@ -68,7 +68,7 @@ const auditEvents: Record<string, unknown>[] = [];
 
 async function run(request: Record<string, unknown>) {
   const { runExtensionDataOperation } = await import("@/lib/extension-data-tool");
-  return runExtensionDataOperation({
+  const result = await runExtensionDataOperation({
     client: client as never,
     schemaName: SCHEMA,
     packageName: PACKAGE,
@@ -79,7 +79,8 @@ async function run(request: Record<string, unknown>) {
     audit: async (e) => {
       auditEvents.push(e);
     },
-  });
+  });  // Every operation this tier exercises hands rows back.
+  return result as { rows: Record<string, unknown>[]; rowCount: number; table: string };
 }
 
 describeDb("the extension-data tool on a real store (cinatra#3031 acceptance 2)", () => {
@@ -180,7 +181,7 @@ describeDb("the extension-data tool on a real store (cinatra#3031 acceptance 2)"
   it("refuses a table the calling extension does not declare, and records the refusal", async () => {
     auditEvents.length = 0;
     await expect(run({ operation: "select", table: HOST_ONLY_TABLE })).rejects.toThrow(
-      /does not declare a table named/,
+      /must name one of the calling extension's own declared tables/,
     );
     expect(auditEvents[0]).toMatchObject({ decision: "denied" });
     expect((auditEvents[0]?.metadata as Record<string, unknown>).reason).toBe("table-not-declared");

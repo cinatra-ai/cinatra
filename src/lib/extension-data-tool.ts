@@ -27,6 +27,36 @@ import "server-only";
 //
 // The reserved `db` host port for server-entry code stays reserved (0.25): this
 // is a flow's road, not a second general database surface.
+//
+// TWO CONDITIONAL OPERATIONS (cinatra#3249). A flow that reserves one row of
+// its own table needs the decision to be the DATABASE'S, not a read followed
+// by a write that another run can slip between. `insertIfAbsent` is ONE
+// statement: it inserts, and where the table's own unique rule refuses the
+// write it reports that refusal as a conflict together with the row that won,
+// so the losing caller learns it lost inside the same round trip.
+// `updateWhere` moves the rows a caller names only while the columns it names
+// still carry the values it expects. Both stay type- and table-agnostic: the
+// caller names its own declared table and its own declared columns, and no
+// value carries a meaning the host reads.
+//
+// WHAT `inserted: false` MEANS, EXACTLY. `ON CONFLICT DO NOTHING` carries no
+// conflict target: the host cannot know which unique rule the pack's own
+// migration wrote, nor whether the organisation column takes part in it, and a
+// target that matches no index raises instead of answering. So the flag reports
+// what actually happened — the database refused the write under one of THAT
+// TABLE'S OWN unique rules — and `existing` is a separate, honestly narrower
+// thing: the row matching the conflict keys THE CALLER NAMED, inside the run's
+// organisation, as this statement's own snapshot sees it. It is null when no
+// such row is visible: the collision was on another of the table's unique
+// rules, or the row that won was committed by a concurrent transaction this
+// snapshot cannot see, or the winning row lies outside the caller's scope. A
+// caller reads `existing` as the row under its key, never as proof of which
+// constraint refused it.
+//
+// A null value in a caller's `conflictKeys` row value or in `expect` is matched
+// with `IS NOT DISTINCT FROM` rather than `=`, because `x = NULL` is unknown
+// and would silently never match — a conditional transition out of a null
+// column is exactly what a reserve/complete flow needs.
 
 import {
   declaredTablePhysicalName,
@@ -34,8 +64,27 @@ import {
   type DeclaredTable,
 } from "@cinatra-ai/sdk-extensions/manifest";
 
-export const EXTENSION_DATA_OPERATIONS = ["select", "insert", "update", "delete"] as const;
+export const EXTENSION_DATA_OPERATIONS = [
+  "select",
+  "insert",
+  "update",
+  "delete",
+  "insertIfAbsent",
+  "updateWhere",
+] as const;
 export type ExtensionDataOperation = (typeof EXTENSION_DATA_OPERATIONS)[number];
+
+/** How the tool reads a compiled statement's result back for the caller. */
+export type ExtensionDataResultShape = "rows" | "insertIfAbsent" | "updated";
+
+/**
+ * The conditional insert's own column and common-table names. A declared
+ * column can never collide with either: a declared name must start with a
+ * lowercase letter (the manifest's identifier rule), and these start with an
+ * underscore.
+ */
+const ATTEMPT_CTE = "__attempted";
+const INSERTED_FLAG = "__inserted";
 
 /** The default and the ceiling for a select. */
 export const EXTENSION_DATA_DEFAULT_LIMIT = 100;
@@ -51,6 +100,21 @@ export type ExtensionDataRequest = {
   values?: Record<string, unknown>;
   /** Equality predicates, declared columns only. */
   where?: Record<string, unknown>;
+  /** `insertIfAbsent`: the row to write, declared columns only. */
+  row?: Record<string, unknown>;
+  /**
+   * `insertIfAbsent`: the declared columns that identify the row this write
+   * would collide with. Their values are read back from `row`, so a caller
+   * names its key once.
+   */
+  conflictKeys?: string[];
+  /** `updateWhere`: the columns to set, declared columns only. */
+  set?: Record<string, unknown>;
+  /**
+   * `updateWhere`: the columns that must STILL carry these values for the set
+   * to happen. The caller's own guard; the host reads no meaning into a value.
+   */
+  expect?: Record<string, unknown>;
   limit?: number;
 };
 
@@ -61,6 +125,8 @@ export type CompiledExtensionDataStatement = {
   physicalTable: string;
   /** The declared columns the statement writes or filters on — the row keys. */
   rowKeys: Record<string, unknown>;
+  /** How the tool reads this statement's result back for the caller. */
+  resultShape: ExtensionDataResultShape;
 };
 
 export class ExtensionDataRefusal extends Error {
@@ -117,8 +183,7 @@ export function buildExtensionDataStatement(input: {
   if (!table) {
     throw new ExtensionDataRefusal(
       "table-not-declared",
-      `extension_data: ${input.packageName} does not declare a table named "${request.table}" — ` +
-        `the tool operates only on the calling extension's declared tables`,
+      "extension_data: `table` must name one of the calling extension's own declared tables",
     );
   }
   const declared = new Set(table.columns.map((c) => c.name));
@@ -147,6 +212,15 @@ export function buildExtensionDataStatement(input: {
     return `$${values.length}`;
   };
   const rowKeys: Record<string, unknown> = {};
+  /**
+   * One equality predicate for the CONDITIONAL operations. A null is matched
+   * with `IS NOT DISTINCT FROM`, since `= NULL` is unknown and would never
+   * match; a non-null keeps the plain, index-usable `=`.
+   */
+  const eq = (column: string, value: unknown) =>
+    value === null
+      ? `${qi(column)} IS NOT DISTINCT FROM ${p(value)}`
+      : `${qi(column)} = ${p(value)}`;
 
   const whereEntries = Object.entries(request.where ?? {});
   for (const [k] of whereEntries) assertColumn(k, "where");
@@ -159,9 +233,9 @@ export function buildExtensionDataStatement(input: {
     return parts.join(" AND ");
   };
 
-  const projection = (() => {
+  const projectionColumns = (() => {
     if (!request.columns || request.columns.length === 0) {
-      return table.columns.map((c) => qi(c.name)).join(", ");
+      return table.columns.map((c) => c.name);
     }
     for (const c of request.columns) {
       if (!declared.has(c)) {
@@ -171,8 +245,17 @@ export function buildExtensionDataStatement(input: {
         );
       }
     }
-    return request.columns.map(qi).join(", ");
+    return request.columns;
   })();
+  const projection = projectionColumns.map(qi).join(", ");
+  /**
+   * The conditional insert names its projection THREE times — once in the
+   * CTE's RETURNING and once in each arm of the union — so a repeated column
+   * would give the common table two columns of one name and make the outer
+   * reference ambiguous. Deduplicated for that statement only; every other
+   * operation keeps the projection the caller wrote.
+   */
+  const distinctProjection = [...new Set(projectionColumns)].map(qi).join(", ");
 
   if (request.operation === "select") {
     const limit = Math.min(
@@ -185,6 +268,87 @@ export function buildExtensionDataStatement(input: {
       values,
       physicalTable: physical,
       rowKeys,
+      resultShape: "rows",
+    };
+  }
+
+  if (request.operation === "insertIfAbsent") {
+    const entries = Object.entries(request.row ?? {});
+    if (entries.length === 0) {
+      throw new ExtensionDataRefusal(
+        "no-values",
+        "extension_data: insertIfAbsent needs a `row` with at least one declared column",
+      );
+    }
+    for (const [k] of entries) assertColumn(k, "row");
+    const keys = request.conflictKeys ?? [];
+    if (keys.length === 0) {
+      throw new ExtensionDataRefusal(
+        "no-conflict-keys",
+        "extension_data: insertIfAbsent needs `conflictKeys` naming the declared columns that " +
+          "identify the row it would collide with",
+      );
+    }
+    const row = Object.fromEntries(entries);
+    for (const k of keys) {
+      assertColumn(k, "conflict key");
+      if (!(k in row)) {
+        throw new ExtensionDataRefusal(
+          "conflict-key-not-in-row",
+          `extension_data: "${k}" (conflict key) is not one of the columns the row carries`,
+        );
+      }
+    }
+    const cols = [orgCol, ...entries.map(([k]) => k)];
+    const placeholders = [p(input.orgId), ...entries.map(([, v]) => p(v))];
+    for (const [k, v] of entries) rowKeys[k] = v;
+    const conflictWhere = [
+      `${qi(orgCol)} = ${p(input.orgId)}`,
+      ...keys.map((k) => eq(k, row[k])),
+    ].join(" AND ");
+    return {
+      text:
+        `WITH ${qi(ATTEMPT_CTE)} AS (` +
+        `INSERT INTO ${target} (${cols.map(qi).join(", ")}) ` +
+        `VALUES (${placeholders.join(", ")}) ON CONFLICT DO NOTHING ` +
+        `RETURNING ${distinctProjection}) ` +
+        `SELECT true AS ${qi(INSERTED_FLAG)}, ${distinctProjection} FROM ${qi(ATTEMPT_CTE)} ` +
+        `UNION ALL ` +
+        `SELECT false AS ${qi(INSERTED_FLAG)}, ${distinctProjection} FROM ${target} ` +
+        `WHERE ${conflictWhere} AND NOT EXISTS (SELECT 1 FROM ${qi(ATTEMPT_CTE)}) ` +
+        `LIMIT 1`,
+      values,
+      physicalTable: physical,
+      rowKeys,
+      resultShape: "insertIfAbsent",
+    };
+  }
+
+  if (request.operation === "updateWhere") {
+    const sets = Object.entries(request.set ?? {});
+    if (sets.length === 0) {
+      throw new ExtensionDataRefusal(
+        "no-values",
+        "extension_data: updateWhere needs a `set` with at least one declared column",
+      );
+    }
+    for (const [k] of sets) assertColumn(k, "set");
+    const expected = Object.entries(request.expect ?? {});
+    for (const [k] of expected) assertColumn(k, "expect");
+    const assignments = sets.map(([k, v]) => `${qi(k)} = ${p(v)}`).join(", ");
+    for (const [k, v] of sets) rowKeys[k] = v;
+    const predicates = [`${qi(orgCol)} = ${p(input.orgId)}`];
+    for (const [k, v] of whereEntries) {
+      predicates.push(eq(k, v));
+      rowKeys[k] = v;
+    }
+    for (const [k, v] of expected) predicates.push(eq(k, v));
+    return {
+      text: `UPDATE ${target} SET ${assignments} WHERE ${predicates.join(" AND ")}`,
+      values,
+      physicalTable: physical,
+      rowKeys,
+      resultShape: "updated",
     };
   }
 
@@ -204,6 +368,7 @@ export function buildExtensionDataStatement(input: {
       values,
       physicalTable: physical,
       rowKeys,
+      resultShape: "rows",
     };
   }
 
@@ -221,6 +386,7 @@ export function buildExtensionDataStatement(input: {
       values,
       physicalTable: physical,
       rowKeys,
+      resultShape: "rows",
     };
   }
 
@@ -230,6 +396,7 @@ export function buildExtensionDataStatement(input: {
     values,
     physicalTable: physical,
     rowKeys,
+    resultShape: "rows",
   };
 }
 
@@ -238,6 +405,46 @@ export type ExtensionDataResult = {
   rowCount: number;
   table: string;
 };
+
+/**
+ * The conditional insert's answer: the row this call wrote, or — where the
+ * table's own unique rule refused the write — that conflict together with the
+ * row standing under the conflict keys the caller named. `existing` is null
+ * whenever no such row is visible to this statement: the collision was on
+ * another of the table's unique rules, the winning row was committed
+ * concurrently, or it lies outside the caller's own scope. It is the row under
+ * the caller's key, never proof of which constraint refused the write.
+ */
+export type ExtensionDataInsertIfAbsentResult =
+  | { inserted: true; row: Record<string, unknown> }
+  | { inserted: false; conflict: true; existing: Record<string, unknown> | null };
+
+/** The conditional update's answer: how many rows actually moved. */
+export type ExtensionDataUpdateWhereResult = { updated: number };
+
+export type ExtensionDataToolResult =
+  | ExtensionDataResult
+  | ExtensionDataInsertIfAbsentResult
+  | ExtensionDataUpdateWhereResult;
+
+/**
+ * Read one executed statement as the operation's own answer. Pure, so the
+ * shape a calling pack sees is readable here rather than inferred from a
+ * driver's row array.
+ */
+export function shapeExtensionDataResult(
+  compiled: CompiledExtensionDataStatement,
+  result: ExtensionDataResult,
+): ExtensionDataToolResult {
+  if (compiled.resultShape === "updated") return { updated: result.rowCount };
+  if (compiled.resultShape !== "insertIfAbsent") return result;
+  const first = result.rows[0];
+  if (!first) return { inserted: false, conflict: true, existing: null };
+  const { [INSERTED_FLAG]: inserted, ...row } = first;
+  return inserted === true
+    ? { inserted: true, row }
+    : { inserted: false, conflict: true, existing: row };
+}
 
 type MinimalClient = {
   query: (
@@ -291,7 +498,7 @@ export async function runExtensionDataOperation(input: {
   actorPrincipalId?: string | null;
   request: ExtensionDataRequest;
   audit?: (event: Record<string, unknown>) => Promise<void>;
-}): Promise<ExtensionDataResult> {
+}): Promise<ExtensionDataToolResult> {
   const audit =
     input.audit ??
     (async (event) => {
@@ -347,7 +554,7 @@ export async function runExtensionDataOperation(input: {
         rowCount: result.rowCount,
       },
     }).catch(() => {});
-    return result;
+    return shapeExtensionDataResult(compiled, result);
   } catch (e) {
     await audit({
       ...base,
