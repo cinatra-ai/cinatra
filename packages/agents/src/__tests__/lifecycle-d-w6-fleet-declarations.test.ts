@@ -19,9 +19,9 @@
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
  *
- * THREE PINS ARE HELD at their previous sha, and each held part is recorded
+ * TWO PINS ARE HELD at their previous sha, and each held part is recorded
  * below as a pinned absence carrying its reason. The wave's own change in
- * those three repositories also carries a defect the host refuses, and the
+ * those two repositories also carries a defect the host refuses, and the
  * border keeps the remedy in the package's own repository rather than in a
  * host special case:
  *
@@ -29,14 +29,20 @@
  *     host provider policy allowlist, which the L1 service-description check
  *     refuses. The model arrived in a later, unrelated change in
  *     that repository, not in the declaration itself.
- *   - company-discovery-agent: its head drops the domain field from `hidden`
- *     without adding it to `required`, so the field is neither shown nor
- *     prompted — the host start-node scan reports it as silently unprompted.
- *     A field is made visible by naming it in `required`.
  *   - email-delivery-agent: its head drops the output renderer id from
  *     `hitlScreens`, and that id is a live renderer binding this host resolves
  *     for the send screen, so the agent card would stop advertising a surface
  *     the host still serves.
+ *
+ * company-discovery-agent's pin is no longer held: its corrected head names
+ * the two fields a person supplies in `required`, which is how the host makes
+ * a field visible, and this file follows that declaration below.
+ *
+ * list-curator-agent's pin is no longer held either: the EndNode invariant it
+ * failed — an EndNode that specifies both inputs and outputs must have them
+ * equal — was fixed in that repository, and its advanced head also turns the
+ * two declared review screens into real pauses in the flow, so this file
+ * follows that declaration below instead of pinning the gap.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -426,15 +432,15 @@ describe("acceptance 2 — inputs: no required-and-hidden, and the visible picks
     expect(a.hiddenInputs).not.toContain("campaignId");
   });
 
-  // The visible field is written and merged in cinatra-ai/company-discovery-agent
-  // as a removal from `hidden` alone. The host has two lists and no third: a
-  // name in neither is not shown AND not prompted, which the host start-node
-  // scan reports. The pin is held until a follow-up in that repository names
-  // the field in `required`, which is how the host makes a field visible.
-  it("company discovery still hides the domain at this pin, and the absence carries its reason", () => {
+  // The corrected head names the two fields a person supplies — the company
+  // name and the domain — in `required`, and leaves only the derived lookup
+  // flag and the run id in `hidden`. The host has two lists and no third, so
+  // naming the field in `required` is how it is shown AND prompted.
+  it("company discovery shows the name and the domain as the fields a person sets", () => {
     const a = agent("company-discovery-agent");
-    expect(a.hiddenInputs).toContain("domain");
-    expect(a.requiredInputs).not.toContain("domain");
+    expect(a.requiredInputs).toEqual(["companyName", "domain"]);
+    expect(a.hiddenInputs).toEqual(["apolloLookup", "cinatra_run_id"]);
+    expect(a.requiredInputs.filter((n) => a.hiddenInputs.includes(n))).toEqual([]);
   });
 });
 
@@ -447,14 +453,13 @@ describe("acceptance 2 — the curator's two declared pauses", () => {
     ]);
   });
 
-  // Named, not hidden: the two declared screens are not yet approval nodes in
-  // the curator's flow. The wave's sentence is to MAKE them real pauses, which
-  // is a later wave's item in that repository, not a deletion of the
-  // declaration here.
-  it("the curator's declared screens are not yet pauses in its flow — the gap is pinned", () => {
+  // At the advanced pin the two declared screens ARE pauses in the flow, and
+  // the manifest's gate claim is true beside them — the pair the host reads
+  // together, so a later pin that loses either one reddens here.
+  it("the curator's declared screens are real pauses in its flow, and its gate claim is true", () => {
     const a = agent("list-curator-agent");
-    expect(a.approvalNodes).toBe(0);
-    expect(a.gateClaim).toBe(false);
+    expect(a.approvalNodes).toBe(2);
+    expect(a.gateClaim).toBe(true);
   });
 });
 
