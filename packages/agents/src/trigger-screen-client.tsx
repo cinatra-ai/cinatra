@@ -115,7 +115,11 @@ export const durationCopy = (d: DurationEstimate): string => durationCopyFor(d);
  * (`background: var(--surface-strong)`), and the chosen row layers the primary
  * tint on that same base (`linear-gradient(rgba(54,78,129,0.05),
  * rgba(54,78,129,0.05)), var(--surface-strong)`) inside a
- * `1px solid var(--blue)` edge. `--blue` is this palette's `--primary`; the
+ * `1px solid var(--blue)` edge. `--blue` is the drawing's own indigo, carried
+ * by `--indigo-ink` — the app token declared once and re-declared by no
+ * palette, so the chosen row marks the choice with the same colour in both
+ * (cinatra#3279: keyed to `--primary`, the palette's ACTION colour, the edge,
+ * the dot and the tint all went near-white in the dark palette); the
  * boundary of an unchosen row is the control boundary `--input`, which carries
  * `--line-strong`'s own value in the light palette and the raised dark value
  * cinatra#3107 pinned for a control edge on a dark ground.
@@ -132,17 +136,17 @@ export function optionRowClass(chosen: boolean, interactive: boolean): string {
     "flex flex-col gap-3 rounded-control border bg-surface-strong px-4 py-3 text-left transition-colors",
     interactive ? "cursor-pointer" : "",
     chosen
-      ? "border-primary bg-linear-to-b from-primary/5 to-primary/5"
+      ? "border-indigo-ink bg-linear-to-b from-indigo-ink/5 to-indigo-ink/5"
       : "border-input",
   ]
     .filter(Boolean)
     .join(" ");
 }
 
-/** The radio disc: `2px solid var(--line-strong)`, the primary token once chosen. */
+/** The radio disc: `2px solid var(--line-strong)`, the drawn indigo once chosen. */
 export function optionDiscClass(chosen: boolean): string {
   return `flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
-    chosen ? "border-primary" : "border-input"
+    chosen ? "border-indigo-ink" : "border-input"
   }`;
 }
 
@@ -651,7 +655,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "immediate")}>
-                    {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <Zap aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Run right after setup</span>
@@ -684,7 +688,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "scheduled")}>
-                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <CalendarClock aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Schedule for later</span>
@@ -779,7 +783,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "recurring")}>
-                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <Repeat aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Recurring</span>
