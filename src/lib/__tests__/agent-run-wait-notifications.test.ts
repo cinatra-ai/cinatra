@@ -154,12 +154,26 @@ describe("buildRunAwaitingHumanNotificationInput — pure shape", () => {
       waitKind: "input",
     });
     expect(held.title).toBe('"Blog draft" needs your input');
-    // The hold lands on the skills chip row (Confirm/Skip), not on a form with
-    // fields, so it does NOT share the derived input wait's body. Interim wording —
-    // the final copy is cinatra#2838's reserved decision; what this pins is that the
-    // hold's body does not promise fields its destination has not got.
-    expect(held.body).toBe("Open the run to confirm or skip the recommended skills.");
+    // The hold lands on the SKILLS STEP — a checkbox in front of each skill and
+    // one Continue beneath the list — not on a form with fields, so it does NOT
+    // share the derived input wait's body.
+    //
+    // THE WORDING IS SETTLED (cinatra#3138, closing the decision cinatra#2838
+    // reserved), so this line pins the sentence itself and no longer describes
+    // itself as interim.
+    expect(held.body).toBe("Open the run to choose the recommended skills.");
     expect(held.body).not.toContain("fields");
+    // THE RETIRED-PROSE BAN. Section V of the lifecycle-cards drawing: "a pill
+    // carries nothing to press — no Confirm, no Adjust, no Skip", and "There is
+    // nothing to skip and nothing that means skip". A bell that names one of the
+    // three sends its reader looking for a control the card does not draw, so
+    // the three words are pinned out of this body rather than merely replaced
+    // once.
+    for (const retired of [/\bconfirm/i, /\badjust/i, /\bskip/i]) {
+      expect(held.body, `the retired control word ${String(retired)} is back`).not.toMatch(
+        retired,
+      );
+    }
     // Same per-run key + payload as any other human wait on this run.
     expect(held.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
     expect(held.metadata).toMatchObject({
