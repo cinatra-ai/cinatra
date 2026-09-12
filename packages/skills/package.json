@@ -13,6 +13,7 @@
     "./agent-skill-assignability": "./src/agent-skill-assignability.ts",
     "./assignable-skill-search": "./src/assignable-skill-search.ts",
     "./bundled-skill-registration": "./src/bundled-skill-registration.ts",
+    "./catalog-rows": "./src/skills-catalog-rows.tsx",
     "./cli": "./src/cli.mjs",
     "./extension-handler": "./src/extension-handler.ts",
     "./repository-package-intake": "./src/repository-package-intake.ts",

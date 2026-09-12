@@ -414,6 +414,7 @@
     { "alias": "@cinatra-ai/asset-transcript/mcp-handlers", "target": "./packages/asset-transcript/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/asset-transcript/plugin", "target": "./packages/asset-transcript/src/plugin/definition.ts" },
     { "alias": "@cinatra-ai/skills", "target": "./packages/skills/src/index.ts" },
+    { "alias": "@cinatra-ai/skills/catalog-rows", "target": "./packages/skills/src/skills-catalog-rows.tsx" },
     { "alias": "@cinatra-ai/skills/actions", "target": "./packages/skills/src/actions.ts" },
     { "alias": "@cinatra-ai/skills/agent-assigned-skills-actions", "target": "./packages/skills/src/agent-assigned-skills-actions.ts" },
     { "alias": "@cinatra-ai/skills/agent-package-resolver", "target": "./packages/skills/src/agent-package-resolver.ts" },
