@@ -2,9 +2,9 @@
 // THE FOUR BLOG DISPLAYS RESOLVE ON THE HOST — over the LIVE pinned extension
 // tree and the REAL generated display map (lifecycle-c W9, the re-pin half).
 //
-// The four blog extensions now ship their own displays. This suite is the
-// host-side half of the acceptance: at the pinned revisions, each blog type
-// reaches ITS OWN extension's display, and the key that display resolves to is
+// The blog extensions ship the displays that are theirs to ship. This suite is
+// the host-side half of the acceptance: at the pinned revisions, each blog type
+// reaches the display that draws it, and the key that display resolves to is
 // present in the generated build map — which is the single predicate every
 // consuming surface asks (the artifact page, the review card's read-only mount,
 // the island inside a third-party application, and the run page's outputs list
@@ -38,10 +38,14 @@ const BLOG_DISPLAYS = [
     mapSlots: ["detail", "preview"] as const,
   },
   {
+    // The post's pack registers NO display for the `detail` slot at its pinned
+    // revision: the post's full view draws through the host's markdown display,
+    // the way the document kinds delivered before it do. So no semantic slot
+    // resolves to this pack, and the build map carries only its `preview`.
     packageName: "@cinatra-ai/blog-post-artifact",
     objectType: "@cinatra-ai/blog-post-artifact:post",
-    semanticSlots: ["detail"] as const,
-    mapSlots: ["detail", "preview"] as const,
+    semanticSlots: [] as const,
+    mapSlots: ["preview"] as const,
   },
   {
     packageName: "@cinatra-ai/blog-image-artifact",
@@ -105,13 +109,15 @@ describe("the four blog displays resolve at the pinned revisions", () => {
 
   it("gives each blog type its OWN extension — no two extensions claim one blog display", () => {
     const snapshot = semanticRendererRegistry._snapshot();
-    for (const { objectType, packageName } of BLOG_DISPLAYS) {
+    for (const { objectType, packageName, semanticSlots } of BLOG_DISPLAYS) {
       const claimants = [
         ...new Set(
           snapshot.filter((d) => d.objectTypeId === objectType).map((d) => d.packageName),
         ),
       ];
-      expect(claimants, objectType).toEqual([packageName]);
+      // A pack that ships no display of its own claims nothing here — the
+      // host draws that type — so the assertion follows the pinned slots.
+      expect(claimants, objectType).toEqual(semanticSlots.length > 0 ? [packageName] : []);
     }
     const packages = BLOG_DISPLAYS.map((d) => d.packageName);
     expect(new Set(packages).size).toBe(packages.length);
@@ -167,7 +173,7 @@ describe("the four blog displays resolve at the pinned revisions", () => {
       ),
     ).toBeNull();
   });
-  it("every one of the nine blog display entries LOADS to a callable default export", async () => {
+  it("every one of the eight blog display entries LOADS to a callable default export", async () => {
     // Map membership is not resolution. The guarded loader swallows a missing
     // module and degrades to "absent", so a specifier that does not resolve at
     // runtime would leave the display silently blank instead of failing. This
@@ -180,7 +186,7 @@ describe("the four blog displays resolve at the pinned revisions", () => {
         key.startsWith("@cinatra-ai/blog-post-artifact::") ||
         key.startsWith("@cinatra-ai/linkedin-artifacts::"),
     );
-    expect(keys).toHaveLength(9);
+    expect(keys).toHaveLength(8);
     for (const key of keys) {
       const mod = (await GENERATED_ARTIFACT_RENDERERS[key].load()) as { default?: unknown };
       expect(typeof mod?.default, `${key} default export`).toBe("function");
