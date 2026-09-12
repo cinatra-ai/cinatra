@@ -29,7 +29,11 @@ import {
   type RankedRecommendation,
   type RecommendationCandidate,
   type RunIntent,
+  buildRecommendationTruncation,
+  orderRankAuthoritative,
+  type RecommendationTruncationV1,
 } from "./request-aware-scorer";
+
 
 export interface RecommendSkillsForAgentInput {
   agentId: string;
@@ -70,7 +74,19 @@ function resolvePinnedRevision(skillId: string): string {
  */
 export async function buildRecommendationCandidatesForAgent(
   input: RecommendSkillsForAgentInput,
+  /** cinatra#2815 S3 part (4): the ELIGIBLE pool size, written back for the
+   *  RecommendationOrderingV1 truncation record. Optional so every landed
+   *  caller is untouched. */
+  poolOut?: { eligibleCount: number },
 ): Promise<RecommendationCandidate[]> {
+  let eligiblePoolCount = 0;
+  try {
+    return await buildCandidates();
+  } finally {
+    if (poolOut) poolOut.eligibleCount = eligiblePoolCount;
+  }
+
+  async function buildCandidates(): Promise<RecommendationCandidate[]> {
   const [matches, skills, labels] = await Promise.all([
     readSkillMatchesByAgent(input.agentId).catch((): SkillMatchRow[] => []),
     listInstalledSkills().catch((): SkillManifest[] => []),
@@ -115,10 +131,20 @@ export async function buildRecommendationCandidatesForAgent(
   // an installed-catalog membership is required, so an uninstalled id is dropped.
   // Tie-break uses code-unit order (locale-independent) so the pre-cap candidate
   // set is identical across runtime locales (AC-1 determinism).
-  const candidateSkills = skills
+  //
+  // TRUNCATION HAPPENS AFTER ELIGIBILITY (cinatra#2815 S3 part 4, bound by
+  // RecommendationOrderingV1). `eligible` IS the pool the record counts: the
+  // installed catalog intersected with the restriction. Only then is the cap
+  // applied — cutting first would let an ineligible id consume a slot a
+  // deliverable skill should have had.
+  const eligible = skills
     .filter((s) => (restrict ? restrict.has(s.id) : matchBySkill.has(s.id)))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .slice(0, input.maxCandidates ?? DEFAULT_MAX_CANDIDATES);
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const candidateSkills = eligible.slice(
+    0,
+    input.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+  );
+  eligiblePoolCount = eligible.length;
 
   return candidateSkills.map((skill) => {
     const match = matchBySkill.get(skill.id);
@@ -140,6 +166,39 @@ export async function buildRecommendationCandidatesForAgent(
       baseMatched: match?.matched ?? false,
     };
   });
+  }
+}
+
+/**
+ * THE RANK-AUTHORITATIVE ENTRY (cinatra#2815 S3 part 4).
+ *
+ * Same scoring as `recommendSkillsForAgentTask`, plus the two things a
+ * PERSISTED decision needs and an advisory one does not: the ordering applied
+ * explicitly under RecommendationOrderingV1 (so the stored boundary is the
+ * bound one, not whatever order a caller happened to iterate), and the
+ * truncation record that says how big the eligible pool was and how much of it
+ * the cap removed.
+ *
+ * The caller's `restrictToSkillIds` is what makes the ranking authoritative:
+ * the ranks are ranks WITHIN the restricted pool, which is exactly the set the
+ * persistence path is allowed to write.
+ */
+export async function recommendSkillsForAgentTaskOrderedV1(
+  input: RecommendSkillsForAgentInput,
+): Promise<{
+  recommendations: RankedRecommendation[];
+  truncation: RecommendationTruncationV1;
+}> {
+  const pool = { eligibleCount: 0 };
+  const candidates = await buildRecommendationCandidatesForAgent(input, pool);
+  const scored = scoreSkillRecommendations({ intent: input.intent, candidates });
+  return {
+    recommendations: orderRankAuthoritative(scored),
+    truncation: buildRecommendationTruncation({
+      eligibleCount: pool.eligibleCount,
+      keptCount: candidates.length,
+    }),
+  };
 }
 
 /**

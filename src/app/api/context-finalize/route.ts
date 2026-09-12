@@ -19,6 +19,7 @@ import {
   recordContextRouteRejection,
   recordContextRouteSuccess,
 } from "@/lib/artifacts/context-route-observability";
+import { planAllocationForGate } from "@/lib/artifacts/context-allocation-gate";
 import {
   finalizeContextSelectionPinsAtomic,
   MissingRepresentationError,
@@ -43,6 +44,10 @@ const RequestSchema = z.object({
   projectId: z.string().optional(),
   selectionMode: z.enum(["interactive", "autonomous"]),
   userResponse: z.string(),
+  // cinatra#2815 S3 part (3): the ContextAllocationTokenV1 /api/context-resolve
+  // returned for THIS gate, carried by the renderer. Optional on the wire so a
+  // renderer that has not yet rolled still finalizes exactly as it did before.
+  allocationToken: z.string().min(1).optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -105,6 +110,47 @@ export async function POST(req: Request): Promise<Response> {
         "resolution_mode_mismatch",
         `envelope resolutionMode '${envelope.resolutionMode}' != slot '${slot.resolutionMode}'`,
       );
+    }
+
+    // cinatra#2815 S3 part (3): THE DRIFT GATE. When the renderer carried an
+    // allocation token, the manifest-wide allocation is recomputed here and
+    // compared to it. Equal means the world the human answered about is the
+    // world being written; unequal means it MOVED between the gate being drawn
+    // and the answer landing, and that is a structured conflict, never a
+    // silent write of a different set.
+    //
+    // FAIL-CLOSED, unlike the resolve side: a token was presented, so this
+    // route can no longer say "the planner is optional here". A plan that
+    // cannot be computed refuses with its own stable code, distinct from the
+    // drift itself, so an operator can tell a moved world from a broken read.
+    if (body.allocationToken) {
+      let recomputed: string;
+      try {
+        recomputed = (
+          await planAllocationForGate({
+            actor: ctx.actor,
+            runId: ctx.run.id,
+            trustedSlotPackageName: ctx.trustedSlotPackageName,
+            projectId: ctx.projectId,
+          })
+        ).token;
+      } catch (err) {
+        throw new ContextRouteError(
+          409,
+          "allocation_unavailable",
+          `the manifest-wide allocation could not be recomputed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      if (recomputed !== body.allocationToken) {
+        throw new ContextRouteError(
+          409,
+          "allocation_drift",
+          `context allocation drifted: the gate was drawn for ` +
+            `${body.allocationToken} and now plans ${recomputed}`,
+        );
+      }
     }
 
     // Re-resolve the trusted candidate set and revalidate the submission.
