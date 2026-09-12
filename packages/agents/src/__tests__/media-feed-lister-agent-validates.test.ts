@@ -102,18 +102,18 @@ describe("media-feed-lister-agent — 7 structural pins", () => {
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("Pin 6: StartNode required=['url'] + hidden=['source','latestCount','filterMode','dateFrom','dateTo']", () => {
+  it("Pin 6: StartNode required=['url','latestCount','filterMode','dateFrom','dateTo'] + hidden=['source']", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = components.start as Record<string, unknown>;
     const meta = (start.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.required).toEqual(["url"]);
-    expect(meta.hidden).toEqual([
-      "source",
+    expect(meta.required).toEqual([
+      "url",
       "latestCount",
       "filterMode",
       "dateFrom",
       "dateTo",
     ]);
+    expect(meta.hidden).toEqual(["source"]);
   });
 
   it("Pin 7: EndNode outputs cover sourceTitle/sourceUrl/detectedType/episodes/failureCode", () => {
