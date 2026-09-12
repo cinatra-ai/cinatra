@@ -220,7 +220,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "ee1998d55c877ab38479a3e595a7d5c810261b25"
+      "resolvedSha": "c11a6dfda78d47532280de7c744f641661c91b73"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
