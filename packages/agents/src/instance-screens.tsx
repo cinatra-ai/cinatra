@@ -1774,6 +1774,11 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // The server-rendered seed carries the gate's own openness too, so the
+        // first paint draws the same reading the surface's later re-read does
+        // rather than one frame of the run's terminal rendering in front of an
+        // open review (cinatra#3051).
+        pending: Boolean(runReviewSlot?.pending),
       }
     : null;
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their

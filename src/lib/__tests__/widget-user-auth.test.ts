@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
 //
@@ -2042,5 +2043,36 @@ describe("the widget token dies with the session that authorized it (cinatra#268
     mintTokenUnder(SESSION_B);
     const bound = [...tokenStore.values()].map((r) => r.auth_session_id).sort();
     expect(bound).toEqual([SESSION_A, SESSION_B]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RENEWAL'S ROTATION IS ONE CLAIM (cinatra#3051, convergence finding 3).
+//
+// A renewal that READ the presented row and then wrote its successor in a second
+// statement decides on a row it has already let go of: two presentations of the
+// same bearer both read it, both write a successor, and one predecessor becomes
+// two live credentials. The shipped rotation is a single statement whose INSERT
+// is fed by its own DELETE, so exactly one caller can ever claim a bearer.
+//
+// Pinned on the SOURCE because the property is the statement's shape: any test
+// driving it through a row-store double would be asserting the double's idea of
+// concurrency, which is nobody's.
+// ---------------------------------------------------------------------------
+describe("renewUserWidgetToken's rotation shape", () => {
+  const source = readFileSync("src/lib/widget-user-auth.ts", "utf-8");
+  const renewal = source.slice(source.indexOf("export function renewUserWidgetToken"));
+
+  it("claims the predecessor and feeds the successor from that claim, in ONE statement", () => {
+    expect(renewal).toMatch(/WITH claimed AS \(`\s*\+\s*`DELETE FROM/);
+    expect(renewal).toMatch(/FROM claimed`/);
+    // The row count of that one statement is what says whether this caller was
+    // the one that claimed it.
+    expect(renewal).toMatch(/rotation\?\.rowCount \?\? 0\) !== 1/);
+    expect(renewal).toMatch(/reason: "already_rotated"/);
+  });
+
+  it("composes no grant of its own — the claims are copied, never re-derived", () => {
+    expect(renewal).not.toMatch(/mintWidgetTokenScope|mintWidgetTokenAudience|userTokenScope\(/);
   });
 });

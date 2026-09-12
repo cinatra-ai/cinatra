@@ -75,7 +75,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/widget-user-auth.ts": {
     class: "sync-required",
     justification:
-      "Widget user-auth validates connect-site credentials + origin on the embed auth path; a synchronous, instant decision with no TOCTOU window. Security-critical — deferred and serialized.",
+      "Widget user-auth validates connect-site credentials + origin on the embed auth path; a synchronous, instant decision with no TOCTOU window. Security-critical — deferred and serialized. cinatra#3051 adds the RENEWAL's two call sites to the same synchronous decision: the read of the presented row and the one transaction that writes its successor and deletes it. Splitting them across an await would open exactly the window the single transaction closes — a column momentarily holding two live bearers, or none.",
   },
   "src/lib/widget-session-binding.ts": {
     class: "sync-required",

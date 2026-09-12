@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
-import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
+import { SpinnerArc } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -144,61 +144,51 @@ export function ReviewGateLoading() {
 
 
 /**
- * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997).
+ * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997, redrawn to the
+ * ratified drawing in cinatra#3051 after the eighth proof round graded it).
  *
- * The maintainer's words are the whole specification, so they are quoted rather
- * than paraphrased:
+ * THE DRAWING IS THE SPECIFICATION, so its sentences are quoted rather than
+ * paraphrased — Agent run & review, "the run progress card":
  *
- *   "The 'Agentic Run Progress' card should basically just be a card (maybe even
- *    an empty review screen) with a spinning icon which is a temporary
- *    placeholder for the review screen. Once the agent is done and the output
- *    generated, that 'Agentic Run Progress' card is being automatically replaced
- *    with the 'Review requested' screen."
+ *   "While the run works, the detail carries a placeholder. A run that will ask
+ *    for a review carries, in the run detail, the run progress card — and while
+ *    the run is working that card is a placeholder for the review screen: the
+ *    card frame, and a spinning icon, the indigo arc of Components § Skeleton /
+ *    Spinner. It names no status, reports no result and draws nothing to press."
  *
- * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
- * nothing else, under the card's own NAME. The section's worked example draws
- * that fixed name as the box's first child, so the heading stays; what the prose
- * forbids is a status word, a result and a control, and a fixed card name is
- * none of the three. There is no status word, no progress sentence and no step
- * list, because the words authorize none of those: it is the review screen's own
- * frame, empty but named, while the screen is still coming.
+ *   "It is replaced, in place, when the output is generated. The placeholder
+ *    becomes the Review requested gate above — the same detail, under the same
+ *    rail. It happens on its own: there is nothing for the reader to open or
+ *    press to bring it."
  *
- * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
- * of the review screen's states — the one before the gate exists — and it is
- * built from the piece the review screen is already built from: the same 30px
- * header tile the gate header draws its clipboard mark in. Keeping it here is
- * what makes the swap read as one card changing rather than two cards trading
- * places, and it is why the replacement needs no new geometry of its own: the
- * placeholder and the screen that replaces it stand in the SAME BOX, the one
- * the enclosing surface draws. They are not the same HEIGHT and nothing here
- * claims they are -- no minimum-height contract exists on this slot, and a
- * placeholder that reserved the finished screen's height would be reporting a
- * result it does not have.
+ * AND THE DRAWN ANATOMY at the anchors `run-progress-placeholder` (Agent run &
+ * review) and `run-progress-placeholder-in-thread` (Lifecycle cards § I), which
+ * draw the SAME card as each other: the card, a title in the sans face at 14px /
+ * weight 700 / ink reading "Agentic Run Progress", then ONE arc — centred, 22px,
+ * stroked in the indigo accent, spinning 1s linear — and nothing else.
  *
- * AND IT CARRIES THE CARD'S OWN NAME (cinatra#3044, the eleventh set). The
- * drawing's placeholder example is markup, and its first child is the heading
- * "Agentic Run Progress" at weight 700, 14px, `var(--ink)`. The same section's
- * prose says the placeholder "names no status, reports no result and draws
- * nothing to press", and an earlier set read that as "no text at all". The two
- * readings settle once each clause's subject is read: what is forbidden is a
- * STATUS word, a RESULT and a CONTROL. A fixed card name is none of the three —
- * it is the name §II itself uses for this card in prose. So the card names
- * itself and still names no status.
+ * WHAT THIS USED TO DRAW, AND WHY IT WAS WRONG. It drew no title at all, a small
+ * ink-toned spinner inside a 30px top-left tile, and the shipped
+ * `ReviewGateLoading` five-bar skeleton as a nested panel under it. That reading
+ * came from the request that opened cinatra#2997 — "maybe even an empty review
+ * screen" — which the drawing has since settled: §IV's loading skeleton is a
+ * DIFFERENT state, drawn while the host prepares a target that already exists,
+ * and Components § Skeleton / Spinner steers against pairing the two marks in
+ * one slot. The eighth proof round read all three back off the pixels in both
+ * palettes; they are pinned now in
+ * `__tests__/review-gate-placeholder-as-drawn.test.tsx`.
  *
- * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
- * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif
- * beneath the tile as well — two bars in a header band over three in a body
- * band — and a graded set measured them. No sentence gives them: the drawing
- * says the placeholder is "the card frame, and a spinning icon, the indigo arc
- * of Components § Skeleton / Spinner", and its own placeholder example draws
- * the card box with one arc in it and nothing else. Bars beside the arc are a
- * third thing, and one that reads as content arriving when nothing has. The bar
- * motif keeps its own job — it is the GATE's loading state, drawn in the target
- * slots while the host prepares them — and that use is untouched.
+ * THE TITLE BELONGS TO THIS COMPONENT, not to its hosts. All four mounts — the
+ * run page's panel, the setup run page's review step, the orchestrator stepper's
+ * terminal card and the conversation column inside the site widget — wrap it in
+ * a card frame that draws no title of its own, so the card is named once here
+ * and every host reads the same drawing.
  *
- * THE SPINNER IS THE DESIGN SYSTEM'S. `LoadingSpinner` from `@cinatra-ai/sdk-ui`
- * — the same component the orchestrator stepper's executing card spins — not a
- * second spinner drawn here.
+ * THE ARC IS THE DESIGN SYSTEM'S. `SpinnerArc` from `@cinatra-ai/sdk-ui` is
+ * Components § Skeleton / Spinner drawn once — the ratified path
+ * (`M21 12a9 9 0 1 1-6.219-8.56`) with no ring behind it, which is what "the
+ * indigo arc" means and what the sibling `LoadingSpinner` (arc over a
+ * 25%-opacity track ring) is not.
  *
  * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
  * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
@@ -214,35 +204,32 @@ export function ReviewGateLoading() {
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
+const REVIEW_GATE_PLACEHOLDER_TITLE_ID = "review-gate-placeholder-title";
+
 export function ReviewGatePlaceholder() {
   return (
     <div
       data-conformance-id="review-gate-placeholder"
-      // A busy REGION, named for a reader who cannot see the spin. The label is
-      // not copy on the card — nothing is drawn from it — it is the accessible
-      // name of a region whose only words are the card's own fixed name.
+      // A busy REGION, named for a reader who cannot see the spin. The card names
+      // itself on screen now, so the region takes its accessible name FROM THAT
+      // TITLE — `role="status"` is not named from its contents, so the name has
+      // to be pointed at explicitly (convergence round: dropping the old
+      // `aria-label` without this left the region unnamed) rather than carrying a
+      // second, invisible label that could drift from the drawn one.
       role="status"
       aria-busy="true"
-      aria-label="Working"
-      className="flex w-full flex-col gap-3"
+      aria-labelledby={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
+      className="w-full"
     >
-      {/* THE CARD'S OWN NAME, the heading the drawn placeholder puts at its
-          head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
-          a status word and not a result — it is the fixed name §II uses for
-          this card in its own prose ("the run progress card"), identical on
-          every run. The drawing's `--ink` is #15213a, and the token registered
-          at that value here is `--foreground`. */}
-      <div className="text-sm font-bold text-foreground">Agentic Run Progress</div>
-      {/* THE ARC SITS ON THE CARD'S CENTRE. The drawn band is
-          `display:grid; place-items:center; padding:26px 0 22px` — the full
-          width of the card with the arc in the middle of it. It used to be a
-          left-aligned `flex flex-wrap items-center` row, which put the arc hard
-          against the card's leading edge. Nothing else goes in this band: a
-          sibling here pulls the arc off the centre exactly as the row did. */}
-      <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-primary">
-          <LoadingSpinner className="size-4" />
-        </span>
+      <p
+        id={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
+        data-placeholder-title="agentic-run-progress"
+        className="font-sans text-sm font-bold text-foreground"
+      >
+        Agentic Run Progress
+      </p>
+      <div className="grid w-full place-items-center pb-[22px] pt-[26px]">
+        <SpinnerArc className="size-[22px] text-primary" />
       </div>
     </div>
   );

@@ -266,6 +266,10 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "recordDisplayedScopesForTransaction#1939",
       "redeemUserAuthCode#1939",
       "removeTeamMemberAction#1939",
+      // cinatra#3051 — the renewal joins the same site-widget login family as
+      // the redeem it copies its row from: no app session to mint an org axis
+      // from, the axis rides the stored row it replaces.
+      "renewUserWidgetToken#1939",
       "repairImplicitDefaultThreadBinding#1939",
       "revokeConnectSiteRow#1939",
       "setAssistantThreadPauseParticipant#1939",

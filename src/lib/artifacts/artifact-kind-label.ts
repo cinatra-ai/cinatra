@@ -117,3 +117,15 @@ export function resolveArtifactKindLabel(id: string): ResolvedArtifactKindLabel 
 export function artifactKindLabelFor(id: string): string {
   return resolveArtifactKindLabel(id).label;
 }
+
+/**
+ * THE ONE scope word, beside the one kind label and for the same reason: an
+ * artifact row's stored owner level / visibility as a surface prints it
+ * ("Team", "Private"). Two surfaces print it — the library row
+ * (`src/components/artifacts/library-mode.tsx`'s `ownerLabel`) and the review
+ * target header's meta line — and the review surface model keeps NO string
+ * projection of its own, so the word it needs is read from here.
+ */
+export function artifactScopeWord(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
