@@ -40,7 +40,6 @@ import {
   FieldLabel,
   FieldSet,
 } from "@/components/ui/field";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Empty,
   EmptyContent,
@@ -499,8 +498,9 @@ export function SchemaConfigConnectorForm({
           {surface.tabs!.map((tab) =>
             tab.id === HELP_TAB_ID ? (
               // Reserved Help tab (§II): read-only setup how-to at the Narrow
-              // width — ONE card, no form, no Save. Rendered by HelpPanel
-              // (advisories become sections of a single card; input-bearing
+              // width, flush under the Wide tablist — no card, panel or chrome
+              // around the prose, no form, no Save. Rendered by HelpPanel
+              // (advisories become sections of THIS wrapper; input-bearing
               // kinds are not rendered, so they never enter the submit scan).
               <TabsContent
                 key={tab.id}
@@ -508,7 +508,7 @@ export function SchemaConfigConnectorForm({
                 forceMount
                 className="data-[state=inactive]:hidden"
               >
-                <div className="max-w-xl">
+                <div className="flex max-w-xl flex-col gap-4">
                   <HelpPanel fields={tab.fields} installId={installId} />
                 </div>
               </TabsContent>
@@ -1381,10 +1381,12 @@ function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: st
 
 /**
  * The reserved Help tab's panel (design/specs/app-connectors.html §II): the
- * connector's setup how-to — read-only prose at the Narrow width, rendered as
- * ONE card ("no form, no Save"). Every advisory field becomes a titled SECTION
- * of that single card (its copy still resolved by the same readiness probe the
- * inline AdvisoryRow uses) — never its own separate card. Input-bearing field
+ * connector's setup how-to — read-only prose at the Narrow width ("no form, no
+ * Save"), sitting DIRECTLY on the page ground. The drawing draws no card, panel
+ * or chrome around that prose, so this panel renders none: every advisory field
+ * becomes a titled SECTION straight inside the tab panel's Narrow wrapper (its
+ * copy still resolved by the same readiness probe the inline AdvisoryRow uses),
+ * and the sections' vertical rhythm rides on that wrapper. Input-bearing field
  * kinds are NOT rendered here: the Help surface is read-only by contract, and
  * not rendering them also keeps stray inputs out of the `collectFormInputs()`
  * live-DOM scan (the panels are force-mounted).
@@ -1393,13 +1395,11 @@ function HelpPanel({ fields, installId }: { fields: SchemaConfigField[]; install
   const advisories = fields.filter((f): f is AdvisoryField => f.kind === "advisory");
   if (advisories.length === 0) return null;
   return (
-    <Card data-testid="help-card" size="sm">
-      <CardContent className="flex flex-col gap-4">
-        {advisories.map((field, i) => (
-          <HelpSection key={`${field.probeActionId}-${i}`} field={field} installId={installId} />
-        ))}
-      </CardContent>
-    </Card>
+    <>
+      {advisories.map((field, i) => (
+        <HelpSection key={`${field.probeActionId}-${i}`} field={field} installId={installId} />
+      ))}
+    </>
   );
 }
 

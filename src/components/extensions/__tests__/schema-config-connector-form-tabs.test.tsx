@@ -11,7 +11,9 @@
 //    `surface.description` are dropped — the page chrome owns them);
 //  - a role-less named action renders as its button ONLY (no FieldLabel
 //    echoing the identical text);
-//  - the reserved Help tab is read-only: advisories merge into ONE card and
+//  - the reserved Help tab is read-only prose sitting DIRECTLY on the page
+//    ground: no card, panel or chrome wraps it (§II draws none), the advisories
+//    render as titled sections straight inside the Narrow wrapper, and
 //    input-bearing kinds are NOT rendered (they also never enter the
 //    `collectFormInputs()` live-DOM scan);
 //  - every OTHER panel stays force-mounted so `collectFormInputs()` still sees
@@ -150,19 +152,126 @@ describe("SchemaConfigConnectorForm — tabbed surface", () => {
     expect(shellInput.closest(".max-w-xl")).toBeTruthy();
   });
 
-  it("renders the Help tab as ONE card of read-only sections (advisories merged, inputs dropped)", async () => {
+  // Chrome the drawing does not draw around the Help prose: a card/panel slot,
+  // a project paint utility (soft-panel/glass/card-*), or a wrapper painting a
+  // frame (rounded corners, a border/ring, a filled ground, a shadow) or inset
+  // padding that would lift the prose off the page ground. Variant prefixes are
+  // stripped (`md:bg-card` paints exactly as `bg-card` does) and the zeroing
+  // resets (`bg-transparent`, `border-0`, `p-0`, …) paint nothing at all.
+  const PAINT_RESET =
+    /^(bg-transparent|bg-none|border-0|ring-0|shadow-none|rounded-none|p-0|px-0|py-0|pt-0|pb-0|pl-0|pr-0|ps-0|pe-0|divide-x-0|divide-y-0)$/;
+  const PAINT_UTILITY = /^(rounded|border|ring|shadow|bg|divide|p|px|py|pt|pb|pl|pr|ps|pe)(-|$)/;
+  const PAINT_PROJECT = /^(soft-panel|soft-panel-flush|glass|card)(-|$)/;
+  const PAINT_ARBITRARY = /^\[(background|border|box-shadow|padding|outline)/;
+  function paintedClasses(el: Element): string[] {
+    return [...el.classList].filter((raw) => {
+      const bare = raw.includes(":") ? raw.slice(raw.lastIndexOf(":") + 1) : raw;
+      if (PAINT_RESET.test(bare)) return false;
+      return PAINT_UTILITY.test(bare) || PAINT_PROJECT.test(bare) || PAINT_ARBITRARY.test(bare);
+    });
+  }
+  function helpPanelOf() {
+    const sections = [...container.querySelectorAll('[data-testid="help-section"]')];
+    expect(sections.length).toBeGreaterThan(0);
+    const panel = sections[0].closest('[role="tabpanel"]');
+    expect(panel).toBeTruthy();
+    return { sections, panel: panel as HTMLElement };
+  }
+
+  it("renders NOTHING the drawing does not draw on the Help tab — no card, panel or chrome wrapping the prose", async () => {
     await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw) });
-    const cards = container.querySelectorAll('[data-testid="help-card"]');
-    expect(cards).toHaveLength(1);
-    const sections = cards[0].querySelectorAll('[data-testid="help-section"]');
+    const { sections, panel } = helpPanelOf();
     expect(sections).toHaveLength(2);
     expect(sections[0].textContent).toContain("Connect Acme");
     expect(sections[1].textContent).toContain("About uploads");
+    // No card/panel component renders anywhere on the Help tab.
+    expect(panel.querySelector('[data-testid="help-card"]')).toBeNull();
+    expect(panel.querySelector('[data-slot="card"]')).toBeNull();
+    expect(panel.querySelector('[data-slot="card-content"]')).toBeNull();
+    expect(panel.querySelector('[data-slot="card-header"]')).toBeNull();
+    expect(panel.querySelector('[data-slot="alert"]')).toBeNull();
     // The advisories do NOT render as separate Alert cards on the Help tab.
-    expect(cards[0].querySelector('[data-testid="schema-config-advisory"]')).toBeNull();
+    expect(panel.querySelector('[data-testid="schema-config-advisory"]')).toBeNull();
+    // Nor does the prose section itself, nor any element between it and the tab
+    // panel (the panel included), paint chrome around the prose.
+    for (const section of sections) {
+      for (let el: Element | null = section; el && el !== panel.parentElement; el = el.parentElement) {
+        expect(paintedClasses(el), `${el.tagName}.${el.className} paints chrome around the Help prose`).toEqual([]);
+      }
+    }
     // Input-bearing kinds are NOT rendered on the read-only Help tab — so they
     // are also invisible to the collectFormInputs() live-DOM scan.
     expect(container.querySelector('input[name="helpNote"]')).toBeNull();
+  });
+
+  it("renders the Help prose AT the Narrow width flush under the tablist, Help last, read-only (no form controls)", async () => {
+    await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw) });
+    const { sections, panel } = helpPanelOf();
+    // Help is the LAST tab, and this panel is the one its trigger controls.
+    const tabs = [...container.querySelectorAll('[role="tab"]')];
+    const last = tabs[tabs.length - 1];
+    expect(last.textContent).toBe("Help");
+    expect(last.getAttribute("aria-controls")).toBe(panel.getAttribute("id"));
+    // The prose sits AT the Narrow width (max-w-xl · 576px): ONE such wrapper,
+    // the panel's DIRECT child and the section's DIRECT container, so nothing
+    // stands between the tab strip and the prose. Its class list is exactly the
+    // Narrow width plus the section rhythm the removed card used to supply — no
+    // inset, and no `mx-auto`/`ml-*` offset that would break the flush edge
+    // (§II: read-only how-to directly on the page ground).
+    const narrowAll = panel.querySelectorAll(".max-w-xl");
+    expect(narrowAll).toHaveLength(1);
+    const narrow = narrowAll[0];
+    expect(narrow.parentElement).toBe(panel);
+    expect([...narrow.classList].sort()).toEqual(["flex", "flex-col", "gap-4", "max-w-xl"]);
+    for (const section of sections) expect(section.parentElement).toBe(narrow);
+    expect(panel.textContent).toContain("Create a key and paste it on the Setup tab.");
+    expect(panel.textContent).toContain("Uploads are retained by the vendor.");
+    // Read-only: no form element and no form control of any kind on the Help tab.
+    expect(panel.querySelector("form")).toBeNull();
+    expect(panel.querySelectorAll("input, textarea, select, button, [role='switch']")).toHaveLength(0);
+  });
+
+  it("the Help-tab chrome guard reads real paint as chrome and layout/resets as none", () => {
+    const el = document.createElement("div");
+    for (const painted of [
+      "soft-panel",
+      "soft-panel-flush",
+      "glass",
+      "card-surface",
+      "rounded-xl",
+      "border",
+      "ring-1",
+      "shadow-sm",
+      "bg-card",
+      "md:bg-card",
+      "data-[state=active]:bg-card",
+      "px-4",
+      "p-3",
+      "divide-y",
+    ]) {
+      el.className = painted;
+      expect(paintedClasses(el), `${painted} must read as chrome`).toEqual([painted]);
+    }
+    for (const bare of [
+      "flex",
+      "flex-col",
+      "gap-4",
+      "max-w-xl",
+      "text-sm",
+      "font-medium",
+      "outline-none",
+      "flex-1",
+      "pointer-events-none",
+      "bg-transparent",
+      "border-0",
+      "ring-0",
+      "shadow-none",
+      "rounded-none",
+      "p-0",
+    ]) {
+      el.className = bare;
+      expect(paintedClasses(el), `${bare} is not chrome`).toEqual([]);
+    }
   });
 
   it("force-mounts the non-Help panels so inactive-tab inputs stay collectable", async () => {
