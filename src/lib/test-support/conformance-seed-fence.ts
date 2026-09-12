@@ -49,6 +49,15 @@
 // The `reason` on a refusal is for the SERVER's own diagnosis (a CI harness that
 // forgot to forward the token looks identical to a missing route otherwise); it
 // is never put in a response body.
+//
+// ONE NARROW EXCEPTION, AND ONLY ON A HARNESS SERVER (cinatra#3416). A server
+// that armed the documented browser-e2e switch is by construction a test
+// harness, never a real deployment, and the design suite that drives it could
+// not tell a refusal from a missing route either — a refused seed POST reported
+// only as "HTTP 404", with no fence named, cost a whole investigation. On that
+// build, and on no other, a refusal additionally carries a header naming the
+// fence. The status and the body do not move: a caller anywhere else still
+// cannot distinguish a refusal from "no such route".
 // ---------------------------------------------------------------------------
 
 import {
@@ -74,6 +83,36 @@ export const CONFORMANCE_SEED_CAPABILITY_MIN_LENGTH = 32;
 
 /** The header the harness presents the capability in. */
 export const CONFORMANCE_SEED_CAPABILITY_HEADER = "authorization";
+
+/**
+ * The header a refusal names its fence in — on a harness server only. The
+ * design suite's seed helper reads it and puts it in the error it throws, so a
+ * red names the fence that refused instead of a bare status code.
+ */
+export const CONFORMANCE_SEED_REFUSAL_HEADER = "x-conformance-seed-refusal";
+
+/**
+ * The documented browser-e2e switch. It is what makes this route reachable on a
+ * production-SHAPED verify build in the first place, so a server that has it
+ * armed is a harness server — the one place the refusal reason may be spoken
+ * aloud.
+ */
+export const CONFORMANCE_SEED_DIAGNOSTIC_ENV = "CINATRA_E2E_SETUP_BYPASS";
+
+/**
+ * The response headers a refusal carries. EMPTY for an admitted caller, and
+ * empty on every build that did not arm the harness switch — fail closed, so
+ * the outside contract (a bare 404, indistinguishable from a missing route)
+ * is unchanged everywhere it matters.
+ */
+export function refusalDiagnosticHeaders(
+  verdict: ConformanceSeedVerdict,
+  env: SeedFenceEnv = process.env,
+): Record<string, string> {
+  if (verdict.ok) return {};
+  if (env[CONFORMANCE_SEED_DIAGNOSTIC_ENV] !== "true") return {};
+  return { [CONFORMANCE_SEED_REFUSAL_HEADER]: verdict.reason };
+}
 
 /**
  * All three fences, in order. Returns `{ ok: true }` only for a caller that

@@ -365,7 +365,11 @@ jobs:
           --health-retries 10
 
     env:
-      E2E_DESIGN_PORT: "3101"
+      # E2E_DESIGN_PORT, BETTER_AUTH_URL and the NEXT_PUBLIC_* URLs are NOT
+      # declared here: they name a port derived PER RUNNER SLOT and exported by
+      # the "Export this runner's design server port" step below (cinatra#3416).
+      # A job-level `env:` would win over that export, which is why it names
+      # none of them.
       # /design-fixtures renders through AppShell, which redirects any non-setup
       # route to /setup when connectionReady=false. The CI env has no
       # encryption key / identity / Nango / OpenAI setup, so the documented
@@ -393,10 +397,6 @@ jobs:
       # without an encryption key; the /design-fixtures route never touches
       # secret storage. Same 64-zero placeholder dashboard-live-verify uses.
       CINATRA_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_APP_URL: http://localhost:3101
-      NEXT_PUBLIC_SITE_URL: http://localhost:3101
       # next.config.ts asserts OPENAI_API_KEY at server boot
       # (REQUIRED_ENV list). The /design-fixtures route never invokes
       # OpenAI; the env is read only by the startup guard. Placeholder
@@ -459,6 +459,36 @@ jobs:
         with:
           node-version: "24"
           cache: "pnpm"
+
+      # THE DESIGN SERVER'S PORT, ONE PER RUNNER SLOT (cinatra#3416).
+      #
+      # It used to be a job-level literal shared by every job. A machine that
+      # hosts several runner processes runs several jobs of this workflow at
+      # once, and the later one's port-reclaim step below then killed a peer's
+      # LIVE server and bound its port — after which the victim's Playwright
+      # step spoke to a server belonging to ANOTHER run. The seed capability is
+      # minted per run, so that server refused the seeded-fixture POST at the
+      # presented-capability fence and answered the bare 404 its contract
+      # requires: a red on a pull request that changed nothing.
+      #
+      # A runner process runs at most one job at a time, so a port per runner
+      # slot is a port per live job. Derived HERE — after the checkout that
+      # makes the script readable, and ahead of the build, so the public URLs
+      # baked into the bundle name the port the server later binds. A job-level
+      # `env:` would win over this export, which is why it declares none of
+      # these names.
+      - name: Export this runner's design server port
+        run: |
+          set -euo pipefail
+          PORT="$(node scripts/ci/design-server-port.mjs)"
+          echo "design server port for runner slot '${RUNNER_NAME:-unnamed}': ${PORT}"
+          {
+            echo "E2E_DESIGN_PORT=${PORT}"
+            echo "BETTER_AUTH_URL=http://localhost:${PORT}"
+            echo "NEXT_PUBLIC_BETTER_AUTH_URL=http://localhost:${PORT}"
+            echo "NEXT_PUBLIC_APP_URL=http://localhost:${PORT}"
+            echo "NEXT_PUBLIC_SITE_URL=http://localhost:${PORT}"
+          } >> "$GITHUB_ENV"
 
       - name: Clone companion extension repos
         uses: ./.github/actions/clone-extensions
@@ -546,12 +576,16 @@ jobs:
           echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
 
       - name: Free the design port on the runner
-        # cinatra#3383: this job binds ONE fixed port (E2E_DESIGN_PORT). On a
+        # cinatra#3383: this job binds ONE port (E2E_DESIGN_PORT). On a
         # self-hosted runner an earlier job that ended without stopping its
         # server (cancelled, timed out, or crashed after the listen) leaves the
         # process holding that port, and every later job dies at start with
         # EADDRINUSE. Free the port here, and only the port — nothing about the
-        # machine is touched. lsof and fuser are not both present on every
+        # machine is touched.
+        #
+        # cinatra#3416: the port is now this RUNNER SLOT's, so what this step
+        # can find holding it is a leftover of an earlier job on THIS slot —
+        # never a peer job's live server, which is what it used to kill. lsof and fuser are not both present on every
         # runner image, so whichever the image carries is used; neither being
         # present is not a failure (a hosted runner starts with the port free).
         run: |

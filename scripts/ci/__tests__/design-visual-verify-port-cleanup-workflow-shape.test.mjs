@@ -1,13 +1,21 @@
-// Pixel job port lifecycle (cinatra#3383): the SHAPE of the shipped
-// design-visual-verify workflow, read from the real file in this repo.
+// Pixel job port lifecycle (cinatra#3383, cinatra#3416): the SHAPE of the
+// shipped design-visual-verify workflow, read from the real file in this repo.
 //
-// The job starts a standalone server on ONE fixed port. A previous job that
-// ended without stopping its server leaves the process on a self-hosted
-// runner, and the next job that binds the port dies at start (EADDRINUSE).
-// The three steps below are the fix, and this file is what keeps them: the
-// port is freed BEFORE the server starts, the server's own pid is recorded so
-// an always() step can stop exactly that process (never a pattern kill), and
-// all three steps read the port from the one job-level env that declares it.
+// The job starts a standalone server and must be the sole holder of the port it
+// binds. A previous job that ended without stopping its server leaves the
+// process behind on a self-hosted runner, and the next job that binds the port
+// dies at start (EADDRINUSE) — so the port is freed BEFORE the server starts
+// and the server's own pid is recorded so an always() step can stop exactly
+// that process (never a pattern kill).
+//
+// ONE fixed port for every job was not enough (cinatra#3416). A machine that
+// hosts several runner processes runs several jobs of this workflow at once,
+// and each reclaimed the one port from a peer that was still using it: the
+// reclaiming job killed a LIVE server and took its port, and from that moment
+// the victim's Playwright step spoke to a server belonging to another run —
+// whose per-run seed capability differs, so the seeded fixtures were refused.
+// The port is therefore derived PER RUNNER SLOT and exported before the build,
+// never pinned as a job-level literal.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,12 +80,48 @@ const FREE = /free.*port/i;
 const START = /^Start standalone server$/;
 const STOP = /stop.*(standalone )?server/i;
 
-describe("design-visual-verify.yml pixel-diff: the port is free before the server starts", () => {
-  it("declares the port ONCE, as a job-level env", () => {
+const EXPORT = /^Export this runner's design server port$/;
+
+describe("design-visual-verify.yml pixel-diff: one port per runner slot (cinatra#3416)", () => {
+  it("does NOT pin the port as a job-level literal — a shared literal is the defect", () => {
     const block = PIXEL_JOB();
-    expect(block).toMatch(new RegExp(`^ {6}${PORT_ENV}: "\\d+"$`, "m"));
-    expect(block.match(new RegExp(`^ {6}${PORT_ENV}:`, "gm")).length).toBe(1);
+    expect(block).not.toMatch(new RegExp(`^ {6}${PORT_ENV}:`, "m"));
   });
+
+  it("derives the port from the runner slot and exports it for the later steps", () => {
+    const step = stepMatching(PIXEL_JOB(), EXPORT);
+    expect(step).toBeDefined();
+    expect(step.text).toContain("scripts/ci/design-server-port.mjs");
+    expect(step.text).toMatch(new RegExp(`${PORT_ENV}=`));
+    expect(step.text).toMatch(/>> "\$GITHUB_ENV"/);
+  });
+
+  it("exports it BEFORE the build, so the URLs baked in name the port that is bound", () => {
+    const block = PIXEL_JOB();
+    const exported = indexOfStep(block, EXPORT);
+    const build = indexOfStep(block, /^Build \(/i);
+    expect(exported).toBeGreaterThan(-1);
+    expect(build).toBeGreaterThan(-1);
+    expect(exported).toBeLessThan(build);
+    expect(exported).toBeLessThan(indexOfStep(block, FREE));
+    expect(exported).toBeLessThan(indexOfStep(block, START));
+  });
+
+  it("leaves no public URL pinned to a port literal at job level", () => {
+    const block = PIXEL_JOB();
+    for (const name of [
+      "BETTER_AUTH_URL",
+      "NEXT_PUBLIC_BETTER_AUTH_URL",
+      "NEXT_PUBLIC_APP_URL",
+      "NEXT_PUBLIC_SITE_URL",
+    ]) {
+      expect(block).not.toMatch(new RegExp(`^ {6}${name}: \\S*:\\d+`, "m"));
+    }
+    expect(stepMatching(block, EXPORT).text).toMatch(/NEXT_PUBLIC_APP_URL=/);
+  });
+});
+
+describe("design-visual-verify.yml pixel-diff: the port is free before the server starts", () => {
 
   it("has a step that frees the port, BEFORE the step that starts the server", () => {
     const block = PIXEL_JOB();
@@ -132,14 +176,13 @@ describe("design-visual-verify.yml pixel-diff: one port, named by all three step
     }
   });
 
-  it("no one of the three re-declares the port number as a literal", () => {
+  it("no one of the three re-declares a port number as a literal", () => {
     const block = PIXEL_JOB();
-    const declared = block.match(new RegExp(`^ {6}${PORT_ENV}: "(\\d+)"$`, "m"));
-    expect(declared).not.toBeNull();
     for (const matcher of [FREE, START, STOP]) {
       const step = stepMatching(block, matcher);
       expect(step).toBeDefined();
-      expect(step.text).not.toContain(declared[1]);
+      // An issue reference is not a port number.
+      expect(step.text.replace(/cinatra#[0-9]+/g, "")).not.toMatch(/[0-9]{4}/);
     }
   });
 });
