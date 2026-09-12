@@ -7,7 +7,7 @@
 // that declares a ceiling, or only recommends a scope).
 //
 // WHAT IS REAL: every rendered element is the shipped implementation of the
-// surface — the host's own `ConnectorSharingPanels` (which OWNS the three
+// surface — the SDK's own `ConnectorSharingPanels` (which OWNS the three
 // conformance ids), the sdk-ui `ConnectionsStatusCard` and
 // `ConnectionsList` / `ConnectionRow` beneath it, and the app's own
 // `PermissionsForm` — the SAME access picker and ownership card the permissions
@@ -42,7 +42,7 @@ import type { AvailableScopes } from "@/components/access-scope";
 import {
   ConnectorSharingPanels,
   type ConnectorSharingPanelView,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 import {
   CONNECTOR_SHARING_ACCESS_HELPER,

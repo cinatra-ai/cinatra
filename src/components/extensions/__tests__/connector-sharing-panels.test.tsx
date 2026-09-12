@@ -20,7 +20,7 @@ import {
   ConnectorSharingPanels,
   CONNECTOR_SHARING_LOADING_LABEL,
   type ConnectorSharingPanelView,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 import {
   CONNECTOR_SHARING_INITIAL_SCOPE,
   CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,

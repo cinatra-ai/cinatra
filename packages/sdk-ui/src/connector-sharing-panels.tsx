@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// ConnectorSharingPanels — the SHARING TAB's body (cinatra#3374).
+// ConnectorSharingPanels — the SHARING TAB's body (cinatra#3374), offered by
+// the SDK as ONE component (cinatra#3385).
 //
 // The ratified drawing (design/specs/app-connectors.html §II, "Sharing tab"):
 // "The tab is a list of panels, one per connection you own here, each one a
@@ -10,13 +11,26 @@
 // Setup tab, with no Check and no All connections link: the list it counts is
 // directly beneath it."
 //
+// WHY IT LIVES HERE and not in the app (cinatra#3385). The app GENERATES the
+// setup page of the connectors whose pack declares the `schema-config` UI
+// surface, and #3374 put the Sharing tab on that page. A connector that ships
+// its own React setup page draws its header and its tab strip itself, so the
+// app has no seam to inject a tab into — the host injects nothing. The tab is
+// therefore a shared primitive like `Tabs` / `ConnectorSetupColumns` /
+// `ConnectionsList`: shared, not copied, from its own dedicated subpath. The
+// app's generated page and a pack's own page draw THIS component — one
+// implementation, never two copies — so the functional-acceptance drivers of
+// `connector-sharing`, `connector-sharing-rollup` and
+// `connector-sharing-locked` grade the same DOM wherever the tab is drawn.
+//
 // PRESENTATIONAL and server-safe (no `server-only`, no DB, no session): the
-// permissions card of each panel arrives as a NODE. The product route hands it
-// the real `ExtensionPermissionsClient` (server actions bound to the
-// connection); the design-conformance harness hands it the same `PermissionsForm`
-// with fixture-fulfilled actions. Both mount THIS component, so the three
-// manifest surfaces it emits — `connector-sharing`, `connector-sharing-rollup`
-// and `connector-sharing-locked` — are the product's own DOM either way.
+// permissions card of each panel arrives as a NODE, and the actions inside it
+// are the caller's own callbacks. The product route hands it the real
+// `ExtensionPermissionsClient` (server actions bound to the connection); the
+// design-conformance harness hands it the same `PermissionsForm` with
+// fixture-fulfilled actions; a pack hands it the node its own page builds.
+// Every one of them mounts THIS component, so the three manifest surfaces it
+// emits are the product's own DOM either way.
 //
 // The roll-up carries NO `action`: `ConnectionsStatusCard` renders its action
 // slot only when one is passed, so omitting it IS the drawing's "no Check and
@@ -24,8 +38,8 @@
 // ---------------------------------------------------------------------------
 
 import * as React from "react";
-import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card";
-import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list";
+import { ConnectionsStatusCard } from "./connection-status-card";
+import { ConnectionsList, ConnectionRow } from "./connections-list";
 
 /** The drawing's own words beneath the tab's heading (§II, Sharing tab). */
 export const CONNECTOR_SHARING_INTRO =
@@ -53,6 +67,13 @@ export type ConnectorSharingPanelView = {
 };
 
 export type ConnectorSharingPanelsProps = {
+  /**
+   * One view per connection the actor owns on THIS connector's page, in the
+   * order the tab lists them. The caller resolves them through its own read
+   * road — the app's generated page from the canonical connection store, a
+   * pack's own page from the road its setup page already reads — and hands
+   * each panel's access picker and ownership card in as `permissions`.
+   */
   panels: ConnectorSharingPanelView[];
   /** `loading` renders the declared loading treatment in the list's place. */
   state?: "ready" | "loading";
