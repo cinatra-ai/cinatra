@@ -45,20 +45,27 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHECKER_PATH,
+  DRIVER_FILE_PATH,
   GLOBAL_PATHS,
   MAP_PATH,
   MOVE_RULE,
   PIN_ENTRY_KEYS,
   PINS_PATH,
   WORKFLOW_PATH,
+  changedMapPinIdsBetween,
   changedPinIdsBetween,
   checkPinsStructure,
   classifyPin,
   decide,
+  driverBlocks,
+  driverFilePinIds,
   formatRedMessage,
   formatTable,
   loadMap,
+  loadPinSurfaceIds,
   loadPins,
+  parseChangedLineRanges,
+  parseRemovedLineRanges,
   publishedUrlFor,
   resolveEvent,
   resolveTouchedPinIds,
@@ -498,8 +505,8 @@ describe("criterion 2 — the trigger rule", () => {
     expect(verdict.warning).toHaveLength(5);
   });
 
-  it("a diff touching the checker, the map or the workflow is red for EVERY drifted pin", () => {
-    for (const global of [CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]) {
+  it("a diff touching the checker or the workflow is red for EVERY drifted pin", () => {
+    for (const global of [CHECKER_PATH, WORKFLOW_PATH]) {
       const touchedPinIds = resolveTouchedPinIds({ touchedPaths: [global], map });
       expect(touchedPinIds, global).toEqual(ALL_IDS);
       const verdict = decide({ event: "pull_request", results: driftedAll, touchedPinIds });
@@ -548,9 +555,14 @@ describe("criterion 2 — the trigger rule", () => {
     // own path from globalPaths would be a map that can edit away the rule
     // that makes editing it matter.
     const tampered = { ...map, globalPaths: [] };
-    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map: tampered })).toEqual(ALL_IDS);
     expect(resolveTouchedPinIds({ touchedPaths: [CHECKER_PATH], map: tampered })).toEqual(ALL_IDS);
-    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]);
+    expect(resolveTouchedPinIds({ touchedPaths: [WORKFLOW_PATH], map: tampered })).toEqual(ALL_IDS);
+    // The map left that set in cinatra#3421, but nothing it can say about
+    // itself narrows the rule: with no readable base entry list it is still
+    // every id, and `loadMap` refuses a declared set the checker disagrees
+    // with before any of this is reached.
+    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map: tampered })).toEqual(ALL_IDS);
+    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
   });
 
   it("changedPinIdsBetween names the entries that moved, and a moved base URL moves every pin", () => {
@@ -602,7 +614,7 @@ describe("criterion 2 — the trigger rule", () => {
     for (const p of map.globalPaths) {
       expect(() => readFileSync(path.join(REPO_ROOT, p)), p).not.toThrow();
     }
-    expect(map.globalPaths).toEqual([CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]);
+    expect(map.globalPaths).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
   });
 
   it("every pin's committed manifest copy is one of its mapped paths", () => {
@@ -667,34 +679,50 @@ describe("criterion 2 — the trigger rule", () => {
 // Criterion 2 — the CLI wiring itself (the parts a pure-function test misses)
 // ---------------------------------------------------------------------------
 
-describe("criterion 2 — the CLI turns that rule into a diff, an annotation and an exit code", () => {
-  /** Runs the real CLI body with the fetch, git and streams injected. */
-  async function cli({ argv = [], env = {}, fetchManifest, gitOut = {} } = {}) {
-    const out = [];
-    const err = [];
-    const gitCalls = [];
-    const runGit = (args) => {
-      gitCalls.push(args);
-      const key = args[0];
-      if (key === "rev-parse") {
-        if (gitOut.unresolvable) throw new Error("bad revision");
-        return "";
-      }
-      if (key === "diff") return (gitOut.touched ?? []).join("\n");
-      if (key === "show") return gitOut.basePinFile ?? readFileSync(path.join(REPO_ROOT, PINS_PATH), "utf8");
+/** Runs the real CLI body with the fetch, git and streams injected. */
+async function cli({ argv = [], env = {}, fetchManifest, gitOut = {} } = {}) {
+  const out = [];
+  const err = [];
+  const gitCalls = [];
+  const runGit = (args) => {
+    gitCalls.push(args);
+    const key = args[0];
+    if (key === "merge-base") return gitOut.mergeBase ?? "";
+    if (key === "rev-parse") {
+      if (gitOut.unresolvable) throw new Error("bad revision");
       return "";
-    };
-    const exitCode = await runCli({
-      argv,
-      env,
-      fetchManifest: fetchManifest ?? fixtureFetcher(SUPERSEDED),
-      runGit,
-      log: (line) => out.push(String(line)),
-      logError: (line) => err.push(String(line)),
-    });
-    return { exitCode, out: out.join("\n"), err: err.join("\n"), gitCalls };
-  }
+    }
+    if (key === "diff") {
+      // The per-file, zero-context diff the driver-file attribution reads.
+      if (args.includes("--unified=0")) return gitOut.driverDiff ?? "";
+      return (gitOut.touched ?? []).join("\n");
+    }
+    if (key === "show") {
+      const target = String(args[1] ?? "");
+      if (target.endsWith(MAP_PATH)) {
+        return gitOut.baseMapFile ?? readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8");
+      }
+      if (target.endsWith(DRIVER_FILE_PATH)) {
+        return (
+          gitOut.baseDriverFile ?? readFileSync(path.join(REPO_ROOT, DRIVER_FILE_PATH), "utf8")
+        );
+      }
+      return gitOut.basePinFile ?? readFileSync(path.join(REPO_ROOT, PINS_PATH), "utf8");
+    }
+    return "";
+  };
+  const exitCode = await runCli({
+    argv,
+    env,
+    fetchManifest: fetchManifest ?? fixtureFetcher(SUPERSEDED),
+    runGit,
+    log: (line) => out.push(String(line)),
+    logError: (line) => err.push(String(line)),
+  });
+  return { exitCode, out: out.join("\n"), err: err.join("\n"), gitCalls };
+}
 
+describe("criterion 2 — the CLI turns that rule into a diff, an annotation and an exit code", () => {
   it("diffs the branch against its merge base with the resolved base (three dots)", async () => {
     const run = await cli({
       env: { GITHUB_EVENT_NAME: "pull_request", DESIGN_PIN_DRIFT_DIFF_BASE: "origin/main" },
@@ -771,6 +799,314 @@ describe("criterion 2 — the CLI turns that rule into a diff, an annotation and
     expect(run.out).not.toContain("::error");
     expect(run.out).not.toContain("::warning");
     expect(run.out).toContain("ok: all 5 published conformance manifests match their pins.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3421 — a file EVERY pin shares is attributed per pin
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3421 — a shared-file touch is attributed per pin, not to every pin", () => {
+  const DRIVER_FILE = "tests/e2e/design/conformance/contract.ts";
+  const driverLines = readFileSync(path.join(REPO_ROOT, DRIVER_FILE), "utf8").split("\n");
+  const PR = { GITHUB_EVENT_NAME: "pull_request", DESIGN_PIN_DRIFT_DIFF_BASE: "origin/main" };
+
+  /** The 1-based line a named top-level declaration of the driver file opens on. */
+  const declarationLine = (declaration) => {
+    const index = driverLines.findIndex((line) => line.startsWith(declaration));
+    expect(index, `${declaration} is not a top-level declaration of ${DRIVER_FILE}`).toBeGreaterThan(-1);
+    return index + 1;
+  };
+  /** One changed line, in the shape `git diff --unified=0` reports it. */
+  const hunkAt = (line) => `diff --git a/${DRIVER_FILE} b/${DRIVER_FILE}\n@@ -${line},1 +${line},1 @@\n-was\n+is\n`;
+  const otherThan = (id) => ALL_IDS.filter((other) => other !== id);
+
+  it("a diff touching only the app-connectors entry of the pin MAP is red on app-connectors alone", async () => {
+    // The map is shared by all five pins, and it used to be a global path: a
+    // one-entry map edit read as every pin, so the PR adopting app-connectors
+    // went red on the four drifts it did not touch.
+    const head = JSON.parse(readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8"));
+    const base = {
+      ...head,
+      pins: { ...head.pins, "app-connectors": head.pins["app-connectors"].slice(0, -1) },
+    };
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: { touched: [MAP_PATH], baseMapFile: JSON.stringify(base, null, 2) },
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.err).toContain('DRIFT — pin "app-connectors"');
+    for (const id of otherThan("app-connectors")) {
+      expect(run.err, id).not.toContain(`pin "${id}"`);
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("a diff touching a DRIVER BLOCK mapped to one pin is red on that pin alone", async () => {
+    // CONNECTOR_SETUP_DRIVER is what the surface-to-driver table binds
+    // "connector-setup" to, and app-connectors is the only pin whose manifest
+    // declares that surface.
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: {
+        touched: [DRIVER_FILE],
+        driverDiff: hunkAt(declarationLine("const CONNECTOR_SETUP_DRIVER") + 2),
+      },
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.err).toContain('DRIFT — pin "app-connectors"');
+    for (const id of otherThan("app-connectors")) {
+      expect(run.err, id).not.toContain(`pin "${id}"`);
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("a diff touching a SHARED HELPER outside every driver block is red on no pin", async () => {
+    // The seed helper drives no surface: it is the case that red every
+    // drifting pin at once and blocked the adoptions from ever going green.
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: {
+        touched: [DRIVER_FILE],
+        driverDiff: hunkAt(declarationLine("export function ensureSeeded") + 1),
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.err).toBe("");
+    expect(run.out).toContain("ok (warnings only)");
+    for (const id of ALL_IDS) {
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("the CHECKER and the workflow still touch every pin, and an unreadable shared file still does", () => {
+    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
+    for (const global of [CHECKER_PATH, WORKFLOW_PATH]) {
+      expect(resolveTouchedPinIds({ touchedPaths: [global], map }), global).toEqual(ALL_IDS);
+    }
+    // Fail-closed, unchanged: a shared file whose changed part cannot be
+    // determined is every id, exactly as the pin file already answered.
+    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map })).toEqual(ALL_IDS);
+    expect(resolveTouchedPinIds({ touchedPaths: [DRIVER_FILE], map })).toEqual(ALL_IDS);
+    expect(
+      resolveTouchedPinIds({ touchedPaths: [DRIVER_FILE], map, driverPinIds: [] }),
+    ).toEqual([]);
+  });
+
+  it("the driver-file constant names the file every pin maps as its driver", () => {
+    expect(DRIVER_FILE_PATH).toBe(DRIVER_FILE);
+    for (const id of ALL_IDS) expect(map.pins[id], id).toContain(DRIVER_FILE_PATH);
+    // The manifests are the ground truth for which surfaces a pin owns.
+    const surfaces = loadPinSurfaceIds(map, REPO_ROOT);
+    expect(surfaces["app-connectors"]).toContain("connector-setup");
+    expect(surfaces["app-notifications"]).not.toContain("connector-setup");
+  });
+
+  it("changedMapPinIdsBetween names the entries that moved, and a moved rule moves every pin", () => {
+    const head = JSON.parse(readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8"));
+    const text = (o) => JSON.stringify(o);
+    const mapIds = Object.keys(head.pins);
+
+    expect(changedMapPinIdsBetween(text(head), text(head))).toEqual([]);
+    expect(changedMapPinIdsBetween(text(head), text({ ...head, $comment: "reworded" }))).toEqual([]);
+
+    const oneEntry = {
+      ...head,
+      pins: { ...head.pins, "app-connectors": [...head.pins["app-connectors"], "src/app/x.tsx"] },
+    };
+    expect(changedMapPinIdsBetween(text(head), text(oneEntry))).toEqual(["app-connectors"]);
+
+    // globalPaths and the pin list decide what the gate READS, not what one
+    // pin adopts: both answer with every id, so no map edit narrows the rule.
+    const moved = { ...head, globalPaths: [CHECKER_PATH] };
+    expect(changedMapPinIdsBetween(text(head), text(moved))).toEqual(mapIds);
+    const dropped = { ...head, pins: Object.fromEntries(Object.entries(head.pins).slice(1)) };
+    expect(changedMapPinIdsBetween(text(head), text(dropped))).toEqual(mapIds);
+  });
+
+  it("parseChangedLineRanges reads every hunk shape git writes at zero context", () => {
+    expect(parseChangedLineRanges("@@ -10,3 +12,4 @@ context\n")).toEqual([{ start: 12, end: 15 }]);
+    expect(parseChangedLineRanges("@@ -10 +12 @@\n")).toEqual([{ start: 12, end: 12 }]);
+    // A pure deletion names the position the removed lines sat BETWEEN, so
+    // both sides of the cut answer for it.
+    expect(parseChangedLineRanges("@@ -10,2 +9,0 @@\n")).toEqual([{ start: 9, end: 10 }]);
+    expect(parseChangedLineRanges("no hunk here")).toEqual([]);
+  });
+
+  it("driverBlocks cuts the REAL driver file into ordered, non-overlapping blocks", () => {
+    const blocks = driverBlocks(readFileSync(path.join(REPO_ROOT, DRIVER_FILE), "utf8"));
+    expect(blocks.length).toBeGreaterThan(50);
+    for (let i = 1; i < blocks.length; i += 1) {
+      expect(blocks[i].start, blocks[i].name).toBeGreaterThan(blocks[i - 1].start);
+      expect(blocks[i].start, blocks[i].name).toBeGreaterThan(blocks[i - 1].end - 1);
+    }
+    const named = (name) => blocks.find((block) => block.name === name);
+    const setup = named("CONNECTOR_SETUP_DRIVER");
+    const seed = named("ensureSeeded");
+    expect(setup, "the connector-setup driver is a block of its own").toBeDefined();
+    expect(seed, "the seed helper is a block of its own").toBeDefined();
+    const setupDeclaration = declarationLine("const CONNECTOR_SETUP_DRIVER");
+    expect(setup.start).toBeLessThanOrEqual(setupDeclaration);
+    expect(setup.end).toBeGreaterThan(setupDeclaration);
+    expect(seed.end).toBeLessThan(setup.start);
+  });
+
+  it("driverFilePinIds gives the three answers the rule names, and nothing else", () => {
+    // A driver file in miniature, with the same structure the real one has.
+    const synthetic = [
+      'import { expect } from "@playwright/test";', // 1
+      "", // 2
+      "/** A helper every family uses. */", // 3
+      "export function ensureSeeded(): Promise<void> {", // 4
+      "  return Promise.resolve();", // 5
+      "}", // 6
+      "", // 7
+      "const ALPHA_DRIVER: SurfaceDriver = {", // 8
+      '  mount: "alpha",', // 9
+      "};", // 10
+      "", // 11
+      "function familyDriver(row) {", // 12
+      "  return { mount: row.mount };", // 13
+      "}", // 14
+      "", // 15
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {", // 16
+      '  "alpha-surface": ALPHA_DRIVER,', // 17
+      "  ...Object.fromEntries(ROWS.map((row) => [row.id, familyDriver(row)])),", // 18
+      "};", // 19
+    ].join("\n");
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"], "pin-two": ["beta-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    const answer = (line) =>
+      driverFilePinIds({
+        contractText: synthetic,
+        baseContractText: synthetic,
+        diffText: `@@ -${line},1 +${line},1 @@\n-was\n+is\n`,
+        pinSurfaceIds,
+        allIds,
+      });
+
+    // 1. a block the table binds to a pinned surface -> that pin;
+    expect(answer(9)).toEqual(["pin-one"]);
+    expect(answer(17)).toEqual(["pin-one"]);
+    // 2. a shared helper the table never names -> no pin;
+    expect(answer(5)).toEqual([]);
+    // 3. a family factory the table reaches only through a computed entry,
+    //    and the table's own lines -> every pin, fail-closed.
+    expect(answer(13)).toEqual(allIds);
+    expect(answer(18)).toEqual(allIds);
+    expect(answer(19)).toEqual(allIds);
+    // An empty diff adopts nothing; an unreadable file adopts everything.
+    expect(
+      driverFilePinIds({
+        contractText: synthetic,
+        baseContractText: synthetic,
+        diffText: "",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual([]);
+    expect(
+      driverFilePinIds({
+        contractText: "const NOTHING = 1;\n",
+        diffText: "@@ -1,1 +1,1 @@\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+  });
+
+  // Convergence round (cinatra#3421): three ways a head-only reader loses the
+  // pin that owns a change, each fail-OPEN — the pin is never asked.
+  it("attributes a DELETED line by the base file, not by the lines that closed over it", () => {
+    const base = [
+      'const ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };', // 1
+      'const BETA_DRIVER: SurfaceDriver = { mount: "beta" };', // 2
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {", // 3
+      '  "alpha-surface": ALPHA_DRIVER,', // 4
+      '  "beta-surface": BETA_DRIVER,', // 5
+      "};", // 6
+    ].join("\n");
+    // The alpha driver is DELETED: on the head side nothing sits in its block
+    // any more, and the head line the hunk names is the beta driver that
+    // closed over the gap. Only the base file can say the cut was pin-one's.
+    const head = base.split("\n").slice(1).join("\n");
+    const diffText = '@@ -1,1 +0,0 @@\n-const ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };\n';
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"], "pin-two": ["beta-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    const answer = driverFilePinIds({
+      contractText: head,
+      baseContractText: base,
+      diffText,
+      pinSurfaceIds,
+      allIds,
+    });
+    // A head-only reader answers "pin-two" alone here: the pin that OWNED the
+    // deleted block is never asked (fail-open).
+    expect(answer).toContain("pin-one");
+    // Without the base side the removal cannot be placed at all: every id.
+    expect(
+      driverFilePinIds({ contractText: head, diffText, pinSurfaceIds, allIds }),
+    ).toEqual(allIds);
+  });
+
+  it("answers every pin when the driver file's structure or the diff cannot be read", () => {
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    // A declaration keyword alone on its line is a block boundary this reader
+    // cannot see; its body would otherwise fall into the block above it.
+    const dangling = [
+      "const",
+      '  ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };',
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {",
+      '  "alpha-surface": ALPHA_DRIVER,',
+      "};",
+    ].join("\n");
+    expect(
+      driverFilePinIds({
+        contractText: dangling,
+        baseContractText: dangling,
+        diffText: "@@ -2,1 +2,1 @@\n-was\n+is\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+    // Diff output that carries no hunk at all still reports a CHANGED file.
+    expect(
+      driverFilePinIds({
+        contractText: dangling,
+        baseContractText: dangling,
+        diffText: "diff --git a/contract.ts b/contract.ts\nBinary files a/x and b/x differ\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+  });
+
+  it("parseRemovedLineRanges reads the BASE side of every hunk shape", () => {
+    expect(parseRemovedLineRanges("@@ -10,3 +12,4 @@ context\n")).toEqual([{ start: 10, end: 12 }]);
+    expect(parseRemovedLineRanges("@@ -10 +12 @@\n")).toEqual([{ start: 10, end: 10 }]);
+    // A pure addition removes nothing and owns no base-side line.
+    expect(parseRemovedLineRanges("@@ -10,0 +11,2 @@\n")).toEqual([]);
+    expect(parseRemovedLineRanges("no hunk here")).toEqual([]);
+  });
+
+  it("reads every base-side file at the MERGE BASE the path diff already uses", async () => {
+    const run = await cli({
+      env: PR,
+      gitOut: { touched: [MAP_PATH], mergeBase: "abc1234" },
+    });
+    const show = run.gitCalls.find((args) => args[0] === "show");
+    // `git show origin/main:<map>` would read the TARGET TIP: an entry the
+    // target moved after the branch cut would read as this branch's adoption.
+    expect(show).toEqual(["show", `abc1234:${MAP_PATH}`]);
+    expect(run.gitCalls.find((args) => args[0] === "merge-base")).toEqual([
+      "merge-base",
+      "origin/main",
+      "HEAD",
+    ]);
   });
 });
 
