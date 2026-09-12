@@ -15,10 +15,11 @@
 //    (switch). Indigo for active state. Switches are reserved for
 //    immediate-effect settings; checkboxes for confirmable form choices."
 //
-// ONE DEPARTURE RECORDED, NOT FIXED — switch is beyond the first ten rows of
-// the issue's table, so this leg records it with a visibly failing assertion
-// and names the follow-up rather than fixing it at the source. See the
-// `RECORDED DEPARTURE` describe block below.
+// LEG 2 (this file's current state). Leg 1 recorded one departure here as a
+// documented expected failure — the 16-18px control band. Leg 2 FIXES it in the primitive
+// and retires the record: the assertion is unchanged, not relaxed, and now
+// runs as a plain regression test that fails on leg 1's head. See the
+// `FIXED IN LEG 2` block, which keeps leg 1's measured reading verbatim.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -72,14 +73,16 @@ describe('clause: "instant-binary (switch)" / "reserved for immediate-effect set
   );
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "control 16-18px"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): draws the track inside the stated 16-18px band — clause "control 16-18px"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table,
+describe('FIXED IN LEG 2: clause "control 16-18px"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: draws the track inside the stated 16-18px band — clause "control 16-18px"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table,
     // so it is recorded here rather than fixed.
     //
     // MEASURED: the track is `h-[1.15rem]` = 18.4px, which is 0.4px above the

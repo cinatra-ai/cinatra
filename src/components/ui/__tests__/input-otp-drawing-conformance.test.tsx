@@ -15,8 +15,11 @@
 //    slot picks up the indigo ring and a blinking caret. Digits set in mono.
 //    Split groups with a short navy dash, never a vertical line."
 //
-// TWO DEPARTURES RECORDED, NOT FIXED — input-otp is beyond the first ten rows
-// of the issue's table. See the two `RECORDED DEPARTURE` blocks.
+// LEG 2 (this file's current state). Leg 1 recorded two departures here as
+// documented expected failures — the 40px slot and the mono 18px digit. Leg 2
+// FIXES both in the primitive and retires both records: the two assertions are
+// unchanged and now run as plain regression tests. See the two `FIXED IN LEG 2`
+// blocks, which keep leg 1's measured reading verbatim.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 
@@ -151,10 +154,25 @@ describe('clause: "active = indigo ring" / "the focused slot picks up the indigo
 });
 
 describe('clause: "middle dash separator" / "Split groups with a short navy dash, never a vertical line"', () => {
-  it("splits the groups with a DASH glyph, not a rule", () => {
+  it("splits the groups with a DASH element, not a rule and not an icon", () => {
     const { separator } = renderOTP();
-    const glyph = separator.querySelector("svg");
-    expect(glyph).not.toBeNull();
+    const dash = separator.querySelector('[data-slot="input-otp-separator-dash"]');
+    expect(dash).not.toBeNull();
+  });
+
+  it("draws the dash SHORT — wider than it is tall — and in the ink token", () => {
+    // The clause's own two halves, pinned on the recipe. The separator used to
+    // render a lucide MinusIcon, whose element is its 24x24 square viewBox
+    // however the glyph inside is drawn: a square can satisfy neither "short"
+    // nor "never a vertical line", and it carried no navy of its own either —
+    // it inherited whatever colour the surrounding text set. The dash states
+    // all three itself, so the live reading has an element to measure.
+    const { separator } = renderOTP();
+    const dash = separator.querySelector('[data-slot="input-otp-separator-dash"]');
+    const cls = dash?.className ?? "";
+    expect(cls).toContain("w-2");
+    expect(cls).toContain("h-0.5");
+    expect(cls).toContain("bg-foreground/40");
   });
 
   it("draws no vertical line anywhere in the separator, which the clause forbids", () => {
@@ -168,14 +186,16 @@ describe('clause: "middle dash separator" / "Split groups with a short navy dash
   });
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "40px white slots"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): draws each slot at the stated 40px — clause "40px white slots"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table.
+describe('FIXED IN LEG 2: clause "40px white slots"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: draws each slot at the stated 40px — clause "40px white slots"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
     //
     // MEASURED: each slot is `h-9 w-9` = 36px square, 4px under the 40px the
     // clause names. 40px is `size-10`, an exact step on the scale, so this is
@@ -186,16 +206,45 @@ describe('RECORDED DEPARTURE (leg 2 follow-up): clause "40px white slots"', () =
     // the slot changes with the box and should be re-measured, not assumed.
     expect(renderOTP().slots[0].className).toMatch(/(^|\s)h-10(\s|$)/);
   });
+
+  it("takes the slot's WIDTH to the same 40px, so the slot is the square the clause names", () => {
+    // Leg 1's follow-up note names `h-10 w-10` together: the clause says "40px
+    // white slot" of the slot as a whole, and moving only the height would
+    // leave a 36x40 box that is neither the drawn shape nor the stated value.
+    expect(renderOTP().slots[0].className).toMatch(/(^|\s)w-10(\s|$)/);
+  });
+
+  // THE CARET, RE-READ. Leg 1 asked for this explicitly: "re-reads the caret,
+  // which is `h-4` and centred inside the slot — the caret's proportion to the
+  // slot changes with the box and should be re-measured, not assumed."
+  //
+  // MEASURED AGAINST THE DRAWING, not against a ratio: the section's own
+  // example draws the focused slot's caret as a 2px-wide, 20px-tall bar
+  // (`width:2px;height:20px;background:var(--blue)`). 20px is `h-5`; the old
+  // `h-4` (16px) was the reading that fitted the 36px box leg 1 measured. The
+  // primitive is taken to `h-5` with the slot.
+  //
+  // It cannot be graded HERE, for leg 1's own stated reason: the caret mounts
+  // only while its slot is the ACTIVE one, which needs real focus inside the
+  // hidden OTP input, and jsdom drives no such focus. The height is read on the
+  // live boot instead, in both palettes ("otp caret",
+  // tests/e2e/design/conformance/primitive-wave-leg2.spec.ts).
+  it.skip(
+    "graded on the boot instead: the caret's 20px height needs the real focus that mounts it — see primitive-wave-leg2.spec.ts",
+    () => {},
+  );
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "mono 18px digit" / "Digits set in mono"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): sets the digit in mono at the stated 18px — clause "mono 18px digit" / "Digits set in mono"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table.
+describe('FIXED IN LEG 2: clause "mono 18px digit" / "Digits set in mono"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: sets the digit in mono at the stated 18px — clause "mono 18px digit" / "Digits set in mono"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
     //
     // MEASURED: the slot carries `text-sm` (14px) and NO mono face at all, so
     // the digits render in the sans body face four pixels under the stated

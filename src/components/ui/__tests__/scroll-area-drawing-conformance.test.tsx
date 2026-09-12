@@ -15,8 +15,11 @@
 //    sidebars, long popovers. A 6px overlay track with a low-alpha navy thumb
 //    that fades when idle."
 //
-// TWO DEPARTURES RECORDED, NOT FIXED — scroll-area is beyond the first ten rows
-// of the issue's table. See the two `RECORDED DEPARTURE` blocks.
+// LEG 2 (this file's current state). Leg 1 recorded two departures here as
+// documented expected failures — the 6px track and the idle fade. Leg 2 FIXES
+// both in the primitive and retires both records: the two assertions are
+// unchanged and now run as plain regression tests. See the two `FIXED IN LEG 2`
+// blocks, which keep leg 1's measured reading verbatim.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -96,8 +99,8 @@ describe('clause: "no native chrome" / "Replaces the OS scrollbar"', () => {
 
   it("draws the bar on both axes rather than leaving one to the platform", () => {
     const { bar } = renderArea();
-    expect(bar.className).toContain("data-vertical:h-full");
-    expect(bar.className).toContain("data-horizontal:flex-col");
+    expect(bar.className).toContain("data-[orientation=vertical]:h-full");
+    expect(bar.className).toContain("data-[orientation=horizontal]:flex-col");
   });
 });
 
@@ -109,14 +112,16 @@ describe('clause: "overlay track"', () => {
   });
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "6px overlay track"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): draws the track at the stated 6px — clause "6px overlay track"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table.
+describe('FIXED IN LEG 2: clause "6px overlay track"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: draws the track at the stated 6px — clause "6px overlay track"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
     //
     // MEASURED: the vertical bar is `w-2.5` = 10px and the horizontal bar
     // `h-2.5` = 10px, against the 6px the clause names — the track is drawn
@@ -127,18 +132,40 @@ describe('RECORDED DEPARTURE (leg 2 follow-up): clause "6px overlay track"', () 
     // a 6px track lands at 3px; the fix should move the padding with the width
     // and be re-read at the DOM seam rather than assumed from the class.
     const { bar } = renderArea();
-    expect(bar.className).toContain("data-vertical:w-1.5");
+    expect(bar.className).toContain("data-[orientation=vertical]:w-1.5");
+  });
+
+  it("takes the HORIZONTAL axis to the same 6px, so one clause governs both bars", () => {
+    // The clause names one track, not a vertical one. Leg 1 measured both axes
+    // at `2.5` (10px) and the fix has to move both or the two bars disagree.
+    expect(renderArea().bar.className).toContain("data-[orientation=horizontal]:h-1.5");
+  });
+
+  it("lets the 6px track hold a 6px thumb rather than a 3px one", () => {
+    // Leg 1's follow-up note: "The bar also carries `p-px` and a 1px
+    // transparent border, so the visible thumb inside a 6px track lands at 3px;
+    // the fix should move the padding with the width."
+    //
+    // The section's own example draws the thumb itself at 6px
+    // (`width: 6px; background: rgba(21,33,58,0.22)`), so the padding and the
+    // placeholder border come off with the width change and the track the
+    // clause names is the bar the eye sees. Read again at the DOM seam.
+    const cls = renderArea().bar.className;
+    expect(cls).not.toMatch(/(^|\s)p-px(\s|$)/);
+    expect(cls).not.toContain("data-[orientation=vertical]:border-l-transparent");
   });
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "fades when idle"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): fades the bar out once scrolling stops — clause "fades when idle"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table.
+describe('FIXED IN LEG 2: clause "fades when idle"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: fades the bar out once scrolling stops — clause "fades when idle"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
     //
     // MEASURED: the scrollbar carries `transition-colors` only. There is no
     // opacity transition and no idle state anywhere in the primitive, so the
@@ -155,8 +182,43 @@ describe('RECORDED DEPARTURE (leg 2 follow-up): clause "fades when idle"', () =>
     expect(bar.className).toMatch(/(^|\s)transition-(opacity|\[opacity)/);
   });
 
-  it("carries a transition at all, so the follow-up extends one rather than introducing it", () => {
-    // Passes today; recorded alongside the failure as the shape the fix takes.
-    expect(renderArea().bar.className).toContain("transition-colors");
+  it("EXTENDS the colour transition rather than replacing it", () => {
+    // Leg 1 pinned this as "the shape the fix takes": the bar already carried
+    // `transition-colors`, and the fix was to add opacity to it, not to swap
+    // one property for the other. `transition-colors` and `transition-opacity`
+    // are one tailwind-merge conflict group, so both cannot be written side by
+    // side — the two properties are named together in a single arbitrary
+    // transition instead, and this case is what keeps colour in it.
+    const cls = renderArea().bar.className;
+    expect(cls).toContain("transition-[opacity,color]");
   });
+
+  it("carries the enter and exit animation Radix's idle state actually needs", () => {
+    // WHY AN ANIMATION AND NOT ONLY A TRANSITION. Leg 1's note named
+    // `type="scroll"` as the mechanism, and it is the right one — but with that
+    // type Radix does not merely restyle the bar on idle, it UNMOUNTS it behind
+    // a `Presence`, and `Presence` waits on an `animationend`, never on a
+    // transitionend. A bar carrying only `transition-opacity` would therefore
+    // still vanish in one frame: the clause says "fades", so the fade has to be
+    // an animation the exit can wait for. Both are kept — the transition covers
+    // the states the bar changes in while it is mounted, the animation covers
+    // the enter and the exit.
+    const cls = renderArea().bar.className;
+    expect(cls).toContain("data-[state=visible]:animate-in");
+    expect(cls).toContain("data-[state=visible]:fade-in-0");
+    expect(cls).toContain("data-[state=hidden]:animate-out");
+    expect(cls).toContain("data-[state=hidden]:fade-out-0");
+  });
+
+  // THE BEHAVIOUR ITSELF is graded on the boot, for the same reason every
+  // measured clause in this wave is: jsdom performs no layout, so Radix never
+  // decides the content overflows, the idle state machine never starts, and the
+  // bar this file reads only exists at all because `renderArea()` forces it
+  // open with `type="always"`. The show-on-scroll / hide-on-idle cycle is read
+  // live, in both palettes ("scroll bar fades when idle",
+  // tests/e2e/design/conformance/primitive-wave-leg2.spec.ts).
+  it.skip(
+    "graded on the boot instead: the idle cycle needs a measured viewport and a real scroll — see primitive-wave-leg2.spec.ts",
+    () => {},
+  );
 });

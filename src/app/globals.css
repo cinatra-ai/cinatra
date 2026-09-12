@@ -1490,3 +1490,184 @@ textarea:focus::placeholder {
   border-bottom-left-radius: calc(var(--radius) + 2px);
   border-bottom-right-radius: calc(var(--radius) + 2px);
 }
+
+/* =====================================================================
+   THE TABLE CELL PADDING — the components drawing's Table section, clause
+   "cell padding 10–14px", declared here rather than on the primitive.
+
+   THE DEFECT. `table.tsx` pads its body cell `p-2` — 8px on all four sides,
+   2px under the band's floor — and its header cell `px-2`, the same 8px step,
+   so the two columns at least agree with each other while both sit outside the
+   clause.
+
+   WHY IT IS A SCOPE ON THE SEAM AND NOT A CLASS ON THE PRIMITIVE — the same
+   mechanism the card corner above is written against. `table.tsx` is a
+   design-registry primitive vendored verbatim, modulo import rewriting, into
+   apollo-connector (it enters that closure through `paginated-table`), and
+   scripts/extensions/vendor-extension-primitives.mjs --check is a provenance
+   gate over that copy: it fails the moment the host source and the vendored
+   copy differ by a byte, and it stays red until the extension repository has
+   re-vendored and cinatra-dev-extensions.lock.json has been raised to the new
+   sha. A rule on the DOM seam reaches the host copy and the vendored copy
+   alike, by containment, with no file the gate reads changed at all.
+
+   IT SUPPLIES THE PRIMITIVE'S DEFAULT AND NOTHING ELSE. The selector requires
+   the cell to still carry the primitive's own padding token — `p-2` on the
+   body cell, `px-2` on the header cell — and to carry no DIRECTIONAL padding
+   utility of its own. `cn()` is tailwind-merge: a call site that states a full
+   `p-*` REPLACES the primitive's `p-2`, so the `[class~="p-2"]` arm alone
+   already excludes it; a call site that states a directional
+   `px-/py-/pt-/pr-/pb-/pl-` leaves `p-2` in place, so those are excluded by
+   name, each matched at a token boundary (`^` or a leading space) so the
+   primitive's own `[&:has([role=checkbox])]:pr-0` — whose `pr-` is preceded by
+   a colon — is never read as a call site's. The call sites in the product that
+   pad their own table cells (the permissions matrix and the metric-cost tables
+   among them, including the empty-state row that pads `py-8` on purpose)
+   therefore keep exactly the padding their class says, and the DOM never
+   disagrees with the class it is given. What changes is the cell that asks for
+   nothing, which is the cell the clause grades.
+
+   THE VALUE IS THE BAND'S FLOOR. 10px is one step up from the 8px the
+   primitive spells and the smallest value inside the clause, so the reflow it
+   costs every table in the product is 2px per side and no more.
+
+   IT IS UNLAYERED ON PURPOSE, for the reason given at the card corner:
+   Tailwind's utilities arrive in `layer(utilities)`, and an unlayered rule
+   wins over a layered one whatever the specificity, so the step is stated over
+   the utility the primitive still spells without an `!important` anywhere.
+
+   Graded as a recipe in
+   src/components/ui/__tests__/table-drawing-conformance.test.tsx; read at the
+   DOM seam in BOTH palettes on the live boot by
+   tests/e2e/design/conformance/primitive-wave-leg2.spec.ts.
+   ===================================================================== */
+[data-slot="table-cell"][class~="p-2"]:not(
+    [class^="px-"], [class*=" px-"],
+    [class^="py-"], [class*=" py-"],
+    [class^="pt-"], [class*=" pt-"],
+    [class^="pr-"], [class*=" pr-"],
+    [class^="pb-"], [class*=" pb-"],
+    [class^="pl-"], [class*=" pl-"],
+    [class^="ps-"], [class*=" ps-"],
+    [class^="pe-"], [class*=" pe-"]
+  ) {
+  padding: 10px;
+}
+
+/* The checkbox column keeps the primitive's own exception: a cell that holds a
+   checkbox drops its trailing padding so the control sits on the column edge.
+   Restated here because the seam above outranks the utility that states it. */
+[data-slot="table-cell"][class~="p-2"]:has([role="checkbox"]) {
+  padding-right: 0;
+}
+
+/* THE HEAD CELL TAKES THE BODY CELL'S OWN EXCLUSION LIST, ARM FOR ARM.
+   The clause the two rules serve together is the section's "never centre body
+   cells" companion: a header and the body beneath it share one column edge. A
+   head that states ANY padding of its own is a call site that has taken the
+   column's horizontal edge into its own hands, and the body cell under it —
+   which states its own padding just as often, and by the `py-`/`pr-` arms
+   above then keeps the primitive's 8px — must not be left disagreeing with it
+   by 2px. So the head seam supplies the primitive's default only where the
+   head asks for nothing, exactly as the body seam does.
+
+   THE ONE ARM THAT IS NOT WRITTEN OUT IS `px-`, AND IT IS NOT MISSING. The
+   head's own token IS `px-2`, so a `[class*=" px-"]` arm matches the primitive
+   itself and switches the seam off for every head cell — measured: it took the
+   two live one-edge readings on this boot from PASS to FAIL. It is not needed
+   either: `cn()` is tailwind-merge, so a call site stating `px-*` (or a full
+   `p-*`) REPLACES the primitive's `px-2`, and the `[class~="px-2"]` arm at the
+   head of the selector has already declined. Only the utilities that leave
+   `px-2` standing — the vertical, the single-side and the logical ones — have
+   to be named, which is exactly the list below.
+
+   MEASURED, on this head, at a real call site:
+   packages/metric-usage-api/src/components/token-by-provider-table.tsx draws
+   its heads `pb-2` (and `pb-2 pr-4`) over body cells `py-2` (and `py-2 pr-4`).
+   With `pb-` unexcluded the "Calls" head took 10px sides while its body cell
+   kept 8px, and its `pr-4` siblings kept 8px on the left — three different
+   column edges inside one table. Every arm the body excludes is excluded here
+   too, so that table now renders exactly what its classes say, unchanged.
+
+   NOT A COMPLETE GUARD, and recorded as such: a VARIANT-PREFIXED padding
+   utility (`md:px-6`) or one behind a state variant is still invisible to
+   these arms, because the primitive's own `[&:has([role=checkbox])]:pr-0`
+   carries a colon-prefixed `pr-` and an arm written to catch prefixed forms
+   would match the primitive itself and switch the seam off for every cell. No
+   call site in the product uses one today (measured: zero hits for a prefixed
+   or logical padding utility in every file that mounts a TableCell or a
+   TableHead), and the follow-up is a real `padding` declaration on the
+   primitive rather than a utility, which needs the vendoring cascade. */
+[data-slot="table-head"][class~="px-2"]:not(
+    [class^="p-"], [class*=" p-"],
+    [class^="py-"], [class*=" py-"],
+    [class^="pt-"], [class*=" pt-"],
+    [class^="pr-"], [class*=" pr-"],
+    [class^="pb-"], [class*=" pb-"],
+    [class^="pl-"], [class*=" pl-"],
+    [class^="ps-"], [class*=" ps-"],
+    [class^="pe-"], [class*=" pe-"]
+  ) {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+/* The header's checkbox column keeps the primitive's exception too — table.tsx
+   spells `[&:has([role=checkbox])]:pr-0` on the HEAD as well as on the cell,
+   and the seam above, being unlayered, outranks the layered utility that
+   states it. Without this the two checkbox columns stop sharing an edge: the
+   head at 10px, the body cell beneath it at 0. */
+[data-slot="table-head"][class~="px-2"]:has([role="checkbox"]) {
+  padding-right: 0;
+}
+
+/* =====================================================================
+   THE BADGE LINE BORDER — the components drawing's Badge / Pill section,
+   chrome line "surface-muted bg · line border · 9999px radius · icon-led".
+
+   THE DEFECT. `badge.tsx` reserves the 1px border box on every variant
+   (`border border-transparent`) but only the `outline` variant ever gives it a
+   colour, so the neutral chip the chrome line describes — `secondary`, the one
+   variant grounded on `--secondary`, which resolves to the surface-muted the
+   same line names — renders with no visible stroke at all. The clause asks for
+   a line border on that chip, and the box for it is already there: this is a
+   colour, not a reflow.
+
+   WHY IT IS A SCOPE ON THE SEAM AND NOT A CLASS ON THE PRIMITIVE. `badge.tsx`
+   is vendored verbatim into six extension packages held in their own
+   repositories, behind the same provenance gate named at the table seam above.
+   Spelling `border-line` in the primitive's class string drifts all six at once
+   and cannot go green until each has re-vendored and the pins have been raised.
+   The seam reaches the host copy and every vendored copy alike.
+
+   SCOPED TO THE NEUTRAL CHIP. The `default` chip is a solid indigo fill and the
+   `ghost` and `link` chips are chromeless by their own recipes; the drawing
+   draws its line border around the surface-muted chip, and the status variants
+   take their stroke from their own status colour under the V section, which is
+   the StatusPill primitive's clause and is graded at that primitive.
+
+   Graded as a recipe in
+   src/components/ui/__tests__/badge-drawing-conformance.test.tsx; read at the
+   DOM seam in BOTH palettes on the live boot by
+   tests/e2e/design/conformance/primitive-wave-leg2.spec.ts.
+   ===================================================================== */
+/* SCOPED TO THE CHIP THAT STILL CARRIES THE PRIMITIVE'S OWN BORDER TOKEN.
+   `border-transparent` is what the base recipe spells, and `cn()` is
+   tailwind-merge: a call site that states a border colour of its own is in the
+   same conflict group, so the primitive's `border-transparent` is REMOVED from
+   the class list and only the call site's colour remains. Requiring the token
+   to still be present is therefore an exact reading of "this chip asked for no
+   stroke of its own", the same discriminator the table seam uses.
+
+   MEASURED, on this head:
+     twMerge("border border-transparent px-2", "border-success/30 bg-success/10")
+       -> "border px-2 border-success/30 bg-success/10"      (token gone)
+     twMerge("border border-transparent px-2", "bg-success/10")
+       -> "border border-transparent px-2 bg-success/10"     (token kept)
+   Without this arm the unlayered seam beat the call site's own utility and
+   repainted it neutral — packages/objects/src/screens/sync-adapter-settings-tab.tsx
+   draws its Enabled chip `variant="secondary" className="border-success/30 ..."`
+   and lost its success stroke. It keeps it now. */
+[data-slot="badge"][data-variant="secondary"][class~="border-transparent"] {
+  border-color: var(--line);
+}

@@ -89,10 +89,10 @@ describe('clause: "the buttons share one outer border with hairlines between seg
     const { items } = renderGroup({ spacing: 0 });
     const cls = items[0].className;
     expect(cls).toContain(
-      "group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg",
+      "group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:first:rounded-l-[7px]",
     );
     expect(cls).toContain(
-      "group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg",
+      "group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:last:rounded-r-[7px]",
     );
   });
 
@@ -102,10 +102,10 @@ describe('clause: "the buttons share one outer border with hairlines between seg
     const { items } = renderGroup({ spacing: 0, variant: "outline" });
     const cls = items[1].className;
     expect(cls).toContain(
-      "group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0",
+      "group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0",
     );
     expect(cls).toContain(
-      "group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l",
+      "group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l",
     );
   });
 
