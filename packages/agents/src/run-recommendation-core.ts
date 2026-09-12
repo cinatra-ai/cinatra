@@ -1,5 +1,13 @@
 import "server-only";
 
+import {
+  WORKSPACE_SCOPE_SENTINEL,
+  type AssignmentScope,
+} from "@/lib/assignment-scope";
+import {
+  readAssignmentScopeSnapshot,
+  type AssignmentScopeSnapshot,
+} from "./assignment-scope-snapshot";
 import { recommendationRunHasStarted } from "./run-status";
 import {
   SKIP_RECOMMENDATION_SOURCE,
@@ -1095,6 +1103,10 @@ export type RunSkillSelectionWriteResult = {
   refusal?: string;
   /** The typed outcome that rides alongside `refusal`. */
   refusalCode?: string;
+  /** cinatra#2815 S3 part (4): what the KEEP did, when one was asked for. The
+   *  run's own selection is written either way — a keep that finds no writable
+   *  scope refuses the keep, never the selection. */
+  kept?: KeepRecommendationResult;
 };
 
 /**
@@ -1123,6 +1135,223 @@ function viewerScopeForHoldActor(who: RecommendationHoldActor): {
 }
 
 
+// ---------------------------------------------------------------------------
+// THE OFFERED SCOPE SET FOR RECOMMENDATION PERSISTENCE (cinatra#2815 S3 part 4).
+//
+// An accepted recommendation may be KEPT: written back into the assignment
+// store as a `source=recommended` row so the next run of this agent receives it
+// without being asked again. Which scope that row lands in is an authorization
+// decision, and the issue is explicit that the SERVER enforces the offered set
+// rather than merely rendering it — a confirm that names a scope is checked
+// against this set before anything is written, so a client that renders a wider
+// picker, or sends a scope no picker ever drew, changes nothing.
+//
+// THE SET IS AN INTERSECTION, PLUS ONE CONDITIONAL LAYER:
+//
+//   (run-snapshot chain) INTERSECT (the actor's writable scopes)
+//     The chain is the run's IMMUTABLE assignment-scope snapshot — the project
+//     it was launched in, the teams that applied, its organization — never the
+//     actor's live memberships. A scope the run never had cannot be offered
+//     however wide the actor's authority is, and a scope the actor cannot write
+//     cannot be offered however narrow the run is.
+//
+//   PLUS the actor's `user` scope, ONLY when the snapshot's originating human
+//   IS the actor.
+//     A personal assignment is read for exactly one person (see the snapshot
+//     module's note on `originatingHumanUserId`), so writing one for somebody
+//     else would create a row nobody can use and hand the confirmer a place to
+//     park an assignment outside every shared scope's oversight. A foreign
+//     confirmer — anyone who did not start this run — is therefore refused the
+//     personal scope, including their OWN, and a headless run offers none at
+//     all because it names no originating human.
+//
+// ORDER IS THE CHAIN'S ORDER, narrowest first: project -> user -> team(s) ->
+// organization -> workspace, exactly as `effective-assigned-skills.ts` walks it
+// at delivery. The DEFAULT is the narrowest writable scope, which is the first
+// element — the smallest blast radius that can hold the decision.
+//
+// PURE: no IO. The caller supplies the snapshot it already read and the scopes
+// it already resolved for the actor.
+// ---------------------------------------------------------------------------
+
+
+/** The scopes the confirming actor may WRITE an assignment into. Resolved by
+ *  the caller from the verified actor — never from anything a client sent. */
+export type RecommendationWritableScopes = {
+  actorUserId: string;
+  projectIds: readonly string[];
+  teamIds: readonly string[];
+  organizationIds: readonly string[];
+  /** Whether this actor may write a workspace-wide assignment at all. */
+  mayWriteWorkspace: boolean;
+};
+
+export type RecommendationScopeRefusal = "no-writable-scope" | "scope-not-offered";
+
+export type RecommendationScopeVerdict =
+  | { ok: true; scope: AssignmentScope; offered: AssignmentScope[] }
+  | { ok: false; reason: RecommendationScopeRefusal };
+
+function sameScope(a: AssignmentScope, b: AssignmentScope): boolean {
+  return a.scopeKind === b.scopeKind && a.scopeId === b.scopeId;
+}
+
+/**
+ * The scopes this actor may persist an accepted recommendation into, on this
+ * run, narrowest first. An empty array means there is nowhere to keep it — a
+ * refusal, never a silent fall back to a wider scope.
+ */
+export function offeredRecommendationScopes(input: {
+  snapshot: AssignmentScopeSnapshot;
+  writable: RecommendationWritableScopes;
+}): AssignmentScope[] {
+  const { snapshot, writable } = input;
+  const offered: AssignmentScope[] = [];
+
+  // project — the run's own project refinement, when the actor holds it.
+  if (snapshot.projectId && writable.projectIds.includes(snapshot.projectId)) {
+    offered.push({ scopeKind: "project", scopeId: snapshot.projectId });
+  }
+  // user — THE CONDITIONAL LAYER. Only the originating human's own scope, and
+  // only when that human is the one confirming.
+  if (
+    snapshot.originatingHumanUserId &&
+    snapshot.originatingHumanUserId === writable.actorUserId
+  ) {
+    offered.push({ scopeKind: "user", scopeId: writable.actorUserId });
+  }
+  // team(s) — in the SNAPSHOT's order, which is sorted and deduplicated at
+  // creation, so two confirms of one run offer the same list in the same order.
+  for (const teamId of snapshot.teamIds) {
+    if (writable.teamIds.includes(teamId)) {
+      offered.push({ scopeKind: "team", scopeId: teamId });
+    }
+  }
+  // organization — the run's own org, never another the actor happens to hold.
+  if (writable.organizationIds.includes(snapshot.orgId)) {
+    offered.push({ scopeKind: "organization", scopeId: snapshot.orgId });
+  }
+  // workspace — the widest, and only for an actor authorized to write it.
+  if (writable.mayWriteWorkspace) {
+    offered.push({ scopeKind: "workspace", scopeId: WORKSPACE_SCOPE_SENTINEL });
+  }
+  return offered;
+}
+
+/**
+ * Decide the scope a confirm writes into: the requested one when it is in the
+ * offered set, otherwise the narrowest writable scope. A request for anything
+ * NOT offered is a refusal — it is never quietly widened, and never quietly
+ * narrowed to the default, because both would write somewhere the confirmer
+ * did not choose.
+ */
+export function resolveRecommendationPersistenceScope(input: {
+  snapshot: AssignmentScopeSnapshot;
+  writable: RecommendationWritableScopes;
+  requested?: AssignmentScope;
+}): RecommendationScopeVerdict {
+  const offered = offeredRecommendationScopes(input);
+  if (offered.length === 0) return { ok: false, reason: "no-writable-scope" };
+  if (!input.requested) {
+    return { ok: true, scope: offered[0], offered };
+  }
+  const match = offered.find((s) => sameScope(s, input.requested!));
+  if (!match) return { ok: false, reason: "scope-not-offered" };
+  return { ok: true, scope: match, offered };
+}
+
+// ---------------------------------------------------------------------------
+// KEEPING AN ACCEPTED RECOMMENDATION (cinatra#2815 S3 part 4).
+//
+// The per-run selection write above decides what THIS run delivers. Keeping is
+// the other half: writing the accepted skills back into the assignment store as
+// `source=recommended` rows so the next run receives them without asking again.
+//
+// INTERACTIVE RUNS ONLY. This is reached from the human confirm path and
+// nowhere else — a headless run auto-applies into its own run selection and
+// keeps nothing, because there is no human to have chosen a scope.
+//
+// THE SCOPE IS ENFORCED, NOT RENDERED. The offered set is derived server-side
+// by `recommendation-persistence-scope.ts` from the run's IMMUTABLE snapshot
+// intersected with the confirming actor's writable scopes (plus their personal
+// scope only when they are the run's originating human), and a requested scope
+// that is not in it is REFUSED. A client that draws a wider picker changes
+// nothing.
+//
+// FAIL-SOFT ON THE ROW, FAIL-CLOSED ON THE SCOPE. A refused scope writes
+// nothing and says why; an individual insert that the store's own per-scope cap
+// rejects is reported, not thrown — the run's selection is already written and
+// committed by then, and a keep that could not fit a cap must never unwind it.
+// ---------------------------------------------------------------------------
+
+/** The store insert this keep needs, as a seam: the default is the real store,
+ *  and a test supplies its own without a database. */
+export type AssignedSkillInsert = (input: {
+  agentPackageName: string;
+  skillId: string;
+  createdBy: string;
+  scope: AssignmentScope;
+  source: "recommended";
+  originRunId: string;
+}) => Promise<{ outcome: string }>;
+
+export type KeepRecommendationResult =
+  | { ok: true; scope: AssignmentScope; written: number; skipped: string[] }
+  | { ok: false; reason: RecommendationScopeRefusal };
+
+/**
+ * Persist the confirmed skills as `source=recommended` assignments in ONE
+ * server-enforced scope. Returns the scope actually written and which skills
+ * the store declined (already assigned there, or the scope's cap is full).
+ */
+export async function keepConfirmedRecommendationInScope(input: {
+  agentPackageName: string;
+  runId: string;
+  confirmedSkillIds: string[];
+  createdBy: string;
+  snapshot: AssignmentScopeSnapshot;
+  writable: RecommendationWritableScopes;
+  /** The scope the confirmer chose. Absent = the narrowest writable one. */
+  requestedScope?: AssignmentScope;
+  insert?: AssignedSkillInsert;
+}): Promise<KeepRecommendationResult> {
+  const verdict = resolveRecommendationPersistenceScope({
+    snapshot: input.snapshot,
+    writable: input.writable,
+    ...(input.requestedScope ? { requested: input.requestedScope } : {}),
+  });
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+
+  const insert: AssignedSkillInsert =
+    input.insert ??
+    (async (row) => {
+      const { insertAssignedSkill } = await import("@/lib/agent-assigned-skills-store");
+      return insertAssignedSkill(row);
+    });
+
+  let written = 0;
+  const skipped: string[] = [];
+  // Deduplicated, and in the order the confirm named them: the store assigns
+  // the position, and two rows must never race for one.
+  for (const skillId of [...new Set(input.confirmedSkillIds)]) {
+    try {
+      const result = await insert({
+        agentPackageName: input.agentPackageName,
+        skillId,
+        createdBy: input.createdBy,
+        scope: verdict.scope,
+        source: "recommended",
+        originRunId: input.runId,
+      });
+      if (result.outcome === "assigned") written += 1;
+      else skipped.push(skillId);
+    } catch {
+      skipped.push(skillId);
+    }
+  }
+  return { ok: true, scope: verdict.scope, written, skipped };
+}
+
 /**
  * THE AUTHORITATIVE PER-RUN SELECTION WRITE, for one verified reader.
  *
@@ -1149,6 +1378,15 @@ export async function writeRunSkillSelectionForActor(input: {
   adjustedSkillIds?: string[];
   /** The hold the decision was bound to — see `RecommendationSelectionWrite`. */
   holdId?: string | null;
+  /**
+   * cinatra#2815 S3 part (4) — KEEP the confirmed skills as `source=recommended`
+   * assignments. Present only on the INTERACTIVE confirm (a human chose a
+   * scope); absent everywhere else, which leaves every landed caller writing
+   * exactly the per-run selection it wrote before. `scope` is the confirmer's
+   * choice and is ENFORCED against the server-derived offered set, never
+   * trusted.
+   */
+  keepRecommended?: { scope?: AssignmentScope };
 }): Promise<RunSkillSelectionWriteResult> {
   const empty: RunSkillSelectionWriteResult = {
     ok: false,
@@ -1243,7 +1481,40 @@ export async function writeRunSkillSelectionForActor(input: {
           : RECOMMENDATION_OFFER_STALE_CODE,
       };
     }
-    return { ok: true, written: result.written, efficacy: result.efficacy };
+    // THE KEEP (cinatra#2815 S3 part 4), after the selection is committed and
+    // only for a human confirm. The scope set is derived from the run's own
+    // IMMUTABLE snapshot — never the actor's live memberships — intersected
+    // with what this actor may write.
+    let kept: KeepRecommendationResult | undefined;
+    if (input.keepRecommended && who.actor.actorType === "human" && who.actor.userId) {
+      const resolved = readAssignmentScopeSnapshot(run.assignmentScopeSnapshot, {
+        durableOrgId: run.orgId ?? viewer.organizationId ?? "",
+      });
+      kept = await keepConfirmedRecommendationInScope({
+        agentPackageName,
+        runId: input.runId,
+        confirmedSkillIds: input.confirmedSkillIds.filter((id) => allowed.has(id)),
+        createdBy: who.actor.userId,
+        snapshot: resolved.snapshot,
+        writable: {
+          actorUserId: who.actor.userId,
+          projectIds: viewer.projectIds,
+          teamIds: viewer.teamIds,
+          organizationIds: viewer.organizationId ? [viewer.organizationId] : [],
+          // A workspace-wide keep needs an authority this seam cannot verify
+          // from the actor projection it holds, so it is not offered at all.
+          // Fail-closed: the widest scope is never the one reached by default.
+          mayWriteWorkspace: false,
+        },
+        ...(input.keepRecommended.scope ? { requestedScope: input.keepRecommended.scope } : {}),
+      });
+    }
+    return {
+      ok: true,
+      written: result.written,
+      efficacy: result.efficacy,
+      ...(kept ? { kept } : {}),
+    };
   } catch {
     return empty;
   }

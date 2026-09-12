@@ -14,6 +14,11 @@ import {
   type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
 import {
+  planAllocationForGate,
+  type GateAllocation,
+} from "@/lib/artifacts/context-allocation-gate";
+import { allocationForSlot } from "@/lib/artifacts/context-allocation-planner";
+import {
   extractContextRouteLogIds,
   recordContextRouteRejection,
   recordContextRouteSuccess,
@@ -76,6 +81,30 @@ export async function POST(req: Request): Promise<Response> {
     });
     const slotMeta = buildSlotMeta(slot);
     const selectedRefs = computeRouteSelectedRefs(candidates, slot);
+    // cinatra#2815 S3 part (3): the MANIFEST-WIDE allocation this gate is
+    // drawn against, content-addressed into a ContextAllocationTokenV1. The
+    // renderer carries the token back to /api/context-finalize, which
+    // recomputes the same payload and refuses a drifted write.
+    //
+    // BEST-EFFORT HERE, FAIL-CLOSED THERE. The per-slot contract above is
+    // exactly as it landed and does not depend on the planner, so a manifest
+    // that cannot be planned (an OAS that went unreadable, a resolver fault on
+    // a sibling slot) still serves this slot's gate — it simply serves no
+    // token, and a finalize that carries none is the pre-#2815 path unchanged.
+    let gate: GateAllocation | null = null;
+    try {
+      gate = await planAllocationForGate({
+        actor: ctx.actor,
+        runId: ctx.run.id,
+        trustedSlotPackageName: ctx.trustedSlotPackageName,
+        projectId: ctx.projectId,
+      });
+    } catch {
+      gate = null;
+    }
+    const plannedRefs = gate
+      ? (allocationForSlot(gate.allocation, parsed.data.slotId)?.refs ?? [])
+      : [];
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({
       kind: "resolve",
@@ -95,6 +124,17 @@ export async function POST(req: Request): Promise<Response> {
       selectedRefs,
       selectionMode: slotMeta.selectionMode,
       resolutionMode: slotMeta.resolutionMode,
+      // Additive (cinatra#2815 S3 part 3). `allocationToken` is what finalize
+      // compares; `plannedRefs` is what this slot was allocated by the one
+      // manifest-wide plan, so a renderer can show the planned set beside the
+      // per-slot candidates. Both are absent when the manifest could not be
+      // planned — never a guessed value.
+      ...(gate
+        ? {
+            allocationToken: gate.token,
+            plannedRefs,
+          }
+        : {}),
     });
   } catch (err) {
     if (err instanceof ContextRouteError) {
