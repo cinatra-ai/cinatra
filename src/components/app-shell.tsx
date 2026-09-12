@@ -29,6 +29,8 @@ import {
 import {
   agentInstanceTabLabel,
   buildBreadcrumbTrail,
+  connectorRouteTabLabel,
+  isConnectorDispatchPathname,
   breadcrumbCrumbKey,
   humanizePathSegment,
   isIdLikeSegment,
@@ -659,11 +661,32 @@ export function AppShell({
     // own rule, so the tab mirrors the trail on the bare tree and under every
     // scope base alike. A null leaves the title to the branches below.
     const agentLabel = agentInstanceTabLabel(pathname, breadcrumbSegments);
+    // AND THE CONNECTOR DISPATCH ROUTE (cinatra#3235): the mirror named one
+    // area, so a connector setup page fell through to the humanized last path
+    // segment below — "Setup | Cinatra" on every connector at once, the page's
+    // own tab strip rather than the connector the reader opened. The label is
+    // the one the route published for its own path, read through the same
+    // crumb-contributions road; the trail's rule, widened, not a second road.
+    const connectorLabel = connectorRouteTabLabel(pathname, crumbContributions);
+    const mirroredLabel = agentLabel ?? connectorLabel;
     let resolved: string | null = null;
     if (isChatThread && chatThreadTitle) {
       resolved = `${chatThreadTitle} | Cinatra`;
-    } else if (agentLabel) {
-      resolved = `${agentLabel} | Cinatra`;
+    } else if (mirroredLabel) {
+      resolved = `${mirroredLabel} | Cinatra`;
+    } else if (isConnectorDispatchPathname(pathname)) {
+      // THE CONNECTOR ROUTE BEFORE ITS CONTRIBUTION LANDS (cinatra#3235). The
+      // publisher island is a CHILD of this shell, so on the mount commit its
+      // effect has not reached the bus yet and the label above is still null.
+      // Falling through to `deriveDocumentTitle` below would write the
+      // humanized last path segment — "Setup | Cinatra", the very string this
+      // issue removes — and the head observer would re-assert it for as long as
+      // the publish took. The route's own `generateMetadata` has already titled
+      // the tab with the resolved display name, so the right move is the
+      // id-bearing branch's: deliberately no write. The publish re-runs this
+      // effect (`crumbContributions` is a dependency) and the mirror above
+      // takes over.
+      resolved = null;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
@@ -690,7 +713,13 @@ export function AppShell({
     const observer = new MutationObserver(apply);
     observer.observe(head, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
-  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments]);
+  }, [
+    activeHeader?.title,
+    pathname,
+    chatThreadTitle,
+    breadcrumbSegments,
+    crumbContributions,
+  ]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.
