@@ -1,0 +1,53 @@
+{
+  "$comment": "Capture receipt for the frozen published conformance manifests beside it. Every body in this directory is the VERBATIM response served at the url below on fetchedAt; nothing was reformatted. Re-derive any row with: curl -sS URL | shasum -a 256. A row that no longer matches the live response is NOT a reason to edit this receipt: it is the drift this gate exists to report, and it moves only with the pin it belongs to. FOUR of the five bodies are the artifacts conformance-pins.json now names (the 2026-09-12 reconciliation: app, app-components and app-extensions were re-pinned hashes-only, app-notifications never moved). app-connectors is the fifth: its published body redeclares the manifest, so it is adopted with its drivers where those live, and until that lands the pin still names the older artifact recorded in published-2026-08-28/capture.json.",
+  "fetchedAt": "2026-09-12",
+  "command": "curl -sS URL -o FILE",
+  "publishedBaseUrl": "https://docs.cinatra.ai/references/design/conformance/",
+  "manifests": [
+    {
+      "file": "app.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app.json",
+      "httpStatus": 200,
+      "byteLength": 1288,
+      "sha256": "7bd7505f5cb4b60ec77975718ed7759a62b78179bbcaeee6200373c9a780de8b",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:5e39a2f6b4360194511415a8bcfdbef45e5abcf3009d09ce0c45357ce327c025"
+    },
+    {
+      "file": "app-components.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-components.json",
+      "httpStatus": 200,
+      "byteLength": 1211,
+      "sha256": "ddfcd50b57cea849063d6bb067c3a710169b5f48282154b6397f3ba1f6de9928",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf"
+    },
+    {
+      "file": "app-extensions.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-extensions.json",
+      "httpStatus": 200,
+      "byteLength": 3849,
+      "sha256": "26e58cb01d1de1cc4b5a2e46f5f35841fd28dc32dd428a6b7133972ef75fb78d",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:4befd3a1ff0ba30d7cac9eee600223e1fc90b4b48c63475be7fe29277b00e093"
+    },
+    {
+      "file": "app-connectors.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-connectors.json",
+      "httpStatus": 200,
+      "byteLength": 4821,
+      "sha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
+    },
+    {
+      "file": "app-notifications.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app-notifications.json",
+      "httpStatus": 200,
+      "byteLength": 2621,
+      "sha256": "1538d3091aa1e752730d48d2123d4d58bc1a0d90e181bd4c746c44708ed44e11",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:e27b22817cac8b427e150739674caa0fa4d96bb9fa46a7b846ff46261cb95790"
+    }
+  ]
+}
