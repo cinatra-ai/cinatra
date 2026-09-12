@@ -706,6 +706,41 @@ export function AgenticRunPanel({
   const isLive = status === "running" || status === "queued";
   const isPendingApproval = status === "pending_approval";
 
+  // -------------------------------------------------------------------------
+  // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
+  // (cinatra#3423).
+  //
+  // The tab that presses Continue and loses the race is answered: the decision
+  // road refuses it with the typed no-longer-pending outcome and the submit
+  // paths above draw the blocked state from it. The tab that was ASLEEP while
+  // the gate was decided somewhere else is answered by nobody. It wakes holding
+  // a gate that is gone, its own gate read comes back empty, and the surface had
+  // nothing to draw for "parked, with no gate": the reader is left in front of a
+  // region that says nothing and never resolves.
+  //
+  // So the surface re-reads on RESUME — the two events that mean the reader came
+  // back, a window focus and a visibility change — and when the answer is still
+  // "no gate" it draws the state the surface already draws for a gate that is no
+  // longer open, ratified copy and Refresh and all.
+  //
+  // A tab that never slept fires neither event, so the ordinary flicker of the
+  // gate context (the poll tick that briefly nulls it while the stream re-derives
+  // state) is never mistaken for a decided gate; and the moment a gate is
+  // drawable again the reading is released.
+  //
+  // AND ONLY FOR A TAB THAT ACTUALLY HELD THE GATE. A null gate context does not
+  // mean "there is no gate": the server synthesizes a context for every paused
+  // run, so a surface holding null was told NOTHING YET — `hitl-recovery-state.ts`
+  // says so in as many words — which is the state of every healthy first paint.
+  // That case already has its own answer further down (the paused banner, the
+  // "Loading the approval step for this run…" line and its Re-check) and it keeps
+  // it: a gate that has not ARRIVED is not a gate that "was already settled or the
+  // run moved on", and drawing the settled state over one would be the stale
+  // reading the drawing's section IV exists to prevent. So the resume reading is
+  // armed only once this surface has actually drawn a gate for this run.
+  const [gateGoneOnResume, setGateGoneOnResume] = useState(false);
+  const heldAGateRef = useRef(false);
+
   // Polling firing guards use pollStatus — independent of SSE-derived status.
   // This keeps the poll loop alive while SSE drives the status badge, ensuring
   // messages + hitlContext continue to be fetched even when SSE has advanced status.
@@ -1079,6 +1114,31 @@ export function AgenticRunPanel({
     setPrevBufferedHitlValueKey(bufferedHitlValueKey);
     setBufferedHitlValue({});
   }
+
+  // cinatra#3423 — the resume re-read described above, wired where the gate
+  // context is known. `parkedWithNoGate` is the run saying it is standing at a
+  // gate while this surface, which WAS holding one, holds none to draw.
+  useEffect(() => {
+    if (effectiveHitlContext) heldAGateRef.current = true;
+  }, [effectiveHitlContext]);
+  const parkedWithNoGate =
+    isPendingApproval && !effectiveHitlContext && heldAGateRef.current;
+  useEffect(() => {
+    if (!parkedWithNoGate) {
+      setGateGoneOnResume(false);
+      return;
+    }
+    const onResume = () => {
+      if (document.visibilityState === "hidden") return;
+      setGateGoneOnResume(true);
+    };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [parkedWithNoGate]);
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
   // review-task id — not on the buffer key above (cinatra#3219 convergence).
@@ -2100,6 +2160,14 @@ export function AgenticRunPanel({
           />
         </LifecycleCardSurfaceProvider>
         )
+      ) : parkedWithNoGate && gateGoneOnResume ? (
+        // cinatra#3423 — the reader came back to a gate this surface was holding
+        // and that is no longer here. Without this branch the banner below draws
+        // its heading over a decision row that renders nothing (it has no gate to
+        // submit against) above a "Loading the approval step for this run…" line
+        // that can never resolve, because the gate it waits for is decided and
+        // gone. The surface draws its blocked state instead.
+        <ReviewGateBlocked reason="no-longer-pending" />
       ) : isPendingApproval ? (
         // Standard HITL approval banner (tool-call gate without x-renderer).
         // cinatra#2444 — the decision for an actively-watched run is taken
