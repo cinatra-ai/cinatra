@@ -72,9 +72,15 @@ refuses a mapped path that no longer exists, so the map cannot rot quietly.
   changed, not all five — otherwise a PR that fixes one pin would be red for
   the four drifts it did not touch. When the changed entries cannot be
   determined (no diff base to compare against), every id counts: fail-closed.
-- **A diff that touches the checker, the map or the workflow** touches every id.
-  Those change what the gate itself decides, so after such a change no pin's
-  silence is trustworthy.
+- **A diff that touches the map** touches the ids whose **entry** changed, on the
+  same granularity and for the same reason; it touches every id when it moves
+  `globalPaths` or the set of pin ids, which decide what the gate reads rather
+  than what one pin adopts.
+- **A diff that touches the shared driver file** touches the ids whose **driver
+  block** changed. The paragraph below states how a block is attributed.
+- **A diff that touches the checker or the workflow** touches every id. Those
+  change what the gate itself decides, so after such a change no pin's silence is
+  trustworthy.
 - **A push to `main` or a `workflow_dispatch`** is red on **any** non-`match`
   outcome, touched or not. This is the run that makes a drift impossible to
   ignore.
@@ -86,6 +92,40 @@ refuses a mapped path that no longer exists, so the map cannot rot quietly.
   `HEAD` there, which self-compares to an empty diff; for this check that is the
   fail-OPEN direction — an empty diff adopts no pin and every drift would
   degrade to a warning — so it over-reports instead.
+
+### How a shared file is attributed
+
+Three files are listed under every pin — the pin file, the map, and the shared
+driver file `tests/e2e/design/conformance/contract.ts` — so a whole-file rule on
+any of them reads a one-line edit as every pin, and an adoption goes red on every
+other pin that drifts (cinatra#3421: two adoptions red each other, and a seed-helper
+edit red all four drifts). Each is attributed by the part of it that changed
+instead. **The pin file and the map** by the *entry*: the pins whose entry differs
+between the diff base and the head. **The driver file** by the *driver block*,
+stated by the file's own structure — a block is one top-level declaration (the
+exported driver constants per drawing, and the helpers beside them), running from
+its declaration, with the comment written directly above it, to the line before the
+next declaration; `SURFACE_DRIVERS` binds a manifest surface id to the block that
+drives it, and each pin's manifest declares the surface ids that pin owns. A
+changed line therefore answers in exactly one of three ways: a block the table
+binds to pinned surfaces attributes to **those pins**; a block the table reaches
+only through a computed entry (a family factory spread over a fixture list, whose
+surface ids the file cannot name without running it), together with the table's own
+braces and comments, attributes to **every pin** — fail-closed; and a block the
+table never names — a shared helper such as the seed helper, the imports, the
+preamble — attributes to **no pin**. Both sides of the cut are read: a deleted or rebound line
+exists only in the base file, so the base text is attributed by the removed line
+range and the head text by the added one, and the answer is the union — a
+head-only reader would credit a deletion to whatever closed over the gap and
+never ask the pin that owned it. Every base-side read names the same merge base
+the three-dot path diff already uses, so an entry the target branch moved after
+the cut is never read as this branch's adoption. Everything unreadable stays
+fail-closed: no diff base, an unparseable file, a declaration this reader cannot
+see as a block boundary, diff output carrying no line range, or a
+surface-to-driver table the checker cannot find is every id, exactly as a
+pin-file edit with no base already was. The rule
+"a pin moves only with its adoption" is untouched by this: it changes who is asked,
+never what.
 
 ## Who moves a pin
 
