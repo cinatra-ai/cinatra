@@ -33,6 +33,7 @@ import {
   isPlatformAdmin,
 } from "@/lib/auth-session";
 import type { ActorContext } from "@/lib/authz/actor-context";
+import { ensureArtifactTypesRegisteredWithStore } from "@/lib/artifacts/ensure-artifact-registry";
 import {
   listInstalledMeaningTypesAcceptingMime,
   type InstalledMeaningType,
@@ -151,6 +152,13 @@ export async function listInstalledTypesForArtifact(
   const read = readArtifactForDetail({ orgId, actor, artifactId });
   if (read.kind === "not-found") return { ok: false, reason: "not-found" };
   if (read.kind === "denied") return { ok: false, reason: "denied" };
+  // The picker reads the in-process object-type registry, and the ordinary read
+  // warm registers the AUTHORING tree only — a pack installed at runtime lives
+  // in the unified extension store, so without this warm its declared type is
+  // offered by no process that did not itself perform the install (cinatra#3204).
+  // The warm drives the fail-closed store authority, so a torn-down or
+  // anchor-refused pack still never reaches the offer.
+  await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
   const raw = listInstalledMeaningTypesAcceptingMime(
     mime,
@@ -238,6 +246,11 @@ export async function assertUploadMeaning(input: {
   // / foreign-scope extension being asserted through a crafted server-action
   // call; the MIME + base type are re-derived from the stored artifact, and the
   // per-actor extension-access gate drops types the actor cannot address.
+  // Warmed with the runtime store for the same reason the candidate LIST is
+  // (cinatra#3204): the validation gate must decide against the same population
+  // the picker offered, or a type the admin could legitimately choose would be
+  // refused here as "not installed".
+  await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
   const raw = listInstalledMeaningTypesAcceptingMime(
     mime,

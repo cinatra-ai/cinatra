@@ -158,10 +158,6 @@ const INVENTORY: Record<string, Entry> = {
     why: "RegistryPermissionsScreen + AgentBuilderImportScreen — both mount under /configuration only.",
     disposition: "admin-only-mount",
   },
-  "packages/agents/src/import-form.tsx": {
-    why: "The upload form of /configuration/extensions/upload.",
-    disposition: "admin-only-mount",
-  },
   "packages/sdk-ui/src/nango-managed-api-card.tsx": {
     why: "Renders on /configuration/llm only.",
     disposition: "admin-only-mount",
@@ -214,6 +210,10 @@ const INVENTORY: Record<string, Entry> = {
   },
   "packages/agents/src/agent-error-display.ts": {
     why: "Exports the two CTA href CONSTANTS; the renderers (agentic-run-panel) gate them.",
+    disposition: "not-a-renderer",
+  },
+  "packages/agents/src/supplied-install-actions.ts": {
+    why: "Server actions of the upload screen; carry each kind observable href and the precondition fixHrefs inside their result payload. The only renderer, import-form.tsx, mounts under /configuration/extensions/upload alone.",
     disposition: "not-a-renderer",
   },
   "src/lib/agent-llm-preflight.ts": {

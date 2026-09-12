@@ -592,7 +592,11 @@ function TypePickerPanel() {
             No installed type accepts this file. Find one in the marketplace.
           </p>
         ) : (
-          <ul className="overflow-hidden rounded-lg border border-line">
+          // The list carries every installed type that accepts the file, so on
+          // an instance with many of them it is the picker's tallest region. It
+          // scrolls inside its own box so the action row below it stays inside
+          // the window and the admin can always confirm the meaning.
+          <ul className="max-h-[45vh] overflow-y-auto rounded-lg border border-line">
             {types.map((t, i) => (
               <li
                 key={t.objectTypeId ?? t.extension}

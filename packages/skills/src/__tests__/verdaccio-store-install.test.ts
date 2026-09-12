@@ -91,6 +91,35 @@ describe("installSkillPackageFromVerdaccio (unified store payload)", () => {
     );
   });
 
+  // cinatra#3204 — a `cinatra.kind: "skill"` package installed from the
+  // finalized store payload IS an extension, and the catalog rows must say so.
+  // Without it they come out shaped like user-authored rows, which the shared
+  // assignability predicate refuses, so an installed skill extension is never
+  // offered on an agent's Skills picker.
+  it("registers the rows as an EXTENSION's, so they can be pinned to an agent", async () => {
+    const storeDir = makePayloadDir({
+      name: "@acme/skills",
+      version: "1.2.0",
+      cinatra: { kind: "skill" },
+    });
+    resolveFinalizedStorePayload.mockResolvedValue({
+      storeDir,
+      digest: "c".repeat(128),
+      version: "1.2.0",
+      registryUrl: "https://registry.cinatra.ai",
+    });
+
+    await installSkillPackageFromVerdaccio({
+      packageName: "@acme/skills",
+      packageVersion: "1.2.0",
+      orgId: "org-1",
+    });
+
+    expect(upsertRepositoryBackedSkillPackage).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionRegistered: true }),
+    );
+  });
+
   it("fails LOUD when no finalized store payload exists (the pipeline runs before the handler)", async () => {
     resolveFinalizedStorePayload.mockResolvedValue(null);
     await expect(

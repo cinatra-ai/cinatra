@@ -15,6 +15,7 @@
     "./bundled-skill-registration": "./src/bundled-skill-registration.ts",
     "./cli": "./src/cli.mjs",
     "./extension-handler": "./src/extension-handler.ts",
+    "./skill-package-source": "./src/skill-package-source.ts",
     "./repository-package-intake": "./src/repository-package-intake.ts",
     "./injection": "./src/injection/index.ts",
     "./llm-matching/constants": "./src/llm-matching/constants.ts",
