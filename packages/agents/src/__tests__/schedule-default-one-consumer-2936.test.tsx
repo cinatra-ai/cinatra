@@ -135,7 +135,7 @@ function row(label: string): HTMLElement | null {
 }
 
 function chosen(label: string): boolean {
-  return (row(label)?.className ?? "").includes("border-primary");
+  return (row(label)?.className ?? "").includes("border-indigo-ink");
 }
 
 afterEach(() => {
