@@ -96,6 +96,29 @@ import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-l
 
 The interactive controls (Check, All connections, Connect/Disconnect, the disconnect confirm dialog) are passed in as slots, so the primitives stay server-safe and the consuming connector owns the probe, navigation, and connection-level confirm copy.
 
+### The Sharing tab: `@cinatra-ai/sdk-ui/connector-sharing-panels`
+
+The connector setup page's SECOND fixed tab (`design/specs/app-connectors.html` §II, the Sharing tab): a roll-up card above a list of panels, one panel per connection the actor owns on this connector, each panel the connection's identity row (name + mono line, no status badge and no per-row action) over the access picker and its ownership card. The app GENERATES the setup page of the connectors whose pack declares `cinatra.uiSurface: "schema-config"` in its `package.json` — at the time of writing anthropic, apify, apollo, gemini, google-appointment-schedules, mcp-server and openai — and draws this tab on it. A connector that ships its own React setup page draws its own header and tab strip, so the app has no seam to inject a tab into and injects nothing: that pack draws the tab itself, from here. Like `Tabs` and the connection primitives above, it is **shared, not copied**, from its own dedicated subpath — one implementation, so the same DOM is graded wherever the tab is drawn.
+
+**The one addition a pack makes** — the component, as the tab right after its own Setup tab:
+
+```tsx
+import { ConnectorSharingPanels } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
+
+<TabsContent value="sharing">
+  <ConnectorSharingPanels panels={panels} />
+</TabsContent>
+```
+
+**Props.**
+
+- **`panels`** — one `ConnectorSharingPanelView` per owned connection, in list order: `key` (the connection identity row id), `name` (the connection's display name), `url` (the mono secondary line), `scopeConstraint` (`"locked"` where the connector declares a ceiling on how far its connections travel, `"recommended"` where it only recommends a scope, `null` where it constrains nothing), and `permissions` — that panel's access picker and ownership card, handed in as a NODE whose actions are already bound as callbacks. The pack resolves the views through the same read road its own setup page already uses for its connections. The component is presentational and server-safe (no session, no database) and mounts no client of its own, so a pack never ends up drawing a connector-specific copy of the two controls.
+- **`state`** — `"loading"` draws the declared loading treatment in the list's place; `"ready"` (the default) draws the list.
+- **`rollup`** — `"always"` (the default, and the tab's own rule) heads the list with the roll-up card whenever there IS a list; `"multiple"` keeps the plural-only rule of the pages that draw no tab strip.
+- **`CONNECTOR_SHARING_INTRO`** carries the drawing's own line for the tab, so every page says the same words.
+
+**The surfaces it emits, and what the pack declares.** The component emits three design-conformance surfaces: `connector-sharing` (one panel — the `name`, `url`, `access` and `co-owners` bindings, the `select-scope` / `search-people` / `remove-co-owner` / `save-access` actions, and the `loading` state), `connector-sharing-rollup` (the roll-up card: no Check and no "All connections" link) and `connector-sharing-locked` (`data-variant="locked"` or `data-variant="recommended"`). Those three ids are declared by the ratified drawing's own `app-connectors` conformance manifest and answered by the functional-acceptance drivers of the same names, so a pack that draws this component is graded against the same drawing as the app's generated page: it declares no id of its own, adds none, and renames none. The pack-side declaration is the UI-surface one it already carries — a pack that draws its own setup page is the one that does NOT declare `cinatra.uiSurface: "schema-config"`, and it is that pack which makes the addition above.
+
 ### First-party glyphs: `@cinatra-ai/sdk-ui/icons`
 
 Design-spec marks the lucide set does not carry, built with lucide's own public `createLucideIcon` factory so each one is a drop-in for a lucide icon (same `LucideProps`, same 24x24 `stroke="currentColor"` chrome, same automatic `aria-hidden`). Exported from its own `@cinatra-ai/sdk-ui/icons` subpath — never from the root or `/marketplace` barrels.
