@@ -224,6 +224,16 @@ async function deregisterIfOwned(packageName: string, hasLiveSibling: boolean): 
     // auto-surfacing (a matcher-only pack registers no object type — the
     // objectTypeRegistry reap above is a no-op for it).
     matcherManifestRegistry.removeByPackage(packageName);
+    // Cross-namespace claim ledger, at the SAME parity (cinatra#3033,
+    // convergence review). A pack that only CLAIMS another namespace's type id
+    // registers no object type and no matcher manifest of its own, so neither
+    // reap above can reach it: without this, a pack registered during a restore
+    // and then rolled back leaves a claimant on the books, and the console goes
+    // on naming a gap for a pack that is no longer installed.
+    const { forgetCrossNamespaceClaimsOf } = await import(
+      "@cinatra-ai/objects/register-artifact-extensions"
+    );
+    forgetCrossNamespaceClaimsOf(packageName);
   } catch (err) {
     console.warn(
       `[artifact-claim-reactivation] "${packageName}": de-register on abort failed (non-fatal):`,

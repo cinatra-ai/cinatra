@@ -1,5 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import {
+  formatRunFailureFloorLine,
+  runFailureFloorForDisplay,
+} from "../run-failure-floor";
+
+/** What a SURFACE draws from a persisted run error: the sanitized floor lines,
+ *  or null when this failure is not a materialization failure at all.
+ *
+ *  THE ROW IS THE RECORD, THE FLOOR IS THE READING (issue 3033, settled on the
+ *  forward merge). `agent_runs.error` keeps the honest sentence cinatra#3208
+ *  needs — which declared output failed, in which package — and every surface
+ *  reduces it through this one function, which keeps the identifiers and drops
+ *  the producer's own text. Asserting through it is what pins the drawing's
+ *  rule where the drawing puts it: on what a reader is shown. */
+function drawnFloor(error: unknown): string | null {
+  const entries = runFailureFloorForDisplay(typeof error === "string" ? error : null);
+  return entries === null ? null : entries.map(formatRunFailureFloorLine).join("\n");
+}
+
 // cinatra#2486 — a run must never present as a CLEAN SUCCESS when the artifact
 // materialization it declared actually failed.
 //
@@ -201,8 +220,12 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     expect(runId).toBe("run-mat-1");
     expect(from).toBe("running");
     expect(to).toBe("failed");
+    // THE ROW names the failing declaration (cinatra#3208).
     expect(String(meta?.error)).toContain("(binding-resolution)");
-    expect(String(meta?.error)).toContain("ECONNREFUSED");
+    // THE READING is the sanitized triple, and no producer text survives it.
+    const floorA = drawnFloor(meta?.error);
+    expect(floorA).toContain("binding-resolution-failed");
+    expect(floorA).not.toContain("ECONNREFUSED");
     // The evidence still lands: the same stepResults payload carries the
     // per-output outcomes, so the failure is inspectable, not just a log line.
     const stepResults = meta?.stepResults as Array<Record<string, unknown>>;
@@ -240,7 +263,11 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
     expect(String(meta?.error)).toContain("draft");
-    expect(String(meta?.error)).toContain("did not resolve to a string");
+    expect(String(meta?.error)).toContain("@cinatra-ai/blog-post-artifact");
+    const floorB = drawnFloor(meta?.error);
+    expect(floorB).toContain("draft");
+    expect(floorB).toContain("output-not-produced");
+    expect(floorB).not.toContain("did not resolve to a string");
     expect(agUiEventTypes()).not.toContain("RUN_FINISHED");
   });
 
@@ -275,6 +302,8 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
     expect(String(meta?.error)).toContain("summary");
+    expect(drawnFloor(meta?.error)).toContain("summary");
+    expect(drawnFloor(meta?.error)).not.toContain("did not resolve to a non-empty string");
   });
 
   it("a thrown materialization pass (defense-in-depth catch) fails the run", async () => {
@@ -290,7 +319,10 @@ describe("cinatra#2486 — materialization failure is surfaced in the run outcom
 
     const [, , to, meta] = lastTransition();
     expect(to).toBe("failed");
-    expect(String(meta?.error)).toContain("boom in the materializer");
+    expect(String(meta?.error)).toContain("(materializer)");
+    const floorT = drawnFloor(meta?.error);
+    expect(floorT).toContain("materializer-failed");
+    expect(floorT).not.toContain("boom in the materializer");
   });
 
   it("resume terminal-success from pending_approval also fails honestly", async () => {

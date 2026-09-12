@@ -91,9 +91,14 @@ export function ReviewTargetPanel({
           nothing about what rendered it; a target that did NOT render is the one
           reading the drawing keeps on screen, over the generic read-only view of
           the representation. */}
-      {provenanceConformanceId !== null && provenance !== null ? (
+      {/* The branch below has already narrowed to the floor reading, so its
+          anchor is written out rather than read back off the model's map: an id
+          that reaches the screen only through a mapping literal is one the
+          conformance suite cannot tell apart from an id that never reaches it
+          at all. */}
+      {provenance !== null && provenance.kind === "floor" && provenanceConformanceId !== null ? (
         <div
-          data-conformance-id={provenanceConformanceId}
+          data-conformance-id="review-target-floor"
           className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
         >
           <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
@@ -106,7 +111,12 @@ export function ReviewTargetPanel({
       ) : null}
 
       {/* The representation slot — the type renderer mounts here, or the floor.
-          S6: the PINNED before/after pair follows as non-decisional visual context. */}
+          S6: the PINNED before/after pair follows as non-decisional visual context.
+
+          NO TIER ANCHOR RIDES ON THIS SLOT. The model's provenance union names
+          the floor reading and nothing else, so the two renderer-tier ids are
+          not values this surface can hold; a keyed attribute for them would be
+          unreachable code that never reaches the screen. */}
       <div className="p-4" data-review-representation-slot="">
         <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />

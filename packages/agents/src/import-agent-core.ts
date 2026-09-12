@@ -320,6 +320,13 @@ export async function importAgentTemplateCore(
           // result on re-import, exactly as installAgentFromPackage's upsert
           // branch does.
           hasArtifactBindings: compiled.hasArtifactBindings,
+          // cinatra#3033: the compiled per-run TRIGGER classification, on the
+          // same contract. THIS is the road the boot materializer rides on an
+          // un-set-up instance, and it dropped both fields — measured on a
+          // development boot of this branch, every seeded template's
+          // `trigger_mode` read NULL while its own OAS compiled a mode.
+          triggerMode: compiled.triggerMode,
+          gatedSteps: compiled.gatedSteps,
           // cinatra#3208: and the DECLARATION that presence flag is about, from
           // the same compile, in the same patch as packageVersion. The two move
           // together or the row contradicts itself — claiming bindings exist
@@ -447,6 +454,11 @@ export async function importAgentTemplateCore(
       // cinatra#2498: the OAS compiler's own binding-presence result rides
       // the fresh create too, for the same reason.
       hasArtifactBindings: compiled.hasArtifactBindings,
+      // cinatra#3033: and the compiled trigger classification, for the same
+      // reason — a fresh boot seed must land the mode its OAS declares rather
+      // than a NULL the runtime gate then has to guess at.
+      triggerMode: compiled.triggerMode,
+      gatedSteps: compiled.gatedSteps,
       // cinatra#3208: the executed declaration rides the fresh create too, so a
       // first install through the loader / ZIP path (dev-boot git-file scan,
       // hot-reload watcher, `cinatra setup`, the data/downloads system-agent

@@ -1470,14 +1470,26 @@ describe("the generated display map imports through package exports, never a hos
     // those renderers, so the generated map emits them only once the rolling
     // dev-lock bump advances that pin — the roster names them either way, and
     // the emitted alias-backed set stays EXACTLY the roster’s emitted part.
+    //
+    // The picture and post displays join that roster on the same road: they
+    // are companion, dev-universe extensions, so they take the
+    // guarded-optional alias road the CMS snapshot display already takes,
+    // and each publishes the very same subpath through its OWN `exports`.
     const buildConfig = buildConfigAliases();
     const emitted = emittedRendererSpecifiers();
     const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
     const ROSTER = [
       "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-image-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-image-artifact/src/renderers/list-row",
+      "@cinatra-ai/blog-image-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-post-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-post-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/detail",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
     ];

@@ -17,7 +17,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import {
-  buildPromotionRepresentationAppend,
+  buildPromotionRevisionOps,
   mimeAccepted,
   planTypedPromotion,
   promotionRevisionId,
@@ -133,6 +133,38 @@ ORDER BY asserted_at DESC LIMIT 1`,
   };
 }
 
+/**
+ * Did the PERSON assert this meaning themselves?
+ *
+ * ONLY a `user` assertion counts, and it is read from the durable store rather
+ * than believed from a caller flag: the road's authority must be provable after
+ * the fact, and a converging re-run — which writes no second assertion — has
+ * only the durable row to prove it by. The mirror image of
+ * `readMatcherAssociation`: that one reads the matcher's authority, this one the
+ * person's, and §XI.10 says the person's outranks it.
+ */
+export function readPersonAssertion(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+}): boolean {
+  ensurePostgresSchema();
+  const s = schema();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT 1 FROM "${s}"."semantic_assertion"
+WHERE org_id = $1 AND artifact_id = $2 AND extension = $3
+  AND asserted_by = 'user' AND eligibility <> 'archived'
+LIMIT 1`,
+        values: [input.orgId, input.artifactId, input.extension],
+      },
+    ],
+  });
+  return (res?.rows?.length ?? 0) > 0;
+}
+
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -167,8 +199,13 @@ export async function promoteMatchedArtifactType(input: {
   artifactId: string;
   extension: string;
   ownType: ExtensionOwnType | null;
-  threshold: number;
+  /** The extension's OWN declared matcher threshold, or null/absent for a pack
+   *  that declares no matcher at all — which no threshold can be invented for. */
+  threshold?: number | null;
   confirmed: boolean;
+  /** The caller took the person's-own-assertion road (§XI.10). The assertion
+   *  itself is re-read from the store here; this only says which road applies. */
+  personAsserted?: boolean;
   createdBy?: string | null;
   /** The acting principal, for the history event the retype records. */
   actor: { userId: string; orgId: string };
@@ -187,17 +224,33 @@ export async function promoteMatchedArtifactType(input: {
   retype?: TypedPromotionRetype;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
-  const matcher = readMatcherAssociation({
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    extension: input.extension,
-    threshold: input.threshold,
-  });
+  // A pack that declares NO matcher has no threshold to compare a confidence
+  // against, so there is no matcher road for it at all — the association is not
+  // read, rather than read and measured against an invented number.
+  const matcher =
+    typeof input.threshold === "number"
+      ? readMatcherAssociation({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          threshold: input.threshold,
+        })
+      : null;
+  // THE PERSON'S OWN ASSERTION, PROVED FROM THE DURABLE ROW (§XI.10). The caller
+  // says which road it took; the authority itself is this store's read.
+  const personAsserted =
+    input.personAsserted === true &&
+    readPersonAssertion({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      extension: input.extension,
+    });
   const plan = planTypedPromotion({
     row,
     ownType: input.ownType,
     matcher,
     confirmed: input.confirmed,
+    personAsserted,
   });
 
   if (!plan.ok) {
@@ -217,8 +270,7 @@ export async function promoteMatchedArtifactType(input: {
       input.ownType &&
       row.objectType === input.ownType.typeId &&
       input.confirmed &&
-      matcher !== null &&
-      matcher.confidence >= matcher.threshold &&
+      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
       mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
     ) {
       const landed = appendPromotionRevision({
@@ -336,18 +388,25 @@ function appendPromotionRevision(input: {
     sharedResourceId: input.sharedResourceId,
     toType: input.toType,
   });
+  // The append AND its writer witness, in the ONE advisory-locked transaction.
+  // The witness is not decoration: a promoted row is a CLAIMED pack-typed row,
+  // and the serve resolver admits such a row's own representation only through
+  // it — without it the promotion appends a revision whose bytes no read path
+  // will hand out (measured live: the featured image's display drew an empty box
+  // on a 404).
   const results = runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
     queries: [
       { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-      buildPromotionRepresentationAppend(postgresSchema, {
+      ...buildPromotionRevisionOps(postgresSchema, {
         orgId: input.orgId,
         artifactId: input.artifactId,
         representationRevisionId,
         sharedResourceId: input.sharedResourceId,
         form: input.form,
         createdBy: input.createdBy,
+        detail: { toType: input.toType },
       }),
     ],
   });

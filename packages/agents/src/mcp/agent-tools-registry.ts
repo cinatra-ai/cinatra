@@ -226,8 +226,12 @@ async function invokePublishedAgentTool(
   // agent-run OBO actor (a human/session invoker has none → no composition).
   // createAgentRun folds it onto the freshly-derived child anchor and throws
   // OboCeilingCompositionError (caught below) on a provably-disjoint chain.
+  // Hoisted out of the try below: the enqueue that follows the launch needs the
+  // SAME authority to compensate a run this call created `queued` (see the
+  // enqueue block).
+  let authority: Awaited<ReturnType<typeof resolveRunCreationAuthority>> | undefined;
   try {
-    const authority = await resolveRunCreationAuthority(orgId, {
+    authority = await resolveRunCreationAuthority(orgId, {
       userId: ctx?.principalType === "HumanUser" ? ctx.principalId : undefined,
     });
     // Routed through the coordinator (cinatra#2928). Agent-as-tool is HEADLESS:
@@ -281,8 +285,30 @@ async function invokePublishedAgentTool(
     throw err;
   }
 
+  // THE RUN IS ALREADY `queued` — THIS ENQUEUE MUST COMPENSATE (cinatra#3033).
+  //
+  // `create.kind: "full"` inserts the row ALREADY `queued`; the coordinator
+  // hands the dispatch back here and this statement is the whole of it. A refused
+  // enqueue therefore leaves a durable `queued` row with no job behind it, and
+  // the chokepoint itself may not fail the run (it holds no org-write authority
+  // — org-write-boundary-gate R2/R5). Without this the run sat `queued` with
+  // `started_at` null, `error` null, no trigger and no job, and no later act
+  // could move it. Land it terminal with the one line that says why, then answer
+  // the tool call with the same reason instead of a throw that says nothing.
   const { enqueueAgentRun } = await import("@/lib/agent-run-enqueue");
-  await enqueueAgentRun({ runId });
+  try {
+    await enqueueAgentRun({ runId });
+  } catch (enqueueErr) {
+    const { failRunOnCallerDispatchFailure } = await import("../lifecycle-coordinator");
+    await failRunOnCallerDispatchFailure({ runId, authority, error: enqueueErr });
+    return {
+      error:
+        enqueueErr instanceof Error
+          ? `This run could not be started: ${enqueueErr.message}`
+          : "This run could not be started.",
+      runId,
+    };
+  }
 
   const deadline = Date.now() + MAX_WAIT_MS;
 

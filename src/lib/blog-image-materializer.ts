@@ -22,6 +22,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
+import { buildFeaturedImageFields } from "@/lib/artifacts/featured-image-fields";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 // Target type via the manifest-declared "artifact-blog-image" extension
@@ -36,7 +37,53 @@ export type MaterializeBlogImageInput = {
   imageMimeType: string;
   title?: string;
   createdByRunId?: string | null;
+  /**
+   * The post artifact this picture belongs to (lifecycle-c W9).
+   *
+   * The picture type declares `post` and `placement` as REQUIRED fields, so a
+   * picture filed without the post it belongs to no longer satisfies its own
+   * type's schema and is refused by the creation road's declared-schema check.
+   * The caller that knows the post passes it here; the placement is always
+   * `featured` — the pipeline makes one picture and there are no body pictures.
+   */
+  post?: string;
+  /**
+   * The blog draft this picture is being made for (lifecycle-c W9, settled on
+   * the forward merge against the core/extension border gate).
+   *
+   * THE HOST OWNS THE REFERENCE, NOT THE BLOG DOMAIN. Deciding WHICH id names
+   * the post — the post's own artifact when its body has been materialized, the
+   * durable draft id before that — is a fact about the picture type's declared
+   * `post` field, so it belongs here, in the host module that writes the field,
+   * and not in `src/lib/blog`, the pack-shaped core domain the border baseline
+   * holds shrink-only. The caller hands over the draft it already has; this
+   * module resolves the reference and the title from it.
+   */
+  draft?: {
+    id: string;
+    title?: string | null;
+    postArtifactId?: string | null;
+  };
 };
+
+/**
+ * Which id names the post a picture belongs to.
+ *
+ * The post's OWN artifact is the reference whenever it exists. A draft whose
+ * body has not been materialized yet has no artifact to point at, so it is
+ * named by its durable draft id — a picture is never filed without naming its
+ * post, and never with an invented one: a draft carrying neither is answered
+ * `null` and the creation road refuses the write with the type's own message.
+ */
+export function postReferenceForDraft(
+  draft: MaterializeBlogImageInput["draft"],
+): string | null {
+  if (!draft) return null;
+  const artifact = typeof draft.postArtifactId === "string" ? draft.postArtifactId.trim() : "";
+  if (artifact.length > 0) return artifact;
+  const id = typeof draft.id === "string" ? draft.id.trim() : "";
+  return id.length > 0 ? id : null;
+}
 
 export type MaterializeBlogImageResult = {
   artifactId: string;
@@ -97,6 +144,7 @@ export async function materializeBlogImageArtifact(
       `blog-image materialization: extension "${targetExtension}" resolves no declared artifact object type: ${resolvedTarget.error}`,
     );
   }
+  const postReference = input.post ?? postReferenceForDraft(input.draft);
   const bytes = Buffer.from(input.imageBase64, "base64");
   const result = await createSemanticArtifact({
     orgId,
@@ -105,12 +153,20 @@ export async function materializeBlogImageArtifact(
     createdBy: null,
     ownerLevel: "organization",
     ownerId: orgId,
-    title: input.title,
+    title: input.draft?.title ?? input.title,
     declaredMime: input.imageMimeType,
     originKind: "agent_generated",
     stream: asImageStream(bytes),
     createdByRunId: input.createdByRunId ?? null,
     skipFallbackClassification: true,
+    // The picture type's own declared fields (W9), carried on the write
+    // path's typed-data road (the road main merged for a type's own data).
+    // Omitted when the caller names no post: the declared-schema check then
+    // refuses the write with the type's own message, which is the honest
+    // outcome — the host does not invent a post reference to get past a schema.
+    typedData: postReference
+      ? buildFeaturedImageFields({ post: postReference })
+      : undefined,
   });
 
   assertSemanticType({

@@ -28,7 +28,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildArtifactWriterWitnessOp,
+  artifactWriterWitnessExistsSql,
+} from "../artifact-writer-witness";
+import {
   buildPromotionRepresentationAppend,
+  buildPromotionRevisionOps,
   mimeAccepted,
   planTypedPromotion,
   promotionRevisionId,
@@ -278,5 +283,171 @@ describe("0.14 — the retype goes through the canonical history-aware writer", 
   it("maps a lost compare-and-set to row-moved and a missing authority to not-authorized", () => {
     expect(source).toContain('return { ok: false, reason: "row-moved" }');
     expect(source).toContain('return { ok: false, reason: "not-authorized" }');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W9 (cinatra#3033) — THE PERSON'S OWN ASSERTION IS THE OTHER ROAD.
+//
+// THE RATIFIED DRAWING, VERBATIM (app-artifact-review §XI.10, "The promoted
+// row"): "Promotion happens only on the matcher's assertion at its threshold and
+// with the person's confirmation, or on the person's own assertion, which
+// outranks the matcher."
+//
+// AND WHY IT DECIDES WHETHER A DISPLAY IS DRAWN AT ALL, in the same section: "A
+// meaning associated with an extension is not enough for that extension to draw
+// the file: a display is registered for a type, and an associated row still
+// carries the base type. Promotion is the step that closes that gap — the row
+// gains a revision of the claiming extension's own type over the same content,
+// and from that moment the extension's own display draws it."
+//
+// The four blog packs of this issue ship a display and NO classifier, so no
+// matcher can ever associate a row with them. Without the person's own road they
+// are unpromotable, their rows keep the base type, and the host's base display
+// draws in place of every one of the four displays.
+// ---------------------------------------------------------------------------
+describe("W9 — the person's own assertion, which outranks the matcher (§XI.10)", () => {
+  it("promotes a pack that ships NO matcher at all, on the person's own assertion", () => {
+    expect(
+      planTypedPromotion({
+        row: row(),
+        ownType: ownType(),
+        matcher: null,
+        confirmed: true,
+        personAsserted: true,
+      }),
+    ).toEqual({
+      ok: true,
+      fromType: BASE_TYPE,
+      toType: OWN_TYPE,
+      sharedResourceId: "res-shared",
+      baseRevisionId: "rev-base",
+      form: "file",
+      expectedVersion: 7,
+    });
+  });
+
+  it("OUTRANKS a matcher that is below its own threshold — no threshold is lowered, it is not consulted", () => {
+    expect(
+      planTypedPromotion({
+        row: row(),
+        ownType: ownType(),
+        matcher: { confidence: 0.1, threshold: 0.9 },
+        confirmed: false,
+        personAsserted: true,
+      }),
+    ).toMatchObject({ ok: true, toType: OWN_TYPE });
+  });
+
+  it("still re-validates the form against the target type — the person's road is not a bypass", () => {
+    expect(
+      planTypedPromotion({
+        row: row({
+          latestRevision: {
+            representationRevisionId: "rev-base",
+            resourceId: "res-shared",
+            form: "file",
+            mime: "application/pdf",
+          },
+        }),
+        ownType: ownType({ acceptsMimes: ["text/markdown"] }),
+        matcher: null,
+        confirmed: true,
+        personAsserted: true,
+      }),
+    ).toEqual({ ok: false, reason: "form-not-accepted" });
+  });
+
+  it("keeps every earlier refusal ahead of the authorities", () => {
+    expect(
+      planTypedPromotion({
+        row: null,
+        ownType: ownType(),
+        matcher: null,
+        confirmed: true,
+        personAsserted: true,
+      }),
+    ).toEqual({ ok: false, reason: "row-not-found" });
+    expect(
+      planTypedPromotion({
+        row: row({ objectType: OWN_TYPE }),
+        ownType: ownType(),
+        matcher: null,
+        confirmed: true,
+        personAsserted: true,
+      }),
+    ).toEqual({ ok: false, reason: "already-promoted" });
+  });
+
+  it("a bare confirmation with NO person assertion still promotes nothing", () => {
+    expect(
+      planTypedPromotion({
+        row: row(),
+        ownType: ownType(),
+        matcher: null,
+        confirmed: true,
+        personAsserted: false,
+      }),
+    ).toEqual({ ok: false, reason: "no-matcher-assertion" });
+  });
+});
+
+describe("W9 — the promoted revision carries the writer witness that makes it readable", () => {
+  // THE DEFECT, MEASURED ON A LIVE BOOT (issue #3033, acceptance item 2: "the
+  // featured image ... is drawn by the blog-image display on its review, on the
+  // run page's outputs and on its artifact page"). The blog-image display
+  // mounted and its host-authorized byte address answered 404, so the picture
+  // painted nothing. Cause: the promotion appended a revision, but a PROMOTED
+  // row is by construction a CLAIMED pack-typed row, and the serve resolver's
+  // claimed-row arm admits such a row's own representation ONLY through the
+  // artifact-writer witness — which the append never wrote.
+  const opsFor = (id: string) =>
+    buildPromotionRevisionOps("app", {
+      orgId: "org-1",
+      artifactId: "art-1",
+      representationRevisionId: id,
+      sharedResourceId: "res-shared",
+      form: "file",
+      createdBy: "user-1",
+    });
+
+  it("writes the representation AND its witness, in that order, as ONE transaction's ops", () => {
+    const ops = opsFor("rep-fixed");
+    expect(ops).toHaveLength(2);
+    expect(ops[0]!.text).toContain('INSERT INTO "app"."representation"');
+    expect(ops[1]!.text).toContain('INSERT INTO "app"."artifact_audit"');
+    // The witness names the EXACT representation it vouches for.
+    expect(ops[1]!.values[2]).toBe("rep-fixed");
+    expect(ops[1]!.text).toContain("'create'");
+  });
+
+  it("emits the witness IF ABSENT, so a converging re-drive never authors the same bytes twice", () => {
+    const ops = opsFor("rep-fixed");
+    expect(ops[1]!.text).toContain("WHERE NOT EXISTS");
+    expect(ops[1]!.text).toContain("aud.action = 'create'");
+  });
+
+  it("uses the SHARED witness builder, so the writer and every reader mean the same thing", () => {
+    const shared = buildArtifactWriterWitnessOp(
+      "app",
+      {
+        orgId: "org-1",
+        artifactId: "art-1",
+        representationRevisionId: "rep-fixed",
+        actor: "user-1",
+      },
+      { ifAbsent: true },
+    );
+    const ops = opsFor("rep-fixed");
+    // Same statement shape and same predicate — a bespoke copy would let the
+    // writer and the serve resolver drift apart.
+    expect(ops[1]!.text.replace(/\s+/g, " ")).toBe(shared.text.replace(/\s+/g, " "));
+    expect(
+      artifactWriterWitnessExistsSql("app", {
+        orgId: "rep.org_id",
+        artifactId: "rep.artifact_id",
+        representationRevisionId: "rep.id",
+      }),
+    ).toContain("aud.action = 'create'");
   });
 });

@@ -1396,6 +1396,27 @@ export type BlogImageMaterializeInputShape = {
   imageMimeType: string;
   title?: string;
   createdByRunId?: string | null;
+  /**
+   * The post this picture belongs to. The picture type declares `post` and
+   * `placement` as required fields, so a picture filed without the post it
+   * belongs to does not satisfy its own type's schema.
+   */
+  post?: string;
+  /**
+   * The blog draft the picture is being made for, when the caller has one.
+   *
+   * WHICH id names the post — the post's own artifact once its body is
+   * materialized, the durable draft id before that — is a fact about the
+   * picture type's declared field, so the HOST module that writes the field
+   * resolves it. A caller that already knows the reference may still pass
+   * `post` directly; a caller holding only the draft hands the draft over and
+   * decides nothing.
+   */
+  draft?: {
+    id: string;
+    title?: string | null;
+    postArtifactId?: string | null;
+  };
 };
 export type BlogImageMaterializeResultShape = {
   artifactId: string;

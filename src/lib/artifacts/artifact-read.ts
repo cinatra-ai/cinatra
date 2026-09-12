@@ -26,6 +26,16 @@ export type ServeResolution = {
   mime: string;
   sizeBytes: number;
   originKind: string;
+  /** The representation form the SUBSTRATE recorded for this revision.
+   *
+   * The join below admits a row on `resource.kind = 'blob'` and does NOT
+   * constrain `representation.form`, so "this resolved, therefore it is a file
+   * form" is an inference, not a fact. A caller that has to tell the content
+   * channel what form a revision is (lifecycle-c W9) must be able to say what
+   * the substrate says, never what the resolution implies — the channel's own
+   * rule is that it is told the substrate's form and never a caller claim.
+   * `null` only where a legacy row records no form at all. */
+  form: string | null;
 };
 
 export function resolveArtifactVersionForServe(input: {
@@ -64,7 +74,7 @@ export function resolveArtifactVersionForServe(input: {
         // resource. The OR-clause below mirrors the invariant:
         // `o.deleted_at IS NULL` OR a pinning artifact_refs row exists on
         // (artifact, representation).
-        text: `SELECT b.storage_key, r.mime, r.size_bytes
+        text: `SELECT b.storage_key, r.mime, r.size_bytes, rep.form
 FROM "${schema}"."representation" rep
 JOIN "${schema}"."resource" r
   ON r.id = rep.resource_id AND r.org_id = rep.org_id
@@ -182,12 +192,14 @@ LIMIT 1`,
         storage_key: string | null;
         mime: string;
         size_bytes: string | number;
+        form: string | null;
       }
     | undefined;
   if (!row || !row.storage_key) return null;
   return {
     storageKey: row.storage_key,
     mime: row.mime,
+    form: row.form ?? null,
     sizeBytes:
       typeof row.size_bytes === "number"
         ? row.size_bytes

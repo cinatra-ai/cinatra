@@ -328,11 +328,38 @@ export async function assertUploadMeaning(input: {
  */
 async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return (await extensionOwnedTypeIds(extension)).includes(objectType);
   } catch {
     return false;
   }
+}
+
+/**
+ * The artifact type ids this extension owns — the ones its package REGISTERED
+ * plus the ones it CLAIMED over a namespace nothing else has provenance for
+ * (`extension-owned-types.ts` states why both count). Registry-read; the caller
+ * has already warmed the registries.
+ */
+async function extensionOwnedTypeIds(extension: string): Promise<string[]> {
+  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  const { crossNamespaceClaimsBy } = await import(
+    "@cinatra-ai/objects/register-artifact-extensions"
+  );
+  const { selectExtensionOwnedTypeIds } = await import(
+    "@/lib/artifacts/extension-owned-types"
+  );
+  const registeredTypeIds = objectTypeRegistry.getTypesForPackage(extension);
+  const claimedTypeIds = crossNamespaceClaimsBy(extension);
+  return selectExtensionOwnedTypeIds({
+    extension,
+    registeredTypeIds,
+    claimedTypeIds,
+    candidates: claimedTypeIds.map((typeId) => ({
+      typeId,
+      registeringPackage: objectTypeRegistry.getRegisteringPackage(typeId),
+      resolves: objectTypeRegistry.resolve(typeId) != null,
+    })),
+  });
 }
 
 /**
@@ -359,12 +386,14 @@ async function promoteOnConfirmedMeaning(input: {
     const { matcherManifestRegistry, objectTypeRegistry } = await import(
       "@cinatra-ai/objects/registry"
     );
-    // THE EXTENSION'S OWN TYPE: the one artifact type its package defines. A
+    // THE EXTENSION'S OWN TYPE: the one artifact type it OWNS — registered by
+    // its package, or claimed over a namespace nothing else has provenance for
+    // (a host-registered type, which is how `@cinatra-ai/linkedin:post-draft`
+    // reaches its pack). A
     // package that defines none is a pure matcher pack — the road does not
     // apply. A package that defines SEVERAL cannot be resolved from a
     // package-keyed confirmation, so it is left alone rather than guessed at.
-    const owned = objectTypeRegistry
-      .getTypesForPackage(input.extension)
+    const owned = (await extensionOwnedTypeIds(input.extension))
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
     if (owned.length !== 1) return null;
@@ -372,13 +401,20 @@ async function promoteOnConfirmedMeaning(input: {
     const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
-    // the matcher itself resolved it from — never a default invented here. A
-    // package with no matcher declaration never matched this row, so the road
-    // refuses on the missing assertion rather than on a fabricated threshold.
+    // the matcher itself resolved it from — never a default invented here.
+    //
+    // A PACK THAT DECLARES NO MATCHER IS STILL PROMOTABLE, ON THE PERSON'S OWN
+    // ASSERTION. The ratified drawing (app-artifact-review §XI.10): "Promotion
+    // happens only on the matcher's assertion at its threshold and with the
+    // person's confirmation, or on the person's own assertion, which outranks the
+    // matcher." This call site IS the person's own assertion — it runs directly
+    // after the user-sourced meaning assertion it just wrote — so a missing
+    // matcher declaration leaves the pack with no threshold, not without a road.
+    // Every pack whose display registers for its own type and ships no classifier
+    // reaches its display through here and nowhere else.
     const entry = matcherManifestRegistry
       .list()
       .find((e) => e.packageName === input.extension);
-    if (!entry) return null;
 
     // The org-write kernel authority the canonical objects writer requires,
     // minted HERE from the acting session — the store leaf never mints one.
@@ -392,8 +428,9 @@ async function promoteOnConfirmedMeaning(input: {
       artifactId: input.artifactId,
       extension: input.extension,
       ownType: { typeId: ownType.typeId, acceptsMimes },
-      threshold: entry.matcherConfidenceThreshold,
+      threshold: entry ? entry.matcherConfidenceThreshold : null,
       confirmed: true,
+      personAsserted: true,
       createdBy: input.principalId,
       actor: { userId: input.userId, orgId: input.orgId },
       authority,

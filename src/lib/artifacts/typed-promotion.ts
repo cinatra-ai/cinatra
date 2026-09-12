@@ -52,6 +52,8 @@
 
 import { createHash } from "node:crypto";
 
+import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
+
 // ---------------------------------------------------------------------------
 // The refusals — closed and named.
 // ---------------------------------------------------------------------------
@@ -135,12 +137,15 @@ export type TypedPromotionPlan =
  *
  * ORDER IS LOAD-BEARING, because more than one refusal can be true and the first
  * is the honest one: a row that does not exist is not "unconfirmed", and a row
- * that already carries the target type is not "below threshold". The two
- * AUTHORITIES — the matcher's assertion and the person's confirmation — are
- * checked LAST and BOTH, because the plan requires both and neither substitutes
- * for the other: a high-confidence match without a confirmation retypes nothing,
- * and a confirmation on a row the matcher never associated retypes nothing
- * either.
+ * that already carries the target type is not "below threshold". The AUTHORITIES
+ * are checked LAST, and there are TWO ROADS to them. On the MATCHER's road the
+ * matcher's assertion and the person's confirmation are checked BOTH, because
+ * neither substitutes for the other: a high-confidence match without a
+ * confirmation retypes nothing, and a confirmation on a row the matcher never
+ * associated retypes nothing either. The PERSON's own assertion is the other
+ * road, and it outranks the matcher's — it carries the whole authority by
+ * itself, so a pack that ships no matcher at all is still promotable when the
+ * person says what the file means.
  */
 export function planTypedPromotion(input: {
   row: PromotableRow | null;
@@ -148,6 +153,13 @@ export function planTypedPromotion(input: {
   matcher: MatcherAssociation | null;
   /** The person's confirmation, from the surface that already asks for one. */
   confirmed: boolean;
+  /**
+   * THE PERSON'S OWN MEANING ASSERTION naming this extension — the
+   * user-sourced assertion the library's §VI.1 pick writes, never the mere
+   * confirmation of a matcher's suggestion. It is an AUTHORITY OF ITS OWN and it
+   * OUTRANKS the matcher, so it needs neither an association nor a threshold.
+   */
+  personAsserted?: boolean;
 }): TypedPromotionPlan {
   const refuse = (reason: TypedPromotionRefusal): TypedPromotionPlan => ({ ok: false, reason });
 
@@ -156,9 +168,22 @@ export function planTypedPromotion(input: {
   if (input.row.objectType === input.ownType.typeId) return refuse("already-promoted");
   if (!input.row.latestRevision) return refuse("no-content");
 
-  if (!input.matcher) return refuse("no-matcher-assertion");
-  if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
-  if (!input.confirmed) return refuse("not-confirmed");
+  // THE TWO ROADS, AND THE PERSON'S OWN ONE OUTRANKS THE MATCHER'S. The ratified
+  // drawing (app-artifact-review §XI.10, "The promoted row"): "Promotion happens
+  // only on the matcher's assertion at its threshold and with the person's
+  // confirmation, or on the person's own assertion, which outranks the matcher."
+  // So the ladder below is the MATCHER road alone. A person who chose the meaning
+  // themselves has already said what the file means: no association is owed, and
+  // no threshold applies — which is also the only road a pack that ships NO
+  // matcher can ever be promoted into, because nothing can associate a row with a
+  // classifier that does not exist. An association on its own still promotes
+  // nothing: `personAsserted` is the person's OWN assertion, and a bare
+  // confirmation of a match that was never made is still refused below.
+  if (input.personAsserted !== true) {
+    if (!input.matcher) return refuse("no-matcher-assertion");
+    if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
+    if (!input.confirmed) return refuse("not-confirmed");
+  }
 
   // RE-VALIDATED AGAINST THE TARGET TYPE, not against the base's. The content is
   // shared unchanged, so the type it lands under must actually accept it — the
@@ -233,6 +258,60 @@ export function promotionRevisionId(input: {
  * UPDATE and DELETE) and the revision is `MAX + 1`, so nothing earlier moves.
  * The resource is the BASE revision's own — the content is shared, never copied.
  */
+/**
+ * THE PROMOTION'S WHOLE WRITE: the appended revision AND the writer witness that
+ * makes it readable.
+ *
+ * WHY THE WITNESS BELONGS HERE. The promoted row is, by construction, a
+ * PACK-TYPED row that CARRIES A CLAIM — that is what a promotion is. The serve
+ * resolver's claimed-row arm (`artifact-read.ts`) admits such a row's own bytes
+ * only through the ARTIFACT-WRITER WITNESS: an `artifact_audit` `create` row
+ * naming the exact representation, written in the SAME transaction as the
+ * representation itself. Without it the promotion appended a revision that NO
+ * read path would admit — the display mounted and its byte address answered 404,
+ * measured on a live boot for the featured image of issue #3033 (the blog-image
+ * display drew an empty box while the row's PRE-promotion revision, which has the
+ * witness, served its PNG). The bytes are not new: this revision shares the base
+ * revision's own resource, and the base's witness vouches only for the base's
+ * revision id, so the append needs its own.
+ *
+ * The witness is emitted IF ABSENT, because the append is idempotent: a
+ * converging re-drive must not say the same bytes were authored twice.
+ *
+ * ORDER IS LOAD-BEARING: the representation first, the witness second, both in
+ * the caller's ONE transaction — a witness that could commit without its
+ * representation is not a witness.
+ */
+export function buildPromotionRevisionOps(
+  schema: string,
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    sharedResourceId: string;
+    form: "file" | "connectorRef" | "dashboard";
+    createdBy: string | null;
+    /** Provenance detail for the audit row. Never authorization input — the
+     *  witness is the EXISTENCE of the row, never its payload. */
+    detail?: Record<string, unknown>;
+  },
+): { text: string; values: unknown[] }[] {
+  return [
+    buildPromotionRepresentationAppend(schema, input),
+    buildArtifactWriterWitnessOp(
+      schema.replaceAll('"', '""'),
+      {
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        representationRevisionId: input.representationRevisionId,
+        actor: input.createdBy ?? null,
+        detail: { ...(input.detail ?? {}), origin: "typed-promotion", form: input.form },
+      },
+      { ifAbsent: true },
+    ),
+  ];
+}
+
 export function buildPromotionRepresentationAppend(
   schema: string,
   input: {

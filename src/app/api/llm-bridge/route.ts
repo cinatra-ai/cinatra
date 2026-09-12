@@ -115,7 +115,11 @@ import {
   GEMINI_MEDIA_MIME_ALLOWLIST,
   MEDIA_MAX_BYTES,
   streamFetchWithSizeCap,
+  shapeBridgeAnswer,
 } from "./_llm-dispatch";
+
+/** How many declared output names one warn line may name before it summarizes. */
+const MISSING_OUTPUTS_LOG_LIMIT = 10;
 import {
   BridgeUrlError,
   isYouTubeUrlStrict,
@@ -2039,20 +2043,37 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    try {
-      const parsed = JSON.parse(text);
-      return NextResponse.json(
-        skillSelection && parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? { ...parsed, skillSelection }
-          : skillSelection
-            ? { output: parsed, skillSelection }
-            : parsed,
-      );
-    } catch {
-      return NextResponse.json(
-        skillSelection ? { output: text, skillSelection } : { output: text },
+    // The DECLARED shape decides the shaping (cinatra#3033, fix leg 2). A
+    // caller that sent an `output_schema` asked for its answer in a named
+    // shape, and the runtime maps this body back onto those names: recovering
+    // the declared object from a fenced or prefaced answer is the difference
+    // between the declared outputs arriving and every one of them falling back
+    // to its EndNode default. A caller that declared nothing is shaped exactly
+    // as before. Any declared output the answer does not carry is named HERE,
+    // at the call, instead of surfacing one frame later as a materialization
+    // refusal about a single binding.
+    const shaped = shapeBridgeAnswer({
+      text,
+      outputSchema: body.output_schema,
+      skillSelection,
+    });
+    if (shaped.missingDeclaredOutputs.length > 0) {
+      // Both the declared names and the agent id come off the request, so they
+      // are serialized (a newline or control character cannot forge a second
+      // log line) and the list is capped (a large properties map cannot
+      // produce an unbounded entry).
+      const shown = shaped.missingDeclaredOutputs.slice(0, MISSING_OUTPUTS_LOG_LIMIT);
+      const overflow = shaped.missingDeclaredOutputs.length - shown.length;
+      const named = shown.map((name) => JSON.stringify(name.slice(0, 120))).join(", ");
+      const rest = overflow > 0 ? ` (+${overflow} more)` : "";
+      const agent = JSON.stringify(String(body.agent_id ?? "wayflow").slice(0, 120));
+      console.warn(
+        `[llm-bridge] declared output(s) missing or unusable in the answer: ` +
+          `${named}${rest} (agent=${agent}) — an absent one falls back to its ` +
+          `EndNode default and an empty one satisfies nothing bound to it`,
       );
     }
+    return NextResponse.json(shaped.body);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
     const stack = err instanceof Error ? err.stack : undefined;

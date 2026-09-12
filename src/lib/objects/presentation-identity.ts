@@ -40,6 +40,7 @@ import {
 } from "@cinatra-ai/objects/effective-identity";
 import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 import { claimedTypeRegisteringPackage } from "@cinatra-ai/objects/claims";
+import { crossNamespaceClaimantsOf } from "@cinatra-ai/objects/register-artifact-extensions";
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
@@ -59,10 +60,44 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
  * liveness is resolved separately through the org-scoped active-install gate
  * (cinatra#1891 A3), unioned into the set by `buildPolicy`. */
 function buildLiveExtensionSet(): Set<string> {
+  return selectLiveExtensions(
+    objectTypeRegistry.list().map((def) => ({
+      typeId: def.type,
+      claimants: crossNamespaceClaimantsOf(def.type),
+    })),
+  );
+}
+
+/**
+ * PURE core: the extensions a registered type makes LIVE.
+ *
+ * TWO WAYS a pack is live through one type, and the second one was missing.
+ *   1. It OWNS the id's namespace (`@scope/pkg:local` makes `@scope/pkg` live).
+ *   2. It CLAIMED the id cross-namespace. A claim registers the pack's DISPLAY
+ *      and never the type, so a pack whose only artifact type is one it claims
+ *      registers nothing and derived NO liveness at all — and an assertion
+ *      naming it could never win tier 1, so the row presented under the type's
+ *      NAMESPACE owner instead, which for a host-registered type is a package
+ *      that does not exist and ships no renderer.
+ *
+ * Measured live for issue #3033: a person picked "Post draft" through the
+ * product's own Upload control, the row became
+ * `@cinatra-ai/linkedin:post-draft`, and the page still drew the generic
+ * markdown handler, because `@cinatra-ai/linkedin-artifacts` — the pack whose
+ * display the drawing names — was not in this set.
+ *
+ * A claim only counts over a type that ACTUALLY REGISTERED (the caller passes
+ * the live registry's own entries), so an orphaned claim over an id nothing
+ * defines still makes nothing live.
+ */
+export function selectLiveExtensions(
+  entries: readonly { typeId: string; claimants: readonly string[] }[],
+): Set<string> {
   const set = new Set<string>();
-  for (const def of objectTypeRegistry.list()) {
-    const ns = claimedTypeRegisteringPackage(def.type);
+  for (const entry of entries) {
+    const ns = claimedTypeRegisteringPackage(entry.typeId);
     if (ns) set.add(ns);
+    for (const claimant of entry.claimants) set.add(claimant);
   }
   return set;
 }

@@ -4,6 +4,7 @@ import {
   selectMeaningTypesAcceptingMime,
   selectMatcherChannelMeaningTypesAcceptingMime,
   unionMeaningTypesAcceptingMime,
+  meaningExtensionFor,
   type RegisteredArtifactMeaningType,
   type MatcherChannelMeaningType,
   type InstalledMeaningType,
@@ -200,5 +201,66 @@ describe("unionMeaningTypesAcceptingMime", () => {
     expect(got.map((t) => t.extension)).not.toContain("@acme/legal");
     // an unrelated matcher pack still surfaces
     expect(got.map((t) => t.extension)).toContain("@cinatra-ai/brand-voice");
+  });
+});
+
+describe("W9 — a HOST-registered type's meaning is keyed on its sole claimant", () => {
+  // issue #3033, acceptance item 1: "each of the four displays draws on the
+  // page, on the card and inside a third-party application at the pinned
+  // revision". `@cinatra-ai/linkedin:post-draft` is HOST-registered (the host is
+  // its single runtime registrar) and CLAIMED by `@cinatra-ai/linkedin-artifacts`.
+  // It carries its `isArtifact` descriptor, so the Type definitions map draws it
+  // — but the picker dropped every provenance-less type, so a LinkedIn post
+  // could not be typed through the product's own Upload control at all and its
+  // display drew on NO surface. Measured live: the uploaded file landed
+  // `@cinatra-ai/markdown-artifact:artifact` and the page drew the markdown
+  // display.
+  it("answers the registering package when there is one", () => {
+    expect(
+      meaningExtensionFor({
+        registeringPackage: "@acme/legal",
+        crossNamespaceClaimants: ["@other/pack"],
+      }),
+    ).toBe("@acme/legal");
+  });
+
+  it("answers the SOLE cross-namespace claimant for a host-registered type", () => {
+    expect(
+      meaningExtensionFor({
+        registeringPackage: null,
+        crossNamespaceClaimants: ["@cinatra-ai/linkedin-artifacts"],
+      }),
+    ).toBe("@cinatra-ai/linkedin-artifacts");
+  });
+
+  it("refuses to guess between TWO claimants — an ambiguous meaning is no candidate", () => {
+    expect(
+      meaningExtensionFor({
+        registeringPackage: null,
+        crossNamespaceClaimants: ["@a/one", "@b/two"],
+      }),
+    ).toBeNull();
+  });
+
+  it("stays null for a provenance-less, unclaimed type", () => {
+    expect(
+      meaningExtensionFor({ registeringPackage: null, crossNamespaceClaimants: [] }),
+    ).toBeNull();
+  });
+
+  it("puts the claimed host type into the picker's candidates for its declared MIME", () => {
+    const withClaimant: RegisteredArtifactMeaningType[] = [
+      {
+        objectTypeId: "@cinatra-ai/linkedin:post-draft",
+        definer: meaningExtensionFor({
+          registeringPackage: null,
+          crossNamespaceClaimants: ["@cinatra-ai/linkedin-artifacts"],
+        }),
+        acceptMimes: ["text/markdown", "text/plain"],
+      },
+    ];
+    const got = selectMeaningTypesAcceptingMime(withClaimant, "text/markdown");
+    expect(got.map((t) => t.objectTypeId)).toContain("@cinatra-ai/linkedin:post-draft");
+    expect(got[0]!.extension).toBe("@cinatra-ai/linkedin-artifacts");
   });
 });

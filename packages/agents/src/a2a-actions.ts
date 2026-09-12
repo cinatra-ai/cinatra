@@ -398,6 +398,13 @@ export async function sendAgentBuilderMessage(input: {
     };
   }
 
+  // The authority each run was CREATED with, by run id (cinatra#3033). The
+  // creation callback below may resolve a different one per run; the enqueue's
+  // compensation must use that exact authority or its terminal write is refused.
+  const authorityByCreatedRunId = new Map<
+    string,
+    Awaited<ReturnType<typeof resolveRunCreationAuthority>>
+  >();
   let task;
   try {
     // The frame wraps client construction too — deliberately the SAME scope the
@@ -409,7 +416,33 @@ export async function sendAgentBuilderMessage(input: {
         packageName,
         enqueueJob: async (_name, data) => {
           const payload = data as { runId: string };
-          await enqueueAgentRun({ runId: payload.runId });
+          // THE RUN IS ALREADY `queued` WHEN THIS RUNS (cinatra#3033). The
+          // in-process executor creates it through `createRunWithAuthority`
+          // below — `create.kind: "full"`, i.e. inserted `queued` — and then
+          // asks for the job here. A refused enqueue would otherwise leave that
+          // durable `queued` row with no job behind it and no error on it, which
+          // nothing later recovers. Land it terminal with the reason, then
+          // re-raise so `sendMessage` still reports the failure.
+          //
+          // THE AUTHORITY IS THE ONE THAT CREATED *THIS* RUN, looked up by run
+          // id — never the outer `runAuthority`. `createRunWithAuthority` below
+          // re-resolves for a run whose org differs from this action's, and
+          // compensating such a run with the outer authority would simply be
+          // refused, leaving exactly the strand this block exists to close
+          // (convergence review, finding 1).
+          try {
+            await enqueueAgentRun({ runId: payload.runId });
+          } catch (enqueueErr) {
+            const { failRunOnCallerDispatchFailure } = await import(
+              "./lifecycle-coordinator"
+            );
+            await failRunOnCallerDispatchFailure({
+              runId: payload.runId,
+              authority: authorityByCreatedRunId.get(payload.runId),
+              error: enqueueErr,
+            });
+            throw enqueueErr;
+          }
         },
         // cinatra#1940 P3: the creation perimeter is now guarded — this
         // in-process executor cannot resolve an authority itself (packages/a2a
@@ -448,6 +481,8 @@ export async function sendAgentBuilderMessage(input: {
           if (launched.carrier.kind !== "run") {
             throw new Error("the in-process A2A launch answered with a carrier that is not a run");
           }
+          // Remember it for the enqueue's compensation (cinatra#3033).
+          authorityByCreatedRunId.set(launched.carrier.run.id, authority);
           return launched.carrier.run;
         },
       });
