@@ -1464,6 +1464,13 @@ describe("the generated display map imports through package exports, never a hos
     // dependency edge a bare specifier needs; its alias goes when it joins the
     // required set (or the guarded road gets its own resolution).
     //
+    // The blog-post and linkedin-artifacts displays travel the same road: the
+    // committed pins for those two companions declare their detail and preview
+    // renderers, so the generated map emits them and their host aliases stand
+    // behind them exactly as the blog-idea pair’s do. They are named here for
+    // the same reason every other roster member is — an alias for any package
+    // NOT on this list still fails.
+    //
     // The blog-idea display’s two subpaths are on the same guarded-optional
     // road: the companion tip publishes them through its own `exports`, and the
     // host alias is their resolution road. The committed companion pin predates
@@ -1476,8 +1483,12 @@ describe("the generated display map imports through package exports, never a hos
     const ROSTER = [
       "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-post-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-post-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/detail",
+      "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
     ];
