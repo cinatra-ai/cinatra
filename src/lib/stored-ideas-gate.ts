@@ -15,14 +15,24 @@
  * what a person is told when their pick lost the race.
  */
 
-/** The pipeline's own relation table, under the extension prefix definition call
- *  3 of plan (C) §7 settled (`ext_` plus the normalised package name). */
-export const IDEA_RELATION_TABLE = "ext_cinatra_ai_blog_pipeline_agent_idea_drafts";
+import { declaredTablePhysicalName } from "@cinatra-ai/sdk-extensions/manifest";
 
-/** The same table as the extension DECLARES it — the declaration-local name the
- *  extension-data tool takes, which the host prefixes into the physical one
- *  above. The two are written down together so the pair cannot drift. */
+/** The relation as the OWNING EXTENSION DECLARES it — the declaration-local name
+ *  the extension-data tool takes, which the host prefixes into the physical one
+ *  through the extension-owned-table road below. */
 export const IDEA_RELATION_TABLE_DECLARED = "idea_drafts";
+
+/**
+ * The physical name of that relation for the CALLING extension, derived from the
+ * owning package's own declaration and never written here: the prefix rule
+ * (`ext_` plus the normalised scope and slug of the declaring package) lives with
+ * the declaration in the SDK, so a physical table name in the host is always a
+ * derivation of a declaration and never a constant of its own. Used where a
+ * person or a log has to be told WHICH relation a write could not reach.
+ */
+export function ideaRelationTableFor(packageName: string): string {
+  return declaredTablePhysicalName(packageName, IDEA_RELATION_TABLE_DECLARED);
+}
 
 /** A row of that table is live — it takes its idea off the list — until it is
  *  released. `reserved` is the pick; `drafted` is the completed relation. */

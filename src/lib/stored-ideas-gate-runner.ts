@@ -26,7 +26,7 @@
  */
 
 import {
-  IDEA_RELATION_TABLE,
+  IDEA_RELATION_TABLE_DECLARED,
   IDEA_TAKEN_REASON,
   offerStoredIdeas,
   takenArtifactIdsFromRows,
@@ -39,6 +39,12 @@ import {
  *  hundred per page (plan (C) §8.9); a person choosing from more than this is
  *  choosing from a list nobody reads, and each entry costs a content read. */
 export const MAX_OFFERED_IDEAS = 100;
+
+/** How the relation is NAMED to a person when the caller passed no derived name:
+ *  the declaration-local name, which is the only name the host owns. A physical
+ *  name is derived from the owning package's declaration and reaches this module
+ *  as `relationTable` — it is never written here. */
+const RELATION_NAME_FLOOR = `the extension's own ${IDEA_RELATION_TABLE_DECLARED} relation`;
 
 export interface StoredIdeaReference {
   readonly artifactId: string;
@@ -110,6 +116,10 @@ export async function reserveStoredIdea(input: {
   readonly orgId: string;
   readonly runId: string;
   readonly idea: OfferedIdea;
+  /** The relation's name for the CALLING extension, derived from that package's
+   *  own declaration (`ideaRelationTableFor`). Absent, a person is told the
+   *  declaration-local name instead of a physical one. */
+  readonly relationTable?: string;
   /** How long a reservation is held before a failed or abandoned run releases it. */
   readonly reservationTtlMs?: number;
   readonly now?: Date;
@@ -131,7 +141,7 @@ export async function reserveStoredIdea(input: {
   return {
     ok: false,
     reason:
-      `The reservation for this blog idea could not be written to ${IDEA_RELATION_TABLE}, so the ` +
+      `The reservation for this blog idea could not be written to ${input.relationTable ?? RELATION_NAME_FLOOR}, so the ` +
       "run stops rather than drafting an idea another run may also be drafting.",
   };
 }
@@ -155,6 +165,8 @@ export async function completeIdeaRelation(input: {
   readonly runId: string;
   readonly ideaArtifactId: string;
   readonly draftArtifactId: string;
+  /** The relation's name for the calling extension — see `reserveStoredIdea`. */
+  readonly relationTable?: string;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
   const written = await input.ports.updateRelationRow(
     { run_id: input.runId, idea_artifact_id: input.ideaArtifactId },
@@ -165,7 +177,7 @@ export async function completeIdeaRelation(input: {
     ok: false,
     reason:
       `The idea-to-draft relation for run ${input.runId} could not be completed in ` +
-      `${IDEA_RELATION_TABLE}; the idea stays reserved until the reservation lapses.`,
+      `${input.relationTable ?? RELATION_NAME_FLOOR}; the idea stays reserved until the reservation lapses.`,
   };
 }
 
