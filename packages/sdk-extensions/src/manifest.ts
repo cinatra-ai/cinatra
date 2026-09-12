@@ -536,6 +536,25 @@ export type DeclaredTable = {
   name: string;
   /** The column carrying the organisation every row is bound to. */
   organizationColumn: string;
+  /**
+   * The column carrying the RUN a row belongs to, for a table whose rows are
+   * one run's own (cinatra#3249) — `null` for a table whose rows outlive any
+   * one run. The host binds it exactly as it binds the organisation: it writes
+   * the bound run on an insert, it substitutes the bound run where a caller
+   * asks for this run's rows, and a request may never name the column itself.
+   */
+  runColumn: string | null;
+  /**
+   * The columns carrying the SCOPE the row's run belongs to (cinatra#3249) —
+   * the kind of scope and the id inside it, in the host's own per-scope
+   * vocabulary (the workspace, an organisation, a team, a project, a person's
+   * own scope), both `null` for a table whose rows are bound to no scope.
+   * Declared as a PAIR: a kind names no scope without an id, and an id names
+   * no vocabulary without a kind. The host binds them exactly as it binds the
+   * organisation and the run.
+   */
+  scopeKindColumn: string | null;
+  scopeIdColumn: string | null;
   columns: DeclaredColumn[];
   indexes: DeclaredIndex[];
 };
@@ -756,6 +775,64 @@ export function parseDeclaredTables(raw: unknown, packageName: string): Declared
       );
     }
 
+    // THE HOST-BOUND COLUMNS BESIDE THE ORGANISATION (cinatra#3249): the RUN a
+    // row belongs to, and the SCOPE that run was launched from. Each is
+    // optional, and each is validated in the same shape the organisation
+    // column already is — a binding a caller cannot write is only as good as
+    // the declaration the host reads it from. Every one of them needs a column
+    // of its OWN: two bindings sharing a column is a table that cannot say
+    // which of them a value meant.
+    const boundBy = new Map<string, string>();
+    const boundColumn = (field: string, noun: string, belongs: string): string | null => {
+      const raw = entry[field];
+      if (raw === undefined || raw === null) return null;
+      if (typeof raw !== "string" || !columnNames.has(raw)) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} ${JSON.stringify(raw)} must name one of ` +
+            `the table's own columns — the host writes the bound ${noun} into that column`,
+        );
+      }
+      if (raw === organizationColumn) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} "${raw}" is already the organisation column ` +
+            `— a ${noun} and a tenant are two different bindings and need two columns`,
+        );
+      }
+      const taken = boundBy.get(raw);
+      if (taken) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} "${raw}" is already the ${taken} column ` +
+            `— every host-bound column carries one binding and needs a column of its own`,
+        );
+      }
+      const col = columns.find((c) => c.name === raw);
+      if (!col || !col.notNull) {
+        throw new Error(
+          `[declared-tables] ${where}: the ${noun} column "${raw}" must be declared ` +
+            `\`notNull: true\` — a nullable ${noun} is a row belonging to no ${belongs}`,
+        );
+      }
+      boundBy.set(raw, noun);
+      return raw;
+    };
+
+    const runColumn = boundColumn("runColumn", "run", "run");
+    // THE SCOPE BINDING IS DECLARED AS A PAIR. The host's per-scope model names
+    // a scope by a KIND and an ID together (the workspace, an organisation, a
+    // team, a project, a person's own scope); a kind alone names no scope and
+    // an id alone names no vocabulary to read it in, so a half-declared binding
+    // is refused rather than half-written.
+    const scopeKindColumn = boundColumn("scopeKindColumn", "scope kind", "scope");
+    const scopeIdColumn = boundColumn("scopeIdColumn", "scope id", "scope");
+    if ((scopeKindColumn === null) !== (scopeIdColumn === null)) {
+      throw new Error(
+        `[declared-tables] ${where}: the scope binding is declared as a PAIR — ` +
+          `"scopeKindColumn" names the kind of scope a row's run belongs to and ` +
+          `"scopeIdColumn" the id inside it; one without the other names no scope the ` +
+          `host could write`,
+      );
+    }
+
     const rawIndexes = entry.indexes;
     const indexes: DeclaredIndex[] = [];
     if (rawIndexes !== undefined && rawIndexes !== null) {
@@ -776,7 +853,15 @@ export function parseDeclaredTables(raw: unknown, packageName: string): Declared
     declaredTablePhysicalName(packageName, name);
     for (const idx of indexes) declaredIndexPhysicalName(packageName, idx.name);
 
-    out.push({ name, organizationColumn, columns, indexes });
+    out.push({
+      name,
+      organizationColumn,
+      runColumn,
+      scopeKindColumn,
+      scopeIdColumn,
+      columns,
+      indexes,
+    });
   }
   return out;
 }
@@ -835,6 +920,18 @@ export type DeclaredIndexDeclaration = {
 export type DeclaredTableDeclaration = {
   name: string;
   organizationColumn: string;
+  /**
+   * The column the host writes the bound run into (cinatra#3249). Optional: a
+   * table that names none binds its rows to no run.
+   */
+  runColumn?: string;
+  /**
+   * The columns the host writes the bound scope into (cinatra#3249) — the kind
+   * of scope the row's run belongs to and the id inside it. Optional, and
+   * declared together: one without the other is refused.
+   */
+  scopeKindColumn?: string;
+  scopeIdColumn?: string;
   columns: DeclaredColumnDeclaration[];
   indexes?: DeclaredIndexDeclaration[];
 };

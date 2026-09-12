@@ -156,6 +156,130 @@ describe("what a declaration may say (enabler 0.23)", () => {
   });
 });
 
+describe("the run column a declaration may name (cinatra#3249)", () => {
+  const RUN_BOUND = [
+    {
+      name: "run_reservations",
+      organizationColumn: "org_id",
+      runColumn: "run_id",
+      columns: [
+        { name: "id", type: "uuid", notNull: true, primaryKey: true },
+        { name: "org_id", type: "text", notNull: true },
+        { name: "run_id", type: "text", notNull: true },
+        { name: "state", type: "text", notNull: true },
+      ],
+    },
+  ];
+
+  it("parses a run column named beside the organisation column", () => {
+    const [t] = parseDeclaredTables(RUN_BOUND, PIPELINE);
+    expect(t?.organizationColumn).toBe("org_id");
+    expect(t?.runColumn).toBe("run_id");
+  });
+
+  it("leaves a table that names none bound to no run", () => {
+    const [t] = parseDeclaredTables(ONE_TABLE, PIPELINE);
+    expect(t?.runColumn).toBeNull();
+  });
+
+  it("refuses a runColumn the table does not declare", () => {
+    const bad = [{ ...RUN_BOUND[0], runColumn: "nope" }];
+    expect(() => parseDeclaredTables(bad, PIPELINE)).toThrow(/runColumn/);
+  });
+
+  it("refuses a NULLABLE run column — a row belonging to no run", () => {
+    const bad = [
+      {
+        ...RUN_BOUND[0],
+        columns: RUN_BOUND[0].columns.map((c) =>
+          c.name === "run_id" ? { name: "run_id", type: "text" } : c,
+        ),
+      },
+    ];
+    expect(() => parseDeclaredTables(bad, PIPELINE)).toThrow(/nullable run/);
+  });
+
+  it("refuses a runColumn that IS the organisation column — two bindings, two columns", () => {
+    const bad = [{ ...RUN_BOUND[0], runColumn: "org_id" }];
+    expect(() => parseDeclaredTables(bad, PIPELINE)).toThrow(/organisation column/);
+  });
+});
+
+describe("the scope columns a declaration may name (cinatra#3249)", () => {
+  // The scope a run belongs to, in the host's OWN per-scope vocabulary: the
+  // workspace, an organisation, a team, a project or a person's own scope. The
+  // declaration names the two columns; the host writes the kind and the id.
+  const SCOPE_BOUND = [
+    {
+      name: "run_reservations",
+      organizationColumn: "org_id",
+      runColumn: "run_id",
+      scopeKindColumn: "scope_kind",
+      scopeIdColumn: "scope_id",
+      columns: [
+        { name: "id", type: "uuid", notNull: true, primaryKey: true },
+        { name: "org_id", type: "text", notNull: true },
+        { name: "run_id", type: "text", notNull: true },
+        { name: "scope_kind", type: "text", notNull: true },
+        { name: "scope_id", type: "text", notNull: true },
+        { name: "state", type: "text", notNull: true },
+      ],
+    },
+  ];
+
+  it("parses the scope kind and the scope id the run belongs to", () => {
+    const [t] = parseDeclaredTables(SCOPE_BOUND, PIPELINE);
+    expect(t?.scopeKindColumn).toBe("scope_kind");
+    expect(t?.scopeIdColumn).toBe("scope_id");
+  });
+
+  it("leaves a table that names none bound to no scope", () => {
+    const [t] = parseDeclaredTables(ONE_TABLE, PIPELINE);
+    expect(t?.scopeKindColumn).toBeNull();
+    expect(t?.scopeIdColumn).toBeNull();
+  });
+
+  it("refuses a scope column the table does not declare", () => {
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeKindColumn: "nope" }], PIPELINE),
+    ).toThrow(/scopeKindColumn/);
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeIdColumn: "nope" }], PIPELINE),
+    ).toThrow(/scopeIdColumn/);
+  });
+
+  it("refuses a NULLABLE scope column — a row belonging to no scope", () => {
+    const nullable = (name: string) => [
+      {
+        ...SCOPE_BOUND[0],
+        columns: SCOPE_BOUND[0].columns.map((c) => (c.name === name ? { name, type: "text" } : c)),
+      },
+    ];
+    expect(() => parseDeclaredTables(nullable("scope_kind"), PIPELINE)).toThrow(
+      /nullable scope kind/,
+    );
+    expect(() => parseDeclaredTables(nullable("scope_id"), PIPELINE)).toThrow(/nullable scope id/);
+  });
+
+  it("refuses a scope column that IS the organisation column, or the run column", () => {
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeKindColumn: "org_id" }], PIPELINE),
+    ).toThrow(/organisation column/);
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeIdColumn: "run_id" }], PIPELINE),
+    ).toThrow(/run column/);
+  });
+
+  it("refuses a scope binding declared HALF — a kind without an id, or an id without a kind", () => {
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeIdColumn: undefined }], PIPELINE),
+    ).toThrow(/PAIR/);
+    expect(() =>
+      parseDeclaredTables([{ ...SCOPE_BOUND[0], scopeKindColumn: undefined }], PIPELINE),
+    ).toThrow(/PAIR/);
+  });
+});
+
 describe("the collision refusal (enabler 0.23)", () => {
   it("refuses an install whose derived prefix collides with an installed extension's", () => {
     expect(() =>
