@@ -81,12 +81,32 @@ describe("email-outreach-agent additive-conversion invariant", () => {
     // Pin the EXACT occurrence count, not just ">0". Any partial strip
     // (for example, removing a DataFlowEdge but leaving one prompt
     // mention) must consciously update this assertion so we never
-    // silently break production wiring. Current count is 15
-    // (14 lines; one line has both source_output + destination_input
-    // references). When the strip-when-live path is implemented, update
-    // this to expect(0) and remove the comment block.
+    // silently break production wiring. Current count is 23, derived
+    // from the pinned declaration itself (21 lines; two of them carry
+    // two references each: the drafting step's input mapping line
+    // "offeringCompanyWebsite": "{{ offeringCompanyWebsite }}" and the
+    // drafting prompt's input list line).
+    //
+    // The count grew from 15 (at pin ee1998d55c87) to 23 (at pin
+    // c11a6dfda78d). The growth landed in ONE pack commit inside that
+    // range: 82eb43988b33, the merge of email-outreach-agent#50, which
+    // is additive: it adds a context_setup step ahead of the drafting
+    // step, so the OAS gained a
+    // start_to_context_setup_offeringCompanyWebsite DataFlowEdge
+    // (name + source_output + destination_input), the context_setup
+    // step's own input title and hidden-input entry, and the drafting
+    // step's re-declared input title plus its mapping line; eleven
+    // references were added and three relocated away, and not one
+    // legacy reference was dropped. The three later pack pull requests
+    // in the newly pinned range leave the count untouched at 23: #51,
+    // #54, and #56 (c11a6dfda78d), which is only the newly pinned
+    // tip, not the source of the additions. The guard therefore still
+    // holds: the legacy references may grow when the pack adds them,
+    // never shrink while the strip-when-live path is unimplemented.
+    // When that path is implemented, update this to expect(0) and
+    // remove the comment block.
     const raw = readFileSync(OAS_PATH, "utf-8");
     const count = (raw.match(/offeringCompanyWebsite/g) ?? []).length;
-    expect(count).toBe(15);
+    expect(count).toBe(23);
   });
 });
