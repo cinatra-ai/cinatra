@@ -46,6 +46,24 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", () => ({
   materializeRunArtifacts: materializeRunArtifactsSpy,
 }));
 
+// cinatra#3007 — the executor asks the produced-review question before every
+// terminal write. This suite is about the WayFlow materialization-honesty verdict, drives the tail with no
+// database, and would otherwise exercise the hold's FAIL-CLOSED branch (an
+// unreachable store cannot prove the run owes no review, so no terminal status
+// is written). Mocked inert here — "nothing holds this run" — so the tail under
+// test behaves exactly as it did. The hold itself is proven in
+// `execution-review-precedes-terminal.test.ts` (the wiring) and
+// `produced-review-ordering.integration.test.ts` (the ordering, real store).
+vi.mock("../run-produced-review-hold", () => ({
+  holdRunForProducedReview: vi.fn(async () => ({
+    held: false,
+    reason: "no-produced-output",
+  })),
+  releaseHeldRun: vi.fn(async () => ({ released: false, reason: "not-parked" })),
+  readGateRunOwner: vi.fn(async () => null),
+  listReleasableHeldRuns: vi.fn(async () => []),
+}));
+
 // The run's transcript receipt (cinatra#3002) is a database write on the same
 // terminal path; it has its own suite
 // (wayflow-run-transcript-receipt.test.ts) and is stubbed here for the same

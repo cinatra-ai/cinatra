@@ -28,6 +28,7 @@ vi.mock("../store", () => ({
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 import { agentHitlScreenStateForRun } from "../agent-hitl-screen-core";
+import { WITHHELD_TERMINAL_KEY } from "../run-produced-review-hold";
 
 type Run = Parameters<typeof agentHitlScreenStateForRun>[0];
 
@@ -75,6 +76,65 @@ describe("which run is asking", () => {
       xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
     });
     expect((await agentHitlScreenStateForRun(RUN)).state).toBe("none");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE PARK IS THE PANEL'S OTHER EXCLUSION (cinatra#3007).
+  //
+  // A run held for the review of what it PRODUCED waits in the same status while
+  // still carrying the last question it was asked — a question the person
+  // answered and the run moved past minutes ago. The interrupt log is where that
+  // question lives and nothing there records that it was answered, so
+  // `deriveRunHitlContext` keeps handing it back, with its renderer and its
+  // current values, exactly as if it were live.
+  //
+  // The run panel drops it, off the run's own row. This reader did not — so the
+  // conversation kept drawing the answered ask above the run's slot as STILL
+  // ASKING, with a live forward control on it, for as long as the park lasted.
+  // The third capture measured the screen still recording `asking` 66 to 84 s
+  // after the run's review gate had been minted.
+  // -------------------------------------------------------------------------
+
+  /** The row of a run parked on the review of what it produced: the parked
+   *  status AND the withheld terminal write, which is what the park IS. */
+  const PARKED_ON_PRODUCED_REVIEW = {
+    ...RUN,
+    status: "pending_approval",
+    stepResults: [
+      { wayflow_response: { ok: true }, [WITHHELD_TERMINAL_KEY]: { status: "completed" } },
+    ],
+  } as unknown as Run;
+
+  it("refuses a run PARKED on the review of what it produced — the ask it carries is answered", async () => {
+    // The gate the derivation answers with is the ordinary setup question, not a
+    // marked review gate: the exclusion above cannot reach it, and only the row
+    // can say the run has moved past it.
+    deriveRunHitlContext.mockResolvedValue(GATE);
+    expect((await agentHitlScreenStateForRun(PARKED_ON_PRODUCED_REVIEW)).state).toBe("none");
+  });
+
+  it("keeps asking for a run parked in the same status WITHOUT the park's own marker", async () => {
+    // The guard on the rule: `pending_approval` alone is not a park. A run
+    // genuinely stopped on a question is in that status too, and it must keep
+    // drawing its question.
+    deriveRunHitlContext.mockResolvedValue(GATE);
+    const asking = await agentHitlScreenStateForRun({
+      ...RUN,
+      status: "pending_approval",
+      stepResults: [{ wayflow_response: { ok: true } }],
+    } as unknown as Run);
+    expect(asking.state).toBe("asking");
+  });
+
+  it("keeps asking for a run carrying the marker but NOT in the parked status", async () => {
+    // The other half of the pair the park is read from: a row that has left the
+    // parked status is not held by anything, whatever its payload still says.
+    deriveRunHitlContext.mockResolvedValue(GATE);
+    const asking = await agentHitlScreenStateForRun({
+      ...PARKED_ON_PRODUCED_REVIEW,
+      status: "running",
+    } as unknown as Run);
+    expect(asking.state).toBe("asking");
   });
 
   it("refuses a run with no derivable gate, and one whose gate names no renderer", async () => {

@@ -53,6 +53,9 @@ export type LeaseExpiryFinalizerSweepSummary = {
   /** The lease was gone by the time this lease's own step ran (settled /
    *  epoch-invalidated / not-actually-expired) — benign, not a failure. */
   skippedLeaseGone: number;
+  /** cinatra#3007 — the run still owed a produced-output review, so the fence
+   *  refused to terminalize it and left its lease for a later pass. */
+  skippedProducedReview: number;
   /** Cancel threw and this lease had not (yet) escalated — left for the next
    *  tick, attempts already durably incremented. */
   cancelDeferred: number;
@@ -90,6 +93,7 @@ function emptySummary(): LeaseExpiryFinalizerSweepSummary {
   return {
     swept: 0,
     skippedLeaseGone: 0,
+    skippedProducedReview: 0,
     cancelDeferred: 0,
     settled: 0,
     settledLeaseOnly: 0,
@@ -188,7 +192,8 @@ async function processExpiredLease(
   // is finalizeExpiredLeaseRun's responsibility.
   const outcome = await finalizeExpiredLeaseRun(row.org_id, row.run_id);
   if (outcome.outcome === "skipped") {
-    summary.skippedLeaseGone += 1;
+    if (outcome.reason === "produced-review-unresolved") summary.skippedProducedReview += 1;
+    else summary.skippedLeaseGone += 1;
     return;
   }
   if (outcome.mode === "lease-only") {

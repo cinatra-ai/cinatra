@@ -96,7 +96,7 @@ import {
 } from "./conversation-services";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
-import { fingerprintMessages, isRealActivity } from "./thread-activity";
+import { fingerprintMessages, isRealActivity, recallThreadTranscript, recalledThreadFingerprint, rememberThreadTranscript } from "./thread-activity";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
@@ -151,7 +151,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(userId ?? null, initialThreadId) as Message[]);
   // Streaming registry: one AbortController per in-flight streamResponse call.
   // Replaces the single boolean flag so N concurrent streams can coexist.
   const [streamingCount, setStreamingCount] = useState(0);
@@ -226,7 +226,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // opened/loaded the thread". Only the former advances `updatedAt` and the
   // sidebar position (issue #283). Empty string == nothing loaded yet (a
   // brand-new thread starts empty, so its first user message reads as activity).
-  const loadedFingerprintRef = useRef<string>("");
+  const loadedFingerprintRef = useRef<string>(recalledThreadFingerprint(userId ?? null, initialThreadId));
   // The active thread's immutable createdAt as read from the loaded thread
   // data. Used as the createdAt fallback when persisting so the payload's
   // createdAt does not drift to `now`/updatedAt if the local `threads` summary
@@ -571,6 +571,11 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       ),
     );
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep this thread's turns where a REBUILT page can redraw them (./thread-activity).
+  useEffect(() => {
+    rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
+  }, [activeThreadId, messages]);
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
   useEffect(() => {

@@ -25,6 +25,163 @@ export function resolveStreamFirst<T>(
 }
 
 /**
+ * THE ROW WINS WHEN THE STREAM CANNOT SPEAK AGAIN (cinatra#3046).
+ *
+ * `resolveStreamFirst` above is right for every value the stream keeps
+ * delivering: while a run is executing, the SSE frames are ahead of any poll and
+ * the poll deliberately stops writing the status at all. It is wrong for exactly
+ * one shape, and cinatra#3007 created that shape.
+ *
+ * A run whose produced output opens a review no longer reaches a terminal
+ * status: it PARKS, and a parked run announces nothing. There is no RUN_FINISHED
+ * and no RUN_ERROR, so the stream's last word stays `running` for as long as the
+ * park lasts. Stream-first then pins the surface to `running` for ever: the slot
+ * reader never looks (it looks only under `completed` or the parked status), the
+ * placeholder never becomes the review card, and the run's own already-answered
+ * question is redrawn with a live control because nothing can tell the surface
+ * that the pause belongs to the review. Measured: the placeholder still stood
+ * four minutes after the gate row existed, on both palettes, and only a RELOAD
+ * swapped it — a reload re-seeds the status from the row, which is precisely the
+ * reading this function restores without one.
+ *
+ * SO THE ROW IS CONSULTED, AND IT WINS ONLY WHERE THE STREAM IS PROVABLY MUTE.
+ * The rule is narrow on purpose, and it is a rule about SILENCE rather than
+ * about freshness:
+ *
+ *   · the stream must be enabled and its last word NON-TERMINAL — a stream that
+ *     has said `completed`, `failed`, `stopped` or a park has spoken, and it
+ *     keeps its say;
+ *   · the ROW must report a status the stream cannot reach on its own: the
+ *     parked status, or a terminal one. A row that merely disagrees about
+ *     `queued` versus `running` changes nothing — the stream is ahead there and
+ *     stays ahead.
+ *
+ * Everything else is byte-for-byte `resolveStreamFirst`, which is what the
+ * unchanged callers keep getting.
+ */
+const RUN_STATUS_STREAM_CANNOT_LEAVE: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+]);
+
+/** The statuses a row may overrule a mute stream with: the park a run waits on
+ *  its own review in, and the three the run never leaves.
+ *
+ *  DELIBERATELY NOT HERE: `waiting_trigger`. It is a second park a stream also
+ *  cannot announce - an in-flight run suspended at a trigger wait - so the rule
+ *  above would read on it, and letting the row win there is a change to what
+ *  the TRIGGER surfaces draw, not to what the review gate draws: the status
+ *  would leave `running`, `isLive` would go false with it, and a run waiting on
+ *  its trigger would stop rendering as working mid-stream. That has no drawing
+ *  to grade against in this change and no pin anywhere; it is named here so the
+ *  omission is a decision on the record rather than a set somebody forgot to
+ *  close, and it belongs in its own change with the trigger surfaces' own
+ *  captures. */
+const RUN_STATUS_ROW_MAY_OVERRULE: ReadonlySet<string> = new Set([
+  "pending_approval",
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * CAN THE STREAM STILL SAY WHAT THIS RUN IS DOING (cinatra#3007, fix leg 9)?
+ *
+ * The window in which the rule above matters, named so a surface can act on it
+ * rather than only resolve through it. While the stream's last word is one of
+ * the two it cannot leave on its own, a park is invisible to the stream and the
+ * ROW is the only thing that can say the run stopped — so a surface with no
+ * transport of its own has to open one for exactly this window and no longer.
+ */
+export function runStreamMayBeMute(
+  streamEnabled: boolean,
+  streamedStatus: string | null,
+): boolean {
+  return (
+    streamEnabled &&
+    streamedStatus !== null &&
+    RUN_STATUS_STREAM_CANNOT_LEAVE.has(streamedStatus)
+  );
+}
+
+/** The three statuses a run never leaves. */
+const RUN_STATUS_TERMINAL: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+/**
+ * HAS THIS RUN FINISHED? The set above, read as a question, so a surface that
+ * has to stop doing something when the run ends asks the same one reading every
+ * other surface asks rather than keeping a list of its own.
+ */
+export function runStatusIsTerminal(status: string | null): boolean {
+  return status !== null && RUN_STATUS_TERMINAL.has(status);
+}
+
+/**
+ * SHOULD THIS SURFACE'S OWN TICK BE RUNNING (cinatra#3007, fix leg 9)?
+ *
+ * The panel's tick is the ONLY carrier of the run ROW on a first-party surface:
+ * it is what `resolveRunSurfaceStatus` above needs to overrule a mute stream,
+ * what records the park beside it, and what the shared review-slot reader takes
+ * as its evidence that this surface's transport answers at all. Whether it runs
+ * was decided by `pollStatus`, which is deliberately NOT written while the
+ * stream is enabled — so the answer was fixed once, by the status the run
+ * happened to be in when the surface was SERVED, and could never be revisited.
+ *
+ * A conversation card served while its run is `pending_input` (the status the
+ * chat's own insert creates a run in), or on its trigger step, therefore never
+ * ticked at all: its row was never read, the row could never overrule the mute
+ * stream, and the park the run reached minutes later was invisible on every
+ * surface served in that window — never, and for the whole RUN rather than for
+ * one surface, which is the shape the eighth graded reading measured.
+ *
+ * So the tick fires while EITHER reading says the run has not finished. It only
+ * ever widens: a surface whose seed said `running` keeps the tick it already had
+ * after the stream has moved on, which is the property the seed-frozen guard was
+ * written for.
+ */
+export function runSurfaceKeepsPolling({
+  pollStatus,
+  status,
+}: {
+  /** The seed-frozen poll status — this surface's original firing guard. */
+  pollStatus: string;
+  /** The status this surface currently draws, as resolved above. */
+  status: string;
+}): boolean {
+  const pollSaysLive =
+    pollStatus === "running" ||
+    pollStatus === "queued" ||
+    pollStatus === "pending_approval";
+  return pollSaysLive || !RUN_STATUS_TERMINAL.has(status);
+}
+
+export function resolveRunSurfaceStatus({
+  streamEnabled,
+  streamedStatus,
+  polledStatus,
+  rowStatus,
+}: {
+  streamEnabled: boolean;
+  /** The stream's last word, or `null` when it has not delivered one. */
+  streamedStatus: string | null;
+  /** The poll-derived status — what `resolveStreamFirst` falls back to. */
+  polledStatus: string;
+  /** The run ROW's own status, as the run's seed route last answered it.
+   *  `null` when this surface has never read one. */
+  rowStatus: string | null;
+}): string {
+  const streamFirst = resolveStreamFirst(streamEnabled, streamedStatus, polledStatus);
+  if (!streamEnabled || streamedStatus === null || rowStatus === null) return streamFirst;
+  if (!RUN_STATUS_STREAM_CANNOT_LEAVE.has(streamedStatus)) return streamFirst;
+  if (!RUN_STATUS_ROW_MAY_OVERRULE.has(rowStatus)) return streamFirst;
+  return rowStatus;
+}
+
+/**
  * Status → badge variant mapping shared by both run surfaces.
  *
  * Trigger-related run states (AgenticRunPanel surface):

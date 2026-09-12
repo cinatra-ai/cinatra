@@ -84,6 +84,20 @@ vi.mock("../wayflow-url", () => ({
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));
 
+// Hermetic: cinatra#3007 puts the produced-output review question before every
+// terminal edge, including the human gate's failure callback that an
+// unmaterializable gate takes. This suite is about ENRICHMENT, so the question is
+// answered here rather than left to reach a store this unit test does not stand
+// up — an unreachable store is a fail-closed hold, and a hold that cannot be
+// recorded is deliberately a thrown, retryable failure. The seam's own behaviour
+// is proved in execution-review-precedes-terminal.test.ts.
+vi.mock("../run-produced-review-hold", () => ({
+  holdRunForProducedReview: vi.fn(async () => ({
+    held: false,
+    reason: "no-produced-output",
+  })),
+}));
+
 // Hermetic: the F1 latest-task write (execution.ts) is fail-closed real Redis
 // at every interrupt-emit — stub it so this unit test never opens a real
 // connection. All other a2a exports keep their real behavior.
@@ -135,6 +149,7 @@ function makeRun(
     traceId: null,
     timeoutSeconds: null,
     streamedText: null,
+    producedReviewPark: null,
     // Per-run AgentAuthPolicy override (null = inherit).
     authPolicy: null,
     // org id is required because the column is NOT NULL. Test fixtures use a
