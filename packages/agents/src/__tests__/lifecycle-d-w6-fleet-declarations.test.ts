@@ -29,14 +29,18 @@
  *     host provider policy allowlist, which the L1 service-description check
  *     refuses. The model arrived in a later, unrelated change in
  *     that repository, not in the declaration itself.
- *   - company-discovery-agent: its head drops the domain field from `hidden`
- *     without adding it to `required`, so the field is neither shown nor
- *     prompted — the host start-node scan reports it as silently unprompted.
- *     A field is made visible by naming it in `required`.
  *   - email-delivery-agent: its head drops the output renderer id from
  *     `hitlScreens`, and that id is a live renderer binding this host resolves
  *     for the send screen, so the agent card would stop advertising a surface
  *     the host still serves.
+ *   - list-curator-agent: its head fails the L1 EndNode invariant — an
+ *     EndNode that specifies both inputs and outputs must have them equal —
+ *     so the runtime refuses to mount the flow at that head. The remedy is
+ *     asked for in that repository as cinatra-ai/list-curator-agent#51.
+ *
+ * company-discovery-agent's pin is no longer held: its corrected head names
+ * the two fields a person supplies in `required`, which is how the host makes
+ * a field visible, and this file follows that declaration below.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -426,15 +430,15 @@ describe("acceptance 2 — inputs: no required-and-hidden, and the visible picks
     expect(a.hiddenInputs).not.toContain("campaignId");
   });
 
-  // The visible field is written and merged in cinatra-ai/company-discovery-agent
-  // as a removal from `hidden` alone. The host has two lists and no third: a
-  // name in neither is not shown AND not prompted, which the host start-node
-  // scan reports. The pin is held until a follow-up in that repository names
-  // the field in `required`, which is how the host makes a field visible.
-  it("company discovery still hides the domain at this pin, and the absence carries its reason", () => {
+  // The corrected head names the two fields a person supplies — the company
+  // name and the domain — in `required`, and leaves only the derived lookup
+  // flag and the run id in `hidden`. The host has two lists and no third, so
+  // naming the field in `required` is how it is shown AND prompted.
+  it("company discovery shows the name and the domain as the fields a person sets", () => {
     const a = agent("company-discovery-agent");
-    expect(a.hiddenInputs).toContain("domain");
-    expect(a.requiredInputs).not.toContain("domain");
+    expect(a.requiredInputs).toEqual(["companyName", "domain"]);
+    expect(a.hiddenInputs).toEqual(["apolloLookup", "cinatra_run_id"]);
+    expect(a.requiredInputs.filter((n) => a.hiddenInputs.includes(n))).toEqual([]);
   });
 });
 
