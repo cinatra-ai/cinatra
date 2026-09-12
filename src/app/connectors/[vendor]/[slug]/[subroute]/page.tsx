@@ -4,7 +4,6 @@ import { notFound, redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
 import {
-  getConnectorRegistryEntryBySlug,
   resolveConnectorBadgeState,
   hasConnectorReadinessProbe,
 } from "@/lib/connectors-registry.server";
@@ -37,8 +36,9 @@ import "@/lib/extensions";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveSchemaConfigInitialValues } from "@/lib/extension-config-hydration";
 import {
-  enforceConnectorPolicy,
-} from "@/lib/connector-policy";
+  connectorRouteTitle,
+  resolveConnectorRouteIdentity,
+} from "@/lib/connector-route-identity.server";
 import { resolveConnectorSetupRedirect } from "@/lib/connector-setup-redirect";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
@@ -48,7 +48,6 @@ import {
   resolveActiveInstallForActor,
   resolveActiveInstallIdForActor,
   resolveRuntimeConnectorUiRecord,
-  resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
@@ -93,17 +92,28 @@ type DispatchPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+// THE TAB READS ONE STRING (cinatra#3235). Two things were wrong here: the
+// title was composed AROUND the root template (`"%s | Cinatra"`,
+// src/app/layout.tsx) rather than against it, so the effective server-rendered
+// title carried a doubled suffix until the shell's trail mirror overwrote it;
+// and the connector was resolved through the static catalog ALONE, so a
+// trusted runtime-only connector — one the page body itself renders through the
+// runtime card record — was titled "Not found" on a page that is not a
+// not-found page. Both are met by asking the SAME resolution the body asks
+// (`resolveConnectorRouteIdentity`) and returning the display name BARE, so the
+// root template composes it once: "{Display name} | Cinatra", before and after
+// hydration alike. Fail-closed: every vendor, slug or subroute the body refuses
+// carries the not-found title here too.
 export async function generateMetadata(props: {
   params: Promise<RouteParams>;
 }): Promise<Metadata> {
-  const { vendor, slug } = await props.params;
-  // The vendor segment is validated against the connector's manifest-resolved
-  // identity (installed-extension scope), not a hardcoded vendor literal.
-  const entry = getConnectorRegistryEntryBySlug(slug);
-  if (!entry || entry.vendor !== vendor) {
-    return { title: "Not found" };
-  }
-  return { title: `${entry.displayName} | Connectors` };
+  const { vendor, slug, subroute } = await props.params;
+  const actor = await getActorContext();
+  const resolution = await resolveConnectorRouteIdentity(
+    { vendor, slug, subroute },
+    actor,
+  );
+  return { title: connectorRouteTitle(resolution) };
 }
 
 export default async function ConnectorDispatchPage(props: DispatchPageProps) {
@@ -119,39 +129,21 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // vendor handling. A connector with a build-time CATALOG descriptor takes the
   // catalog path; a purely RUNTIME-installed connector with NO catalog descriptor
   // takes the runtime-only fallback (cinatra#658 Track 2 — closing the L62 gap
-  // where `getConnectorRegistryEntryBySlug` returned undefined and the route
-  // notFound()'d before any runtime lookup).
-  const catalogEntry = getConnectorRegistryEntryBySlug(slug);
-
-  // Resolved connector identity for this route, from EITHER source.
-  let packageId: string;
-  let displayName: string;
-  let isCatalog: boolean;
-
-  if (catalogEntry) {
-    if (catalogEntry.vendor !== vendor) notFound();
-    if (subroute !== catalogEntry.setupSubroute) notFound();
-    // Catalog policy gate (unchanged): canonical-first → legacy fallback.
-    const decision = enforceConnectorPolicy(catalogEntry.packageId, actor, "read");
-    if (!decision.allowed) notFound();
-    packageId = catalogEntry.packageId;
-    displayName = catalogEntry.displayName;
-    isCatalog = true;
-  } else {
-    // RUNTIME-ONLY fallback. `enforceConnectorPolicy` denies a no-catalog package
-    // (`unknown_connector`) BEFORE any canonical check (codex finding 1), so we
-    // CANNOT reach the runtime surface through it. Instead, resolve the trusted
-    // runtime card record: it runs the FULL trust gate (actor has an active
-    // canonical install in scope → anchor → integrity → signature → trust). A
-    // non-null result is therefore BOTH proof of trust AND of actor authorization
-    // for this install (the canonical install row is addressable in the actor's
-    // scope) — the exact two facts the catalog policy + bundled manifest provide.
-    // We never loosen the catalog policy; this is a parallel trusted-runtime path.
-    const packageName = `@${vendor}/${slug}`;
-    const cardRecord = await resolveRuntimeConnectorCardRecord(packageName, actor);
-    // Fail closed: no trusted+addressable runtime install → not found (never leak
-    // existence to an unauthorized/cross-org actor).
-    if (!cardRecord || cardRecord.vendor !== vendor || cardRecord.slug !== slug) {
+  // where the catalog lookup returned undefined and the route notFound()'d
+  // before any runtime lookup).
+  //
+  // ONE RESOLUTION (cinatra#3235): the gates below used to live inline here, and
+  // `generateMetadata` above resolved the connector its own, catalog-only way —
+  // so the tab title and the page disagreed about the very identity of the
+  // connector. Both callers now ask `resolveConnectorRouteIdentity`, which is
+  // this body's own logic in its own order. The gates themselves stay here,
+  // where this route owns `notFound()` and `redirect()`.
+  const resolution = await resolveConnectorRouteIdentity(
+    { vendor, slug, subroute },
+    actor,
+  );
+  if (resolution.kind === "refused") {
+    if (resolution.considerMarketplaceRedirect) {
       // cinatra#1529: before the 404, evaluate the NARROW marketplace-redirect
       // decision. Only a genuinely-absent install of a connector this actor can
       // already discover + install in the in-app marketplace redirects there;
@@ -161,23 +153,18 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       // throws NEXT_REDIRECT) is called OUTSIDE any try/catch — otherwise this
       // route would convert the redirect back into a 404.
       const redirectDecision = await resolveConnectorSetupRedirect({
-        packageName,
+        packageName: `@${vendor}/${slug}`,
         subroute,
         actor,
       });
       if (redirectDecision.kind === "redirect") {
         redirect(redirectDecision.target);
       }
-      notFound();
     }
-    // A runtime-only connector reaches its setup route only via the schema-config
-    // surface (it ships no base-image React loader). Reuse the catalog setup
-    // subroute convention ("setup").
-    if (subroute !== "setup") notFound();
-    packageId = packageName;
-    displayName = cardRecord.displayName;
-    isCatalog = false;
+    notFound();
   }
+  // Resolved connector identity for this route, from EITHER source.
+  const { packageId, displayName, isCatalog, catalogEntry } = resolution;
 
   const manifest = isCatalog ? STATIC_EXTENSION_MANIFEST[packageId] : undefined;
 
@@ -262,6 +249,18 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           : []),
         {
           prefix: `/connectors/${encodeURIComponent(vendor)}/${encodeURIComponent(slug)}`,
+          label: displayName,
+        },
+        // THE ROUTE'S OWN PATH (cinatra#3235). The browser tab mirrors the
+        // resolved trail, and the shell reads the entry whose prefix is the
+        // route's own four-segment path — the same road the agents area's tab
+        // title is read through, so there is no second, connector-only title
+        // source. The label is this same server-authorized display name, so the
+        // tab and the leaf crumb beside it cannot disagree. The page's selected
+        // tab contributes NO crumb (cinatra#3215), so this entry names the
+        // route, never a crumb of its own: the composer drops that position.
+        {
+          prefix: `/connectors/${encodeURIComponent(vendor)}/${encodeURIComponent(slug)}/${encodeURIComponent(subroute)}`,
           label: displayName,
         },
       ]}
