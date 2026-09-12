@@ -131,6 +131,15 @@ export type CinatraManifest = {
    * See `./declared-tables`.
    */
   declaredTables?: DeclaredTableDeclaration[];
+  /**
+   * The modules this extension exposes to the passthrough's ONE generic
+   * dispatch tool (cinatra#3249, epic #3023). Each entry names a tool and the
+   * package-relative module that runs it; the host resolves a caller's asked-for
+   * name against THIS list and nothing else, so core keeps no table of package
+   * names. See `parseDeclaredTools` below for the whole contract: the field
+   * names, the package-relative path constraint, and the callable export.
+   */
+  tools?: DeclaredToolDeclaration[];
   // ---- self-describing card identity (additive) ----
   /**
    * User-facing card label. Falls back to the host catalog when absent.
@@ -829,3 +838,132 @@ export type DeclaredTableDeclaration = {
   columns: DeclaredColumnDeclaration[];
   indexes?: DeclaredIndexDeclaration[];
 };
+
+// ---------------------------------------------------------------------------
+// THE DECLARED-TOOLS CONTRACT (cinatra#3249, epic #3023).
+//
+// The passthrough admits ONE generic dispatch tool. It names no package: the
+// host derives the CALLER and its pinned version from the already-bound run
+// context, and resolves the name the caller asks for against THAT package's own
+// manifest — the list parsed here. Core keeps no table of package names, and a
+// name this list does not carry is refused.
+//
+// THE CONTRACT IS THIS CODE AND THE TESTS BESIDE IT, never a pull request body:
+//
+//   - the list lives at `cinatra.tools`;
+//   - each entry is `{ name, module }`, and nothing else is read;
+//   - `name` is the name the caller passes to the dispatch, in the same
+//     local-identifier vocabulary a declared table's name uses;
+//   - `module` is a PACKAGE-RELATIVE path INSIDE the package's own tree: it
+//     starts `./`, carries no parent-directory segment, is never absolute, and
+//     names a BUILT artifact (`.mjs`/`.cjs`/`.js`) — the same
+//     built-artifacts-only rule `cinatra.serverEntry` already lives under, and
+//     the same no-traversal rule `resolveServerEntryPath` enforces;
+//   - the module's CALLABLE EXPORT is the named export
+//     `EXTENSION_TOOL_MODULE_EXPORT`: one function of ONE argument,
+//     `{ input, ports }`, returning the result (or a promise of it).
+//
+// ADDITIVE, like every field before it: one new key under `cinatra`, no shape
+// change, so the frozen ABI is untouched.
+// ---------------------------------------------------------------------------
+
+/** One raw `cinatra.tools` entry, as an extension author writes it. */
+export type DeclaredToolDeclaration = {
+  /** The name the caller asks the generic dispatch for. */
+  name: string;
+  /** Package-relative path of the module that runs it (`./cinatra/tools/x.mjs`). */
+  module: string;
+};
+
+/** A parsed, validated declared tool. */
+export type DeclaredTool = {
+  name: string;
+  module: string;
+};
+
+/**
+ * The ONE named export a declared tool module exposes. Pinned here so a pack
+ * author and the host read the same name from the same place — the host calls
+ * nothing else, and guesses at no other export.
+ */
+export const EXTENSION_TOOL_MODULE_EXPORT = "extensionTool";
+
+/** Built-artifact extensions a declared module may carry — the `importable`
+ *  class of `classifyServerEntryArtifact`, stated here so this pure parser
+ *  stays free of the loader module. */
+const IMPORTABLE_MODULE_RE = /\.(mjs|cjs|js)$/;
+
+/**
+ * Why one declared module path is refused, or `null` when it is admissible.
+ *
+ * Exported because the HOST applies the identical constraint again when it
+ * resolves the path against the materialized package dir: the declaration gate
+ * and the load gate must never be able to disagree.
+ */
+export function declaredToolModulePathIssue(modulePath: unknown): string | null {
+  if (typeof modulePath !== "string" || modulePath.trim() === "") {
+    return "module must be a non-empty package-relative path";
+  }
+  const raw = modulePath.trim();
+  if (raw.includes("\\")) {
+    return "module must use forward slashes";
+  }
+  if (!raw.startsWith("./")) {
+    return 'module must be package-relative and start with "./"';
+  }
+  const rel = raw.slice(2);
+  if (rel === "") return "module must name a file inside the package";
+  const segments = rel.split("/");
+  if (segments.some((seg) => seg === "..")) {
+    return "module must stay inside the package's own tree — no parent-directory segment";
+  }
+  if (segments.some((seg) => seg === "")) {
+    return "module must not carry an empty path segment";
+  }
+  if (!IMPORTABLE_MODULE_RE.test(rel)) {
+    return "module must name a BUILT artifact (.mjs, .cjs or .js)";
+  }
+  return null;
+}
+
+/**
+ * Parse and validate `cinatra.tools` for one package. Fail-closed, exactly as
+ * `parseDeclaredTables` is: every refusal names what broke, and NOTHING is
+ * dispatchable for a package whose declaration does not parse.
+ *
+ * `undefined` (the common case — an extension that exposes no module) parses to
+ * an empty list, never to an error; a dispatch against an empty list is then
+ * refused by the name check, which is the same answer.
+ */
+export function parseDeclaredTools(raw: unknown, packageName: string): DeclaredTool[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`[declared-tools] ${packageName}: cinatra.tools must be an array`);
+  }
+  const out: DeclaredTool[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!isPlainObject(entry)) {
+      throw new Error(`[declared-tools] ${packageName}: each declared tool must be an object`);
+    }
+    const name = entry.name;
+    if (typeof name !== "string" || !LOCAL_IDENT_RE.test(name)) {
+      throw new Error(
+        `[declared-tools] ${packageName}: tool name ${JSON.stringify(name)} must match ${LOCAL_IDENT_RE}`,
+      );
+    }
+    if (seen.has(name)) {
+      throw new Error(`[declared-tools] ${packageName}: tool "${name}" is declared twice`);
+    }
+    seen.add(name);
+    const issue = declaredToolModulePathIssue(entry.module);
+    if (issue !== null) {
+      throw new Error(
+        `[declared-tools] ${packageName} tool "${name}": ${issue} ` +
+          `(got ${JSON.stringify(entry.module)})`,
+      );
+    }
+    out.push({ name, module: (entry.module as string).trim() });
+  }
+  return out;
+}

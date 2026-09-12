@@ -108,3 +108,92 @@ describe("cinatra#3249 — the two host modules the gate lived in are gone", () 
     expect(dangling).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SECOND LAYER NAMES NOTHING EITHER (cinatra#3249, second half).
+//
+// Acceptance, in the issue's own words: "nothing in core names a pack, a table,
+// a type or a state — a test greps the new code for the blog pack's names".
+//
+// The walk above already covers every file under `src/lib`. These cases name the
+// files the second layer ADDS and the manifest contract it lands beside them, so
+// a later edit to exactly those files cannot slip a pack's name, its artifact
+// TYPE or its state vocabulary in without turning this red.
+// ---------------------------------------------------------------------------
+
+const MANIFEST = path.resolve(HERE, "..", "..", "packages", "sdk-extensions", "src", "manifest.ts");
+
+/**
+ * The code THIS layer adds. The manifest module is read from the marker of the
+ * declared-tools contract onward: everything above it is the W7 declared-tables
+ * work, whose own prose already carries a worked example of the prefix
+ * derivation ("`ext_`, then the extension's scope and slug"), and a walk of the
+ * whole file would report that pre-existing line instead of anything added here.
+ */
+const SECOND_LAYER: Array<{ file: string; from?: string }> = [
+  { file: path.join(LIB, "extension-tool-dispatch.ts") },
+  { file: path.join(LIB, "extension-tool-module-loader.ts") },
+  { file: path.join(LIB, "extension-scoped-tools.ts") },
+  { file: MANIFEST, from: ["THE DECLARED", "TOOLS CONTRACT"].join("-") },
+];
+
+/** The added code of one entry, and a failure when its marker is not there. */
+function addedCode(entry: { file: string; from?: string }): string {
+  const text = readFileSync(entry.file, "utf8");
+  if (entry.from === undefined) return text;
+  const at = text.indexOf(entry.from);
+  expect([entry.file, at >= 0]).toEqual([entry.file, true]);
+  return text.slice(at);
+}
+
+/** Assembled from fragments, so this file is never itself an occurrence. */
+const PACK_PACKAGE_NAME = ["@cinatra", "ai/blog", "pipeline", "agent"].join("-");
+const PACK_ARTIFACT_TYPE = ["blog", "idea", "artifact"].join("-");
+const PACK_STATE_WORDS = [["reserved"], ["drafted"], ["released"]].map(([w]) => `"${w}"`);
+
+describe("cinatra#3249 — the generic dispatch layer names no pack, table, type or state", () => {
+  it("stands where the test says it does", () => {
+    for (const entry of SECOND_LAYER) expect(existsSync(entry.file)).toBe(true);
+  });
+
+  it("names the pack's package nowhere", () => {
+    for (const entry of SECOND_LAYER) {
+      expect([entry.file, addedCode(entry).includes(PACK_PACKAGE_NAME)]).toEqual([
+        entry.file,
+        false,
+      ]);
+    }
+  });
+
+  it("names the pack's tables nowhere", () => {
+    for (const entry of SECOND_LAYER) {
+      const text = addedCode(entry);
+      expect([entry.file, text.includes(PACK_PHYSICAL_TABLE)]).toEqual([entry.file, false]);
+      expect([entry.file, text.includes(PACK_LOGICAL_TABLE)]).toEqual([entry.file, false]);
+    }
+  });
+
+  it("names the pack's artifact type nowhere", () => {
+    for (const entry of SECOND_LAYER) {
+      expect([entry.file, addedCode(entry).includes(PACK_ARTIFACT_TYPE)]).toEqual([
+        entry.file,
+        false,
+      ]);
+    }
+  });
+
+  it("spells none of the pack's state values — a state is the caller's own column value", () => {
+    for (const entry of SECOND_LAYER) {
+      const text = addedCode(entry);
+      for (const word of PACK_STATE_WORDS) {
+        expect([entry.file, word, text.includes(word)]).toEqual([entry.file, word, false]);
+      }
+    }
+  });
+
+  it("admits no passthrough tool under one pack's own name", () => {
+    for (const entry of SECOND_LAYER) {
+      expect([entry.file, addedCode(entry).includes(PACK_NAMED_TOOL)]).toEqual([entry.file, false]);
+    }
+  });
+});
