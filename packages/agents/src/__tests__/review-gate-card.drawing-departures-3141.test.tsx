@@ -72,7 +72,7 @@ vi.mock("../run-window-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { ReviewGateCard } from "../review-gate-card";
+import { ISLAND_BODY_ANCHOR, ReviewGateCard } from "../review-gate-card";
 
 afterEach(() => {
   cleanup();
@@ -349,6 +349,17 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
   it("keeps the header once the island has PAINTED, and draws exactly one", async () => {
     const { container } = await renderPending("run_card");
     const frame = container.querySelector("iframe")!;
+    // A PAINTED frame, not merely a loaded one. An island that refused answers
+    // 200 with the EMPTY document and fires `load` exactly like a full one, so
+    // the card reads the framed document's own body anchor before it calls the
+    // preview painted. This fixture therefore writes the island's own body
+    // document, the way a real navigation does, and then reports the load.
+    const doc = frame.contentDocument!;
+    doc.open();
+    doc.write(
+      `<html><body><div data-conformance-id="${ISLAND_BODY_ANCHOR}"></div></body></html>`,
+    );
+    doc.close();
     await act(async () => {
       fireEvent.load(frame);
     });
@@ -368,6 +379,36 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       h.querySelector("[data-review-target-revision]")?.getAttribute("data-review-target-revision"),
     );
     expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
+  });
+
+  it("names NO package on the floor — not even where every target shares one", async () => {
+    // §V FIXES WHERE THAT NAME MAY COME FROM: "The resolution is host-derived,
+    // never a claim the client or the model can forge." This overlay is the
+    // CARD's, drawn on the client for a frame that has not painted, so no
+    // renderer was reached and no resolution exists to report. Reading the
+    // artifact TYPE's defining package off the type id instead would name a
+    // package that had no part in the failure — the host may have resolved a
+    // runtime renderer from another package entirely — which is exactly the
+    // invented value "never a raw error or manifest value" keeps off this line.
+    // The slot and the reason are true of the reading whatever it holds, so the
+    // line is still drawn: the floor is never a blank.
+    const { container } = await renderPending("run_card", [HEADER_ONE, HEADER_TWO]);
+    const floor = container.querySelector("[data-review-target-floor]")!;
+    expect(floor, "the floor is still drawn").not.toBeNull();
+    expect(floor.getAttribute("data-review-floor-package")).toBe("");
+    expect(floor.textContent).toBe('slot "detail" · reason "preview-loading"');
+    cleanup();
+
+    // Two targets that DO share one type package are named no differently: the
+    // half is dropped because the card cannot know what drew them, not because
+    // the two disagreed.
+    const together = await renderPending("run_card", [
+      HEADER_ONE,
+      { ...HEADER_TWO, objectType: "@cinatra-ai/email:thread" },
+    ]);
+    const shared = together.container.querySelector("[data-review-target-floor]")!;
+    expect(shared.getAttribute("data-review-floor-package")).toBe("");
+    expect(shared.textContent).toBe('slot "detail" · reason "preview-loading"');
   });
 
   it("the conversation's card draws the header in every island state too", async () => {
@@ -420,12 +461,31 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
     ).toBeNull();
   });
 
-  it("an answer that carries no headers draws none — never an invented one", async () => {
+  // AMENDED (cinatra#3058, fix leg 8). The half this pin was written for is
+  // unchanged and is measured first: an answer that carried no headers COMPOSES
+  // none, and nothing is invented in their place. What it no longer says is
+  // that the panel is then nameless — §IV opens "EVERY target opens with a
+  // header that names what is under review and fixes it in place", and the
+  // reading measured on the real surface was a reader offered Approve and
+  // Reject for twenty seconds over a panel that named nothing at all. So the
+  // card draws the header's own form with no facts in it, which is the one
+  // reading that invents nothing and names the panel.
+  it("an answer that carries no headers composes none — and names the reading instead", async () => {
     mockResolve(PENDING);
     const { container } = renderOn("run_card");
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
     );
-    expect(headers(container)).toHaveLength(0);
+    expect(headers(container), "no composed header").toHaveLength(0);
+    const pending = container.querySelector("[data-review-target-header-pending]");
+    expect(pending, "and the panel is named anyway").not.toBeNull();
+    expect(
+      pending!.getAttribute("data-review-target-header-pending"),
+      "openly, as the reading whose facts have not arrived",
+    ).toBe("");
+    // NOT ONE FACT OF THE ARTIFACT: no title, no type, no revision, no pin.
+    expect(pending!.textContent).toBe("Review target");
+    expect(container.querySelector("[data-review-target-revision]")).toBeNull();
+    expect(container.textContent).not.toContain("undefined");
   });
 });

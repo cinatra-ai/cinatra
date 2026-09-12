@@ -53,6 +53,7 @@ import {
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
+  producesWithoutMaterializationRoad,
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 
@@ -2209,6 +2210,11 @@ export async function compileOasAgentJson(opts: {
   // registry read, so a registry outage at run time only fails runs whose
   // packages actually declare bindings.
   let hasArtifactBindings = false;
+  // Hoisted out of the two blocks below so 10d can ask the OTHER direction of
+  // the parity question — which promised extension has no road at all — without
+  // walking the document a third time (cinatra#3051).
+  let declaredBindings: ReadonlyArray<{ binding: { extension: string } }> = [];
+  let declaredMaterializeNodes: ReadonlyArray<{ extension: string }> = [];
   // cinatra#3208 — the FULL collected declaration, not only its presence. Kept
   // on the compiled root so the install seed / recompile writer can persist it
   // beside package_version; `null` while the sibling manifest is unreadable.
@@ -2227,6 +2233,7 @@ export async function compileOasAgentJson(opts: {
       };
     }
     hasArtifactBindings = bindingResult.bindings.length > 0;
+    declaredBindings = bindingResult.bindings;
     // Only a compile that SAW the sibling manifest may persist the declaration:
     // the parity check above (`binding.extension` is in `produces`) ran, and the
     // typed produces refs the materializer needs to resolve a binding's declared
@@ -2260,6 +2267,37 @@ export async function compileOasAgentJson(opts: {
           `artifact_materialize node validation failed for ${opts.packageName}:\n` +
           materializeResult.errors.join("\n"),
       };
+    }
+    declaredMaterializeNodes = materializeResult.nodes;
+  }
+
+  // 10d. A PROMISE WITH NO ROAD — the other direction of the parity above
+  // (cinatra#3051). The rule and the reasoning live beside the grammar in
+  // artifact-binding.ts.
+  //
+  // 10b checks every binding against `cinatra.produces`. Nothing checked the
+  // reverse, so a manifest could declare it produces an artifact while the
+  // service description wired no way to make one — no output binding, no
+  // materialize node — and the package installed, ran and completed owing
+  // nothing, without a word anywhere.
+  //
+  // NAMED, NOT REFUSED. The compile still succeeds; what changes is that the
+  // contradiction says its own name, once, at the moment a person installs the
+  // package — which is the only moment it is cheap to act on.
+  {
+    const unkept = producesWithoutMaterializationRoad(sibling?.producesRefs ?? null, {
+      bindings: declaredBindings,
+      materializeNodes: declaredMaterializeNodes,
+    });
+    if (unkept.length > 0) {
+      console.warn(
+        `[artifact-binding] ${opts.packageName} declares cinatra.produces ` +
+          `[${unkept.join(", ")}] but wires no road for ` +
+          `${unkept.length === 1 ? "it" : "them"}: no outputs[].cinatra.artifact ` +
+          `binding and no artifact_materialize node. A run of this agent completes ` +
+          `owing no artifact, so the host materializes nothing and opens no review ` +
+          `gate — the declaration alone does not produce one.`,
+      );
     }
   }
 
