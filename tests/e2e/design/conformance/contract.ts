@@ -20,6 +20,7 @@
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 
+import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_CARD_FIXTURES,
@@ -188,8 +189,19 @@ export function ensureSeeded(): Promise<void> {
         headers: { authorization: `Bearer ${capability}` },
       });
       if (!res.ok()) {
+        // NAME THE FENCE (cinatra#3416). Every refusal of the seed route is a
+        // bare 404 by design, so a red here used to say only "HTTP 404" and
+        // left the reason to be guessed at. The server under test is a harness
+        // server, and a harness server puts the fence it refused at in a header
+        // this suite reads. "capability-not-presented" from a server that was
+        // handed the same value this process holds means the answer came from a
+        // DIFFERENT server than this run started.
+        const fence = res.headers()[CONFORMANCE_SEED_REFUSAL_HEADER];
         throw new Error(
-          `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}`,
+          `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}` +
+            (fence === undefined
+              ? ` (no ${CONFORMANCE_SEED_REFUSAL_HEADER} header: the server on ${SEED_BASE_URL} is not a harness server of this run)`
+              : ` (refused at the fence: ${fence})`),
         );
       }
     } finally {
