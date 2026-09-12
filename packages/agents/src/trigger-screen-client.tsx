@@ -970,8 +970,13 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <span className="text-muted-foreground">:</span>
                     <Select value={String(recurring.minute)} onValueChange={(v) => updateRecurring({ minute: Number(v) })}>
                       <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278) — the same
+                          defect the schedule card carried: a stated 05:12 found
+                          no option for 12 and drew a blank minute. Only the
+                          option set changes; the cron this row builds is the
+                          same builder it always was. */}
                       <SelectContent>
-                        {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                        {Array.from({ length: 60 }, (_, m) => (
                           <SelectItem key={m} value={String(m)}>{String(m).padStart(2, "0")}</SelectItem>
                         ))}
                       </SelectContent>
