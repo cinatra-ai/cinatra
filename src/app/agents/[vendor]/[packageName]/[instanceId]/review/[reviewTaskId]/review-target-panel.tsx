@@ -69,10 +69,18 @@ export function ReviewTargetPanel({
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
   return (
+    // IT DOES NOT CLIP THE WORK (the tenth proof round's counted defect 3 on
+    // cinatra#3143: "the drawn bodies are CLIPPED with no visible scroll
+    // affordance ... cut hard at the panel's right edge"). The frame used to
+    // carry `overflow-hidden`, which took a display wider than the panel and
+    // simply cut it — a structured-data tree lost its right-hand columns and a
+    // text body lost the end of every long line, with nothing on screen to say
+    // anything had been cut. The container is the slot below, and it scrolls;
+    // the frame around it only draws the border.
     <div
       data-conformance-id="review-target"
       data-field="name=type.displayName"
-      className="overflow-hidden rounded-control border border-line bg-surface-strong"
+      className="rounded-control border border-line bg-surface-strong"
     >
       {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
           The header used to be drawn here, inside the island document, which is
@@ -107,7 +115,13 @@ export function ReviewTargetPanel({
 
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context. */}
-      <div className="p-4" data-review-representation-slot="">
+      {/* THE SLOT IS THE CONTAINER THAT SCROLLS. `overflow-x-auto` gives a
+          representation wider than the panel its own horizontal scroll — the
+          reader reaches the whole of it, and the page around it never widens.
+          `min-w-0` is what lets that happen inside the flex column the island
+          body draws: without it the slot takes its width from its content and
+          the overflow moves back out to the document. */}
+      <div className="min-w-0 overflow-x-auto p-4" data-review-representation-slot="">
         <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
