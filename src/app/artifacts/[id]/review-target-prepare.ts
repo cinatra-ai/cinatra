@@ -56,8 +56,10 @@ import {
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 import {
+  beginReviewTargetsCore,
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
+  type BeginReviewResult,
   type PrepareReviewInput,
   type PrepareReviewPorts,
   type PrepareReviewResult,
@@ -443,4 +445,20 @@ export async function prepareArtifactReviewTargets(args: {
 }): Promise<PrepareReviewResult> {
   const artifactPorts = bindArtifactReviewPorts({ orgId: args.orgId, actor: args.actor });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
+}
+
+/**
+ * The STREAMING reading of the same call (cinatra#3334): the authorization,
+ * gate and substitution preflight is awaited, and the per-target preparations
+ * come back started, capped and in the gate's order. Same core, same ports,
+ * same hard failures — only the moment the caller is answered moves.
+ */
+export async function beginArtifactReviewTargets(args: {
+  input: PrepareReviewInput;
+  orgId: string;
+  actor: ActorContext;
+  runGatePorts: ReviewRunGatePorts;
+}): Promise<BeginReviewResult> {
+  const artifactPorts = bindArtifactReviewPorts({ orgId: args.orgId, actor: args.actor });
+  return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

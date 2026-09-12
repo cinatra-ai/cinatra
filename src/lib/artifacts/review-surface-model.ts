@@ -27,6 +27,7 @@ import type {
   PreparedReviewTarget,
   ReviewTargetMount,
 } from "@/lib/artifacts/artifact-review-preparation";
+import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import type {
   ReviewDisposition,
   SubmitDecisionResult,
@@ -305,6 +306,35 @@ export function reviewDecideDisabledReason(
 // agent's one-line summary when present + the decision permissions.
 // ---------------------------------------------------------------------------
 
+/**
+ * ONE TARGET OF THE STREAMING SURFACE (cinatra#3334).
+ *
+ * The surface used to carry targets that were already prepared, which meant the
+ * loader could not answer until the LAST of them was — and the page could not
+ * open a boundary around anything, because there was nothing left to wait for.
+ * It now carries the target's identity (available the moment the gate's pinned
+ * set is known) beside the promise of its display and the promise of its pinned
+ * capture, in the gate's order, so the page puts each one under its own
+ * boundary and a prepared target paints while its siblings are still resolving.
+ *
+ * The promises are started by the loader, after the preflight: nothing here can
+ * begin a target read before the run access, the gate state and the pinned-set
+ * check have answered.
+ */
+export interface ReviewTargetStream {
+  /** The pinned target, known at preflight — the key the page draws it under. */
+  target: ArtifactReviewTarget;
+  /** Its never-blank display, still being prepared. */
+  prepared: Promise<PreparedReviewTarget>;
+  /** S6 (#2044 L-B + L-D) — its PINNED visual before/after pair: the live page
+   *  beside the proposal composed into that page's own adapter-marked regions,
+   *  captured at gate creation and read from the store (the surface never
+   *  fetches the remote site at view time, so an old gate keeps showing its
+   *  original pictures). Null for a target that has none — every other artifact
+   *  type — which renders nothing at all: the pictures are additive context. */
+  capturePair: Promise<PinnedCapturePairView | null>;
+}
+
 export type ReviewSurfaceModel =
   /** A viewer with no read access to the run never sees the targets (§V). */
   | { kind: "not-authorized" }
@@ -346,10 +376,9 @@ export type ReviewSurfaceModel =
   | {
       kind: "settled";
       /** The frozen pinned set, prepared READ-ONLY — the reviewed target(s) the
-       * decided reading keeps, in gate order. */
-      targets: PreparedReviewTarget[];
-      /** As `ready`: the pinned before/after pair per target, where one exists. */
-      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+       * decided reading keeps, in gate order, each streaming under its own
+       * boundary exactly as on the pending reading. */
+      targets: ReviewTargetStream[];
       /** As `ready`: the producing agent's one-line summary, when present. */
       agentSummary: string | null;
     }
@@ -358,22 +387,18 @@ export type ReviewSurfaceModel =
       kind: "ready";
       runId: string;
       reviewTaskId: string;
-      targets: PreparedReviewTarget[];
+      /** The gate's pinned set in gate order, each target carrying the promise
+       * of its own display and its own pinned capture (cinatra#3334). */
+      targets: ReviewTargetStream[];
       /** The producing agent's one-line summary (§I/II) — rendered only when
        * present; absent for a gate whose producer supplied none. */
       agentSummary: string | null;
       /**
-       * S6 (#2044 L-B + L-D) — the PINNED visual before/after PAIR per target,
-       * keyed `<artifactId>:<representationRevisionId>` (the pinned pair):
-       * the live page beside the proposal composed into that page's own
-       * adapter-marked regions. Captured at gate creation and read from the
-       * store; the surface NEVER fetches the remote site at view time, so an old
-       * gate keeps showing its original pictures. Absent for a target that has
-       * none (every other artifact type), which renders nothing at all — the
-       * pictures are additive context.
+       * The decision axis (§V) — a PROMISE since cinatra#3334. It is the card's
+       * floor, below the frame, that consumes it, and no target's body waits on
+       * it, so resolving it is no longer allowed to hold the surface's answer.
        */
-      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
-      permissions: ReviewDecisionPermissions;
+      permissions: Promise<ReviewDecisionPermissions>;
     };
 
 /** The key a target's pinned captures are stored under on the surface model. */

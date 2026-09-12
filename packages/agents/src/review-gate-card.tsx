@@ -343,6 +343,65 @@ type IslandLoadState = "loading" | "loaded" | "timed-out";
  */
 const ISLAND_LOAD_TIMEOUT_MS = 12_000;
 
+/**
+ * THE IDLE-PROGRESS BOUND (cinatra#3334) — the second of the card's two bounds.
+ *
+ * The bound above answers one question only: did the island answer AT ALL? Once
+ * it has (the early, data-free `island-ready` the document posts before any
+ * panel work), the card stops asking that and starts asking whether the island
+ * is still making progress: every panel that mounts posts `panel-mounted`, and
+ * every one of them restarts this bound. A gate whose targets keep arriving is
+ * therefore never plated, however many it has, while a document that goes quiet
+ * — a hung render, a panel that never resolves — still fails inside one bound.
+ *
+ * Same twelve seconds as the initial bound, for the same reason: long enough
+ * that a slow but live step never misfires, short enough that a genuine hang
+ * does not strand the reviewer on a skeleton.
+ */
+const ISLAND_IDLE_PROGRESS_TIMEOUT_MS = 12_000;
+
+/**
+ * The island's progress channel and frame-name stamp. MIRRORED from
+ * `src/app/lifecycle/review-island/island-progress.ts`, exactly as the island's
+ * `ic` and `scheme` query keys are mirrored here: this package cannot import
+ * from the application, and the island's own suite pins the server side of the
+ * same two literals.
+ */
+const REVIEW_ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
+const REVIEW_ISLAND_FRAME_NAME_PREFIX = "cinatra-review-island";
+
+/** The name this card stamps on the frame it is currently showing. The island
+ *  reads it as `window.name` and names the attempt back, so the card can tell a
+ *  live frame's message from one a replaced frame is still sending — without
+ *  putting anything into the island's address. */
+function reviewIslandFrameName(attempt: number): string {
+  return `${REVIEW_ISLAND_FRAME_NAME_PREFIX}:${attempt}`;
+}
+
+/**
+ * Narrow an arbitrary `message` payload to one of the island's two signals.
+ *
+ * The provenance checks (origin, source frame, attempt) are the caller's; this
+ * is the shape check, and it is a closed one: an unknown channel, an unknown
+ * type or a non-numeric attempt is not a signal. Nothing is read out of the
+ * payload beyond these three fields, because the island puts nothing else in
+ * one — no ref, no target id, no credential.
+ */
+function readIslandProgress(
+  data: unknown,
+): { type: "island-ready" | "panel-mounted"; attempt: number } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { channel, type, attempt } = data as {
+    channel?: unknown;
+    type?: unknown;
+    attempt?: unknown;
+  };
+  if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL) return null;
+  if (type !== "island-ready" && type !== "panel-mounted") return null;
+  if (typeof attempt !== "number" || !Number.isInteger(attempt)) return null;
+  return { type, attempt };
+}
+
 export type ReviewGateCardView = {
   viewType: "artifact_review_gate";
   schemaVersion: number;
@@ -1544,18 +1603,80 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  const [load, setLoad] = useState({
+    src,
+    attempt: 0,
+    loaded: false,
+    timedOut: false,
+    /** Has the island answered at all yet (`island-ready`)? */
+    ready: false,
+    /** How many panels it has reported since — the idle bound's restart count. */
+    progress: 0,
+  });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0 });
   }
 
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
+  /**
+   * THE ISLAND'S ORIGIN — the only origin whose messages this card reads. On a
+   * first-party page it is this document's own; inside the widget the card is
+   * on a third-party CMS page and the island is still Cinatra's, so it is
+   * resolved from the address the frame was actually pointed at rather than
+   * assumed to be either one.
+   */
+  const islandOrigin = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return new URL(src, window.location.href).origin;
+    } catch {
+      return null;
+    }
+  }, [src]);
+
+  // THE ISLAND'S OWN PROGRESS (cinatra#3334). Three checks, all of them
+  // required, before a message may touch a bound: it came from the ISLAND'S
+  // ORIGIN, it came from the FRAME THIS CARD IS SHOWING (never a sibling frame
+  // on the same origin), and it names THIS ATTEMPT (a frame the card has
+  // already replaced cannot hold the live one open). The payload itself is
+  // data-free, so accepting one grants nothing but the timer it restarts.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (islandOrigin === null || event.origin !== islandOrigin) return;
+      const frame = frameRef.current;
+      if (!frame || event.source !== frame.contentWindow) return;
+      const progress = readIslandProgress(event.data);
+      if (!progress || progress.attempt !== load.attempt) return;
+      setLoad((current) =>
+        progress.type === "island-ready"
+          ? current.ready
+            ? current
+            : { ...current, ready: true }
+          : { ...current, ready: true, progress: current.progress + 1 },
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [islandOrigin, load.attempt]);
+
+  // THE TWO BOUNDS, as one restarting timer (cinatra#3334). Before
+  // `island-ready` it is the INITIAL-RESPONSE bound, running from the moment
+  // the card pointed the frame at the island — a lazy frame included, which is
+  // the known residual above. `island-ready` cancels it and starts the
+  // IDLE-PROGRESS bound in its place, and every `panel-mounted` restarts that
+  // one. The plate is painted ONLY when a bound expires, and the frame's own
+  // `load` still cancels whichever is running and heals the plate.
+  const bound = load.ready ? ISLAND_IDLE_PROGRESS_TIMEOUT_MS : ISLAND_LOAD_TIMEOUT_MS;
   useEffect(() => {
     if (load.loaded) return;
     const timer = setTimeout(() => {
-      setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
-    }, ISLAND_LOAD_TIMEOUT_MS);
+      setLoad((current) =>
+        current.loaded || current.timedOut ? current : { ...current, timedOut: true },
+      );
+    }, bound);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.loaded]);
+  }, [load.src, load.attempt, load.loaded, load.ready, load.progress, bound]);
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
   const height = ISLAND_HEIGHT;
@@ -1571,7 +1692,14 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.src}:${load.attempt}`}
+        ref={frameRef}
         src={src}
+        // THE ATTEMPT STAMP (cinatra#3334). A frame's `name` is readable as
+        // `window.name` inside the document it holds, so the island can name
+        // this attempt back to the card without anything being added to the
+        // island's ADDRESS — which stays the ref and, where there is one, the
+        // server's credential, and nothing else.
+        name={reviewIslandFrameName(load.attempt)}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
         // withhold top-navigation, form submission and popups from a document
@@ -1617,6 +1745,10 @@ function ReviewTargetIsland({
                   attempt: current.attempt + 1,
                   loaded: false,
                   timedOut: false,
+                  // A fresh frame is a fresh protocol: the new attempt has not
+                  // answered yet, and the old one's messages no longer name it.
+                  ready: false,
+                  progress: 0,
                 }));
               }}
             />

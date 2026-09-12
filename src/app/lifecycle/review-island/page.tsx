@@ -95,13 +95,16 @@ import "server-only";
 // all, so there is nothing to press on either side of the boundary.
 // ---------------------------------------------------------------------------
 
-import { Suspense } from "react";
+import { Suspense, use } from "react";
 import { redirect } from "next/navigation";
 
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.server";
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
-import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
+import {
+  pinnedCaptureKey,
+  type ReviewTargetStream,
+} from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
 import {
@@ -113,6 +116,10 @@ import {
   type IslandColorScheme,
 } from "./island-color-scheme";
 import { resolveIslandCredentialReader } from "@/lib/lifecycle/review-island-serving";
+import {
+  IslandPanelMountedSignal,
+  IslandReadySignal,
+} from "./island-progress-signals";
 import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
@@ -259,6 +266,12 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           closed enum, never from the request's text. */}
       {groundCss ? <style>{groundCss}</style> : null}
 
+      {/* cinatra#3334 — the EARLY answer, before any panel work: it tells the
+          card that this document is alive, so the card stops watching for a
+          first response and starts watching for progress instead. It carries
+          nothing (see `island-progress.ts`) and renders nothing. */}
+      <IslandReadySignal />
+
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}
       {surface.agentSummary ? (
@@ -273,21 +286,54 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       {/* §II/§III — every pinned target as a sibling panel, in gate order. The
           card below the frame carries ONE floor for all of them, because the
           decision is all-or-nothing across the gate. */}
-      {surface.targets.map((prepared) => (
-        <Suspense
-          key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
-          fallback={<ReviewGateLoading />}
-        >
-          <ReviewTargetPanel
-            prepared={prepared}
+      {surface.targets.map((stream) => (
+        <Suspense key={pinnedCaptureKey(stream.target)} fallback={<ReviewGateLoading />}>
+          <StreamedReviewTarget
+            prepared={stream.prepared}
+            capturePair={stream.capturePair}
             // The TRUSTED organization scope, from the reader this island just
             // authorized — never from the query string and never from the
             // display props. The form rung reads the pinned bytes under it.
             orgId={actorCtx.orgId}
-            capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
           />
         </Suspense>
       ))}
     </div>
+  );
+}
+
+/**
+ * ONE TARGET, UNDER ITS OWN BOUNDARY (cinatra#3334).
+ *
+ * The boundaries around the targets used to be decoration: the page awaited the
+ * whole prepared set before it built them, so nothing inside one could still be
+ * pending. The surface now hands this document a promise per target, and THIS
+ * is what waits on it — inside the boundary, one target at a time — so a target
+ * that is ready paints while its siblings are still being prepared, and a gate
+ * over several targets stops spending the card's whole load bound before its
+ * first body can stream.
+ *
+ * It is the SAME `ReviewTargetPanel` the review page has always rendered, fed
+ * the same prepared value and the same pinned pair. Nothing about the ladder,
+ * the floor or the trusted organization scope moves.
+ */
+function StreamedReviewTarget({
+  prepared,
+  capturePair,
+  orgId,
+}: {
+  prepared: ReviewTargetStream["prepared"];
+  capturePair: ReviewTargetStream["capturePair"];
+  orgId: string;
+}) {
+  const target = use(prepared);
+  const pair = use(capturePair);
+  return (
+    <>
+      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} />
+      {/* The card's idle-progress bound restarts on this: a gate that is still
+          streaming panels is never painted over with a failure plate. */}
+      <IslandPanelMountedSignal />
+    </>
   );
 }
