@@ -71,6 +71,13 @@ const UI_ALLOWLIST = new Set<string>([
   // ScopeFilterCombobox and resolves ?scope= server-side. A UI pick target, so
   // an archived org must never be offered here either.
   "src/app/assistants/page.tsx",
+  // The WorkspaceVantage read binding (cinatra#2810, per-scope surfaces S4).
+  // The vantage is what a scope tab OFFERS as reachable, and its own contract
+  // puts archival on the picker side of this split: "Archival removes the
+  // organization on the next read, exactly like a revoked membership". So the
+  // active-only reader is the correct one here, and an archived organization
+  // must never enter a vantage.
+  "src/lib/scope-surface-workspace-vantage.ts",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {
