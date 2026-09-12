@@ -8,6 +8,7 @@
     "src/components/extension-card.tsx",
     "src/lib/extension-accent.ts",
     "src/lib/__tests__/extension-accent-guard.test.ts",
+    "src/app/__tests__/palette-mirror-lockstep.test.ts",
     "src/components/ui/status-pill.tsx",
     "src/components/svg-icons/**",
     "node_modules/**",

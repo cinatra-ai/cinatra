@@ -250,9 +250,9 @@ export default function ConformanceHarnessPage() {
             <CardTitle>Side sheet (mount: app-shell-sheet)</CardTitle>
           </CardHeader>
           <CardContent>
-            {/* cinatra#833's top-offset guard measures a real right-side sheet
-                against the live app bar. Its trigger moved here from the
-                retired primitives catalog (cinatra#3189). */}
+            {/* The top-offset guard from cinatra issue 833 measures a real
+                right-side sheet against the live app bar. Its trigger moved
+                here from the retired primitives catalog (cinatra issue 3189). */}
             <AppShellSheetFixture />
           </CardContent>
         </Card>
