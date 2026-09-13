@@ -2,11 +2,10 @@ import { revalidatePath } from "next/cache";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
-import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
-import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase } from "@/lib/database";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 // installedSkillPackages + canonical access-policy helpers (W4, #1073) live in ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
-import { assertPersonalSkillOwnership, catalogSignature, EXTENSION_SKILL_SOURCE_ORIGIN, installedSkillPackages, isExtensionRegisteredSkill, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, sortCatalog, visibilityToLevelScope } from "./skill-packages";
+import { addSkillCoOwner, addSkillPackageCoOwner, assertPersonalSkillOwnership, catalogSignature, EXTENSION_SKILL_SOURCE_ORIGIN, installedSkillPackages, isExtensionRegisteredSkill, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillCoOwners, readSkillPackageCoOwners, readSkillsCatalogSnapshot, removeAllPolymorphicSkillPermissionsForPackage, removeAllSkillCoOwnersForPackage, removeAllSkillPackageCoOwners, removeSkillCoOwner, removeSkillPackageCoOwner, resolveUpsertAccessConfig, sortCatalog, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource, type UpsertBundleFile } from "./skill-source";
@@ -2493,12 +2492,27 @@ export function resolveCustomSkillOwner(args: {
 
 import type { AgentAuthPolicy as SkillPackageAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
-export type SkillPackageCoOwnerRow = {
-  packageId: string;
-  userId: string;
-  grantedBy: string;
-  grantedAt: Date;
+// Co-owner ROW store (`cinatra.skill_package_co_owners` /
+// `cinatra.skill_co_owners`) — moved to ./skill-packages to bring this file
+// back under its file-size ceiling. That module was chosen over a new file for
+// the same reason the access-policy helpers live there: it is ALREADY reachable
+// from every locked route bundle, so the extraction is a 0-module route-graph
+// delta. Behavior, names and call sites are unchanged — the re-export below IS
+// the public surface, and `uninstallSkillPackage` above calls three of these
+// through the same imported bindings. The policy readers and writers below stay
+// here because they read and rewrite the CATALOG, not the co-owner tables.
+export {
+  readSkillPackageCoOwners,
+  addSkillPackageCoOwner,
+  removeSkillPackageCoOwner,
+  removeAllSkillPackageCoOwners,
+  removeAllSkillCoOwnersForPackage,
+  removeAllPolymorphicSkillPermissionsForPackage,
+  readSkillCoOwners,
+  addSkillCoOwner,
+  removeSkillCoOwner,
 };
+export type { SkillPackageCoOwnerRow, SkillCoOwnerRow } from "./skill-packages";
 
 export async function readSkillPackageAccessPolicy(
   packageId: string,
@@ -2536,169 +2550,6 @@ export async function readSkillPackageInstalledBy(
   const catalog = await readSkillsCatalogSnapshot();
   const pkg = catalog.skillPackages.find((p) => p.packageId === packageId || p.id === packageId);
   return pkg?.installedByUserId ?? null;
-}
-
-export async function readSkillPackageCoOwners(
-  packageId: string,
-): Promise<SkillPackageCoOwnerRow[]> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  const [result] = runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `SELECT package_id, user_id, granted_by, granted_at
-               FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
-               WHERE package_id = $1
-               ORDER BY granted_at ASC`,
-        values: [packageId],
-      },
-    ],
-  });
-  type Row = { package_id: string; user_id: string; granted_by: string; granted_at: string | Date };
-  const rows = (result?.rows ?? []) as Row[];
-  return rows.map((r) => ({
-    packageId: r.package_id,
-    userId: r.user_id,
-    grantedBy: r.granted_by,
-    grantedAt: r.granted_at instanceof Date ? r.granted_at : new Date(r.granted_at),
-  }));
-}
-
-export async function addSkillPackageCoOwner(
-  packageId: string,
-  userId: string,
-  grantedBy: string,
-): Promise<{ ok: boolean }> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `INSERT INTO "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
-                 (package_id, user_id, granted_by)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (package_id, user_id) DO NOTHING`,
-        values: [packageId, userId, grantedBy],
-      },
-    ],
-  });
-  return { ok: true };
-}
-
-export async function removeSkillPackageCoOwner(
-  packageId: string,
-  userId: string,
-): Promise<{ ok: boolean }> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
-               WHERE package_id = $1 AND user_id = $2`,
-        values: [packageId, userId],
-      },
-    ],
-  });
-  return { ok: true };
-}
-
-/**
- * Remove ALL co-owner rows for a package.
- *
- * Used by `uninstallSkillPackage()` to explicitly clean up the sibling
- * `skill_package_co_owners` rows BEFORE the catalog's package row is
- * deleted by `replaceSkillCatalogInDatabase()`. The FK changed from
- * CASCADE to RESTRICT (so the catalog rewrite no longer silently wipes
- * co-owners), and explicit uninstall — by user intent — should also clear
- * the sharing entries.
- */
-export async function removeAllSkillPackageCoOwners(packageId: string): Promise<void> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
-               WHERE package_id = $1`,
-        values: [packageId],
-      },
-    ],
-  });
-}
-
-/**
- * Remove ALL skill-level co-owner rows for every
- * skill belonging to the given package.
- *
- * `skill_co_owners.skill_id` is FK to `cinatra.skills(id)` with
- * ON DELETE RESTRICT. When a package is uninstalled, its skill rows are
- * dropped by the catalog rewrite. If any of those skills still have
- * skill-level co-owners, the FK rejects the rewrite and the transaction rolls
- * back. Call this first to clear the sibling rows by user intent.
- */
-export async function removeAllSkillCoOwnersForPackage(packageId: string): Promise<void> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  // Delete by joining through the skills payload — co-owner rows whose
-  // skill_id matches any skill whose payload.packageId is the uninstalled
-  // package. payload is text holding JSON; cast to jsonb for `->>` lookup.
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
-               WHERE skill_id IN (
-                 SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
-                 WHERE (payload::jsonb)->>'packageId' = $1
-               )`,
-        values: [packageId],
-      },
-    ],
-  });
-}
-
-/**
- * Remove ALL polymorphic
- * `extension_co_owners` + `extension_access_policy` rows for every skill
- * belonging to the given package.
- *
- * The polymorphic backend has no FK on `resource_id` (one FK
- * can't span multiple kind-specific resource tables), so an
- * uninstallSkillPackage must also clean polymorphic rows keyed by
- * `resource_kind='skill'` for each child skill — otherwise those rows
- * orphan and could re-apply grants if the same skill id is later reused.
- */
-export async function removeAllPolymorphicSkillPermissionsForPackage(packageId: string): Promise<void> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."extension_co_owners"
-               WHERE resource_kind = 'skill'
-                 AND resource_id IN (
-                   SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
-                   WHERE (payload::jsonb)->>'packageId' = $1
-                 )`,
-        values: [packageId],
-      },
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."extension_access_policy"
-               WHERE resource_kind = 'skill'
-                 AND resource_id IN (
-                   SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
-                   WHERE (payload::jsonb)->>'packageId' = $1
-                 )`,
-        values: [packageId],
-      },
-    ],
-  });
 }
 
 export async function setSkillPackageInstalledBy(
@@ -2739,13 +2590,6 @@ export async function setSkillPackageInstalledBy(
 // ---------------------------------------------------------------------------
 
 import type { AgentAuthPolicy as SkillAuthPolicy } from "@cinatra-ai/agents/auth-policy";
-
-export type SkillCoOwnerRow = {
-  skillId: string;
-  userId: string;
-  grantedBy: string;
-  grantedAt: Date;
-};
 
 export async function readSkillAccessPolicy(
   skillId: string,
@@ -2791,72 +2635,6 @@ export async function writeSkillAccessPolicy(
   replaceSkillCatalogInDatabase({
     skillPackages: catalog.skillPackages,
     skills: next,
-  });
-  return { ok: true };
-}
-
-export async function readSkillCoOwners(skillId: string): Promise<SkillCoOwnerRow[]> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  const [result] = runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `SELECT skill_id, user_id, granted_by, granted_at
-               FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
-               WHERE skill_id = $1
-               ORDER BY granted_at ASC`,
-        values: [skillId],
-      },
-    ],
-  });
-  type Row = { skill_id: string; user_id: string; granted_by: string; granted_at: string | Date };
-  const rows = (result?.rows ?? []) as Row[];
-  return rows.map((r) => ({
-    skillId: r.skill_id,
-    userId: r.user_id,
-    grantedBy: r.granted_by,
-    grantedAt: r.granted_at instanceof Date ? r.granted_at : new Date(r.granted_at),
-  }));
-}
-
-export async function addSkillCoOwner(
-  skillId: string,
-  userId: string,
-  grantedBy: string,
-): Promise<{ ok: boolean }> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `INSERT INTO "${schema.replaceAll('"', '""')}"."skill_co_owners"
-                 (skill_id, user_id, granted_by)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (skill_id, user_id) DO NOTHING`,
-        values: [skillId, userId, grantedBy],
-      },
-    ],
-  });
-  return { ok: true };
-}
-
-export async function removeSkillCoOwner(
-  skillId: string,
-  userId: string,
-): Promise<{ ok: boolean }> {
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
-  runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
-               WHERE skill_id = $1 AND user_id = $2`,
-        values: [skillId, userId],
-      },
-    ],
   });
   return { ok: true };
 }
