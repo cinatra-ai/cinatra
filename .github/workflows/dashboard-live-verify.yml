@@ -318,16 +318,21 @@ jobs:
       - name: Add CI build swap (default-runner only)
         # Best-effort, GitHub-hosted runners ONLY (a self-hosted runner brings
         # its own memory and cleanup, and this step's tools are not on its
-        # path). A 4G swapfile absorbs `pnpm build` page-data
-        # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
-        # unresponsiveness ("runner received a shutdown signal" mid page-data
-        # collection). Subshell-guarded so a swap-setup failure NEVER fails the job.
-        # Mirrors the build-image build/e2e jobs.
+        # path). A 16G swapfile UNDER /mnt — the hosted runners' temp volume
+        # has the room the root disk lacks — absorbs the production build's
+        # memory SPIKES so the runner is not RECLAIMED for unresponsiveness
+        # ("The runner has received a shutdown signal" inside the build step).
+        # 4G on the root disk was NOT enough: a sampler over run 34558946726
+        # measured mem_available_mb between 122 and 400 for six minutes with
+        # mem_used_mb up to 15850, and three build attempts died in that
+        # window. This is the same 16G-under-/mnt provision the image build
+        # already makes. Subshell-guarded so a swap-setup failure NEVER fails
+        # the job. Mirrors the build-image jobs.
         if: ${{ needs.detect.outputs.run_real == 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+          SWAPFILE=/mnt/cinatra-s9k-swap
+          if { sudo fallocate -l 16G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=16384; }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
