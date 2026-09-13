@@ -5,7 +5,7 @@
   "regeneration": {
     "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
     "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
-    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
     "generator": "scripts/ci/merge-readiness-inventory.mjs"
   },
   "excluded": [
@@ -28,7 +28,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 45
     },
     {
       "context": "/design-fixtures pixel-diff + axe",
@@ -84,7 +85,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 23
     },
     {
       "context": "Actions SHA-pin gate",
@@ -93,7 +95,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "actions-pinned-gate / actions-pinned-gate",
@@ -111,7 +114,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 20
     },
     {
       "context": "Agents-run static invariants (tunnel-wiring)",
@@ -120,7 +124,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 15
     },
     {
       "context": "Archive acceptance coverage-completeness gate (#1943)",
@@ -129,7 +134,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "Better Auth schema parity",
@@ -138,7 +144,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 24
     },
     {
       "context": "build",
@@ -147,7 +154,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "Canonical extension invariants",
@@ -156,7 +164,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 23
     },
     {
       "context": "Chat-HITL held-turn dev-runtime e2e",
@@ -165,7 +174,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 50
     },
     {
       "context": "context-resolve route response shape",
@@ -174,7 +184,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 23
     },
     {
       "context": "Core-store schema migration gate",
@@ -183,7 +194,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "Create GitHub Release",
@@ -192,7 +204,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": null
     },
     {
       "context": "CRM migration gates",
@@ -201,7 +214,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "design suite selection",
@@ -304,7 +318,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 10
     },
     {
       "context": "design-pin-freshness",
@@ -313,7 +328,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 10
     },
     {
       "context": "detect",
@@ -322,7 +338,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "Detect skip — docs-only or draft (build-image)",
@@ -331,7 +348,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "Detect skip — docs-only or draft (e2e-app-suites)",
@@ -340,7 +358,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "Detect upgrade-relevant changes",
@@ -349,7 +368,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "devperf invariants",
@@ -358,7 +378,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 24
     },
     {
       "context": "Discover batteries",
@@ -401,7 +422,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 23
     },
     {
       "context": "Extension-anchor lifecycle DB tests",
@@ -410,7 +432,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 10
     },
     {
       "context": "gates",
@@ -419,7 +442,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 15
     },
     {
       "context": "gates-pnpm",
@@ -428,7 +452,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 15
     },
     {
       "context": "gitignore-gate / gitignore-gate",
@@ -446,7 +471,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 23
     },
     {
       "context": "image",
@@ -455,7 +481,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 45
     },
     {
       "context": "Notifications browser e2e",
@@ -464,7 +491,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 45
     },
     {
       "context": "Perpetual core invariants (loops, ratchets, unit tiers)",
@@ -473,7 +501,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 37
     },
     {
       "context": "Perpetual extension suites (discovery gate shard)",
@@ -482,7 +511,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 24
     },
     {
       "context": "Perpetual system loops invariants",
@@ -491,7 +521,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "Presence-degraded build (required-only universe)",
@@ -500,7 +531,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 31
     },
     {
       "context": "proof",
@@ -509,7 +541,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 45
     },
     {
       "context": "Publish image (non-release)",
@@ -518,7 +551,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 30
     },
     {
       "context": "Publish image (release)",
@@ -527,7 +561,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 30
     },
     {
       "context": "Queue path selection",
@@ -553,7 +588,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 24
     },
     {
       "context": "RBAC browser e2e",
@@ -562,7 +598,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 45
     },
     {
       "context": "Render-smoke browser e2e",
@@ -571,7 +608,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 45
     },
     {
       "context": "secret-scan-gate / secret-scan-gate",
@@ -589,7 +627,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "Skills unit tests",
@@ -598,7 +637,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 24
     },
     {
       "context": "skills-drift-gate / skills-drift-gate",
@@ -607,7 +647,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "source-leak-gate / source-leak-gate",
@@ -616,7 +657,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "toast-banner-gate / toast-banner-gate",
@@ -634,7 +676,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 10
     },
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
@@ -643,7 +686,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "Typecheck and unit tests",
@@ -652,7 +696,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 30
     },
     {
       "context": "ui-design-system-gate / ui-design-system-gate",
@@ -661,7 +706,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "Upgrade proof (previous releases to candidate)",
@@ -670,7 +716,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 30
     },
     {
       "context": "Workspace package unit suites",
@@ -679,7 +726,8 @@
       "paths": [
         "**"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 25
     }
   ]
 }

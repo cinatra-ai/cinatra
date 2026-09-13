@@ -143,13 +143,16 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**None.** All five pins were reconciled on 2026-08-30 and every one of them
-reads `match` against the published manifests, including on the `push`-to-`main`
-arm that is red on any non-`match` outcome. The record of what each adoption
-changed is below; the five bodies that were drifting are kept as the checker's
-own drift fixture (see `superseded-pins-2026-08-28/` beside the frozen
-published ones), because a gate whose drift path has no input is a gate whose
-drift path is untested.
+**One: `app-connectors`.** Its published body redeclares the manifest (three
+sharing surfaces gained), so it moves with the drivers and harness mounts that
+answer those surfaces and is adopted where those live, not here — until that
+lands, the `push`-to-`main` arm, red on any non-`match` outcome, reports that
+single drift. The four other pins read `match` on both arms after the
+2026-09-12 reconciliation. The record of what each adoption changed is below;
+the bodies that were drifting are kept as the checker's own drift fixtures (see
+`superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/` beside the
+frozen published ones), because a gate whose drift path has no input is a gate
+whose drift path is untested.
 
 ## Reconciliation record
 
@@ -211,6 +214,34 @@ pin needed to be deferred, and none was.
 `allowlist.json` gained nothing — it is shrink-only and did not move. Every
 surface in every adopted manifest has a driver.
 
+## Reconciliation record — 2026-09-12
+
+Measured 2026-09-12 against the manifests published under `publishedBaseUrl`.
+Each published body was fetched into a scratch directory outside the tree and
+its `surfaces` array compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/`: for `app`, `app-components` and
+`app-extensions` the declarations are byte-identical and only the embedded
+`contentHash` moved — the second of the two cases "why a hash-only re-pin is
+refused" names, the one nothing downstream catches. The committed artifact of
+each of those three rows is now the verbatim published body, and both hashes in
+`conformance-pins.json` were re-derived from it through the checker's own
+functions, never typed. `app-connectors` keeps the artifact and the hashes it
+had.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-components` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations | re-pin |
+| `app-connectors` | `drift` | three surfaces gained (`connector-sharing`, `connector-sharing-locked`, `connector-sharing-rollup`) — adopted with its drivers by the pull request of #3374 | not this diff |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+`app-connectors` is the one pin this reconciliation does not adopt: its
+published body redeclares the manifest, so it takes the drivers and harness
+mounts with it and is adopted where those live. Until that lands, the
+`push`-to-`main` arm — red on any non-`match` outcome — reports that single
+drift; the four other pins read `match` on both arms.
+
 ## Running it locally
 
 ```sh
@@ -220,6 +251,7 @@ pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/design-pin-d
 ```
 
 The unit suite needs no network: it runs the checker against the frozen
-2026-08-28 bodies (the adopted, zero-drift set), against the superseded bodies
-beside them (the drift set), against the committed manifest copies, and against
-one fixture per failure outcome.
+2026-09-12 bodies (the adopted set — four `match`es and the one `app-connectors`
+drift the section above names), against the superseded bodies frozen beside
+each reconciliation (the drift sets), against the committed manifest copies,
+and against one fixture per failure outcome.
