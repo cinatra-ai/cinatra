@@ -8,8 +8,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEADLINE_MINUTES,
+  DEFAULT_JOB_TIMEOUT_MINUTES,
+  EXIT_PENDING,
+  MAX_WAIT_MINUTES,
   QUEUE_TIMEOUT_MINUTES,
+  WAIT_MARGIN_MINUTES,
   evaluateReadiness,
+  exitCodeFor,
   isSettled,
   parseBoundaryRecords,
   pathsApply,
@@ -18,6 +23,7 @@ import {
   validateApprovedHead,
   validateInventory,
   verificationBoundaryVerdict,
+  waitBudgetMinutes,
 } from "../merge-readiness.mjs";
 // Namespace import for the sha-splitting road, so a missing export shows up as
 // a failing case here instead of a module-load error across the whole file.
@@ -97,12 +103,51 @@ describe("merge-readiness fixture matrix", () => {
     }
   });
 
-  it("FAILs when an expected context is still running at the deadline", () => {
+  // A deadline is never a readiness verdict (cinatra#3391): a required run that
+  // is still queued or in progress when the wait runs out is PENDING — the
+  // candidate is not red, and a re-run picks up where this one left off.
+  const running = (status) => {
     const checks = greenChecks();
-    checks[0] = { name: "build", status: "in_progress", conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    checks[0] = { name: "build", status, conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    return checks;
+  };
+
+  it("reports PENDING, never a failure, when an expected context is still in progress at the deadline", () => {
+    const r = evalPr(running("in_progress"));
+    expect(r.verdict).toBe("PENDING");
+    expect(r.ok).toBe(false);
+    expect(r.failures).toEqual([]);
+    expect(r.pending.join("\n")).toMatch(
+      /^pending: 'build' is still 'in_progress' after 90 minutes — not a failure$/m,
+    );
+  });
+
+  it("reports PENDING when an expected context is still queued at the deadline", () => {
+    const r = evalPr(running("queued"));
+    expect(r.verdict).toBe("PENDING");
+    expect(r.failures).toEqual([]);
+    expect(r.pending.join("\n")).toMatch(
+      /^pending: 'build' is still 'queued' after 90 minutes — not a failure$/m,
+    );
+  });
+
+  it("names the minutes actually waited in the pending text", () => {
+    const r = evaluateReadiness({
+      inventory: inventory(),
+      checks: running("queued"),
+      changedPaths: ["src/app/page.tsx"],
+      eventName: "pull_request",
+      waitedMinutes: 105,
+    });
+    expect(r.pending.join("\n")).toContain("after 105 minutes");
+  });
+
+  it("stays a FAIL when a real red sits beside a still-queued context", () => {
+    const checks = running("queued");
+    checks[1] = { ...checks[1], conclusion: "failure" };
     const r = evalPr(checks);
     expect(r.verdict).toBe("FAIL");
-    expect(r.failures.join("\n")).toMatch(/timed out: 'build' is still 'in_progress'/);
+    expect(r.failures.join("\n")).toMatch(/failed: 'source-leak-gate/);
   });
 
   it("FAILs on a duplicate source for one expected context", () => {
@@ -333,6 +378,68 @@ describe("the deadline is shorter than the queue timeout", () => {
   });
 });
 
+describe("the wait follows the longest job budget of the evaluated workflows", () => {
+  // Each expected entry carries the `timeout-minutes` of the job that reports
+  // it, derived into the inventory by scripts/ci/merge-readiness-inventory.mjs.
+  const withBudgets = (budgets) => {
+    const inv = inventory();
+    inv.expected = inv.expected.map((e, i) => ({ ...e, timeoutMinutes: budgets[i] }));
+    return inv;
+  };
+
+  it("reads the bound from the inventory: the longest applicable job budget plus the margin", () => {
+    const inv = withBudgets([25, 45, 70]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["src/a.ts"] })).toBe(70 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("ignores the budget of a context this candidate's paths do not apply to", () => {
+    const inv = withBudgets([25, 45, 70]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(45 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("treats a job with no declared timeout-minutes as GitHub's own default budget", () => {
+    const inv = withBudgets([25, null, 45]);
+    expect(DEFAULT_JOB_TIMEOUT_MINUTES).toBe(360);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(MAX_WAIT_MINUTES);
+  });
+
+  it("never waits past the upper bound the evaluator's own job timeout allows", () => {
+    const inv = withBudgets([600, 600, 600]);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["src/a.ts"] })).toBe(MAX_WAIT_MINUTES);
+    expect(MAX_WAIT_MINUTES).toBeLessThan(QUEUE_TIMEOUT_MINUTES);
+    expect(MAX_WAIT_MINUTES).toBeGreaterThan(DEADLINE_MINUTES);
+  });
+
+  it("falls back to the inventory's deadlineMinutes when no expected context applies", () => {
+    const inv = withBudgets([25, 45, 70]);
+    inv.expected = inv.expected.map((e) => ({ ...e, paths: ["src/**"] }));
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: ["README.md"] })).toBe(inv.deadlineMinutes);
+  });
+});
+
+describe("a pending outcome exits non-zero, and distinctly from a failure", () => {
+  it("gives PASS, PENDING and FAIL three different exit codes", () => {
+    expect(exitCodeFor({ verdict: "PASS" })).toBe(0);
+    expect(exitCodeFor({ verdict: "PENDING" })).toBe(EXIT_PENDING);
+    expect(exitCodeFor({ verdict: "FAIL" })).toBe(1);
+    expect(EXIT_PENDING).not.toBe(0);
+    expect(EXIT_PENDING).not.toBe(1);
+  });
+
+  it("renders the pending lines in the job summary", () => {
+    const checks = greenChecks();
+    checks[0] = { name: "build", status: "queued", conclusion: null, app: "github-actions", workflow: "gates.yml" };
+    const summary = readiness.renderSummary({
+      candidateSha: HEAD,
+      lookupSha: HEAD,
+      eventName: "pull_request",
+      result: evalPr(checks),
+    });
+    expect(summary).toContain("merge-readiness: PENDING");
+    expect(summary).toContain("pending: 'build' is still 'queued' after 90 minutes — not a failure");
+  });
+});
+
 describe("verification-boundary parser", () => {
   it("reads column-0 records in document order", () => {
     const text = `Verification boundary: candidate-pending-ci at ${HEAD} (checks: build; proof)\nVerification boundary: candidate at ${HEAD}\n`;
@@ -418,5 +525,98 @@ describe("inventory validation fails closed", () => {
     const badFlag = inventory();
     badFlag.expected[0] = { ...badFlag.expected[0], skippable: "yes" };
     expect(validateInventory(badFlag).problems.join("\n")).toMatch(/non-boolean 'skippable' flag/);
+  });
+
+  it("accepts a per-entry job budget and rejects a malformed one", () => {
+    const good = inventory();
+    good.expected[0] = { ...good.expected[0], timeoutMinutes: 30 };
+    good.expected[1] = { ...good.expected[1], timeoutMinutes: null };
+    expect(validateInventory(good).ok).toBe(true);
+
+    const bad = inventory();
+    bad.expected[0] = { ...bad.expected[0], timeoutMinutes: 0 };
+    expect(validateInventory(bad).problems.join("\n")).toMatch(/malformed 'timeoutMinutes'/);
+  });
+});
+
+describe("a check run's source is the workflow that produced it, not its check suite", () => {
+  // A draft-to-ready flip runs every `ready_for_review` workflow a second time
+  // at ONE head: two check suites, one workflow, one context. Keying the source
+  // on the check-suite id read that as two sources (cinatra#3391).
+  const suiteIndex = () =>
+    readiness.workflowPathsBySuite([
+      { check_suite_id: 93602180530, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966667, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966999, path: ".github/workflows/source-leak-gate.yml" },
+    ]);
+
+  const suiteRun = (id, suiteId, over = {}) => ({
+    id,
+    name: "build",
+    status: "completed",
+    conclusion: "success",
+    completedAt: "2026-09-11T01:55:00Z",
+    app: "github-actions",
+    checkSuiteId: suiteId,
+    workflow: `check_suite:${suiteId}`,
+    ...over,
+  });
+
+  it("indexes the head's workflow runs by check-suite id", () => {
+    const index = readiness.workflowPathsBySuite([
+      { check_suite_id: 93602180530, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 93601966667, path: ".github/workflows/gates.yml" },
+      { check_suite_id: null, path: ".github/workflows/gates.yml" },
+      { check_suite_id: 7, path: "" },
+    ]);
+    expect(index.get(93602180530)).toBe(".github/workflows/gates.yml");
+    expect(index.get(93601966667)).toBe(".github/workflows/gates.yml");
+    expect(index.get(7)).toBeUndefined();
+    expect(index.size).toBe(2);
+  });
+
+  it("resolves a check run to its workflow path, and keeps the check-suite id when no run maps", () => {
+    const [resolved, unmapped] = readiness.resolveCheckWorkflows(
+      [suiteRun(1, 93602180530), suiteRun(2, 4242)],
+      suiteIndex(),
+    );
+    expect(readiness.sourceOf(resolved)).toBe("github-actions:.github/workflows/gates.yml");
+    expect(readiness.sourceOf(unmapped)).toBe("github-actions:check_suite:4242");
+  });
+
+  it("reads two check suites of ONE workflow at one head as one source, the latest run deciding", () => {
+    const draftStub = suiteRun(103124792060, 93602180530, { conclusion: "failure", completedAt: "2026-09-11T01:49:00Z" });
+    const ready = suiteRun(103124792061, 93601966667);
+    const checks = readiness.resolveCheckWorkflows([draftStub, ready], suiteIndex());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), ...checks]);
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reports.join("\n")).toMatch(/re-run \(the latest of 2 runs from one source decides\): 'build'/);
+  });
+
+  it("keeps duplicate-source when two DIFFERENT workflow paths report one context", () => {
+    const checks = readiness.resolveCheckWorkflows(
+      [suiteRun(1, 93602180530), suiteRun(2, 93601966999)],
+      suiteIndex(),
+    );
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), ...checks]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(/duplicate-source: 'build' was reported 2 times from 2 source/);
+  });
+
+  it("reports untrusted-source when the resolved workflow path is not the inventory's for that context", () => {
+    const [run] = readiness.resolveCheckWorkflows([suiteRun(1, 93601966999)], suiteIndex());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), run]);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.join("\n")).toMatch(
+      /untrusted-source: 'build' was reported by workflow '\.github\/workflows\/source-leak-gate\.yml', but the inventory expects '\.github\/workflows\/gates\.yml'/,
+    );
+  });
+
+  it("leaves an unresolved check run judged exactly as before", () => {
+    const [run] = readiness.resolveCheckWorkflows([suiteRun(1, 4242)], new Map());
+    const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), run]);
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
   });
 });

@@ -46,7 +46,7 @@ import "server-only";
 // because a mismatch is a signal worth failing on rather than ignoring. They
 // never select: dropping them changes nothing about the answer.
 //
-// THE SAME-ORIGIN GATE IS DEFENSE IN DEPTH, NOT THE BOUNDARY. `isSameOriginFrameRequest`
+// THE SAME-ORIGIN GATE IS DEFENSE IN DEPTH, NOT THE BOUNDARY. `resolveFrameRequestOrigin`
 // refuses a request that is not the Cinatra frame's own. Headers are forgeable
 // outside a browser, so this is not what stops a CMS backend from running the
 // flow itself. What stops that is in the ceremony, not here: the hosted sign-in
@@ -54,7 +54,27 @@ import "server-only";
 // no amount of header forgery makes a browser deliver that message to a CMS
 // page. This gate exists so a BROWSER-driven cross-origin call fails early and
 // visibly.
+//
+// AND THE ORIGIN IT EXPECTS IS THE OPERATOR'S, NOT THE REQUEST'S (cinatra#3330).
+// The gate used to compare `Origin` with `new URL(request.url).origin`. That is
+// the framework's own derivation — the forwarded protocol, the configured server
+// hostname and the listen port — so on a boot whose public address differs from
+// its bind address it is a bind-address origin the frame's `Origin` can never
+// equal, and every legitimate frame sign-in was refused. `Host` and the
+// `X-Forwarded-*` headers are no sounder an authority: they are caller-supplied
+// unless a trusted proxy is guaranteed to overwrite them, and this module has
+// already said off-browser headers are forgeable. So the expected origin comes
+// from the operator-controlled CANONICAL ORIGIN ALLOWLIST — the configured
+// auth/local origin and the saved configured public base origin, the same set
+// `getTrustedTokenOrigins()` already governs token verification and OAuth CSRF
+// with — matched EXACTLY on scheme, host and port. The matcher hands the matched
+// member back, and both frame routes build their public URLs (the init route's
+// `authorizeUrl`, the token route's `issuerBaseUrl`) from THAT, because a 200
+// carrying an authorize URL on an origin that is not the frame's own is a
+// refusal the client performs instead of the server.
 // ---------------------------------------------------------------------------
+
+import { getTrustedTokenOrigins } from "@cinatra-ai/mcp-server/credentials";
 
 import { listActiveConnectSitesForClientOrigin } from "@/lib/connect-sites-store";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
@@ -103,30 +123,61 @@ export type FrameBindingResult =
   | { ok: true; binding: FrameBinding }
   | { ok: false; reason: FrameBindingDenial };
 
+export type FrameOriginResult =
+  /** The `Origin` is an exact member of the canonical allowlist; this is the
+   *  member it matched, and it is what the routes build public URLs from. */
+  | { ok: true; canonicalOrigin: string }
+  | { ok: false };
+
 /**
- * Is this request the Cinatra frame's own same-origin call?
+ * The operator-controlled allowlist of canonical origins, `new URL(...).origin`
+ * normalised so the comparison is exactly scheme + host + port and nothing else
+ * (a trailing slash, a default port or a path on a configured value cannot make
+ * a member unmatchable, and cannot make a non-member match). A malformed entry
+ * is skipped rather than trusted as an opaque string.
+ */
+function canonicalFrameOrigins(): string[] {
+  const out = new Set<string>();
+  for (const entry of getTrustedTokenOrigins()) {
+    try {
+      out.add(new URL(entry).origin);
+    } catch {
+      /* an unparseable configured value is not an origin — skip it */
+    }
+  }
+  return Array.from(out);
+}
+
+/**
+ * Is this request the Cinatra frame's own first-party call, and if so, on WHICH
+ * canonical origin?
  *
  * A same-origin `fetch` POST always carries `Origin` (the Fetch standard omits it
  * only for same-origin GET/HEAD), so a missing `Origin` on a POST is not a
- * browser we serve. `Sec-Fetch-Site` is checked when present and must say
- * `same-origin`; it is not REQUIRED, because a browser that does not send it is
- * still bound by the `Origin` comparison and by the absence of any CORS response
- * header — it could never read the answer cross-origin regardless.
+ * browser we serve. The `Origin` must then be an exact member of the canonical
+ * allowlist — never `new URL(request.url).origin`, never `Host`, never a
+ * forwarded header (see the module header, cinatra#3330). `Sec-Fetch-Site` is
+ * checked when present and must say `same-origin`; it is not REQUIRED, because a
+ * browser that does not send it is still bound by the `Origin` comparison and by
+ * the absence of any CORS response header — it could never read the answer
+ * cross-origin regardless.
  *
  * Defense in depth. See the module header for what the actual boundary is.
  */
-export function isSameOriginFrameRequest(request: Request): boolean {
-  let selfOrigin: string;
+export function resolveFrameRequestOrigin(request: Request): FrameOriginResult {
+  const header = request.headers.get("Origin");
+  if (!header) return { ok: false };
+  let claimed: string;
   try {
-    selfOrigin = new URL(request.url).origin;
+    claimed = new URL(header).origin;
   } catch {
-    return false;
+    return { ok: false };
   }
-  const origin = request.headers.get("Origin");
-  if (!origin || origin !== selfOrigin) return false;
   const fetchSite = request.headers.get("Sec-Fetch-Site");
-  if (fetchSite && fetchSite !== "same-origin") return false;
-  return true;
+  if (fetchSite && fetchSite !== "same-origin") return { ok: false };
+  const matched = canonicalFrameOrigins().find((origin) => origin === claimed);
+  if (!matched) return { ok: false };
+  return { ok: true, canonicalOrigin: matched };
 }
 
 /**
