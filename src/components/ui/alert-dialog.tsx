@@ -27,6 +27,16 @@ function AlertDialogPortal({
   )
 }
 
+/**
+ * The dim scrim (cinatra#2735). `top-16` is the ratified drawing's clause
+ * verbatim — "Overlay `top: 4rem` so it doesn't cover the navbar" — so the
+ * navbar staying bright is intended and stays. The second half of the same
+ * clause, "the overlay dims everything below the 4rem navbar", is what the
+ * `z-[145]` buys: the app shell's left sidebar is a fixed `z-[70]` element
+ * (src/components/ui/sidebar.tsx), so a scrim below that number covered the
+ * content pane and left the sidebar bright. `z-[145]`/`z-[150]` are the same
+ * band `DialogOverlay`/`DialogContent` already paint in.
+ */
 function AlertDialogOverlay({
   className,
   ...props
@@ -35,7 +45,7 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Overlay
       data-slot='alert-dialog-overlay'
       className={cn(
-        'fixed inset-x-0 bottom-0 top-16 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        'fixed inset-x-0 bottom-0 top-16 z-[145] bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
         className
       )}
       {...props}
@@ -62,7 +72,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot='alert-dialog-content'
         className={cn(
-          'fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-line bg-background p-6 shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg',
+          'fixed top-[50%] left-[50%] z-[150] grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-line bg-background p-6 shadow-lg duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg',
           className
         )}
         {...props}
