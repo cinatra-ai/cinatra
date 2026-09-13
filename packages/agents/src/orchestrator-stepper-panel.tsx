@@ -102,11 +102,14 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   gateAnswerIncompleteReason,
   hitlRendererFieldName,
+  hostOwnsSetupGateContinue,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  SETUP_GATE_NO_ANSWER_STAGED,
   setupFieldRendererValue,
+  setupGateBufferedFieldValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
@@ -513,6 +516,33 @@ function HitlApprovalCard({
   // suppression, but it was write-only here — this panel's re-show guard is
   // the awaitingNextStep state in the parent — so it was removed.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
+  // WHAT THE HOST'S CONTINUE ACTUALLY SENDS, and how it asks for it
+  // (cinatra#3358, convergence). Both are REFS, not state, and both mirror the
+  // ratified sibling surface `agent-hitl-screen-card.tsx` rather than inventing
+  // a second answer to the same question:
+  //
+  //  - `setupAnswerRef` holds the gate's staged answer exactly as the renderer
+  //    reported it, already wrapped under the gate's own field name. The press
+  //    reads it AFTER an asynchronous flush, so a React state read there would
+  //    be one tick stale; a ref cannot be.
+  //  - `rendererFlushRef` is the seam a renderer that holds the reader's text
+  //    LOCALLY hands its value out through -- the same call its own Continue
+  //    makes. Without it, hiding that button strands the reader: the host's
+  //    press would submit an empty answer under visibly typed text (the schema
+  //    floor `SchemaOnlyFloorRenderer` an extension binding degrades to, and
+  //    every binding during its load window, is exactly that renderer).
+  //
+  // Tagged with the gate identity they were staged for, so neither can outlive
+  // the question it belongs to.
+  const setupAnswerRef = useRef<{
+    payload: Record<string, unknown>;
+    fieldName: string | undefined;
+  } | null>(null);
+  const rendererFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
+  const flushGateKeyRef = useRef<string | null>(null);
+  const registerRendererFlush = useCallback((fn: () => Promise<void>) => {
+    rendererFlushRef.current = { key: flushGateKeyRef.current ?? "", fn };
+  }, []);
   // Reset the per-gate buffer when a new HITL gate opens (xRenderer changes).
   // Without this, gate N+1's handleContinue sends gate N's accumulated values
   // to approveReviewTask, leaking one gate's `userResponse` into the next gate's
@@ -548,12 +578,19 @@ function HitlApprovalCard({
     if (Object.keys(bufferedHitlValue).length > 0) {
       queueMicrotask(() => setBufferedHitlValue({}));
     }
+    // The staged answer and the flush registration belong to the gate that made
+    // them (cinatra#3358): carrying either across a field advance would submit
+    // the previous field's answer for the next field's question.
+    setupAnswerRef.current = null;
+    rendererFlushRef.current = null;
   }
   // Advance the ref only on non-null keys so a transient null doesn't
   // poison the next real comparison.
   if (bufferKey !== null) {
     prevBufferKeyRef.current = bufferKey;
   }
+  // The identity a flush registration is tagged with, read at registration time.
+  flushGateKeyRef.current = bufferKey;
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
   // review-task id — and not on the buffer key above (cinatra#3219 convergence).
@@ -796,6 +833,39 @@ function HitlApprovalCard({
       toast.error(incompleteAnswer);
       return;
     }
+    // THE HOST-OWNED SETUP GATE ANSWERS THE WAY THE RATIFIED SIBLING ANSWERS
+    // (cinatra#3358, convergence). BEFORE the optimistic switch, for the same
+    // reason the refusal above sits there: a press that sends nothing must
+    // leave the step where it is, not hand it over as approved first.
+    //
+    //  1. ASK THE FIELD FOR ITS VALUE, the way the field's own button asks it.
+    //     A renderer that reports through `onChange` as the reader types has
+    //     already staged its answer and registers no flush; one that holds the
+    //     text locally hands it over here. Either way the stage below carries
+    //     what that renderer's own Continue would have submitted.
+    //  2. REFUSE AN EMPTY PRESS. Nothing staged means nothing to merge, and the
+    //     server would flip the run to `queued` regardless and re-ask the same
+    //     field - the loop this fix exists to end.
+    //  3. SUBMIT THROUGH THE SINGLE-FIELD PATH, by naming the field. That is
+    //     the path this gate family always used (the per-keystroke fallback
+    //     passed `payloadFieldName`); routing the same answer through the
+    //     grouped merge instead would hand it to an allowlist read off the
+    //     STORED template schema, which is stale-empty for a documented class
+    //     of installed templates, and to a reserved-key strip that eats a
+    //     declared input named `approvalNote`.
+    let hostSetupAnswer: {
+      payload: Record<string, unknown>;
+      fieldName: string | undefined;
+    } | null = null;
+    if (hostOwnsThisSetupContinue) {
+      const flush = rendererFlushRef.current;
+      if (flush !== null && flush.key === (bufferKey ?? "")) await flush.fn();
+      hostSetupAnswer = setupAnswerRef.current;
+      if (hostSetupAnswer === null) {
+        toast.error(SETUP_GATE_NO_ANSWER_STAGED);
+        return;
+      }
+    }
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
     onApproved?.();
@@ -804,11 +874,20 @@ function HitlApprovalCard({
     // Calling approveReviewTask after a setState would risk reading stale `bufferedHitlValue`
     // because React batches updates. handleContinue is terminal (renderer unmounts on success),
     // so no setState is needed here — just capture the merged object as a local.
-    let nextBuffered: Record<string, unknown> = {
-      ...bufferedHitlValue,
-      approved: true,
-      approvedAt: new Date().toISOString(),
-    };
+    let nextBuffered: Record<string, unknown> = hostSetupAnswer
+      ? // The staged answer LAST: the approval envelope is bookkeeping, and a
+        // declared input that happens to share one of its key names is still
+        // the reader's answer.
+        {
+          approved: true,
+          approvedAt: new Date().toISOString(),
+          ...hostSetupAnswer.payload,
+        }
+      : {
+          ...bufferedHitlValue,
+          approved: true,
+          approvedAt: new Date().toISOString(),
+        };
     // Renderer-specific approvalNote lifts (list-picker / setup-form /
     // scrape-schema-review / final-list-review) — snapshot exactly what was
     // approved at this gate for the downstream continuation. Shared with
@@ -849,7 +928,7 @@ function HitlApprovalCard({
     }
     let didApprove = false;
     try {
-      const outcome = await approveReviewTask(interruptContext.reviewTaskId, nextBuffered, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+      const outcome = await approveReviewTask(interruptContext.reviewTaskId, nextBuffered, hostSetupAnswer?.fieldName, interruptContext.schema as Record<string, unknown> | undefined);
       if (!outcome.ok) {
         // The run moved on before the click landed. Draw the blocked state and
         // stop: the submitted values were never recorded, so nothing is
@@ -914,7 +993,19 @@ function HitlApprovalCard({
   // calls approveReviewTask. Renderers that own their own action surface
   // coexist fine; their inner button still works and the outer button is a
   // redundant alternate.
-  const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
+  // THE STEP THE HOST OWES A CONTROL (cinatra#3358). A per-field setup gate
+  // drawn by a renderer this repository cannot read gets the host's Continue,
+  // the same one every other gate family has always had — see
+  // `hostOwnsSetupGateContinue` for what is excluded and why.
+  const hostOwnsThisSetupContinue = hostOwnsSetupGateContinue({
+    reviewTaskId: interruptContext.reviewTaskId,
+    xRenderer: interruptContext.xRenderer,
+    fieldName: interruptContext.fieldName,
+    rendererResolved: RendererComponent !== undefined && RendererComponent !== null,
+    midRunClassified: isMidRunHitl,
+  });
+  const showContinueButton =
+    isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup) || hostOwnsThisSetupContinue;
   // Nothing picked and nothing pickable — the same rule the press itself reads
   // (./hitl-gate-submit), asked BEFORE the control is drawn.
   const gateContinueUnavailable =
@@ -949,13 +1040,70 @@ function HitlApprovalCard({
             schema={renderSchema}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
-            value={setupFieldRendererValue(
-              { ...interruptContext.values, ...bufferedHitlValue },
-              interruptContext.fieldName,
-              renderSchema,
-            )}
+            value={
+              // The reader's uncommitted answer, where the host holds it for
+              // them (cinatra#3358) — otherwise the envelope resolution this
+              // surface has always passed.
+              hostOwnsThisSetupContinue
+                ? setupGateBufferedFieldValue(
+                    bufferedHitlValue,
+                    interruptContext.fieldName,
+                    setupFieldRendererValue(
+                      { ...interruptContext.values, ...bufferedHitlValue },
+                      interruptContext.fieldName,
+                      renderSchema,
+                    ),
+                  )
+                : setupFieldRendererValue(
+                    { ...interruptContext.values, ...bufferedHitlValue },
+                    interruptContext.fieldName,
+                    renderSchema,
+                  )
+            }
             onChange={
-              isMidRunHitl
+              // The rule is asked ONCE, where it is named — a mid-run gate never
+              // reaches here (`hostOwnsSetupGateContinue` excludes it), so this
+              // branch cannot shadow the mid-run buffering below.
+              hostOwnsThisSetupContinue
+                ? async (next: unknown) => {
+                    // A VALUE REPORT, NOT A SUBMIT (cinatra#3358). The host drew
+                    // the Continue for this step, so what the renderer reports
+                    // is held here until the reader presses it — and it is held
+                    // UNDER THE GATE'S OWN FIELD NAME, the same wrap the submit
+                    // itself uses, so `handleContinue` sends the shape the
+                    // server's setup merge keys off and the value lands in the
+                    // run's inputs instead of being dropped between keystrokes.
+                    const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
+                      (interruptContext as { fieldName?: string }).fieldName,
+                      next,
+                      {
+                        objectTypedField:
+                          (interruptContext.schema as { type?: string } | undefined)?.type
+                            === "object",
+                      },
+                    );
+                    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+                      // STAGED FOR THE PRESS, and buffered for the draw. The ref
+                      // is what `handleContinue` sends (it reads after an async
+                      // flush, where state would be stale); the state is what
+                      // feeds the controlled input back its own text.
+                      //
+                      // An emission the wrap could NOT key under this gate's
+                      // field name is deliberately not staged: the press refuses
+                      // rather than spreading a shape across the top level that
+                      // the server's allowlist would reject under a different
+                      // field's name.
+                      setupAnswerRef.current = {
+                        payload: payload as Record<string, unknown>,
+                        fieldName: payloadFieldName,
+                      };
+                      setBufferedHitlValue((prev) => ({
+                        ...prev,
+                        ...(payload as Record<string, unknown>),
+                      }));
+                    }
+                  }
+                : isMidRunHitl
                 ? async (next: unknown) => {
                     // Compute nextBuffered synchronously, pass to
                     // approveReviewTask (if grouped-setup immediate-submit), then setState
@@ -1069,6 +1217,23 @@ function HitlApprovalCard({
             }
             context={context}
             mode="edit"
+            // THE SHARED PROPS CONTRACT (cinatra#3358): "sub-renderers that
+            // draw their own Continue button MUST skip it". Carried through the
+            // contract every field renderer already receives, never through a
+            // per-renderer flag, so it reaches a component this repository has
+            // never read — and so the reader is never offered two controls for
+            // one step. A renderer with no internal button ignores it.
+            hideSubmit={hostOwnsThisSetupContinue}
+            // AND THE WAY BACK (cinatra#3358, convergence). Hiding a renderer's
+            // own Continue without giving it a way to hand its value over
+            // strands the reader: the shipped schema floor -- which is what an
+            // extension binding draws while it loads and whatever it degrades
+            // to -- holds the reader's text in local state and reports it ONLY
+            // from the button just hidden. `registerFlush` is the same seam the
+            // ratified sibling surface uses, and it is the same call that
+            // button makes. A renderer that reports through `onChange` ignores
+            // it and keeps working.
+            registerFlush={hostOwnsThisSetupContinue ? registerRendererFlush : undefined}
             onApply={handleApply}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}

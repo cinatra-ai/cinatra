@@ -17,7 +17,10 @@
  */
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
@@ -216,6 +219,100 @@ export function setupFieldRendererValue(
   if (!isObjectTyped || !fieldName) return envelope;
   return envelope[fieldName];
 }
+
+/**
+ * WHO OWES A PER-FIELD SETUP GATE ITS ADVANCE CONTROL (cinatra#3358).
+ *
+ * THE MEASURED WALL. A setup field bound to an extension-declared renderer that
+ * draws its input and nothing else — no Continue, no Next, no start control
+ * anywhere in the run-detail column — left the reader with nothing to press,
+ * while the setup-loop fallback sent every keystroke out as an approval. The
+ * first one moved the run out of `pending_approval`, so every later one was
+ * refused; the text was held nowhere, and the same gate came back for ever.
+ *
+ * Neither half is the renderer's fault to fix. A field renderer is an INPUT: it
+ * draws the field and reports what is in it. Which control ends the step is the
+ * host surface's question, and the host already answers it for every other gate
+ * family — so it answers it here too, rather than each package shipping its own
+ * Continue (the core/extension border: a pack declares the binding, the host
+ * owns the step).
+ *
+ * WHAT IS EXCLUDED, and why each exclusion is the byte-identical path it was:
+ *   - a gate that is not a per-field setup gate — the rule is about the setup
+ *     loop's one-field-at-a-time pause, which is the only place a field's value
+ *     has to survive a round trip before the next field is asked for;
+ *   - the grouped setup form — it owns the single "Save & start run" and the
+ *     reader must never see two;
+ *   - the host's own schema-field fallback — it DRAWS a Continue and treats
+ *     `onChange` as the submit that button makes, so taking that press away
+ *     would buffer into a control that is not there;
+ *   - a mid-run-classified renderer — those already buffer into the outer
+ *     Continue this surface has always drawn for them (`classifyMidRunHitl`);
+ *   - a gate with no resolved renderer — the step draws "no renderer configured"
+ *     and there is nothing to answer with.
+ *
+ * Everything else — every renderer the host hands a field to and cannot read —
+ * gets the host's Continue, is TOLD the host owns it through the shared props
+ * contract (`hideSubmit`, which says in as many words that a renderer drawing
+ * its own Continue must skip it), and has its `onChange` read as a value report
+ * rather than as a submit.
+ */
+export function hostOwnsSetupGateContinue(args: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName: string | undefined;
+  rendererResolved: boolean;
+  midRunClassified: boolean;
+}): boolean {
+  if (!args.rendererResolved) return false;
+  if (!isSetupGateTaskId(args.reviewTaskId)) return false;
+  if (args.fieldName === undefined || args.fieldName.trim() === "") return false;
+  if (args.midRunClassified) return false;
+  if (isGroupedSetupRenderer(args.xRenderer, { includeSetupFormSuffix: true })) return false;
+  if (args.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return false;
+  return true;
+}
+
+/**
+ * The `value` a host-driven per-field setup gate hands its renderer
+ * (cinatra#3358).
+ *
+ * The per-field surfaces pass every renderer the whole values ENVELOPE, and
+ * `setupFieldRendererValue` unwraps it to the field's own slot only for
+ * object-typed fields — deliberately, so a string gate is not pre-filled from a
+ * previously-submitted value. That is still right for what the SERVER holds. It
+ * is wrong for what the READER has just typed: a controlled input fed the
+ * envelope reads its own value as absent and clears itself between keystrokes,
+ * which is why the measured field never accumulated more than one character.
+ *
+ * So the buffer — this step's own uncommitted answer, and nothing else — takes
+ * precedence, and only once the reader has actually put something in it. Absent
+ * a buffered answer the caller's existing resolution stands untouched.
+ */
+export function setupGateBufferedFieldValue(
+  buffered: Record<string, unknown>,
+  fieldName: string | undefined,
+  fallback: unknown,
+): unknown {
+  if (fieldName === undefined || fieldName.trim() === "") return fallback;
+  if (!Object.prototype.hasOwnProperty.call(buffered, fieldName)) return fallback;
+  return buffered[fieldName];
+}
+
+/**
+ * WHY THE HOST'S CONTINUE CAN REFUSE ITS OWN PRESS (cinatra#3358, convergence).
+ *
+ * The host draws this step's only control, so a press with nothing staged is
+ * the one case the reader cannot see coming. Sending it anyway is not harmless:
+ * the server's setup branch strips the approval envelope, finds no field left
+ * to merge, flips the run to `queued` anyway and re-enqueues the setup loop --
+ * which finds the same required input still absent and asks the same question
+ * again. That is the very loop this fix exists to end, reached through the
+ * control the fix added. So the press is refused here, with the reason said out
+ * loud, and the step is left exactly where the reader left it.
+ */
+export const SETUP_GATE_NO_ANSWER_STAGED =
+  "Add an answer before continuing.";
 
 /**
  * The `fieldName` prop for a single-field HITL gate's renderer (cinatra#2541).
