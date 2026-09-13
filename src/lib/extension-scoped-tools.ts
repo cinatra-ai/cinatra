@@ -236,6 +236,35 @@ async function runArtifactRead(
 // ---------------------------------------------------------------------------
 
 /**
+ * EITHER SHAPE THE CALL ARRIVES IN, ONE READING. A pack reaches its own
+ * passthrough tool either flatly — the call's fields straight on the request
+ * body's `input` — or through the envelope the generic passthrough body carries:
+ * `{ tool, input: { name, input } }`, where `name` is the pack's OWN name for the
+ * tool it is calling and the call's fields sit under the inner `input`. The
+ * envelope is recognised by its shape alone — an inner `name` that names
+ * something, over an inner `input` object — so no tool name is written in core
+ * here either, and the reading stays the shape the generic dispatch (#3249)
+ * reads the same body by.
+ *
+ * NOTHING IS WIDENED BY THE READING. The admission above is unchanged: it is
+ * still the OUTER name the calling pack's own declaration must name, and every
+ * read and write such a call makes still goes through the scoped tools on the
+ * caller's own declared tables and dependencies. The inner name is used for ONE
+ * thing — saying which tool refused — because a refusal naming the envelope would
+ * name the generic passthrough instead of the pack's own call.
+ */
+function readStoredIdeasCall(input: { tool: string; input: Record<string, unknown> }): {
+  readonly name: string;
+  readonly raw: Record<string, unknown>;
+} {
+  const outer = isPlainObject(input.input) ? input.input : {};
+  const name = typeof outer.name === "string" ? outer.name.trim() : "";
+  const inner = outer.input;
+  if (name !== "" && isPlainObject(inner)) return { name, raw: inner };
+  return { name: input.tool, raw: outer };
+}
+
+/**
  * THE CALLING EXTENSION NAMES THE TYPE, NEVER THIS FILE. Core code may not
  * hard-code an extension instance (the core-to-extension instance-coupling ban),
  * and it does not need to: the type an idea is filed under is the caller's own
@@ -274,7 +303,8 @@ async function runStoredIdeasGate(
   // derived from that same declaring package, never spelled in core.
   const relationTable = ideaRelationTableFor(context.packageName);
 
-  const ideaType = requireIdeaType(input.tool, input.input);
+  const call = readStoredIdeasCall(input);
+  const ideaType = requireIdeaType(call.name, call.raw);
   const listPage = (cursor?: string) =>
     runArtifactRead(context, {
       ...input,
@@ -348,7 +378,7 @@ async function runStoredIdeasGate(
     },
   };
 
-  const raw = input.input;
+  const raw = call.raw;
   const op = typeof raw.op === "string" ? raw.op : "";
   if (op === "prepare") {
     const offer = await prepareStoredIdeas({
@@ -405,7 +435,7 @@ async function runStoredIdeasGate(
   }
   throw new ExtensionDataRefusal(
     "invalid-request",
-    `${input.tool}: \`op\` must be one of prepare, reserve, complete, release (got ${JSON.stringify(op)})`,
+    `${call.name}: \`op\` must be one of prepare, reserve, complete, release (got ${JSON.stringify(op)})`,
   );
 }
 
