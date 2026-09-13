@@ -369,15 +369,24 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
       });
     }
     const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
-    const { transitionRunStatus, RunTransitionError } = await import("./store");
-    await transitionRunStatus(runId, run.status as AgentRunStatus, "failed", undefined, authority).catch((err) => {
-      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-        // Race: another path terminated this run between our read and the CAS.
-        // Safe to ignore — the run is terminal either way.
-        return;
-      }
-      throw err;
-    });
+    // cinatra#3423 — THE LOST DECLINE IS REPORTED, NOT SWALLOWED.
+    //
+    // This transition is already a compare-and-swap on the run's own status, so
+    // a gate decided elsewhere between the read above and the write here updates
+    // no row and raises `stale_from_status`. That IS the second answer to an
+    // already-decided gate, and it used to be caught and dropped on the floor:
+    // the action returned normally, the caller could not tell a landed decline
+    // from a refused one, and the person who lost the race was shown the gate
+    // going quietly away as though their decline had been recorded.
+    //
+    // It is left to propagate instead. The typed error is the SAME shape the
+    // approve half refuses with, so the Server Action boundary in
+    // `hitl-actions.ts` classifies it into `{ ok: false, blocked:
+    // "no-longer-pending" }` and the review surface draws its blocked state. The
+    // run itself is untouched by the loser either way — it goes on with the
+    // decision that won.
+    const { transitionRunStatus } = await import("./store");
+    await transitionRunStatus(runId, run.status as AgentRunStatus, "failed", undefined, authority);
     console.log(`[rejectReviewTask] setup-path rejected run=${runId} actor=${actor.userId} reason=${reason ?? "(none)"}`);
     return;
   }
