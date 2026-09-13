@@ -128,16 +128,17 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     );
   });
 
-  it("heads the tab's list with the roll-up card, unconditionally, and gives it NO action", () => {
-    // §II, the Sharing tab: "The roll-up card is the Connections status card of
-    // the Setup tab, with no Check and no All connections link: the list it
-    // counts is directly beneath it." The Setup tab's plural-only rule is its
-    // own; this card heads the list whenever there is a list (cinatra#3374).
-    // The tab mount asks for the unconditional card; the mounts that draw no
-    // tab strip (bundled-react, the error treatments) keep the plural-only rule
-    // they had before this issue — the section chooses by its variant.
-    expect(SHARING_PANELS).toContain('rollup === "always" || panels.length > 1');
-    expect(SHARING_SECTION).toContain('rollup={variant === "tab" ? "always" : "multiple"}');
+  it("heads the list with the roll-up card only when it counts more than one connection, and gives it NO action", () => {
+    // §II, the Sharing tab: "the roll-up card heads the list, and only when
+    // there is more than one connection to roll up" — and "The roll-up card is
+    // the Connections status card of the Setup tab, with no Check and no All
+    // connections link: the list it counts is directly beneath it."
+    // ONE rule for every mount — the tab and the pages that draw no tab strip
+    // (bundled-react, the error treatments) alike — so the panels component
+    // carries no mode branch and the section hands down no switch (cinatra#3374).
+    expect(SHARING_PANELS).toContain("panels.length > 1 ?");
+    expect(SHARING_PANELS).not.toContain("rollup ===");
+    expect(SHARING_SECTION).not.toContain("rollup=");
     const cardStart = SHARING_PANELS.indexOf("<ConnectionsStatusCard");
     expect(cardStart).toBeGreaterThan(-1);
     const card = SHARING_PANELS.slice(cardStart, SHARING_PANELS.indexOf("/>", cardStart));
