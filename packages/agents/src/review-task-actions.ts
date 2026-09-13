@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -56,6 +57,46 @@ import {
   createWayflowFetch,
   resolveWayflowUrl,
 } from "./wayflow-url";
+
+// cinatra#3468 — the setup resume's job id is per ANSWER, never per run.
+//
+// On the setup path the synthetic review-task id is `setup-{runId}`: the SAME
+// id for every field of one run. The id this enqueue used to pass was derived
+// from it alone, and the queue de-duplicates on the job id (`queue.add` is
+// HSETNX-shaped — an id that already exists, pending or finished, is silently
+// not added), so every resume after the FIRST per-field answer was dropped: the
+// run accepted its first field and then stayed `queued` forever with no
+// execution attempt and no trigger row.
+//
+// What the constant id actually protected, stated exactly and no wider:
+// `resumeRunFromSetupApproval`'s guarded CAS (`status = 'pending_approval'` AND
+// the authority's org) runs BEFORE this enqueue, so a duplicate submit that
+// arrives while the run is not in `pending_approval` updates zero rows and
+// throws before reaching here. That CAS carries no gate identity and no
+// generation: a delayed duplicate of an EARLIER answer that lands after the
+// setup loop has parked the run on its NEXT field wins the CAS, writes, and
+// reaches this enqueue — which the constant id used to swallow. Swallowing it
+// by re-using ONE job id per run is exactly what dropped every legitimate later
+// answer, so the id is per-answer here; per-gate at-most-once ACCEPTANCE needs a
+// gate-generation CAS in `resumeRunFromSetupApproval`, not a queue-key
+// collision. Recorded on the issue as the follow-up, not fixed in this change.
+//
+// The suffix is a random UUID rather than a wall clock plus a per-process
+// counter: the host runs as more than one process and a counter resets on a
+// restart, so a time+counter suffix can repeat across processes and across a
+// restart — and a repeat is the whole defect. The field name stays in the id,
+// first, so a job is still identifiable in the queue and in the logs; it cannot
+// carry uniqueness on its own, because the same slot can be answered twice for
+// one run (the envelope-only leg merges nothing, so its gate can be raised
+// again).
+//
+// The `:` normalization mirrors lifecycle-repair-dispatch-store.ts: BullMQ's
+// custom-jobId validation rejects an id containing exactly one `:` (reserved for
+// its own 3-part repeatable-job ids).
+function buildSetupResumeJobId(runId: string, fieldName: string | undefined): string {
+  const slot = fieldName ?? "grouped";
+  return `resume-setup-${runId}-${slot}-${randomUUID()}`.replace(/:/g, "_");
+}
 
 // Reserved approval-ENVELOPE keys the approval UI stamps on top of the user's
 // actual setup-field values when "Approve" is clicked (orchestrator-stepper-
@@ -508,7 +549,7 @@ export async function approveReviewTaskInternal(
       // trigger step before it may dispatch — so it hands off to
       // `pending_trigger` instead of running before the user has chosen when.
       { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
+      { jobId: buildSetupResumeJobId(runId, fieldName) },
     );
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
