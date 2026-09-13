@@ -118,6 +118,22 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 
+/**
+ * WHICH pinned target this document draws (cinatra#3356).
+ *
+ * "Every artifact must render itself … always show one artifact with head plus
+ * body, then the next artifact with head plus body and so on." The card draws one
+ * BLOCK per pinned target — that target's immutable header directly over that
+ * target's own body — so the frame inside a block asks for the ONE target the
+ * block is about, named by the revision the gate pinned. It selects; it
+ * authorizes nothing, and a revision this gate did not pin resolves to no target
+ * and draws the same empty document every other absence draws.
+ *
+ * An address that names none renders the gate's whole pinned set, which is what a
+ * card that could not name its targets still frames.
+ */
+export const REVIEW_ISLAND_TARGET_QUERY_PARAM = "tr";
+
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
 
@@ -242,6 +258,19 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
   const decided = surface.kind === "settled";
 
+  // ONE BLOCK, ONE TARGET (cinatra#3356). The pinned set is read from the frozen
+  // gate exactly as before; the parameter only says which of it this frame is.
+  const namedRevision = one(sp[REVIEW_ISLAND_TARGET_QUERY_PARAM]);
+  const targets =
+    namedRevision === null
+      ? surface.targets
+      : surface.targets.filter(
+          (prepared) => prepared.target.representationRevisionId === namedRevision,
+        );
+  // A named revision this gate never pinned is an absence, and every absence here
+  // draws the same empty document.
+  if (targets.length === 0) return empty;
+
   return (
     <div
       className={islandBodyClassName(scheme)}
@@ -250,7 +279,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       // conformance check and for nothing else. Both readings draw the same
       // panels from the same frozen set; neither carries decision chrome.
       data-review-reading={decided ? "decided" : "pending"}
-      data-target-count={surface.targets.length}
+      data-target-count={targets.length}
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
     >
@@ -270,10 +299,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
         </p>
       ) : null}
 
-      {/* §II/§III — every pinned target as a sibling panel, in gate order. The
-          card below the frame carries ONE floor for all of them, because the
-          decision is all-or-nothing across the gate. */}
-      {surface.targets.map((prepared) => (
+      {/* §II/§III — the target(s) this frame was asked for: the ONE target of the
+          block that frames it (cinatra#3356), or the gate's whole pinned set when
+          the address named none. The card below the frame carries ONE floor for
+          all of them, because the decision is all-or-nothing across the gate. */}
+      {targets.map((prepared) => (
         <Suspense
           key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
           fallback={<ReviewGateLoading />}

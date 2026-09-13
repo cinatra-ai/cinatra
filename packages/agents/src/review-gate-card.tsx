@@ -256,6 +256,30 @@ const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
  *  server side by the island page's own suite. */
 const REVIEW_ISLAND_COLOR_SCHEME_PARAM = "scheme";
 
+/** The query parameter the island reads WHICH PINNED TARGET a frame is for — the
+ *  client half of `src/app/lifecycle/review-island/page.tsx`'s
+ *  `REVIEW_ISLAND_TARGET_QUERY_PARAM`, mirrored here for the same reason the
+ *  credential's key and the palette's are (cinatra#3356). */
+const REVIEW_ISLAND_TARGET_PARAM = "tr";
+
+/**
+ * The island address for ONE pinned target.
+ *
+ * "Every artifact must render itself … always show one artifact with head plus
+ * body, then the next artifact with head plus body and so on." A block's frame
+ * therefore asks for the one target the block is about, named by the revision the
+ * gate pinned — the same identity the header over it carries, so the head and the
+ * body of one block can never come from two different artifacts.
+ *
+ * It NARROWS an address the card already composed; it adds no authorization, and
+ * a revision the gate never pinned resolves to no target and draws the island's
+ * ordinary empty document.
+ */
+export function reviewTargetIslandSrcForTarget(src: string, revisionId: string): string {
+  const separator = src.includes("?") ? "&" : "?";
+  return `${src}${separator}${REVIEW_ISLAND_TARGET_PARAM}=${encodeURIComponent(revisionId)}`;
+}
+
 /**
  * The credential OUT of a server-issued island URL — never the URL itself.
  *
@@ -304,12 +328,24 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
-/** The island's ONE height. §III of the ratified artifact-review drawing gives
- * the target no height control: "a wide representation scrolls inside its own
- * container rather than widening the page". The frame is that container, and it
- * scrolls; the Expand / Collapse toggle that used to sit under it was a control
- * the surface added of its own, which §IV forbids. */
-const ISLAND_HEIGHT = 380;
+/**
+ * The FLOOR a target's frame stands on while its own document has not yet said
+ * how tall it is — never a CAP on it (cinatra#3456).
+ *
+ * The region used to be held at this height and scrolled inside itself, so a gate
+ * over several targets showed only the first body and the rest were reachable
+ * only by scrolling a box within the page. §IV draws each target with its header
+ * and its representation in the page's own flow: the card grows with its targets,
+ * and the PAGE — not a box inside it — scrolls. So a frame takes its height from
+ * the document it frames, and this number is only what the loading skeleton and
+ * the recovery panel stand on until that reading arrives.
+ *
+ * §III's "a wide representation scrolls inside its own container rather than
+ * widening the page" is unchanged and is about WIDTH; the Expand / Collapse
+ * toggle that once sat under the frame stays gone — §IV forbids a control the
+ * surface adds of its own.
+ */
+const ISLAND_PLACEHOLDER_MIN_HEIGHT = 380;
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -917,17 +953,16 @@ function renderState(args: {
       return state.outcome ? (
         <>
           <ReviewGateHeader pending={false} />
-          {/* §IV — the header the decision was taken on, kept over the reviewed
-              work: a settled gate names what was reviewed whether or not its
-              read-only preview has painted. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the reviewed target(s), read-only, exactly as the pending
-              reading drew them: one island, every pinned target, the renderer
-              resolved from the artifact's own type. The island carries no
-              decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+          {/* §III/§IV — the reviewed target(s), read-only, exactly as the pending
+              reading drew them: one block per artifact, its header over its own
+              body, the renderer resolved from the artifact's own type. A settled
+              gate names what was reviewed whether or not its read-only preview
+              has painted, and no block carries decision chrome on either
+              reading. */}
+          <ReviewTargetBlocks
+            headers={targetHeaders}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -964,19 +999,19 @@ function renderState(args: {
       return (
         <>
           <ReviewGateHeader pending />
-          {/* §IV — the immutable target header(s): "Every target opens with a
-              header that names what is under review and fixes it in place".
-              Drawn HERE, by the card, so it survives every state of the island
-              below it — the skeleton while the preview is still arriving and the
-              recovery panel when it never did. Inert: no control, no revision
-              picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the target(s). ONE island renders every pinned target as
-              sibling panels, exactly as the page stacks them, because the
-              decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+          {/* §III/§IV — the target(s), one BLOCK each: "Every target opens with a
+              header that names what is under review and fixes it in place",
+              directly over that target's own body. The header is drawn HERE, by
+              the card, so it survives every state of the frame under it — the
+              skeleton while the preview is still arriving and the recovery panel
+              when it never did. Inert: no control, no revision picker, because
+              the target is versioned and frozen. The blocks run in the gate's
+              order and the page scrolls; the decision below is still one floor,
+              all-or-nothing across the whole gate. */}
+          <ReviewTargetBlocks
+            headers={targetHeaders}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1498,32 +1533,36 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 }
 
 /**
- * The island frame: a same-origin, authenticated, DISPLAY-ONLY iframe holding
- * the server-rendered §III ladder at ONE fixed height, scrolling inside its own
- * container, with NO height control of any kind — §IV: "the review surface adds
- * no per-type controls of its own around it". The height is fixed rather than
- * measured: a card in a transcript must not be able to push the rest of the
- * conversation off screen, and reading a height back out of the frame would need
- * a message channel the display-only posture deliberately does not have.
+ * The island frame: a same-origin, authenticated, DISPLAY-ONLY iframe holding the
+ * server-rendered §III ladder, with NO height control of any kind — §IV: "the
+ * review surface adds no per-type controls of its own around it".
+ *
+ * IT IS AS TALL AS WHAT IT DRAWS (cinatra#3456). The frame used to be held at one
+ * fixed height and scrolled inside itself, which is how a gate over several
+ * targets came to show only the first body. It now takes its height from the
+ * document it is framing: the island is SAME-ORIGIN, so the card reads that
+ * document's own height directly and needs no message channel into it — which is
+ * what lets the frame grow without the display-only posture gaining a channel it
+ * deliberately does not have. A document whose height cannot be read leaves the
+ * floor standing, which is exactly the reading this surface had before it grew.
  *
  * cinatra#2713 — the region draws THREE states while the iframe's own document
- * loads, layered over the same clamped box so the card never resizes under the
- * reviewer: a skeleton (the shipped `ReviewGateLoading` bar motif, extended
- * into this taller box — no dedicated island mockup exists in
- * `specs/app-lifecycle-cards.html` or `app-components.html`'s Skeleton/Spinner
- * section for THIS iframe's own load window, only the generic bar-skeleton
- * language this reuses); the painted iframe once `onLoad` fires; and, past the
- * bound, a retry panel. The panel deliberately does NOT mount the shipped
- * `ReviewGateBlocked` component: that component's `ReviewBlockedReason` is a
- * closed set about the GATE's own lifecycle (no longer pending / mismatched /
- * revision not live) that `review-surface-model.ts` shares with the review
- * page server-side — none of its three reasons is true here (the gate is
- * exactly as open as it was; only the PREVIEW failed to arrive), and drawing
- * one anyway would tell the reviewer something false. What IS reused,
- * verbatim, is that component's established VISUAL shape — the destructive
- * icon circle, the title/body pairing, the `link` retry button — so the card
- * still has exactly one "this didn't work" drawing language, just not the
- * gate-scoped component whose props don't fit.
+ * loads, layered over the same box so the card never jumps under the reviewer: a
+ * skeleton (the shipped `ReviewGateLoading` bar motif, extended into this taller
+ * box — no dedicated island mockup exists in `specs/app-lifecycle-cards.html` or
+ * `app-components.html`'s Skeleton/Spinner section for THIS iframe's own load
+ * window, only the generic bar-skeleton language this reuses); the painted iframe
+ * once `onLoad` fires; and, past the bound, a retry panel. The panel deliberately
+ * does NOT mount the shipped `ReviewGateBlocked` component: that component's
+ * `ReviewBlockedReason` is a closed set about the GATE's own lifecycle (no longer
+ * pending / mismatched / revision not live) that `review-surface-model.ts` shares
+ * with the review page server-side — none of its three reasons is true here (the
+ * gate is exactly as open as it was; only the PREVIEW failed to arrive), and
+ * drawing one anyway would tell the reviewer something false. What IS reused,
+ * verbatim, is that component's established VISUAL shape — the destructive icon
+ * circle, the title/body pairing, the `link` retry button — so the card still has
+ * exactly one "this didn't work" drawing language, just not the gate-scoped
+ * component whose props don't fit.
  *
  * Applies identically on every host this card mounts on: nothing here reads
  * `host`, so the chat thread, the run card, the page gate region and the site
@@ -1544,10 +1583,19 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  // The measured height rides the same bag, so a new address can never keep the
+  // previous document's measurement for a frame (cinatra#3456).
+  const [load, setLoad] = useState<{
+    src: string;
+    attempt: number;
+    loaded: boolean;
+    timedOut: boolean;
+    height: number | null;
+  }>({ src, attempt: 0, loaded: false, timedOut: false, height: null });
   if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ src, attempt: 0, loaded: false, timedOut: false, height: null });
   }
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     if (load.loaded) return;
@@ -1557,16 +1605,57 @@ function ReviewTargetIsland({
     return () => clearTimeout(timer);
   }, [load.src, load.attempt, load.loaded]);
 
+  /** The framed document's own height, or nothing when it cannot be read. */
+  const measure = useCallback(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let measured = 0;
+    try {
+      measured = frame.contentDocument?.documentElement?.scrollHeight ?? 0;
+    } catch {
+      // An opaque framing: the floor stands, and the card draws what it drew
+      // before the frame could grow.
+      return;
+    }
+    if (measured <= 0) return;
+    setLoad((current) =>
+      current.height === measured ? current : { ...current, height: measured },
+    );
+  }, []);
+
+  // Re-read after the paint, and again whenever the framed document changes size
+  // under its own reflow (a renderer that finishes a late layout, a wide
+  // representation wrapping). Same-origin, so the observation needs no channel.
+  useEffect(() => {
+    if (!load.loaded) return;
+    measure();
+    let observer: ResizeObserver | null = null;
+    try {
+      const body = frameRef.current?.contentDocument?.body ?? null;
+      if (body && typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(() => measure());
+        observer.observe(body);
+      }
+    } catch {
+      // No observation available; the reading above still stands.
+    }
+    return () => observer?.disconnect();
+  }, [load.loaded, load.src, load.attempt, measure]);
+
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const height = ISLAND_HEIGHT;
+  const measured = load.height;
 
   return (
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
-      className="relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      // No clipping and no held height: what the frame draws is in the page's own
+      // flow, and the page is what scrolls (cinatra#3456).
+      className="relative rounded-control border border-line bg-surface-strong"
+      style={measured === null ? { minHeight: ISLAND_PLACEHOLDER_MIN_HEIGHT } : undefined}
     >
       <iframe
+        ref={frameRef}
         // Keyed by src+attempt so a retry (or a genuinely new target) forces a
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
@@ -1585,21 +1674,25 @@ function ReviewTargetIsland({
         // has no such clock and keeps `lazy`, which is what lets a thread mount
         // several of these off screen without fetching them all.
         loading={credentialed ? "eager" : "lazy"}
-        className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
+        className={`w-full rounded-control border-0 bg-surface-strong transition-opacity duration-200 ${
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
-        style={{ height }}
-        onLoad={() =>
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
+        // The floor until the document says how tall it is; then exactly that.
+        style={
+          measured === null ? { minHeight: ISLAND_PLACEHOLDER_MIN_HEIGHT } : { height: measured }
         }
+        onLoad={() => {
+          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current));
+          measure();
+        }}
       />
-      {/* Overlays the iframe's own box exactly (same height) — never the
-          footer below, so neither state changes the card's footprint. The
-          iframe stays mounted underneath while timed out: a late `onLoad`
-          self-heals the display instead of leaving a reviewer stuck on a
-          retry panel for content that did, eventually, arrive. */}
+      {/* Overlays the frame's own box exactly — never the footer below, so
+          neither state changes the card's footprint. The iframe stays mounted
+          underneath while timed out: a late `onLoad` self-heals the display
+          instead of leaving a reviewer stuck on a retry panel for content that
+          did, eventually, arrive. */}
       {state !== "loaded" ? (
-        <div className="absolute inset-x-0 top-0" style={{ height }}>
+        <div className="absolute inset-0">
           {state === "loading" ? (
             <IslandLoadingSkeleton />
           ) : (
@@ -1617,6 +1710,7 @@ function ReviewTargetIsland({
                   attempt: current.attempt + 1,
                   loaded: false,
                   timedOut: false,
+                  height: null,
                 }));
               }}
             />
@@ -1770,9 +1864,13 @@ export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }
 }
 
 /**
- * Every pinned target's header, in gate order — the reading the card draws
- * above the one island that renders all of them. An answer that carried no
- * headers draws NOTHING: a header the card cannot source is a header it would
+ * Every pinned target's header, in gate order, and nothing else.
+ *
+ * The CARD no longer draws its targets this way: each header now sits inside its
+ * own block, directly over that target's own body (`ReviewTargetBlocks`,
+ * cinatra#3356). This stays the header family's own composition — what the
+ * conformance fixtures draw when they draw headers alone. An answer that carried
+ * no headers draws NOTHING: a header the card cannot source is a header it would
  * have to invent, and naming the wrong artifact over a review is worse than
  * naming none.
  */
@@ -1786,6 +1884,72 @@ export function ReviewTargetHeaders({
     <>
       {headers.map((header) => (
         <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * EVERY ARTIFACT RENDERS ITSELF (cinatra#3356, the ruling of 2026-09-13).
+ *
+ * "Every artifact must render itself, i.e. do not show the head of all artifacts
+ * stacked, then their bodies stacked. Instead, always show one artifact with head
+ * plus body, then the next artifact with head plus body and so on."
+ *
+ * So the card draws ONE BLOCK per pinned target — that target's immutable header
+ * directly over that target's own body — in the gate's order. The card used to
+ * draw every header first and then ONE frame holding every body, which is the
+ * shape the ruling names: a column of heads over a region of bodies, and (with
+ * the region held at a fixed height) only the first body visible at all.
+ *
+ * THE HEAD AND THE BODY OF A BLOCK ARE THE SAME ARTIFACT, by construction: the
+ * block's frame is addressed with the revision its header carries, so the two
+ * halves cannot come from different targets even when the answer could name fewer
+ * headers than the gate pinned.
+ *
+ * ONE FLOOR FOR ALL THE BLOCKS, unchanged — the decision below is all-or-nothing
+ * across the gate, and it is drawn by the card outside every frame.
+ *
+ * AN ANSWER THAT CARRIED NO HEADERS still frames the gate's pinned set: a card
+ * that cannot name the targets cannot split them either, and one frame over the
+ * whole set is exactly what this surface drew before the headers existed.
+ */
+export function ReviewTargetBlocks({
+  headers,
+  islandSrc,
+  islandCredentialed,
+  onRetryResolve,
+}: {
+  headers: readonly LifecycleTargetHeader[] | null;
+  islandSrc: string;
+  islandCredentialed: boolean;
+  onRetryResolve: () => void;
+}): ReactElement {
+  if (!headers || headers.length === 0) {
+    return (
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        onRetryResolve={onRetryResolve}
+      />
+    );
+  }
+  return (
+    <>
+      {headers.map((header, index) => (
+        <div
+          key={`${header.revisionId}:${header.objectType}`}
+          data-conformance-id="review-target-block"
+          data-target-index={index}
+          className="flex w-full flex-col gap-2"
+        >
+          <ReviewTargetHeader header={header} />
+          <ReviewTargetIsland
+            src={reviewTargetIslandSrcForTarget(islandSrc, header.revisionId)}
+            credentialed={islandCredentialed}
+            onRetryResolve={onRetryResolve}
+          />
+        </div>
       ))}
     </>
   );

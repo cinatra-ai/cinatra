@@ -367,12 +367,18 @@ describe("§III the target island", () => {
     // The src is a RELATIVE first-party path — the island is never fetched from
     // another origin, and the ref is the only thing in the query.
     expect(frame.getAttribute("src")?.startsWith("/")).toBe(true);
-    // ONE HEIGHT, and the frame scrolls inside it. §III of the ratified drawing:
-    // "a wide representation scrolls inside its own container rather than
-    // widening the page" — and §IV: "the review surface adds no per-type controls
-    // of its own around it", which is why the Expand toggle that used to sit
-    // under the frame is gone.
-    expect(frame.style.height).toBe("380px");
+    // A FLOOR, NEVER A CLAMP (cinatra#3456). The frame used to be HELD at one
+    // height and scroll inside it, which is how a gate over several targets came
+    // to show only the first body. §IV draws each target with its header and its
+    // representation in the page's own flow, so the frame stands on a floor until
+    // its own document says how tall it is and then grows to exactly that — and
+    // the PAGE, not a box inside it, scrolls. §III's "a wide representation
+    // scrolls inside its own container rather than widening the page" is about
+    // WIDTH and is unchanged, and §IV's "the review surface adds no per-type
+    // controls of its own around it" is why the Expand toggle that used to sit
+    // under the frame is still gone.
+    expect(frame.style.height).toBe("");
+    expect(frame.style.minHeight).toBe("380px");
     expect(screen.queryByRole("button", { name: /expand|collapse/i })).toBeNull();
   });
 
@@ -487,21 +493,25 @@ describe("§III the target island", () => {
     ).toBeNull();
   });
 
-  it("no layout shift: loading, loaded and timed-out all hold the SAME clamped height", async () => {
+  it("no layout shift: loading and timed-out stand on the SAME floor", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    const clamped = (container.querySelector("iframe") as HTMLIFrameElement).style.height;
-    expect(clamped).not.toBe("");
+    const floor = (container.querySelector("iframe") as HTMLIFrameElement).style.minHeight;
+    expect(floor).not.toBe("");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(12_000);
     });
     await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
-    // The iframe itself — still mounted underneath the retry panel — keeps its
-    // clamped height; only the overlay on top of it changed.
-    expect((container.querySelector("iframe") as HTMLIFrameElement).style.height).toBe(clamped);
+    // The iframe itself — still mounted underneath the retry panel — stands on
+    // the same floor; only the overlay on top of it changed. Neither reading
+    // holds it at a height (cinatra#3456): a document that never arrived has no
+    // height of its own to take.
+    const frame = container.querySelector("iframe") as HTMLIFrameElement;
+    expect(frame.style.minHeight).toBe(floor);
+    expect(frame.style.height).toBe("");
   });
 
   it("a card re-pointed at a different gate's island starts loading again, never on the old verdict", async () => {

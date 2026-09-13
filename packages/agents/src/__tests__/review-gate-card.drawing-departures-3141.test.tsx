@@ -429,3 +429,133 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
     expect(headers(container)).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3356 — EVERY ARTIFACT RENDERS ITSELF (the ruling of 2026-09-13).
+//
+// "Every artifact must render itself, i.e. do not show the head of all artifacts
+// stacked, then their bodies stacked. Instead, always show one artifact with head
+// plus body, then the next artifact with head plus body and so on."
+//
+// And cinatra#3456, which falls with it: the target region was capped at 380 CSS
+// px and scrolled inside itself, so a gate over several targets showed only the
+// first body. §IV draws each target with its header and its representation in the
+// page's own flow; the card grows with its targets, and the page — not a box
+// inside it — scrolls.
+// ---------------------------------------------------------------------------
+
+const blocks = (root: ParentNode) =>
+  root.querySelectorAll('[data-conformance-id="review-target-block"]');
+const islands = (root: ParentNode) =>
+  root.querySelectorAll('[data-conformance-id="review-target-island"]');
+
+describe("#3356 — one block per artifact: its head directly over its own body", () => {
+  const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComment: true };
+
+  async function renderBlocks(headerList = [HEADER_ONE, HEADER_TWO]) {
+    mockResolve(PENDING, { targetHeaders: headerList });
+    const rendered = renderOn("run_card");
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      ).not.toBeNull(),
+    );
+    return rendered;
+  }
+
+  it("draws ONE block per artifact, in the gate's order", async () => {
+    const { container } = await renderBlocks();
+    expect(blocks(container)).toHaveLength(2);
+    const revisions = [...blocks(container)].map((b) =>
+      b
+        .querySelector("[data-review-target-revision]")
+        ?.getAttribute("data-review-target-revision"),
+    );
+    expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
+  });
+
+  it("each block carries its own head and its own body, the head first", async () => {
+    const { container } = await renderBlocks();
+    expect(islands(container)).toHaveLength(2);
+    for (const block of [...blocks(container)]) {
+      const head = block.querySelector('[data-conformance-id="review-target-header"]');
+      const body = block.querySelector('[data-conformance-id="review-target-island"]');
+      expect(head, "the block draws its own head").not.toBeNull();
+      expect(body, "the block draws its own body").not.toBeNull();
+      expect(
+        head!.compareDocumentPosition(body!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        "the head sits directly over its own body",
+      ).toBeTruthy();
+    }
+  });
+
+  it("never a column of heads followed by a region of bodies", async () => {
+    const { container } = await renderBlocks();
+    const [firstHead, secondHead] = [...headers(container)];
+    const firstBody = blocks(container)[0].querySelector(
+      '[data-conformance-id="review-target-island"]',
+    )!;
+    expect(
+      firstHead.compareDocumentPosition(firstBody) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      firstBody.compareDocumentPosition(secondHead) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the FIRST artifact's body comes before the SECOND artifact's head",
+    ).toBeTruthy();
+  });
+
+  it("each block's frame asks for THAT artifact's body and no other", async () => {
+    const { container } = await renderBlocks();
+    const srcs = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
+    expect(srcs).toHaveLength(2);
+    expect(srcs[0]).toContain(`tr=${HEADER_ONE.revisionId}`);
+    expect(srcs[1]).toContain(`tr=${HEADER_TWO.revisionId}`);
+  });
+
+  it("no inner capped region — the frame is never held at a fixed height (cinatra#3456)", async () => {
+    const { container } = await renderBlocks();
+    for (const island of [...islands(container)]) {
+      expect(
+        island.className,
+        "the target region clips nothing — the page scrolls, not a box inside it",
+      ).not.toContain("overflow-hidden");
+      expect((island as HTMLElement).style.height, "the region takes no fixed height").toBe("");
+    }
+    for (const frame of [...container.querySelectorAll("iframe")]) {
+      expect(
+        (frame as HTMLIFrameElement).style.height,
+        "the frame is not capped while its own height is unknown",
+      ).toBe("");
+      expect(
+        (frame as HTMLIFrameElement).style.minHeight,
+        "it stands at a floor until its document says how tall it is",
+      ).not.toBe("");
+    }
+  });
+
+  it("a SETTLED gate keeps the same composition", async () => {
+    mockResolve({ state: "settled", outcome: "approved" }, {
+      targetHeaders: [HEADER_ONE, HEADER_TWO],
+    });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(blocks(container)).toHaveLength(2));
+    expect(islands(container)).toHaveLength(2);
+    const firstBody = blocks(container)[0].querySelector(
+      '[data-conformance-id="review-target-island"]',
+    )!;
+    const secondHead = [...headers(container)][1];
+    expect(
+      firstBody.compareDocumentPosition(secondHead) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("an answer that carries no headers still frames the gate's own pinned set", async () => {
+    mockResolve(PENDING);
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(blocks(container)).toHaveLength(0);
+    expect(islands(container)).toHaveLength(1);
+  });
+});
