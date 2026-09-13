@@ -2016,8 +2016,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@a2ui/web_core':
-        specifier: 0.10.0
-        version: 0.10.0
+        specifier: 0.10.6
+        version: 0.10.6
       '@ag-ui/core':
         specifier: 0.0.58
         version: 0.0.58
@@ -2753,8 +2753,8 @@ packages:
       express:
         optional: true
 
-  '@a2ui/web_core@0.10.0':
-    resolution: {integrity: sha512-pSieKxaB6aZWBL2LjZfKo4/1v4xMWylczpzte1ehuGH0kfNGf/iTd73PKsIKYx3b0FNWTbD8gAloOM4JCVqUig==}
+  '@a2ui/web_core@0.10.6':
+    resolution: {integrity: sha512-kTwir93Fk5eupl4FZ6CkhJDrisR2fnQgEIlDCTp06uzx2PvUhItbq1E+h7hFyeHGTu/NMci9Tqn7Is1IVRpufw==}
 
   '@ag-ui/core@0.0.58':
     resolution: {integrity: sha512-XgGb7YmhV+yMBaEmlrpsd5S+nUxq0JgSegss2t4gIFR1j7w3w0ibtKfRgcQHWeMvwZxcT5S28VEEarqtgxYYHw==}
@@ -11815,7 +11815,7 @@ snapshots:
     optionalDependencies:
       express: 5.2.1
 
-  '@a2ui/web_core@0.10.0':
+  '@a2ui/web_core@0.10.6':
     dependencies:
       '@preact/signals-core': 1.14.3
       date-fns: 4.4.0
