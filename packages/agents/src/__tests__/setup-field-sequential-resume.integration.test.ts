@@ -58,23 +58,27 @@ const hasDb =
   typeof dbUrl === "string" && dbUrl.length > 0 && !dbUrl.includes(NO_DATABASE_MARKER);
 const enabled = hasDb && process.env.CINATRA_DB_INTEGRATION_TESTS === "1";
 
-// THE QUEUE NAME IS READ FROM THE ENVIRONMENT AT MODULE LOAD, so it is set here
-// — before the first dynamic import below pulls the queue module in. A name
-// private to this test process keeps these jobs off any queue a running app is
-// working, and any such app off these. Every module this suite drives is
-// imported inside `beforeAll` for that reason alone. Set ONLY when this suite
-// actually runs, and put back in `afterAll`, so a file that loads after it in
-// the same process reads the environment it would have read without it.
-const PRIOR_QUEUE_NAME = process.env.BULLMQ_QUEUE_NAME;
-if (enabled) {
-  process.env.BULLMQ_QUEUE_NAME = `cinatra-jobs-w11-setup-resume-${process.pid}`;
-}
-
 // FIXTURE IDENTITIES ARE UNIQUE PER TEST PROCESS. This suite runs against a
-// SHARED lane database, so fixed organization/user ids would let two overlapping
+// SHARED test database, so fixed organization/user ids would let two overlapping
 // runs of this file delete each other's rows in teardown (the membership delete
 // is by user id). A fresh identity per process owns only what it created.
 const FIXTURE_KEY = randomUUID().slice(0, 12);
+
+// THE QUEUE NAME IS READ FROM THE ENVIRONMENT AT MODULE LOAD, so it is set here
+// — before the first dynamic import below pulls the queue module in. A name
+// private to this suite's own process keeps these jobs off any queue a running
+// app is working, and any such app off these; it is keyed by the SAME fresh
+// fixture identity rather than by the pid alone, because a pid repeats across
+// two machines that share one Redis. Every module this suite drives is imported
+// inside `beforeAll` for that reason alone. Set ONLY when this suite actually
+// runs, and put back in `afterAll`, so a file that loads after it in the same
+// process reads the environment it would have read without it. The queue runtime
+// itself is process-global and the module exposes no close, so the process exit
+// is what releases it — the keys it leaves behind are its own private name's.
+const PRIOR_QUEUE_NAME = process.env.BULLMQ_QUEUE_NAME;
+if (enabled) {
+  process.env.BULLMQ_QUEUE_NAME = `cinatra-jobs-w11-setup-resume-${FIXTURE_KEY}`;
+}
 const ORG = `org-w11-setup-resume-${FIXTURE_KEY}`;
 const USER = `user-w11-setup-resume-${FIXTURE_KEY}`;
 const MEMBER = `m-w11-setup-resume-${FIXTURE_KEY}`;

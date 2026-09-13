@@ -199,7 +199,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s1-field-name" },
+      { jobId: "resume-setup-run-s1-field-name-8d39bde6" },
     );
   });
 
@@ -225,8 +225,39 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     const jobIds = vi
       .mocked(bgJobs.enqueueBackgroundJob)
       .mock.calls.map((call) => (call[2] as { jobId?: string } | undefined)?.jobId);
-    expect(jobIds).toEqual(["resume-setup-run-s3035-field-brief", "resume-setup-run-s3035-field-ideaCount"]);
+    expect(jobIds).toEqual([
+      "resume-setup-run-s3035-field-brief-e1c9f99f",
+      "resume-setup-run-s3035-field-ideaCount-db3eb011",
+    ]);
     expect(new Set(jobIds).size).toBe(2);
+  });
+
+  // cinatra#3035, convergence round — THE SAME DEFECT ONE LEVEL DOWN. A key that
+  // only sanitized the field name mapped `a.b`, `a:b` and `a_b` onto ONE string,
+  // so a template declaring two such fields reproduced the stall the per-decision
+  // id was introduced to end. The digest is over the WHOLE raw name, so the three
+  // names are three ids.
+  it("cinatra#3035: field names that sanitize to the SAME string still enqueue under different job ids", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-s3035c",
+      templateId: "tpl-s3035c",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    for (const fieldName of ["a.b", "a:b", "a_b"]) {
+      await approveReviewTaskInternal("setup-run-s3035c", "actor-1", { [fieldName]: 1 }, fieldName);
+    }
+
+    const jobIds = vi
+      .mocked(bgJobs.enqueueBackgroundJob)
+      .mock.calls.map((call) => (call[2] as { jobId?: string } | undefined)?.jobId);
+    expect(jobIds).toEqual([
+      "resume-setup-run-s3035c-field-a_b-108bf50c",
+      "resume-setup-run-s3035c-field-a_b-08bd8540",
+      "resume-setup-run-s3035c-field-a_b-1ba46871",
+    ]);
+    expect(new Set(jobIds).size).toBe(3);
   });
 
   // Regression: assert the SQL fragment serializes only values[fieldName],
