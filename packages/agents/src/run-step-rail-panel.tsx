@@ -87,6 +87,29 @@ export function RunStepRailPanel({
       ? entries.length + 1
       : Math.max(1, entries.findIndex((e) => e.ordinal === activeOrdinal) + 1)) + stepOffset;
 
+  // WHERE THE READER STANDS, WRITTEN INTO THE DOM (cinatra#3149, item 3).
+  //
+  // The ratified drawing highlights ONE entry at a time -- section I.3: "The
+  // run waits at each -- one entry is highlighted at a time -- and when a
+  // review is decided the rail keeps it as read-only history and moves to the
+  // next review beneath it". Three sibling rails on the same surface already
+  // say that in the DOM (`recommendation-rail-step`, `schedule-rail-step`,
+  // `run-surface-rail` all set `aria-current="step"` on their own active row);
+  // this rail computed the same fact per row and wrote it nowhere, so a reader
+  // who does not see the colour was told nothing at all.
+  //
+  // The marker is a POSITION, not a predicate. `isActive` below is true for
+  // EVERY pending non-lifecycle entry (it also drives `disabled`, which is a
+  // per-row question), so a rail carrying two pending gates would have carried
+  // two markers -- two places to stand, which the drawing does not draw. The
+  // reader stands at the FIRST such entry: the one the run is actually waiting
+  // at. A rail whose entries are all settled elects none, and carries none.
+  const currentIndex = entries.findIndex(
+    (entry, i) =>
+      i + 1 + stepOffset === activeIndex ||
+      (entry.status === "pending" && entry.kind !== "lifecycleDecision"),
+  );
+
   return (
     <div
       data-run-step-rail=""
@@ -118,6 +141,8 @@ export function RunStepRailPanel({
             const isPending = entry.status === "pending";
             const isCompleted = entry.status === "completed" || isResolved;
             const isActive = displayStep === activeIndex || (isPending && entry.kind !== "lifecycleDecision");
+            // The one entry the rail stands the reader at (see `currentIndex`).
+            const isCurrent = i === currentIndex;
             const isLast = i === entries.length - 1;
 
             // Gates / verifications / lifecycle decisions render through the
@@ -147,6 +172,7 @@ export function RunStepRailPanel({
                     entry={entry}
                     reviewHrefBase={reviewHrefBase}
                     displayStep={displayStep}
+                    isCurrent={isCurrent}
                   />
                   {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>
@@ -198,6 +224,11 @@ export function RunStepRailPanel({
                   // row as on a one-line one (cinatra#3225 item 3, fix leg 10) —
                   // the rule the shared row class states for every rail row.
                   className="flex w-full min-w-0 items-center gap-1"
+                  // The rail's current position, on the row the reader stands
+                  // at (cinatra#3149, item 3) -- the same anchor the three
+                  // sibling rails write, so one reading of any rail on this
+                  // surface answers the same question the same way.
+                  aria-current={isCurrent ? "step" : undefined}
                   data-rail-kind={entry.kind}
                   data-rail-status={entry.status}
                   data-rail-openable={entry.openable === false ? "false" : undefined}

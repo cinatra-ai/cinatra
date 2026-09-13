@@ -34,7 +34,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
-import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
+import { AlertCircle, ArrowRight, Check, Loader2, Pause, X } from "lucide-react";
 
 import {
   Stepper,
@@ -47,12 +47,6 @@ import {
 } from "@/components/reui/stepper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { StatusPill } from "@/components/ui/status-pill";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -271,6 +265,38 @@ export type OrchestratorStepperPanelProps = {
    * this states — the same handover `embedMode` makes, for the same reason.
    */
   railDrawsTheFrame?: boolean;
+  /**
+   * DOES THE FRAME BESIDE THIS COLUMN STAND THE READER AT ONE OF ITS OWN ROWS?
+   * (cinatra#3149 item 3, fix leg 10.)
+   *
+   * The ratified drawing, section I.3: "The run waits at each -- one entry is
+   * highlighted at a time". One rail, one place to stand: this column marks its
+   * own active entry unless the frame has already marked a row of its own.
+   *
+   * IT IS NOT THE SAME QUESTION AS `railDrawsTheFrame`, and leg 9 asked that one
+   * instead. A frame is drawn for a Skills entry the run already answered, and
+   * such a run is paused at a WORK step the frame carries no row for: the frame
+   * elects nothing there, and a column standing down on the frame's mere
+   * presence left the whole surface with no marker at all. The screen reads the
+   * frame's own election once and states it here.
+   */
+  frameElectsTheCurrentEntry?: boolean;
+  /**
+   * THE STEP THE SERVER READ OFF THE GATE THE RUN IS PARKED AT, where the frame
+   * beside this column has stood its own row for that gate down (cinatra#3149
+   * item 3, fix leg 10).
+   *
+   * This column's stream opens with `interruptContext` null and fills in when
+   * the first frame arrives, so until then the rail's election has no step
+   * number and falls back to the FIRST row. That was harmless while the frame
+   * carried the marker for this class of run; now that the marker is this
+   * column's, a spine whose policy numbers start above 1 would stand the reader
+   * at the wrong entry for as long as the stream takes.
+   *
+   * It is read by the RAIL'S ELECTION and by nothing else — no card, no spinner
+   * and no gate reading takes a step from it. Null on every other run.
+   */
+  initialGateStepNumber?: number | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -1261,6 +1287,7 @@ function StepperColumn({
   onActiveStepClick,
   railExtras = EMPTY_RAIL_EXTRAS,
   reviewHrefBase = "",
+  electsCurrentEntry = true,
 }: {
   stepperSteps: StepperStep[];
   activeStep: number;
@@ -1281,6 +1308,18 @@ function StepperColumn({
   // deep links into the run-embedded review surface.
   railExtras?: readonly RunStepRailEntry[];
   reviewHrefBase?: string;
+  /**
+   * Does THIS rail stand the reader at an entry? (cinatra#3149, item 3)
+   *
+   * "One entry is highlighted at a time" is a fact about the whole surface, not
+   * about one rail, so the rail that draws the rows the reader is standing on
+   * is the rail that marks one. Where the page's own rail frames the run detail
+   * it draws those rows and marks one itself (`run-surface-rail.tsx`), and this
+   * column stands down — the same stand-down the page-level panel already makes
+   * on this branch (`screenHostsStepRail`). Absent -> this rail is the one rail,
+   * which is what every other caller mounts it as.
+   */
+  electsCurrentEntry?: boolean;
 }) {
   const isLoadingStatus =
     status === "running" || status === "pending_input" || status === "queued";
@@ -1291,141 +1330,136 @@ function StepperColumn({
   if (stepperSteps.length === 0 && railExtras.length === 0) return null;
 
   return (
-    <TooltipProvider>
-      <div
-        data-run-step-rail=""
-        data-conformance-id="run-step-rail"
-        data-action="open-run-step -> step-detail"
-        aria-label="Agent run steps"
-        className="flex shrink-0 flex-col pt-1"
+    <div
+      data-run-step-rail=""
+      data-conformance-id="run-step-rail"
+      data-action="open-run-step -> step-detail"
+      aria-label="Agent run steps"
+      className="flex shrink-0 flex-col pt-1"
+    >
+      <Stepper
+        value={activeStep}
+        orientation="vertical"
+        indicators={{ completed: <Check className="h-3 w-3" /> }}
       >
-        <Stepper
-          value={activeStep}
-          orientation="vertical"
-          indicators={{ completed: <Check className="h-3 w-3" /> }}
-        >
-          <StepperNav>
-            {stepperSteps.map((s, i) => {
-              const isActive = s.index === activeStep;
-              const isCompleted = s.index < activeStep;
-              const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
-              const showPauseIcon = isPaused && !isCompleted && !isResuming;
-              // The replay affordance this row actually carries — asserted by
-              // the single-rail regression test (cinatra#2739).
-              const replayAffordance = isCompleted && onCompletedStepClick
-                ? "open"
-                : isActive && onActiveStepClick
-                  ? "exit"
-                  : undefined;
-              return (
-                <StepperItem
-                  key={s.index}
-                  step={s.index}
-                  completed={isCompleted}
-                  loading={isLoading}
-                  disabled={devStepperMode ? false : s.index > activeStep}
-                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
-                  // and 3, fix leg 10). The mark stands between two rows as a
-                  // sibling in normal flow, carrying the drawing's own 4px above
-                  // and 4px below; leg 9's pair box reserved a 16px slot the
-                  // drawing does not draw, and on a wrapped row the mark landed
-                  // inside the row's own box. `items-start` is the COLUMN's
-                  // cross axis — the row and the mark line up on the left — and
-                  // is not the row's own `align-items`, which the shared row
-                  // class states as the drawing does.
-                  className="items-start !flex-none"
+        <StepperNav>
+          {stepperSteps.map((s, i) => {
+            const isActive = s.index === activeStep;
+            const isCompleted = s.index < activeStep;
+            const isLoading = isActive && (isLoadingStatus || isResuming);
+            const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
+            const showPauseIcon = isPaused && !isCompleted && !isResuming;
+            // The replay affordance this row actually carries — asserted by
+            // the single-rail regression test (cinatra#2739).
+            const replayAffordance = isCompleted && onCompletedStepClick
+              ? "open"
+              : isActive && onActiveStepClick
+                ? "exit"
+                : undefined;
+            return (
+              <StepperItem
+                key={s.index}
+                step={s.index}
+                completed={isCompleted}
+                loading={isLoading}
+                disabled={devStepperMode ? false : s.index > activeStep}
+                // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                // and 3, fix leg 10). The mark stands between two rows as a
+                // sibling in normal flow, carrying the drawing's own 4px above
+                // and 4px below; leg 9's pair box reserved a 16px slot the
+                // drawing does not draw, and on a wrapped row the mark landed
+                // inside the row's own box. `items-start` is the COLUMN's
+                // cross axis — the row and the mark line up on the left — and
+                // is not the row's own `align-items`, which the shared row
+                // class states as the drawing does.
+                className="items-start !flex-none"
+              >
+                <div
+                  className="flex items-center gap-1"
+                  // WHERE THE READER STANDS, WRITTEN INTO THE DOM (cinatra#3149,
+                  // item 3). "The step the run is paused on is highlighted" --
+                  // and `activeStep` is already that entry, elected across the
+                  // spine and the trailing rows alike by
+                  // `electRunRailActiveStep`, which returns a number past every
+                  // row when the run stands at none. The colour said it and the
+                  // DOM said nothing: a real run of the email-outreach agent
+                  // parked on its first step measured five rows, the pending
+                  // one among them, and `aria-current` null on all five.
+                  aria-current={electsCurrentEntry && isActive ? "step" : undefined}
+                  data-rail-kind="step"
+                  data-rail-step-number={s.stepNumber}
+                  data-rail-status={isCompleted ? "completed" : isActive ? "pending" : "upcoming"}
+                  data-rail-replay={replayAffordance}
                 >
-                  <div
-                    className="flex items-center gap-1"
-                    data-rail-kind="step"
-                    data-rail-step-number={s.stepNumber}
-                    data-rail-status={isCompleted ? "completed" : isActive ? "pending" : "upcoming"}
-                    data-rail-replay={replayAffordance}
+                  <StepperTrigger
+                    className={RUN_PAGE_RAIL_ROW_CLASS}
+                    // Read-only HITL replay — completed steps open replay; active step exits replay.
+                    tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
+                    onClick={
+                      isCompleted && onCompletedStepClick
+                        ? () => onCompletedStepClick(s)
+                        : isActive && onActiveStepClick
+                          ? () => onActiveStepClick(s)
+                          : devStepperMode && onDevStepClick
+                            ? () => onDevStepClick(s)
+                            : undefined
+                    }
                   >
-                    <StepperTrigger
-                      className={RUN_PAGE_RAIL_ROW_CLASS}
-                      // Read-only HITL replay — completed steps open replay; active step exits replay.
-                      tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
-                      onClick={
-                        isCompleted && onCompletedStepClick
-                          ? () => onCompletedStepClick(s)
-                          : isActive && onActiveStepClick
-                            ? () => onActiveStepClick(s)
-                            : devStepperMode && onDevStepClick
-                              ? () => onDevStepClick(s)
-                              : undefined
-                      }
-                    >
-                      <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
-                        {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
-                      </StepperIndicator>
-                      <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
-                        {s.label}
-                      </StepperTitle>
-                    </StepperTrigger>
-                    {s.description && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span
-                            role="button"
-                            tabIndex={-1}
-                            data-rail-step-info=""
-                            className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-default"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Info className="h-3.5 w-3.5" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" className="max-w-[220px] whitespace-normal text-left">
-                          {s.description}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </div>
-                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
-                </StepperItem>
-              );
-            })}
-            {/* The merged rail's trailing rows (cinatra#2739) — review gates,
-                their verifications, and lifecycle policy decisions. These are
-                the DEEP LINKS the page-level rail used to be mounted for; they
-                render here through the shared `RailExtraEntry`, which is why
-                retiring that second mount loses nothing. They trail the spine
-                in the exact order `buildRunStepRail` sorted them into. */}
-            {railExtras.map((entry, i) => {
-              const displayStep = stepperSteps.length + i + 1;
-              const isLast = i === railExtras.length - 1;
-              return (
-                <StepperItem
-                  key={entry.key}
-                  step={displayStep}
-                  completed={entry.status === "completed" || entry.status === "resolved"}
-                  data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
-                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
-                  // and 3, fix leg 10). The mark stands between two rows as a
-                  // sibling in normal flow, carrying the drawing's own 4px above
-                  // and 4px below; leg 9's pair box reserved a 16px slot the
-                  // drawing does not draw, and on a wrapped row the mark landed
-                  // inside the row's own box. `items-start` is the COLUMN's
-                  // cross axis — the row and the mark line up on the left — and
-                  // is not the row's own `align-items`, which the shared row
-                  // class states as the drawing does.
-                  className="items-start !flex-none"
-                >
-                  <RailExtraEntry
-                    entry={entry}
-                    reviewHrefBase={reviewHrefBase}
-                    displayStep={displayStep}
-                  />
-                  {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
-                </StepperItem>
-              );
-            })}
-          </StepperNav>
-        </Stepper>
-      </div>
-    </TooltipProvider>
+                    <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
+                      {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
+                    </StepperIndicator>
+                    <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+                      {s.label}
+                    </StepperTitle>
+                  </StepperTrigger>
+                </div>
+                {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
+              </StepperItem>
+            );
+          })}
+          {/* The merged rail's trailing rows (cinatra#2739) — review gates,
+              their verifications, and lifecycle policy decisions. These are
+              the DEEP LINKS the page-level rail used to be mounted for; they
+              render here through the shared `RailExtraEntry`, which is why
+              retiring that second mount loses nothing. They trail the spine
+              in the exact order `buildRunStepRail` sorted them into. */}
+          {railExtras.map((entry, i) => {
+            const displayStep = stepperSteps.length + i + 1;
+            const isLast = i === railExtras.length - 1;
+            return (
+              <StepperItem
+                key={entry.key}
+                step={displayStep}
+                completed={entry.status === "completed" || entry.status === "resolved"}
+                data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
+                // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                // and 3, fix leg 10). The mark stands between two rows as a
+                // sibling in normal flow, carrying the drawing's own 4px above
+                // and 4px below; leg 9's pair box reserved a 16px slot the
+                // drawing does not draw, and on a wrapped row the mark landed
+                // inside the row's own box. `items-start` is the COLUMN's
+                // cross axis — the row and the mark line up on the left — and
+                // is not the row's own `align-items`, which the shared row
+                // class states as the drawing does.
+                className="items-start !flex-none"
+              >
+                <RailExtraEntry
+                  entry={entry}
+                  reviewHrefBase={reviewHrefBase}
+                  displayStep={displayStep}
+                  // The gate the run waits at is a trailing row, and the
+                  // election above already numbers those rows (cinatra#3149,
+                  // item 3): the spine takes 1..N and these continue from N+1,
+                  // which is exactly the `displayStep` this row is drawn with.
+                  isCurrent={electsCurrentEntry && displayStep === activeStep}
+                />
+                {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
+              </StepperItem>
+            );
+          })}
+        </StepperNav>
+      </Stepper>
+    </div>
   );
 }
 
@@ -1622,6 +1656,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    frameElectsTheCurrentEntry = false,
+    initialGateStepNumber = null,
   } = props;
 
   const router = useRouter();
@@ -1856,11 +1892,19 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // soon as the next SSE frame or poll arrives. Future enhancement: persist
   // lastStepNumber in run.metadata so it survives refreshes.
   const highestStepNumberRef = useRef(0);
+  // HAS THE STREAM EVER DELIVERED A GATE ON THIS MOUNT? (cinatra#3149 item 3,
+  // fix leg 10.) The one thing that retires the server's seed above; written
+  // during render beside the ref below, which is this file's own idiom for a
+  // fact read out of the frame that just arrived.
+  const streamHasDeliveredAGateRef = useRef(false);
   const currentStepNumber =
     typeof (effectiveInterruptContext?.values as { stepNumber?: number } | undefined)
       ?.stepNumber === "number"
       ? (effectiveInterruptContext!.values as { stepNumber: number }).stepNumber
       : null;
+  if (effectiveInterruptContext !== null) {
+    streamHasDeliveredAGateRef.current = true;
+  }
   if (
     currentStepNumber !== null &&
     currentStepNumber > highestStepNumberRef.current
@@ -1910,9 +1954,22 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // THE SERVER'S ANSWER UNTIL THE STREAM HAS ONE (cinatra#3149 item 3, fix
+    // leg 10) — see `initialGateStepNumber`. It is a SEED, and a seed is spent:
+    // once the stream has delivered any interrupt at all the gate on screen is
+    // the stream's, and the number the server read before it is stale for the
+    // rest of this mount. "No interrupt right now" is not the same question —
+    // a RESUME frame clears the interrupt WITHOUT leaving `pending_approval`,
+    // so a seed retired only for as long as one is present would come back and
+    // move the marker to a step the run has passed.
+    const railStepNumber =
+      currentStepNumber ??
+      (status === "pending_approval" && !streamHasDeliveredAGateRef.current
+        ? initialGateStepNumber
+        : null);
     return electRunRailActiveStep({
       status,
-      currentStepNumber,
+      currentStepNumber: railStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
@@ -2440,6 +2497,13 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         onActiveStepClick={replayStepIndex !== null ? () => setReplayStepIndex(null) : undefined}
         railExtras={railExtras}
         reviewHrefBase={reviewHrefBase}
+        // ONE PLACE TO STAND ON THE WHOLE SURFACE (cinatra#3149, item 3; the
+        // rule corrected by fix leg 10). This column marks its own active entry
+        // unless the frame beside it has already marked a row of ITS own -- not
+        // merely whenever a frame is drawn, which is the question leg 9 asked
+        // and which left a run paused at a work step under a settled Skills
+        // entry with no marker anywhere on the surface.
+        electsCurrentEntry={!frameElectsTheCurrentEntry}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>
     </div>

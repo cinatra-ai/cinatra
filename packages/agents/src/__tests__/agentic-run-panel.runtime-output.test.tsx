@@ -167,7 +167,16 @@ describe.each(MOUNTS)(
 
       // The text itself is on the page — no further navigation, no database read.
       await waitFor(() => expect(screen.queryByText(RUNTIME_ANSWER)).not.toBeNull());
-      expect(screen.queryByText(/final response/i)).not.toBeNull();
+      // ...in the run's transcript, below the completion card. It is NOT a
+      // titled panel of its own: the third proof round read the "Final
+      // response" box as "a SECOND panel ... stacked beneath the one completion
+      // card in the same detail", and the drawing draws ONE card for the
+      // finished run (cinatra#3149, fix leg 5). What this case pins is that the
+      // produced text is drawn and that the card's sentence names where.
+      const finalRow = document.querySelector('[data-run-transcript-row="final"]');
+      expect(finalRow).not.toBeNull();
+      expect(finalRow?.textContent).toContain(RUNTIME_ANSWER);
+      expect(screen.queryByText(/^final response$/i)).toBeNull();
       // …and the card's sentence names exactly where it is.
       await waitFor(() =>
         expect(

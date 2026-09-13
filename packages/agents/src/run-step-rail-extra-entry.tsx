@@ -10,6 +10,92 @@ import { cn } from "@/lib/utils";
 import type { RunStepRailEntry } from "./run-step-rail";
 
 // ---------------------------------------------------------------------------
+// THE SETTLEMENT WORD A RESOLVED GATE'S ENTRY READS (cinatra#3149, fix leg 6,
+// defect A)
+// ---------------------------------------------------------------------------
+//
+// A proof round of this branch graded the settled review entry and read the
+// ENGINE's own decision verb on it -- "APPROVE": the gate row's `disposition`
+// column printed verbatim, shouted by the badge's `uppercase` class.
+//
+// The ratified drawing gives a settled entry a WORD, never a verb and never a
+// code. Section I: "A resolved gate stays on the rail as read-only history --
+// its entry keeps its place and records how it was settled (continued,
+// superseded by a regeneration, changes requested)", and its own settled entry
+// reads "Review the post continued" (section XI: "Continued is the only settled
+// reading a display has").
+//
+// THREE DISPOSITIONS RESOLVE A GATE AND THE DRAWING GIVES THREE WORDS.
+// `approve` releases the held effect and the run goes on -- the drawing's own
+// example, and its "continued". `changes_requested` is the drawing's word
+// itself: the prompt-window path closes the base gate and opens the repair.
+// `reject` resumes the workflow on its reject branch -- "compensation,
+// re-draft, alternate branch" (`artifact-review-rejection.ts`) -- so what was
+// reviewed is turned back to be made again, which is the drawing's "superseded
+// by a regeneration". A `comment` is non-terminal and never settles a gate, so
+// it is not a settlement this map can be asked for.
+//
+// AND A VALUE THAT IS ALREADY THE DRAWING'S OWN WORD PASSES THROUGH. Not every
+// feed of this rail speaks the engine's vocabulary: a surface that declares its
+// rows directly carries the settlement the drawing names ("continued"), and
+// answering `null` to the drawing's own word would take the settled reading off
+// the row entirely -- the opposite of what section I asks for. The map answers
+// the drawing's word to the drawing's word.
+//
+// AND AN UNREADABLE VALUE DRAWS NO WORD AT ALL. A disposition outside both sets
+// is one this build cannot name in the drawing's vocabulary, and the one thing
+// it must not do is fall back to printing the raw value -- that fallback IS the
+// graded defect. The entry keeps its place and its one label, which is what
+// section I gives it before any settlement is added.
+//
+// WHY THE MAP LIVES IN THIS MODULE and not beside `RunStepRailEntry` in
+// `run-step-rail`: exactly the reason the vocabulary above gives. `run-step-rail`
+// reaches this row only as a TYPE today, and a value import of it pulls that
+// module and its own step-name module into the graph of four route-budgeted
+// routes -- measured at +2 modules each, which the route-graph ratchet refuses.
+// The row that draws the word holds the word.
+
+/** The drawing's settled readings, in the drawing's own words (section I). */
+export const RAIL_SETTLEMENT_WORDS = {
+  continued: "continued",
+  superseded: "superseded by a regeneration",
+  changesRequested: "changes requested",
+} as const;
+
+/**
+ * The drawing's settlement word for a resolved gate's disposition, or `null`
+ * when this build cannot name one.
+ *
+ * Three vocabularies are accepted because the rail is fed from three places:
+ * the gate ROW carries `approve` / `reject` / `changes_requested` (the decision
+ * core's terminal CAS and the repair store), the settled card's projection
+ * carries the past tense `approved` / `rejected`, and a surface that declares
+ * its own rows carries the drawing's word already. One word answers for all
+ * three, so no two readings of one settled gate can disagree.
+ */
+export function railSettlementWord(
+  disposition: string | null | undefined,
+): string | null {
+  if (typeof disposition !== "string") return null;
+  switch (disposition.trim().toLowerCase().replace(/[-\s]+/g, "_")) {
+    case "approve":
+    case "approved":
+    case "continued":
+      return RAIL_SETTLEMENT_WORDS.continued;
+    case "reject":
+    case "rejected":
+    case "superseded":
+    case "superseded_by_a_regeneration":
+      return RAIL_SETTLEMENT_WORDS.superseded;
+    case "changes_requested":
+      return RAIL_SETTLEMENT_WORDS.changesRequested;
+    default:
+      return null;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // THE RUN PAGE'S RAIL VOCABULARY, IN ONE PLACE (cinatra#3188, forward + fix
 // leg 1).
 //
@@ -258,9 +344,18 @@ export function RailExtraEntry({
   entry,
   reviewHrefBase,
   displayStep,
+  isCurrent = false,
 }: {
   entry: RunStepRailEntry;
   reviewHrefBase: string;
+  /**
+   * True on the ONE row the rail stands the reader at (cinatra#3149, item 3).
+   * The caller elects it, because "one entry is highlighted at a time"
+   * (the ratified drawing, section I.3) is a fact about the whole rail and no
+   * row can read it off itself. Absent -> the row carries no marker, which is
+   * what every caller that has not elected one gets.
+   */
+  isCurrent?: boolean;
   /** Numeral for a plain STEP row (a surplus stepResult past the policy spine —
    *  the only `kind: "step"` entry that ever reaches this component). Gates,
    *  verifications and lifecycle decisions draw an icon instead. */
@@ -273,6 +368,15 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
+  // THE DRAWN SETTLEMENT, NEVER THE ENGINE'S VERB (cinatra#3149, fix leg 6,
+  // defect A). A proof round read "APPROVE" on this row -- the gate row's own
+  // disposition column, shouted by the badge's uppercase class. The drawing
+  // gives the settled entry a word instead ("continued", "superseded by a
+  // regeneration", "changes requested"), and a value this build cannot name in
+  // that vocabulary draws no word at all rather than falling back to the raw
+  // one. `railSettlementWord` holds the whole mapping and the reasoning.
+  const settlementWord =
+    isGate && isResolved ? railSettlementWord(entry.gate?.disposition) : null;
 
   const titleNode = (
     <StepperTitle
@@ -282,9 +386,15 @@ export function RailExtraEntry({
       )}
     >
       {entry.label}
-      {isGate && isResolved ? (
-        <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          {entry.gate?.disposition ?? "resolved"}
+      {settlementWord !== null ? (
+        // NOT UPPERCASED EITHER. The drawing's settled entry reads "continued"
+        // in the row's own type; the `uppercase` class is what turned a word
+        // into the shouted machine code the round photographed.
+        <span
+          data-rail-gate-settlement=""
+          className="ms-1.5 text-badge-2xs tracking-widest text-muted-foreground"
+        >
+          {settlementWord}
         </span>
       ) : null}
       {isVerification ? (
@@ -292,23 +402,18 @@ export function RailExtraEntry({
           {entry.verification?.outcome ?? "verified"}
         </span>
       ) : null}
-      {isLifecycle ? (
-        <>
-          <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-            {entry.lifecycleDecision?.decidedBy ?? lifecycleOutcome ?? "policy"}
-          </span>
-          {/* The REASON is the point of the entry: a user must be able to
-              tell a deliberately-skipped review from no machinery running.
-              It WRAPS inside the narrow rail (never truncates) — a clipped
-              reason answers nothing. */}
-          <span
-            className="mt-0.5 block max-w-36 text-start text-badge-2xs leading-4 break-words whitespace-normal text-muted-foreground"
-            data-rail-lifecycle-reason=""
-          >
-            {entry.lifecycleDecision?.reason}
-          </span>
-        </>
-      ) : null}
+      {/* A LIFECYCLE ENTRY IS ITS ONE NAME (cinatra#3149, fix leg 4). The
+          drawing's rail entry is a glyph and one span, and its section I rule
+          gives a settled entry the SETTLEMENT it was closed with -- "records
+          how it was settled" -- never a reason. The projection already folds
+          that settlement into the label ("Review skipped", "Review not
+          classifiable", "Review pending policy"), exactly as the drawing folds
+          "Review the post continued" into one name, so this row had a badge
+          repeating the lattice's own word beside a label that already carried
+          it, over a whole sentence of reason drawn as a second line. A proof
+          round read both back as text the rail does not draw. The outcome and
+          the decider stay on the row below as passive data attributes, where a
+          walk can read them and a reader is not shown them. */}
     </StepperTitle>
   );
 
@@ -339,6 +444,10 @@ export function RailExtraEntry({
       // The row spans the rail column and may SHRINK inside it, which is what
       // lets a long label wrap instead of running past the column (cinatra#3226).
       className="flex w-full min-w-0 items-center gap-1"
+      // The rail's current position (cinatra#3149, item 3) -- a gate row is the
+      // entry a finished run is waiting at, so the marker has to reach the rows
+      // this component draws and not only the panel's own step rows.
+      aria-current={isCurrent ? "step" : undefined}
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
       // The row that opens nothing says so here on BOTH rails, so one reading
@@ -347,13 +456,18 @@ export function RailExtraEntry({
       data-rail-gated-step={isGate ? "true" : undefined}
       data-rail-gate-history={isGate && isResolved ? "true" : undefined}
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
+      // The engine's own disposition stays on the row as PASSIVE DATA, where a
+      // walk can read it and a reader is not shown it -- the same treatment the
+      // lattice's words got below when fix leg 4 took them out of the text.
+      data-rail-gate-disposition={
+        isGate && isResolved ? entry.gate?.disposition ?? undefined : undefined
+      }
       data-rail-verification={isVerification ? "true" : undefined}
       data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
       data-rail-lifecycle-decision={isLifecycle ? lifecycleOutcome : undefined}
       data-rail-lifecycle-decided-by={
         isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined
       }
-      title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
     >
       {isGate && entry.gate ? (
         // A gate row links into the run-embedded review surface. A resolved
