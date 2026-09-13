@@ -82,7 +82,16 @@ export function shapeBlogPipelineObjectsSave(
       );
     }
     return {
-      typeHint: "@dynamic/types:blog-pipeline-selected-idea",
+      // cinatra#2960: a HOST-OWNED static type, never the tombstoned
+      // `@dynamic/types:*` namespace — that namespace resolves to no
+      // extension by design, so the save boundary refused this write and the
+      // run died one frame after the idea-selection gate. Registered in
+      // `packages/objects/src/integration/register-types.ts`
+      // (BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID); written as a literal here
+      // because this module is deliberately zero-dependency, and pinned
+      // equal to the declaration by
+      // `src/__tests__/passthrough-dynamic-type-refusal-rule.test.ts`.
+      typeHint: "@cinatra-ai/blog-pipeline:selected-idea",
       rawData: { cinatra_agent_run_id: runId, idea: matched ?? selected },
     };
   }

@@ -78,7 +78,12 @@ export const PASSTHROUGH_SHAPER_DECLARATIONS: readonly PassthroughShaperDeclarat
   {
     shaperId: "blog-pipeline-seam:blog_pipeline_selected_idea",
     module: "src/app/api/agents/passthrough/blog-pipeline-seam.ts",
-    savesTypes: ["@dynamic/types:blog-pipeline-selected-idea"],
+    // cinatra#2960: the selected-idea save was moved off the tombstoned
+    // `@dynamic/types:*` namespace onto the host-owned static type. The
+    // DECLARATION stays — the shaper still saves, and the audit still counts
+    // it down to the wave that retires the persistence — only the type it
+    // names changed, so the declaration keeps matching what the shaper does.
+    savesTypes: ["@cinatra-ai/blog-pipeline:selected-idea"],
     // The gate's chosen idea, reshaped and written back. A run value's
     // transform, persisted.
     persistsRunValueTransform: true,
