@@ -46,6 +46,10 @@ vi.mock("../wayflow-url", () => ({
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
   markResumeIntentDelivered: vi.fn(),
+  // cinatra#3035 (epic #3023 W11): the worker reads the run's own gates so a
+  // review that opens one per artifact holds the run parked until the last of
+  // them is decided. These runs carry a single gate, so no leg is outstanding.
+  listReviewGatesForRun: vi.fn(async () => []),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
 

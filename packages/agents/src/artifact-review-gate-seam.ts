@@ -21,6 +21,7 @@ import "server-only";
 
 import {
   emitArtifactReviewGate,
+  listReviewGatesForRun,
   readReviewGate,
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
@@ -56,6 +57,11 @@ export type ArtifactReviewGateSeam = {
     runId: string,
     reviewTaskId: string,
   ): Promise<{ orgId: string; status: string } | null>;
+  /** cinatra#3035 (epic #3023 W11) — every gate this run owns, projected to what
+   *  the per-artifact routing needs: a review that opens one gate per artifact
+   *  sends the person to the first artifact still waiting to be read, and only
+   *  the run's own gate list can say which that is. */
+  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -80,6 +86,10 @@ export function bindArtifactReviewGateSeam(): void {
     async readGate(runId, reviewTaskId) {
       const gate = await readReviewGate(runId, reviewTaskId);
       return gate ? { orgId: gate.orgId, status: gate.status } : null;
+    },
+    async listGates(runId) {
+      const gates = await listReviewGatesForRun(runId);
+      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
     },
   };
   (

@@ -41,10 +41,26 @@ import {
 
 const CTX: FieldRendererContext = { connectedApps: [] };
 const BINDING_ID = "@cinatra-ai/blog-pipeline-agent:idea-selection";
+// cinatra#3035 (epic #3023 W11): an offered idea is a REFERENCE — the idea
+// artifact and the exact revision the list offered — plus the text whose first
+// line is its title. The renderer commits the reference; an entry with no
+// reference is not offered at all.
 const IDEAS = [
-  { title: "Idea Alpha", summary: "First angle" },
-  { title: "Idea Beta", summary: "Second angle" },
+  {
+    artifactId: "idea-alpha",
+    representationRevisionId: "rev-alpha",
+    title: "Idea Alpha",
+    text: "Idea Alpha\nFirst angle",
+  },
+  {
+    artifactId: "idea-beta",
+    representationRevisionId: "rev-beta",
+    title: "Idea Beta",
+    text: "Idea Beta\nSecond angle",
+  },
 ];
+const REF_ALPHA = { artifactId: "idea-alpha", representationRevisionId: "rev-alpha" };
+const REF_BETA = { artifactId: "idea-beta", representationRevisionId: "rev-beta" };
 // The compiled InputMessageNode schema the gate carries after the Stage-2
 // repoint (blog OAS idea_selection_gate.inputMessageSchema).
 const GATE_SCHEMA = {
@@ -73,24 +89,29 @@ function renderChooser(value: unknown, schema: unknown = GATE_SCHEMA) {
 afterEach(cleanup);
 
 describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)", () => {
-  it("renders a radio per idea and commits ideas[0] on mount as {selectedIdeaJson, userResponse}", () => {
+  it("renders a radio per idea and commits NOTHING on mount (cinatra#3035: the first-idea default is gone)", () => {
     const { onChange } = renderChooser({ ideas: IDEAS });
     expect(screen.getByText("Idea Alpha")).toBeTruthy();
     expect(screen.getByText("Idea Beta")).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(2);
-    // The exact payload shape the gate + its passthrough seam expect.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("commits the chosen idea's reference in the payload shape the gate expects", () => {
+    const { onChange } = renderChooser({ ideas: IDEAS });
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
     expect(onChange).toHaveBeenCalledWith({
-      selectedIdeaJson: JSON.stringify(IDEAS[0]),
-      userResponse: JSON.stringify(IDEAS[0]),
+      selectedIdeaJson: JSON.stringify(REF_ALPHA),
+      userResponse: JSON.stringify(REF_ALPHA),
     });
   });
 
-  it("selecting the second idea commits ideas[1] in the same payload shape", () => {
+  it("selecting the second idea commits its reference in the same payload shape", () => {
     const { onChange } = renderChooser({ ideas: IDEAS });
     fireEvent.click(screen.getAllByRole("radio")[1]!);
     expect(onChange).toHaveBeenLastCalledWith({
-      selectedIdeaJson: JSON.stringify(IDEAS[1]),
-      userResponse: JSON.stringify(IDEAS[1]),
+      selectedIdeaJson: JSON.stringify(REF_BETA),
+      userResponse: JSON.stringify(REF_BETA),
     });
   });
 
@@ -101,12 +122,13 @@ describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)
 
   it("commits selectedIdeaJson === userResponse (single-string InputMessageNode contract)", () => {
     const { onChange } = renderChooser({ ideas: IDEAS });
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
     const call = onChange.mock.calls.at(-1)![0] as {
       selectedIdeaJson: string;
       userResponse: string;
     };
     expect(call.selectedIdeaJson).toBe(call.userResponse);
-    expect(JSON.parse(call.selectedIdeaJson)).toEqual(IDEAS[0]);
+    expect(JSON.parse(call.selectedIdeaJson)).toEqual(REF_ALPHA);
   });
 
   it("degrades to the schema floor with no ideas — no chooser, no selectedIdeaJson auto-commit (never blank)", () => {

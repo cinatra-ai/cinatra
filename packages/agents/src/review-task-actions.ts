@@ -180,6 +180,36 @@ async function assertRunScopeOrDeny(
   }
 }
 
+/**
+ * The per-decision half of a setup resume's job id (cinatra#3035).
+ *
+ * A field name comes from the template's own inputSchema, so a queue key cannot
+ * carry it verbatim. A key that merely SANITIZED the name was NOT injective,
+ * and that is the same defect one level down: `a.b`, `a:b` and `a_b` all reduce
+ * to one string, as do any two names sharing a truncated prefix, and two fields
+ * of ONE run that share a key hand the second decision the first one's finished
+ * job again — exactly the stall this id was changed to end. So the key carries a
+ * digest of the WHOLE raw name; the sanitized, truncated part is kept only so the
+ * id stays readable where jobs are listed.
+ *
+ * The digest is FNV-1a/32: this is an identity for de-duplication inside one
+ * run's handful of declared fields, never a security boundary, so a wider or
+ * cryptographic digest would buy nothing. The grouped form (no single field)
+ * keeps a reserved identity of its own; a field whose name sanitizes to nothing
+ * is still a field and keeps its digest rather than borrowing that identity.
+ */
+function setupResumeDecisionKey(fieldName: string | undefined): string {
+  if (typeof fieldName !== "string") return "grouped";
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < fieldName.length; i += 1) {
+    hash ^= fieldName.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const digest = (hash >>> 0).toString(16).padStart(8, "0");
+  const readable = fieldName.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48);
+  return readable.length > 0 ? `field-${readable}-${digest}` : `field-${digest}`;
+}
+
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
   actorId: string,
@@ -472,7 +502,28 @@ export async function approveReviewTaskInternal(
       // trigger step before it may dispatch — so it hands off to
       // `pending_trigger` instead of running before the user has chosen when.
       { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
+      // cinatra#3035 — THE JOB ID NAMES THE DECISION, NOT THE ROAD. The setup
+      // gate synthesizes ONE review-task identity for the whole road
+      // (`setup-<runId>`), so an id derived from it alone was the SAME id for
+      // every declared field. BullMQ's id-carrying add is HSETNX and finished
+      // jobs are KEPT (`removeOnComplete` is a count, not zero), so the second
+      // field's resume found the first field's COMPLETED job, was handed that
+      // job back, and queued no work at all: the run stayed `queued` at the
+      // `hitl` moment on its already-decided gate, never parked on the Schedule
+      // step, never wrote a trigger row and never started.
+      //
+      // Each field is decided exactly once on this road (a decided gate is
+      // closed — a second press is answered "this review is no longer open"),
+      // so the field name is the decision's own identity and the grouped form,
+      // which decides the whole road at once, keeps an identity of its own. The
+      // de-duplication the deterministic id is here for is unchanged WITHIN one
+      // decision. A double submit racing ITSELF is refused before this enqueue by
+      // the guarded writer's org-scoped status compare-and-set, which updates 0
+      // rows and throws while the run is no longer `pending_approval`; a LATE
+      // repeat that arrives after the run has re-parked on the NEXT field passes
+      // that gate, and it is this deterministic id that then stops it from
+      // queuing a second copy of a decision already carried out.
+      { jobId: `resume-${reviewTaskId}-${setupResumeDecisionKey(fieldName)}` },
     );
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,

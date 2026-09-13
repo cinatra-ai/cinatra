@@ -127,6 +127,22 @@ vi.mock("../reserved-workspace-slugs", () => ({
 }));
 
 import { ensureAgentPackage, ensureAgentPackageFromGitFile } from "../ensure-agent-package";
+
+// The install-record heal seam, injected (cinatra#3035).
+//
+// `ensureAgentPackageFromGitFile` falls back to `defaultHealInstallRecord`
+// when the seam is not supplied, and THAT default dynamically imports
+// `@/lib/extension-install-anchor` — a module that reads (and repairs) the
+// LIVE `installed_extension` table. The version-skip guard consults the gate
+// before it may report "already up to date", so a test that leaves the seam
+// un-injected has its `skipped` verdict decided by whatever rows happen to be
+// in the shared lane database: an ambient "repaired" outcome turns the skip
+// into a re-import and the assertion fails, but only in a whole-suite run that
+// an earlier file has left rows behind for. The seam exists precisely so a
+// unit test drives the decision without a DB (see its docstring); inject it so
+// these assertions measure the version/lifecycle guard and nothing else.
+const healAlreadyLive = async () => ({ outcome: "already-live" });
+
 import { createZipBuffer, readZipFiles } from "../zip-helpers";
 
 type SynthesizedCinatra = {
@@ -141,7 +157,7 @@ async function synthesizedCinatraBlock(
 ): Promise<SynthesizedCinatra | undefined> {
   // No existing DB row → not a version-skip; the loader synthesizes + imports.
   readAgentTemplateByPackageNameMock.mockResolvedValue(undefined);
-  const result = await ensureAgentPackageFromGitFile({ oasSourcePath });
+  const result = await ensureAgentPackageFromGitFile({ oasSourcePath, healInstallRecord: healAlreadyLive });
   expect(result.skipped).toBe(false);
   expect(importAgentTemplateCoreMock).toHaveBeenCalledTimes(1);
   const zipBase64 = importAgentTemplateCoreMock.mock.calls[0]![0] as string;
@@ -336,7 +352,7 @@ describe("cinatra#2044 GAP 2 — the version-skip guard also compares the derive
       packageVersion: "0.1.6",
       lifecycleConfig: JSON.stringify({ repairCapable: true }),
     });
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
   });
@@ -348,7 +364,7 @@ describe("cinatra#2044 GAP 2 — the version-skip guard also compares the derive
       packageVersion: "0.1.6",
       lifecycleConfig: null,
     });
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(false);
     expect(importAgentTemplateCoreMock).toHaveBeenCalledTimes(1);
   });
@@ -362,7 +378,7 @@ describe("cinatra#2044 GAP 2 — the version-skip guard also compares the derive
       packageVersion: "0.1.6",
       lifecycleConfig: JSON.stringify({ repairCapable: true }),
     });
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(false);
     expect(importAgentTemplateCoreMock).toHaveBeenCalledTimes(1);
   });
@@ -374,7 +390,7 @@ describe("cinatra#2044 GAP 2 — the version-skip guard also compares the derive
       packageVersion: "0.1.6",
       lifecycleConfig: null,
     });
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
   });
@@ -410,7 +426,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
   it("passes lifecycleDeclarationAuthoritative:false when no sibling manifest exists", async () => {
     MANIFEST_PATHS = {};
     readAgentTemplateByPackageNameMock.mockResolvedValue(undefined);
-    await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(importAgentTemplateCoreMock).toHaveBeenCalledTimes(1);
     const options = importAgentTemplateCoreMock.mock.calls[0]![2] as {
       lifecycleDeclarationAuthoritative?: boolean;
@@ -420,7 +436,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
 
   it("passes lifecycleDeclarationAuthoritative:true when the sibling manifest WAS read", async () => {
     readAgentTemplateByPackageNameMock.mockResolvedValue(undefined);
-    await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     const options = importAgentTemplateCoreMock.mock.calls[0]![2] as {
       lifecycleDeclarationAuthoritative?: boolean;
     };
@@ -437,7 +453,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
       packageVersion: undefined,
       lifecycleConfig: JSON.stringify({ repairCapable: true }),
     });
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
   });
@@ -531,7 +547,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
       throw err;
     });
     readAgentTemplateByPackageNameMock.mockResolvedValue(undefined);
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
   });

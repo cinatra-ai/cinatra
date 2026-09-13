@@ -1,49 +1,60 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { FieldRendererProps } from "./field-renderer-registry";
+import { useState } from "react";
 import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import {
+  choiceBody,
+  choiceReference,
+  choiceTitle,
+  offerableChoices,
+  statedReason,
+  type FieldRendererProps,
+  type OfferedChoice,
+} from "./field-renderer-registry";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-// Host-bundled renderer for blog-pipeline's `idea_selection_gate`
-// (cinatra#1796). It is keyed in RENDERER_KIND_TABLE under the neutral
-// kind "blog-idea-selection" and activated by the DEDICATED binding id
-// `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition — see
-// register-default-renderers.ts). The idea-chooser relocated OFF the shared
-// (now RETIRED) reviewer binding onto this dedicated one
-// (blog-pipeline-agent#40); that shared binding, its package and the
-// reviewer-output dispatcher the inline chooser lived in were all deleted by the
-// cinatra#1796 retirement teardown, so this is the sole idea-selection renderer.
+// Host-bundled renderer for the idea-selection gate (cinatra#1796). It is keyed
+// in RENDERER_KIND_TABLE under the neutral kind "blog-idea-selection" and
+// activated by the DEDICATED binding id the declaring pack names (strict-id
+// condition — see register-default-renderers.ts).
 //
-// PAYLOAD CONTRACT (ground truth: this renderer's tests + the blog OAS
-// idea_selection_gate
-// InputMessageNode): the gate is an InputMessageNode whose one string output
-// (`selectedIdeaJson`) becomes the WayFlow resume text (`userResponse`). The
-// chosen idea is committed as JSON.stringify(idea) into BOTH keys. A default
-// selection (ideas[0]) is committed on mount so the buffered value is always a
-// valid, offered idea (the seam validates it by title) and the run can never
-// resume with an empty/placeholder selection. The user may change the pick
-// before pressing the panel's Continue.
+// PAYLOAD CONTRACT (cinatra#3035, epic #3023 W11; plan (C) §5.1, §8.4 "the gate
+// renderer"). The gate is an InputMessageNode whose one string output
+// (`selectedIdeaJson`) becomes the WayFlow resume text (`userResponse`), and the
+// pick is committed as JSON into BOTH keys. NOTHING IS PICKED FOR ANYONE: the
+// list starts with no selection and commits only what a person actually chooses,
+// and what it commits is the REFERENCE the offer named, never a title. Both the
+// reference shape and the title/body split are the generic offered-choice road
+// on `field-renderer-registry.ts`, which knows no pack.
 
 /**
- * The idea-selection field renderer. Reads the generated ideas from
- * `props.value.ideas` (surfaced from the gate's pendingApproval render input).
- * With no offered ideas it degrades to the schema-driven floor
- * (SchemaOnlyFloorRenderer — the registry-bypass floor that never re-enters the
- * registry) so the HITL surface is never blank; this dedicated binding is only
- * ever emitted by idea_selection_gate, so that branch is defensive.
+ * The idea-selection field renderer. Reads the offered ideas from
+ * `props.value.ideas` (surfaced from the gate's pendingApproval render input)
+ * and the run-ending sentence, when there is one, from `props.value.reason`.
+ *
+ * With no offered ideas and a stated reason it draws the reason: "an empty list
+ * ends the run with a plain reason" is something a person must be able to READ,
+ * not a state the surface leaves blank. With no ideas and no reason it degrades
+ * to the schema-driven floor as before.
  */
 export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
   const value = (props.value ?? {}) as {
     ideas?: unknown;
     summary?: string;
+    reason?: unknown;
     [extraKey: string]: unknown;
   };
-  const ideas = Array.isArray(value.ideas)
-    ? (value.ideas as Array<Record<string, unknown>>)
-    : null;
-  if (!ideas || ideas.length === 0) {
-    // Never blank: no offered ideas -> schema-driven floor (no re-resolution).
+  const offered = offerableChoices(value.ideas);
+  const reason = statedReason(value.reason);
+  if (offered.length === 0) {
+    if (reason) {
+      return (
+        <p className="text-sm text-muted-foreground" role="status">
+          {reason}
+        </p>
+      );
+    }
+    // Never blank: no offered ideas and nothing said -> schema-driven floor.
     return <SchemaOnlyFloorRenderer {...props} />;
   }
   const summary =
@@ -56,7 +67,7 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
         <p className="text-sm text-muted-foreground mb-2">{summary}</p>
       ) : null}
       <IdeaChooser
-        ideas={ideas}
+        ideas={offered}
         onChange={props.onChange}
         disabled={props.disabled}
       />
@@ -65,44 +76,27 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
 }
 
 /**
- * Radio-per-idea chooser for the dedicated idea-selection binding. Commits the
- * chosen idea as
- * JSON.stringify(idea) into { selectedIdeaJson, userResponse } — the exact shape
- * idea_selection_gate + its downstream `selected_idea` passthrough seam expect.
+ * Radio-per-idea chooser. Commits `JSON.stringify({artifactId,
+ * representationRevisionId})` into { selectedIdeaJson, userResponse } — and only
+ * ever in response to a person choosing.
  */
 function IdeaChooser({
   ideas,
   onChange,
   disabled,
 }: {
-  ideas: Array<Record<string, unknown>>;
+  ideas: OfferedChoice[];
   onChange: (next: unknown) => void;
   disabled?: boolean;
 }) {
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  // No index: nothing is chosen until someone chooses.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const commit = (idx: number) => {
-    const json = JSON.stringify(ideas[idx]);
+    const reference = choiceReference(ideas[idx]);
+    if (!reference) return;
+    const json = JSON.stringify(reference);
     void onChange({ selectedIdeaJson: json, userResponse: json });
   };
-  // Commit the default selection once on mount (an effect — never call the
-  // parent setter during render). Uses the mount-time `onChange`, which is
-  // valid; radio changes below re-commit via the current-render closure.
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  useEffect(() => {
-    const json = JSON.stringify(ideas[0]);
-    void onChangeRef.current({ selectedIdeaJson: json, userResponse: json });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const ideaLabel = (idea: Record<string, unknown>, idx: number) =>
-    typeof idea.title === "string" && idea.title.trim().length > 0
-      ? idea.title
-      : `Idea ${idx + 1}`;
-  const ideaSummary = (idea: Record<string, unknown>) =>
-    (typeof idea.summary === "string" && idea.summary) ||
-    (typeof idea.angle === "string" && idea.angle) ||
-    (typeof idea.description === "string" && idea.description) ||
-    "";
   return (
     <div className="flex flex-col gap-2">
       <p className="text-sm text-muted-foreground">
@@ -110,7 +104,7 @@ function IdeaChooser({
       </p>
       <RadioGroup
         aria-label="Select one blog idea to draft"
-        value={String(selectedIndex)}
+        value={selectedIndex === null ? "" : String(selectedIndex)}
         disabled={disabled}
         onValueChange={(v) => {
           const idx = Number(v);
@@ -121,7 +115,7 @@ function IdeaChooser({
       >
         {ideas.map((idea, idx) => {
           const selected = idx === selectedIndex;
-          const sub = ideaSummary(idea);
+          const sub = choiceBody(idea);
           return (
             <label
               key={idx}
@@ -131,9 +125,9 @@ function IdeaChooser({
             >
               <RadioGroupItem value={String(idx)} className="mt-1" />
               <span className="flex flex-col gap-0.5">
-                <span className="font-medium">{ideaLabel(idea, idx)}</span>
+                <span className="font-medium">{choiceTitle(idea, idx, "Idea")}</span>
                 {sub ? (
-                  <span className="text-muted-foreground">{sub}</span>
+                  <span className="text-muted-foreground whitespace-pre-line">{sub}</span>
                 ) : null}
               </span>
             </label>

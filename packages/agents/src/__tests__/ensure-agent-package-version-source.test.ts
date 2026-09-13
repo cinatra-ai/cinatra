@@ -79,6 +79,22 @@ vi.mock("../reserved-workspace-slugs", () => ({
 }));
 
 import { ensureAgentPackageFromGitFile } from "../ensure-agent-package";
+
+// The install-record heal seam, injected (cinatra#3035).
+//
+// `ensureAgentPackageFromGitFile` falls back to `defaultHealInstallRecord`
+// when the seam is not supplied, and THAT default dynamically imports
+// `@/lib/extension-install-anchor` — a module that reads (and repairs) the
+// LIVE `installed_extension` table. The version-skip guard consults the gate
+// before it may report "already up to date", so a test that leaves the seam
+// un-injected has its `skipped` verdict decided by whatever rows happen to be
+// in the shared lane database: an ambient "repaired" outcome turns the skip
+// into a re-import and the assertion fails, but only in a whole-suite run that
+// an earlier file has left rows behind for. The seam exists precisely so a
+// unit test drives the decision without a DB (see its docstring); inject it so
+// these assertions measure the version/lifecycle guard and nothing else.
+const healAlreadyLive = async () => ({ outcome: "already-live" });
+
 import { readZipFiles } from "../zip-helpers";
 
 describe("ensureAgentPackageFromGitFile — version resolves solely from package.json#version", () => {
@@ -93,7 +109,7 @@ describe("ensureAgentPackageFromGitFile — version resolves solely from package
     // If the loader read the OAS value, the version-skip guard would fire (skip).
     readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-demo", packageVersion: "0.1.0" });
 
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
 
     // It must have re-imported (package.json#version 0.1.1 ≠ DB row 0.1.0), NOT skipped.
     expect(result.skipped).toBe(false);
@@ -115,7 +131,7 @@ describe("ensureAgentPackageFromGitFile — version resolves solely from package
     // The OAS's 0.1.0 is irrelevant; the loader never reads it.
     readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-demo", packageVersion: "0.1.1" });
 
-    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH, healInstallRecord: healAlreadyLive });
 
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();

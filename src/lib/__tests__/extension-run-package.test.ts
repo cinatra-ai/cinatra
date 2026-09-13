@@ -43,10 +43,12 @@ describe("resolving the run's extension identity", () => {
     });
   });
 
-  it("REFUSES an unpinned run rather than reading whatever is published now", async () => {
+  it("REFUSES a run no binding gives a version, rather than reading what is published now", async () => {
     // Without a version there is no one declaration to bind the admission to,
     // and a floating read would let a republish widen a RUNNING flow's reach
-    // with no restart and no rebinding.
+    // with no restart and no rebinding. Neither the run row here nor its
+    // template names one — the template-bound road is exercised next door, in
+    // extension-run-package-template-binding.
     const { resolveRunExtensionContext } = await import("@/lib/extension-run-package");
     query.mockResolvedValue({ rows: [{ package_name: "@cinatra-ai/pipeline" }] });
     const loadManifest = vi.fn().mockResolvedValue(MANIFEST);

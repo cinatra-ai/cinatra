@@ -88,7 +88,14 @@ const TABLE: Array<{
   },
   {
     agent: "blog-linkedin-publish-agent",
-    produces: [{ extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE }],
+    // A KNOWN NON-PRODUCER, and its pinned head says so explicitly. The
+    // publisher is handed a draft that already exists, writes the published
+    // address back onto that same artifact and persists no revision, so no
+    // recognised write road reaches a new artifact: the pack declares an empty
+    // produces set in both its manifest and its flow document, and the fleet's
+    // adoption gate reads that emptiness directly. Its EDGE stays: it says what
+    // the run touches, which is true either way.
+    produces: [],
     edges: [LINKEDIN],
   },
   {
@@ -132,12 +139,14 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(14);
   });
 
-  it("declares six of the nine typed produces entries", () => {
-    // Nine after the prototype. Three wait for their write roads, not for their
-    // packages: the image agent's own entry and the pipeline's idea and picture
-    // entries. No road an agent can take reaches a picture today.
+  it("declares five of the eight typed produces entries", () => {
+    // Eight after the prototype, not nine: the publisher's entry is RETIRED
+    // rather than waiting, because its flow files nothing of its own. Three of
+    // the eight wait for their write roads, not for their packages: the image
+    // agent's own entry and the pipeline's idea and picture entries. No road an
+    // agent can take reaches a picture today.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(6);
+    expect(total).toBe(5);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);

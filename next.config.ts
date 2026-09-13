@@ -145,9 +145,24 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: process.env.CI === "true",
   },
-  devIndicators: {
-    position: "bottom-right",
-  },
+  // cinatra#3035 — the development indicator's own switch.
+  //
+  // A dev boot paints this indicator over every page, and a graded proof frame
+  // may not carry it (nor be cropped or DOM-edited to take it off), so a proof
+  // round has to turn it off through the framework's OWN means. Next's only
+  // supported switch is `devIndicators: false`, so a round boots with
+  // CINATRA_DEV_INDICATOR=off and the framework draws nothing.
+  //
+  // Every ordinary dev boot leaves the variable unset and keeps the indicator
+  // where it was; any other value keeps it too, so a typo can never silently
+  // hide a dev boot's own warning surface. Production is unaffected: the
+  // framework only ever draws this indicator in development.
+  devIndicators:
+    process.env.CINATRA_DEV_INDICATOR === "off"
+      ? false
+      : {
+          position: "bottom-right",
+        },
   turbopack: {
     root: process.cwd(),
     // cinatra#1506: force a single `sonner` module instance (see the block above).
