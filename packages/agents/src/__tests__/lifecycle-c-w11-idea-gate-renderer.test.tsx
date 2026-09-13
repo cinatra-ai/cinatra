@@ -121,3 +121,81 @@ describe("W11 — an empty list ends the run with a reason", () => {
     expect(screen.getByText(/no blog idea left to draft/i)).toBeTruthy();
   });
 });
+
+/**
+ * THE REAL EMITTED SPEC — the pause the runtime actually parked this pack on.
+ *
+ * Both constants below are copied VERBATIM out of the durable gate row the host
+ * wrote for the parked Blog Pipeline Agent run (`cinatra.agent_run_hitl_gates`,
+ * review_task_id `wayflow-92b67227-5457-47a0-b557-d87eaa6077ea`, x_renderer
+ * `@cinatra-ai/blog-pipeline-agent:idea-selection`): `input_schema` and
+ * `gate_values` exactly as stored. The envelope carries NO `ideas` key and NO
+ * `reason` — the runtime delivered neither — so this is the reading a person
+ * really got on that page.
+ *
+ * The ratified drawing gives that reading (the stored-ideas step): "An empty
+ * list draws no rows and no Continue: it states that no idea is left to draft
+ * and that the run ends here, because there is nothing to pick." A generic
+ * response field with a Continue over it is the one shape this step may not
+ * draw, because it is a way to settle the run's subject without a row being
+ * picked.
+ */
+const REAL_EMITTED_SCHEMA = {
+  type: "object",
+  properties: {
+    selectedIdeaJson: {
+      type: "string",
+      title: "Selected idea (JSON)",
+    },
+  },
+  "x-renderer": "@cinatra-ai/blog-pipeline-agent:idea-selection",
+};
+const REAL_EMITTED_VALUES = {
+  brief: "Practical ways small teams keep their internal notes tidy.",
+  ideaCount: 3,
+  stepNumber: 1,
+};
+
+describe("W11 — the runtime's real emitted spec draws no field and no Continue", () => {
+  function renderRealPause() {
+    const onChange = vi.fn();
+    render(
+      <BlogIdeaSelectionRenderer
+        fieldName="selectedIdeaJson"
+        schema={REAL_EMITTED_SCHEMA as Record<string, unknown>}
+        value={REAL_EMITTED_VALUES}
+        onChange={onChange}
+        context={CTX}
+      />,
+    );
+    return onChange;
+  }
+
+  it("draws no rows", () => {
+    renderRealPause();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
+  it("draws no Continue of its own", () => {
+    renderRealPause();
+    expect(
+      screen.queryAllByRole("button", { name: /continue|submit/i }),
+    ).toHaveLength(0);
+  });
+
+  it("offers no free-text way to settle the run's subject without a pick", () => {
+    renderRealPause();
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
+  });
+
+  it("says there is nothing to pick rather than leaving the page blank", () => {
+    renderRealPause();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/nothing to pick/i);
+  });
+
+  it("commits nothing at all", () => {
+    const onChange = renderRealPause();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
