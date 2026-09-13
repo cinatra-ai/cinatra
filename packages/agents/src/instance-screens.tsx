@@ -441,7 +441,16 @@ export function runDetailPanelKind(params: {
  * by side: the left column plain, the right one with the ⓘ tooltips. Owner
  * ruling 2026-08-14: exactly ONE column.
  *
- * WHICH RAIL OWNS IT. The panel's column, whenever it draws one. Its active
+ * WHICH RAIL OWNS IT, AND WHERE THAT ANSWER STOPS (amended cinatra#3478).
+ * INSIDE THE RUN SURFACE'S OWN FRAME the answer is the other way round: the
+ * frame draws a rail column for the rows the screen hands it, that column
+ * cannot be the panel's (selecting a step with a surface of its own REPLACES
+ * the slot the panel occupies), so the panel stands ITS column down and the
+ * page's rows are mounted inside the frame's column instead. That is decided in
+ * `screenDrawsPageRail` below; this function keeps answering for the
+ * composition it was written for, and is asked only there.
+ *
+ * OUTSIDE THE FRAME, unchanged: the panel's column, whenever it draws one. Its active
  * step, pause state, replay clicks, dev stepper and ⓘ tooltips are all bound to
  * the panel's live run-stream state, which a server-rendered rail cannot carry;
  * the deep links the page rail owned move DOWN into it as `railExtras`. So the
@@ -480,7 +489,10 @@ export function screenHostsStepRail(params: {
  * stands down for one that has any.
  *
  * Nothing else moves: an empty rail is still no rail, and the stepper branch's
- * own live column is still the one rail where it draws (`screenHostsStepRail`).
+ * own live column is still the one rail where it draws (`screenHostsStepRail`)
+ * — OUTSIDE the run surface's frame. Inside it (cinatra#3478) these rows are
+ * the frame column's rows and the branch below is not reached; see the note on
+ * `gateStepCount` in the body.
  *
  * Exported so the regression test can pin the whole table without a DB, a
  * session or a Next.js render.
@@ -494,6 +506,20 @@ export function screenDrawsPageRail(params: {
 }): boolean {
   if (params.railEntryCount === 0) return false;
   if (params.runStatus === "pending_input" && params.gateStepCount === 0) return false;
+  // AND WHERE THE FRAME DRAWS A RAIL COLUMN, THESE ROWS ARE DRAWN IN IT
+  // (cinatra#3478). `gateStepCount` is the number of rows the screen hands the
+  // run surface's frame, and a frame with rows draws a rail column of its own.
+  // That column is not the one the answer below stands down for: the 2739
+  // answer retires this panel in favour of the run panel's live column, and the
+  // frame's column is a THIRD thing, which nothing suppressed — so a run
+  // carrying any frame row drew the frame's column AND the panel's, side by
+  // side, and the page's own rows (the run's work steps, its review gates,
+  // their verifications, its lifecycle decisions) were drawn by neither.
+  //
+  // The frame's column is the rail that survives (`run-step-rail-extra-entry.tsx`),
+  // so these rows come back to this panel and are mounted INSIDE that column,
+  // beneath the frame's own rows and renumbered behind them (`stepOffset`).
+  if (params.gateStepCount > 0) return true;
   return screenHostsStepRail({
     panel: params.panel,
     stepperStepCount: params.stepperStepCount,
@@ -2567,14 +2593,23 @@ export async function SetupScreen({
               }
               // The page's OWN rail rows. The gate rows above are drawn by
               // their own step components rather than by this rail, because the
-              // live orchestrator column is the rail on the flow branch
-              // (`screenHostsStepRail`) and the plan puts both gate steps above
+              // frame composes them (and, where the frame draws none, the live
+              // orchestrator column is the rail on the flow branch —
+              // `screenHostsStepRail`), and the plan puts both gate steps above
               // the run's steps on every branch — not only the one where the
               // server-rendered rail happens to draw.
+              // AND THE RUN'S OWN RECORD IS ONE OF THE FRAME'S ROWS TOO
+              // (cinatra#3478). It is composed BELOW this answer, because its
+              // numeral counts the page's rows — but it makes the frame draw a
+              // rail column exactly as every other row does. A terminal run
+              // that carries nothing else would otherwise answer "no frame
+              // column" here, stand the panel's column down all the same, and
+              // draw its work steps in neither.
+              const railCarriesMadeStep = run != null && isTerminalRunStatus(run.status);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
-                gateStepCount: railSteps.length,
+                gateStepCount: railSteps.length + (railCarriesMadeStep ? 1 : 0),
                 panel: runDetailPanel,
                 stepperStepCount: stepperSteps.length,
               });
@@ -2608,12 +2643,17 @@ export async function SetupScreen({
               //     page's own rows were then offset by, which numbered the
               //     work steps after the record they come before.
               //
-              // Nothing else moves with the reorder: `screenDrawsPageRail`
-              // reads `gateStepCount` only to keep a pre-dispatch run's rail
+              // The reorder moves nothing about the pre-dispatch suppression,
+              // and it does move the OTHER reading of the same count
+              // (cinatra#3478): `gateStepCount` is also how the screen knows
+              // the frame will draw a rail column, and this row makes it draw
+              // one — which is why `railCarriesMadeStep` is decided above the
+              // answer and only pushed here. `screenDrawsPageRail`
+              // reads `gateStepCount` to keep a pre-dispatch run's rail
               // suppressed (`pending_input`), and a run at a TERMINAL status —
               // the only run that carries this step at all — is never at that
               // status.
-              if (run && isTerminalRunStatus(run.status)) {
+              if (run && railCarriesMadeStep) {
                 const madeRailStep: RunSurfaceRailStep = {
                   key: "made",
                   reached: true,

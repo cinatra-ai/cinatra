@@ -51,7 +51,9 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { RUN_RAIL_MARK_CLASS } from "./run-step-rail-extra-entry";
+// THE FRAME STATES THAT IT DRAWS THE RAIL (cinatra#3478) -- see the
+// declaration beside the rail vocabulary in ./run-step-rail-extra-entry.
+import { RUN_RAIL_MARK_CLASS, RunSurfaceRailFrameProvider } from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -465,6 +467,19 @@ export function RunSurfaceRail({
 
   return (
     <RunStepSelectionContext.Provider value={{ selected, select }}>
+      {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
+
+          A run panel drawn inside this detail raises a live rail column of
+          its own (`StepperColumn`), and nothing stood it down: the frame's
+          column and the panel's drew side by side, two rails on one run
+          page. The drawing gives one — "a step rail down the left names the
+          run's ordered steps, and the run detail on the right". The frame's
+          column is the one that survives, because the rail cannot live in
+          the slot the detail occupies: selecting a step with a surface of
+          its own REPLACES that slot, and a rail drawn inside it would leave
+          with it. The panel's rows come back through the page-level rail
+          the screen mounts in this column (`screenDrawsPageRail`). */}
+      <RunSurfaceRailFrameProvider value={true}>
       {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows,
           with the drawing's separator standing between adjacent entries.
 
@@ -538,6 +553,7 @@ export function RunSurfaceRail({
             produce. */}
         {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
       </div>
+      </RunSurfaceRailFrameProvider>
     </RunStepSelectionContext.Provider>
   );
 }

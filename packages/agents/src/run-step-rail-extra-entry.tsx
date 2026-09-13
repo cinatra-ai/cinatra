@@ -1,5 +1,6 @@
 "use client";
 
+import { createContext, useContext } from "react";
 import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
@@ -565,4 +566,60 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   }
 
   return 1;
+}
+
+// ---------------------------------------------------------------------------
+// IS THIS SUBTREE DRAWN INSIDE THE RUN SURFACE'S OWN RAIL FRAME? (cinatra#3478)
+//
+// THE DEFECT THIS CLOSES. `screenHostsStepRail` (cinatra#2739) suppressed the
+// page-level `RunStepRailPanel` on the branch where `OrchestratorStepperPanel`
+// raises a column of its own, and that answer was correct for the ONE rail it
+// knew about. It was never asked about the SECOND one: the run surface's own
+// frame (`RunSurfaceRail`) draws a rail column whenever the screen hands it any
+// rail step — a schedule, an input form, the gate the run is stopped at, the
+// run's own record — and nothing suppressed that column. So a run on the
+// stepper branch that also carried any such row drew TWO live rail columns side
+// by side: the frame's at the left, the panel's beside it, then the detail. It
+// was measured on three run pages on 2026-09-13 — a rail at x≈464, a second at
+// x≈583 — and the ratified drawing gives ONE: "a two-column frame: a step rail
+// down the left names the run's ordered steps, and the run detail on the right".
+//
+// WHY A CONTEXT AND NOT A SECOND PREDICATE. The frame's column is drawn from a
+// list the screen composes LAST — after the run detail (and the panel inside it)
+// is already built — so a prop would have to restate, ahead of time, exactly
+// when that list ends up non-empty. A second derivation of the same fact is how
+// this page came to draw two rails in the first place: `screenHostsStepRail`
+// answered for one column and nothing answered for the other. The composition
+// itself is the fact, and it is read where it is true: inside the frame.
+//
+// The frame provides it; the run panel asks it and stands its own column down,
+// exactly as the page-level rail already stands down for the panel. What the
+// panel's column carried alone -- the deep links that travel as `railExtras` --
+// is drawn by the page-level rail inside the frame's column, which the screen
+// mounts there for this branch (`screenDrawsPageRail`).
+// ---------------------------------------------------------------------------
+//
+// WHY THIS MODULE HOLDS IT. Both sides of the question -- the frame in
+// run-surface-rail.tsx that answers it, and the run panel in
+// orchestrator-stepper-panel.tsx that asks it -- already import the rail
+// vocabulary from here, so the declaration reaches them over edges that
+// already exist. Held in a module of its own it added one module to four
+// route-budgeted route graphs, which the route-graph ratchet refuses (the
+// same lesson cinatra#3188 wrote at the head of this file): the rule lives
+// where the rows already meet.
+// ---------------------------------------------------------------------------
+
+const RunSurfaceRailFrameContext = createContext<boolean>(false);
+
+/** The frame states it draws the rail; nothing else may provide this. */
+export const RunSurfaceRailFrameProvider = RunSurfaceRailFrameContext.Provider;
+
+/**
+ * Does the run surface's own frame draw the step rail around this subtree?
+ *
+ * `false` outside a frame — the default — so every host that is not composed by
+ * `RunSurfaceRail` reads exactly as it always has.
+ */
+export function useRunSurfaceRailFrame(): boolean {
+  return useContext(RunSurfaceRailFrameContext);
 }
