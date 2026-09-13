@@ -85,8 +85,13 @@ export function startDetachedDevAutoSetupPhase(): void {
 // ── Block 1 body (verbatim from the original detached IIFE) ──────────────────
 async function runDevAgentsAndSkillsScan(): Promise<void> {
   // Load git-native agent definitions from agents/ at startup. The version-skip
-  // guard in ensureAgentPackageFromGitFile ensures DB writes are skipped when the
-  // packageVersion matches — restarts are low-overhead.
+  // guard in ensureAgentPackageFromGitFile skips the template-row writes when
+  // the packageVersion matches. That skip covers the TEMPLATE ROW only: the
+  // loader activates a package's declared tables (its database role and its
+  // tables) independently of it, so a table-declaring package is runnable on a
+  // database created from nothing (cinatra#3462). A restart therefore costs one
+  // read per table-declaring package to confirm its activation is current —
+  // nothing is re-created and no privilege is re-granted while it is.
   try {
     const { readdir } = await import("node:fs/promises");
     const { join } = await import("node:path");
