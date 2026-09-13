@@ -659,7 +659,14 @@ export function selectFamilies({ changedFiles, families, routes = new Map(), unr
 }
 
 const MAIN_REFS = new Set(["main", "refs/heads/main"]);
-const ALWAYS_ALL_EVENTS = new Set(["push", "workflow_dispatch", "schedule", "merge_group"]);
+const ALWAYS_ALL_EVENTS = new Set(["push", "workflow_dispatch", "schedule"]);
+// The merge queue is NOT in that set (engineering#658 item 1). GitHub applies
+// no `paths:` filter to a merge_group event, so the queue fires this suite on
+// every candidate; widening to ALL there would pay the whole suite on a
+// docs-only group. The candidate carries its own base and head, which is an
+// honest diff — so it is used as one, and the widening stays only for the
+// events that genuinely have no range (a push, a dispatch, a schedule).
+const QUEUE_EVENT = "merge_group";
 
 /**
  * The diff to classify. Returns {mode:"all", reason} whenever the diff cannot
@@ -687,6 +694,16 @@ export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}
   }
 
   const configured = (env.DESIGN_SELECT_DIFF_BASE ?? "").trim();
+  if (event === QUEUE_EVENT && configured === "") {
+    // A queue candidate whose group base was not handed in cannot be diffed
+    // honestly, and a suite that stops running while reporting success is the
+    // one unacceptable outcome — so it widens rather than skips.
+    return {
+      mode: "all",
+      files: [],
+      reason: `the event is ${QUEUE_EVENT} and no group base was recorded`,
+    };
+  }
   const baseBranch = (env.GITHUB_BASE_REF ?? "").trim() || "main";
   const base = configured || `origin/${baseBranch}`;
 
