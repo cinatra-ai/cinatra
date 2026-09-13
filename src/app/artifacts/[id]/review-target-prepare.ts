@@ -98,8 +98,9 @@ export type ReviewRunGatePorts = Pick<
 // something false about the work they are deciding on.
 //
 // WHAT IS WIRED, AND WHAT IS NOT. The TEXT arm reads the pinned revision's bytes
-// through `resolveArtifactVersionForServe` + the local blob store — the same
-// canonical server-side read the artifact page's own markdown handler uses. The
+// through the shared pinned-substance reader over `resolveArtifactVersionForServe`
+// + the local blob store — the same canonical server-side read the artifact
+// page's own markdown handler uses, under one implementation rather than two. The
 // CONFIGURATION arm needs no read at all: a dashboard revision's pinned
 // configuration travels on the member the gate already resolved, with its own
 // stable digest. The `page` class (a `connectorRef` revision's remote content)
@@ -108,57 +109,37 @@ export type ReviewRunGatePorts = Pick<
 // rather than hidden behind a comment.
 // ---------------------------------------------------------------------------
 
-/** The pinned revision's bytes as text, or `null` when they cannot be read. */
-async function readPinnedRevisionText(input: {
-  orgId: string;
-  artifactId: string;
-  representationRevisionId: string;
-  liveOnly: boolean;
-}): Promise<string | null> {
-  try {
-    // THE RESOLUTION READS THE DATABASE, so it belongs INSIDE the guard with
-    // the read it addresses (corrected at convergence). Outside it, a resolver
-    // that threw rejected `buildProps`, and the preparation core has no catch
-    // of its own: one unreadable revision took the WHOLE review surface down
-    // instead of flooring one target, which is the opposite of the channel's
-    // "every failure is a named absence" contract.
-    const resolved = resolveArtifactVersionForServe({
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      representationRevisionId: input.representationRevisionId,
-      // THE READING'S OWN BOUND travels with the read (absorbed from the default
-      // branch at the 2026-09-04 forward). A LIVE review must not resolve a
-      // tombstoned-but-pinned revision; the gate-authorized SETTLED reading
-      // (enabler 0.9) may, bounded instead by the frozen set the gate pinned.
-      // Only the caller knows which reading it is on, so the member says.
-      liveOnly: input.liveOnly,
-    });
-    if (!resolved) return null;
-    const store = createLocalDiskBlobStore();
-    const handle = await store.openByStorageKey({
-      orgId: input.orgId,
-      storageKey: resolved.storageKey,
-    });
-    // AND IT READS ONLY WHAT THE CHANNEL CAN CARRY (corrected at convergence).
-    // The projection is capped; buffering the whole object before the cap is
-    // applied let one authorized multi-megabyte text revision cost the server
-    // its full size for a payload that can never exceed the cap. Reading one
-    // byte PAST the cap keeps the channel's own `truncated` reading true.
-    const budget = artifactContentCapFor("text") + 1;
-    const chunks: Buffer[] = [];
+/** The pinned revision's bytes, stopped one byte past the channel's own text cap.
+ *
+ * THE ONE SERVER READ STAYS THE SHARED READER'S. This surface used to carry a
+ * second copy of the text read, and the copy meant the shipped binder no longer
+ * went through `createPinnedSubstanceReader` at all: the reader's own
+ * degrade-to-a-named-absence road and this surface's were two implementations
+ * of one behaviour, and the binder's own suite measured the drift. What is this
+ * surface's own is only how far the bytes are pulled — a review card draws as
+ * much of the work as the channel can carry, so the stream handed to the shared
+ * reader stops one byte past the channel's cap and lets the projection report
+ * itself `truncated`.
+ */
+async function openCappedPinnedBytes(input: { orgId: string; storageKey: string }): Promise<{
+  stream: AsyncIterable<Uint8Array>;
+  sizeBytes?: number;
+}> {
+  const handle = await createLocalDiskBlobStore().openByStorageKey(input);
+  const budget = artifactContentCapFor("text") + 1;
+  const stream = (async function* () {
     let read = 0;
     for await (const chunk of handle.stream) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
-      chunks.push(buf);
       read += buf.byteLength;
-      if (read >= budget) break;
+      yield buf;
+      // Past the cap nothing more can ever be projected, so the read stops
+      // here; leaving the loop calls the source iterator's `return`, which
+      // cancels the underlying stream.
+      if (read >= budget) return;
     }
-    return Buffer.concat(chunks).toString("utf8");
-  } catch {
-    // A read that fails is an absence, never a throw: the channel's own contract
-    // is that "every failure is a NAMED absence", and the display floors on it.
-    return null;
-  }
+  })();
+  return { stream, sizeBytes: handle.sizeBytes };
 }
 
 /** The substance read for ONE pinned review target, over the member the gate
@@ -169,45 +150,27 @@ export function reviewTargetSubstancePorts(
 ): ArtifactContentChannelPorts {
   const liveOnly = member.historical !== true;
 
-  // THE CONFIGURATION AND `page` ARMS ARE THE CANONICAL SHARED READER'S
-  // (resolved at the 2026-09-05 forward). The default branch extracted exactly
-  // this behaviour into `createPinnedSubstanceReader` — the carried record
-  // preferred, the row resolved when the member carries none, and a
-  // configuration with no recorded digest answered as an absence rather than
-  // sealed to a digest the gate never wrote — so a second copy here was one
-  // behaviour with two places to drift.
-  //
-  // THE TEXT ARM STAYS THIS SURFACE'S OWN. The shared reader answers a named
-  // ABSENCE for anything past its read ceiling; a review card must draw as much
-  // of the work as the channel can carry, so the read below stops one byte past
-  // the channel's own cap and lets the projection report itself `truncated`.
-  // That is what a reviewer sees on a long document, and it is pinned by
-  // `review-target-content-wiring-converge.test.ts`.
-  const shared = createPinnedSubstanceReader({
-    liveOnly,
-    carriedConfiguration:
-      member.configuration === undefined || member.configuration === null
-        ? null
-        : {
-            configuration: member.configuration,
-            digest: member.configurationDigest ?? null,
-          },
-  });
-
-  return {
-    async readPinnedSubstance(input) {
-      if (input.contentClass === "text") {
-        const text = await readPinnedRevisionText({
-          orgId: input.orgId,
-          artifactId: input.artifactId,
-          representationRevisionId: input.representationRevisionId,
-          liveOnly,
-        });
-        return text === null ? null : { class: "text", text };
-      }
-      return shared.readPinnedSubstance(input);
+  // EVERY CLASS IS THE CANONICAL SHARED READER'S — the text bytes, the carried
+  // configuration record preferred over a second read of the same row, and the
+  // `page` class answered as a named absence. This surface contributes only its
+  // own byte source: the capped stream above.
+  return createPinnedSubstanceReader(
+    {
+      liveOnly,
+      carriedConfiguration:
+        member.configuration === undefined || member.configuration === null
+          ? null
+          : {
+              configuration: member.configuration,
+              digest: member.configurationDigest ?? null,
+            },
     },
-  };
+    {
+      resolveFileRevision: (input) => resolveArtifactVersionForServe(input),
+      resolveNonFileRevision: (input) => resolveNonFileArtifactRevision(input),
+      openBytes: openCappedPinnedBytes,
+    },
+  );
 }
 
 /** Build ONE review target's content projection. The form is the SUBSTRATE's own

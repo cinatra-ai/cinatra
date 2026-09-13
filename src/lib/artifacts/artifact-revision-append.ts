@@ -1218,8 +1218,8 @@ RETURNING id, revision`,
  * artifact stores beside it, artifact-creation.ts and its siblings: one
  * transaction that carries its own version bump and its own
  * `graphiti_projection_outbox` row, which is the condition the objects-writer
- * drift gate names for a writer that is not yet routed through the canonical
- * history-aware writer.
+ * projection audit names for a writer that is not yet routed through the
+ * canonical history-aware writer.
  */
 function projectionGuardedOnItsRepresentation(
   schema: string,

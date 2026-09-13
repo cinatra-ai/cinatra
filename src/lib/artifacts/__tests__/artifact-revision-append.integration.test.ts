@@ -28,9 +28,28 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
-vi.mock("@/lib/database", async () => {
+// PARTIAL, NOT WHOLE (cinatra#3080, fix leg 10). This mock is here to keep the
+// three METADATA members inert — the transaction under test must not read or
+// write instance metadata, and it must not re-run the schema init this suite
+// builds itself. It is NOT here to replace the module: the other three files in
+// this same tier import `@/lib/database` un-stubbed and pass, so the real module
+// is safe here.
+//
+// It used to be a WHOLE-module mock, and that is what made it a red: the module
+// gained connector-config members (`readConnectorConfigFromDatabase`,
+// `writeConnectorConfigToDatabase`, `deleteConnectorConfig`, …) that the boot
+// road this suite drags in actually calls — `src/lib/auth.ts` asks
+// packages/google-oauth-connection for its stored settings, and
+// `src/lib/register-host-connector-services.ts` publishes the connector-config
+// service — so the import itself threw and the SUITE failed before one real-store
+// assertion ran. Spreading the original fixes that class for good rather than one
+// member at a time: a member added to `@/lib/database` tomorrow arrives here real,
+// and only the three named below stay inert.
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
   const cfg = await import("@/lib/postgres-config");
   return {
+    ...actual,
     readMetadataValueFromDatabase: (_key: string, fallback: unknown) => fallback,
     writeMetadataValueToDatabase: () => {},
     getPostgresConnectionString: cfg.getPostgresConnectionString,

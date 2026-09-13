@@ -165,7 +165,7 @@
             "data-suggestion-chips-mode={recorded ? \"recorded\" : interactive ? \"live\" : \"read-only\"}",
             "conformanceId: \"suggestion-accepted\"",
             "onToggleMark={state.canDecide ? onToggleMark : undefined}",
-            "Deciding these needs approve access on this run."
+            "Deciding these needs decision access on this run."
           ]
         }
       ]
@@ -829,8 +829,8 @@
             "data-conformance-id=\"review-decision-bar\"",
             "data-conformance-id=\"review-decision-disabled\"",
             "data-action=\"comment-review -> annotated\"",
-            "data-action=\"approve-review -> resolved\"",
-            "data-action=\"reject-review -> resolved\""
+            "data-action=\"regenerate-review -> changes-requested\"",
+            "data-action=\"continue-review -> resolved\""
           ]
         }
       ]

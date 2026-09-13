@@ -17,7 +17,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { readAgentInstanceIdFromSegment, buildAgentInstancePath } from "@/lib/agent-url";
+import {
+  RESERVED_AGENT_INSTANCE_SEGMENTS,
+  readAgentInstanceIdFromSegment,
+  buildAgentInstancePath,
+} from "@/lib/agent-url";
 
 const REPAIR_RUN_ID = "lifecycle-repair-run:8f1d2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7";
 const ORDINARY_RUN_ID = "8f1d2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7";
@@ -85,11 +89,27 @@ describe("cinatra#3080 — the repair run's page reads its own address", () => {
   });
 
   it("reads a segment back to exactly what the link builder wrote, for any id", () => {
-    for (const id of [REPAIR_RUN_ID, ORDINARY_RUN_ID, "new", "a b", "a/b"]) {
+    // "new" IS NOT ON THIS LIST, and cannot be (corrected, cinatra#3080 fix
+    // leg 10). The round trip is a property of the ids the builder ACCEPTS, and
+    // the launch segment is not one of them: the default branch's own
+    // `buildAgentInstancePath` refuses a reserved segment below the
+    // vendor/package pair because it is a route of its own, not an instance id.
+    // Asking the builder for it raised out of this test rather than proving
+    // anything about the round trip. The refusal is pinned instead, just below.
+    for (const id of [REPAIR_RUN_ID, ORDINARY_RUN_ID, "a b", "a/b"]) {
       const segment = buildAgentInstancePath("@cinatra-ai/x", id).split("/").pop()!;
       expect(readAgentInstanceIdFromSegment(segment)).toBe(id);
     }
   });
+
+  it.each(RESERVED_AGENT_INSTANCE_SEGMENTS.map((segment) => [segment]))(
+    "refuses %s as an instance id — a reserved segment is a route of its own, never a run",
+    (segment) => {
+      expect(() => buildAgentInstancePath("@cinatra-ai/x", segment)).toThrow(
+        /reserved segment/,
+      );
+    },
+  );
 
   // The run page is one of EIGHT routes under `[instanceId]` that read the same
   // segment. A fix in one and not the rest is precisely the shape this issue
