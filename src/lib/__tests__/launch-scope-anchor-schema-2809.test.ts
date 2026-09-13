@@ -174,13 +174,23 @@ describe("the instance surface decides the canonical home", () => {
 
   it("decides it AFTER the access door and BEFORE any instance content", () => {
     const door = screens.indexOf("run = await readAgentRunById(instanceId, setupActor, setupRoles);");
-    const redirectAt = screens.indexOf("if (home) redirect(home);");
+    // The spelling of the redirect moved with cinatra#3358 — it now carries the
+    // completion contract across the canonical hop instead of dropping it — while
+    // the rule THIS pin holds (after the door, before any content) is unchanged.
+    const redirectAt = screens.indexOf("if (home) redirect(withCompletionReturn(");
     expect(door).toBeGreaterThan(0);
     expect(redirectAt).toBeGreaterThan(door);
   });
 
   it("routes the post-create redirect through the path helper, never a hand-written route", () => {
-    expect(screens).toContain("buildAgentInstancePath(agentId, encodeURIComponent(result.runId)");
+    // THE PIN MOVES WITH THE ROAD (cinatra#3358): the launcher now reads the
+    // run coordinator's create-and-trigger answer into a named launch outcome
+    // before it redirects, so the helper call names `outcome.runId`. The rule
+    // this pin holds is unchanged — the fresh run's address comes from the one
+    // path helper and never from a hand-written template literal, under either
+    // spelling of the coordinator's answer.
+    expect(screens).toContain("buildAgentInstancePath(agentId, encodeURIComponent(outcome.runId)");
+    expect(screens).not.toContain("redirect(`/agents/${agentId}/${encodeURIComponent(outcome.runId)}`)");
     expect(screens).not.toContain("redirect(`/agents/${agentId}/${encodeURIComponent(result.runId)}`)");
   });
 

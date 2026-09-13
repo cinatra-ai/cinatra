@@ -36,6 +36,10 @@ vi.mock("../list-picker-actions", () => ({
 import { ListPickerRenderer } from "../list-picker-renderer";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
+import {
+  isRunSurfaceStepSelectable,
+  type RunSurfaceRailStep,
+} from "../run-surface-rail-step";
 
 // Minimal-required props every FieldRendererProps consumer expects. The
 // picker reads `value`, `onChange`, `disabled`, `required`, `error`, `label`,
@@ -83,7 +87,12 @@ describe("ListPickerRenderer", () => {
     expect(screen.getByPlaceholderText(/search lists/i)).toBeTruthy();
   });
 
-  it("renders 'Build a list with AI' CTA deep-linking to list-curator-agent", async () => {
+  // cinatra#3358 — THE OFFERED ROAD CARRIES ITS RETURN. The CTA used to name
+  // the offering step (`onComplete=list-picker`) and nothing else, so the run
+  // it starts had no way to know which run was parked at this step. It now
+  // carries THIS run's identity beside the name, which is what the generic
+  // new-run launcher forwards onto the run it creates.
+  it("renders 'Build a list with AI' CTA deep-linking to list-curator-agent with this run as the return", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
 
@@ -94,9 +103,26 @@ describe("ListPickerRenderer", () => {
     const cta = screen.getByTestId("build-list-with-ai-cta");
     expect(cta).toBeTruthy();
     expect(cta.getAttribute("href")).toBe(
-      "/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
+      "/agents/cinatra-ai/list-curator-agent/new" +
+        "?onComplete=list-picker&onCompleteRunId=run-1",
     );
     expect(cta.textContent?.toLowerCase()).toContain("build a list with ai");
+  });
+
+  it("offers the bare road when the step has no run identity in hand", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    render(
+      <ListPickerRenderer {...makeProps({ context: { connectedApps: [] } })} />,
+    );
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
+    );
+
+    const cta = screen.getByTestId("build-list-with-ai-cta");
+    expect(cta.getAttribute("href")).toBe(
+      "/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
+    );
   });
 
   it("renders all returned lists with both contact and mixed member types", async () => {
@@ -267,5 +293,92 @@ describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
       expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2),
     );
     expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(2, "run-late");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE RUN PARKS AT THIS STEP UNTIL A LIST EXISTS (cinatra#3358, acceptance 2).
+//
+// "A run started with no list does not walk past its review steps: it parks at
+// the account-scope step until a list exists."
+//
+// THE MECHANISM, pinned rather than described. The answer this gate wants is a
+// LIST, and the only thing in this renderer that emits one is a list's own row:
+// `handleSelect` is reachable from nowhere else. So on an account with no lists
+// there is no row to press, the step emits NO value, and the question the run is
+// parked on stays unanswered — which is what keeps the run standing here. The
+// step becomes answerable the moment a list exists, and not before.
+//
+// AND NO LATER STEP IS STARTED while it stands there: a step the run has not
+// reached is closed even when the page has a run detail to fall back on, read
+// through the rail's own predicate rather than asserted about the DOM.
+// ---------------------------------------------------------------------------
+describe("the run parks at the account-scope step until a list exists (cinatra#3358)", () => {
+  it("emits no answer while the account has no list, so the gate stays unanswered", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const onChange = vi.fn();
+    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
+    );
+
+    // The step says so in its own words, and offers nothing to answer with.
+    await waitFor(() =>
+      expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
+    );
+    expect(screen.queryAllByRole("button", { pressed: false })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { pressed: true })).toHaveLength(0);
+    // Nothing was emitted: the run has no value to walk past this step with.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("becomes answerable only once a list exists", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([
+      {
+        id: "list-9",
+        name: "Marketing directors",
+        memberCount: 5,
+        memberType: "contact",
+        lastUpdated: null,
+      },
+    ]);
+    const onChange = vi.fn();
+    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+
+    await waitFor(() =>
+      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
+    );
+
+    expect(screen.queryByText(/no lists yet/i)).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Marketing directors"));
+    expect(onChange).toHaveBeenCalledWith({
+      scope: "list",
+      listId: "list-9",
+      listName: "Marketing directors",
+      memberCount: 5,
+    });
+  });
+
+  it("leaves every later step closed while the run stands at this one", () => {
+    const parked: RunSurfaceRailStep = {
+      key: "gate",
+      row: null,
+      surface: "the account-scope step",
+      reached: true,
+    };
+    const later: RunSurfaceRailStep = {
+      key: "review",
+      row: null,
+      surface: "the review step",
+      reached: false,
+    };
+    const detail = "the run detail";
+
+    expect(isRunSurfaceStepSelectable(parked, detail)).toBe(true);
+    expect(isRunSurfaceStepSelectable(later, detail)).toBe(false);
   });
 });

@@ -103,6 +103,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  gateAnswerIncompleteReason,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -776,6 +777,28 @@ function HitlApprovalCard({
 
   const handleContinue = async () => {
     if (!(await checkRunName())) return;
+    // THE STEP STAYS PUT WHILE ITS ANSWER NAMES NOTHING (cinatra#3358).
+    // BEFORE the optimistic switch below, because this is not a submit that
+    // fails — it is a submit that never happens. Handing the step over as
+    // approved first, and only then finding nothing to send, would leave the
+    // parent holding an `awaitingNextStep` this card would have to take back —
+    // the dead end cinatra#3219 filed; refusing here leaves
+    // the rail exactly where the reader left it, on this step, with the reason
+    // said out loud. The rule is the shared one, so this surface and the server
+    // seam answer the same question the same way (./hitl-gate-submit).
+    const incompleteAnswer = gateAnswerIncompleteReason(
+      interruptContext.xRenderer,
+      bufferedHitlValue,
+      // The gate's own values too, not the buffer alone: this card draws its
+      // renderer from both (the merge below), so a step that already holds an
+      // answer shows it without the reader touching anything, and refusing it
+      // would refuse what the reader can see is chosen.
+      interruptContext.values,
+    );
+    if (incompleteAnswer) {
+      toast.error(incompleteAnswer);
+      return;
+    }
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
     onApproved?.();

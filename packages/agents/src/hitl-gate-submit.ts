@@ -495,3 +495,140 @@ export function applyAttachmentEnvelopeUserResponseOnly(
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
 }
+
+// ---------------------------------------------------------------------------
+// A GATE ANSWER THAT NAMES NOTHING KEEPS ITS RUN PARKED (cinatra#3358).
+//
+// THE MEASURED DEFECT. A run started on an account that holds no list reached
+// its account-scope step, and the step could be continued with nothing chosen:
+// the panel sent `{approved:true}` plus a snapshot naming an EMPTY list, the
+// resume dispatched, and the run walked past that review step and the one after
+// it without ever raising a gate on the missing list. Neither end of the submit
+// asked the one question the step exists to ask — "is there a list yet?" — so
+// both ends ask it here, from ONE rule, the way every other submit decision in
+// this module is shared between the two surfaces.
+//
+// GENERIC BY CONSTRUCTION, at both ends and for the same reason the lift above
+// is generic: the client end keys on the RENDERER FAMILY (`:list-picker` —
+// every package that declares a list-picking step, and no package by name), the
+// server end on the ANSWER CONTRACT that `liftRendererApprovalNote` mints for
+// that family (`type: "list"`). Nothing here learns which package is at either
+// end, and a package that declares no list-picking step is untouched by it.
+//
+// IT REFUSES, IT DOES NOT BLOCK. The gate is still open and still the reader's
+// to answer — so this is an ordinary incomplete-answer refusal, never one of the
+// three reasons of the closed blocked axis the review surface draws (§V). The
+// step keeps its place in the rail and the run stays where it is.
+// ---------------------------------------------------------------------------
+
+/** What the reader is told when a list-picking step is continued with no list. */
+export const LIST_ANSWER_NAMES_NO_LIST =
+  "Choose a list before continuing — or build one first.";
+
+/**
+ * Does an answer that is supposed to NAME a list name none? An absent answer
+ * names no list just as surely as one carrying an empty id, so both are the
+ * same verdict here.
+ */
+function namesNoList(answer: unknown): boolean {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return true;
+  const listId = (answer as { listId?: unknown }).listId;
+  return typeof listId !== "string" || listId.trim().length === 0;
+}
+
+/**
+ * THE CLIENT END. Why a step about to be continued may not be: read off the
+ * renderer family and the answer the step actually holds. `null` = nothing in
+ * the way, which is every gate of every other family.
+ *
+ * `gateValues` are the gate's OWN current values — what the renderer was drawn
+ * from — and they are read BESIDE the buffer because a step re-drawn with a list
+ * already chosen shows that row selected without the reader touching anything
+ * (the picker seeds its selection from the incoming value and emits only on a
+ * click). A step that already holds a list is not a step that names none, so it
+ * is not refused.
+ */
+export function gateAnswerIncompleteReason(
+  xRenderer: string,
+  buffered: Record<string, unknown> | null | undefined,
+  gateValues?: Record<string, unknown> | null,
+): string | null {
+  if (!xRenderer.endsWith(":list-picker")) return null;
+  if (!namesNoList(buffered)) return null;
+  if (!namesNoList(gateValues)) return null;
+  return LIST_ANSWER_NAMES_NO_LIST;
+}
+
+/**
+ * THE ONE ANSWER A RESUME ACTUALLY DISPATCHES, as both resume seams order it:
+ * `userResponse` wins over `approvalNote`, and free text is not a structured
+ * answer. Reading the EFFECTIVE answer — not every key that happens to be
+ * present — is what keeps the rule below from refusing an answer the seam would
+ * have accepted: a superseded note left beside a good `userResponse` is never
+ * what the run receives.
+ */
+function effectiveStructuredAnswer(values: unknown): Record<string, unknown> | null {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return null;
+  const { approvalNote, userResponse } = values as {
+    approvalNote?: unknown;
+    userResponse?: unknown;
+  };
+  for (const raw of [userResponse, approvalNote]) {
+    if (typeof raw !== "string" || raw.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Free text IS the answer this resume sends, and it names no list. Either
+      // way the first non-empty key is the answer — nothing behind it is read.
+    }
+    return null;
+  }
+  return null;
+}
+
+/** The pending gate a resume is answering, as the server derived it itself. */
+export type ResumeGateContract = {
+  /** The renderer family the pending gate declared, or null when unknown. */
+  xRenderer?: string | null;
+  /** The values the pending gate already holds. */
+  currentValues?: unknown;
+};
+
+/**
+ * THE SERVER END, and the authoritative one: the client refusal is a courtesy,
+ * this is the pin. Two readings, in this order:
+ *
+ *  1. THE GATE'S OWN CONTRACT, when the seam derived the pending gate. A step
+ *     whose renderer family asks for a list may not be resumed on an answer that
+ *     names none — INCLUDING NO ANSWER AT ALL. That case is not hypothetical: a
+ *     supported surface reaches the resume seam with no values whatsoever (the
+ *     lifecycle card's Continue submits the form as it stands), and a payload-only
+ *     reading let exactly that walk a listless run past its step. A gate that
+ *     already holds a list is never refused.
+ *  2. THE ANSWER'S OWN DECLARED CONTRACT, when no gate is in hand. A resume that
+ *     reaches a seam any other way (a replayed action, a hand-built payload) is
+ *     still refused when the answer it carries declares itself a list answer and
+ *     names none.
+ *
+ * Generic at both readings: the renderer FAMILY and the answer CONTRACT, never a
+ * package, a template or a renderer id.
+ */
+export function resumeAnswerIncompleteReason(
+  values: unknown,
+  gate?: ResumeGateContract | null,
+): string | null {
+  const answer = effectiveStructuredAnswer(values);
+  const gateAsksForAList =
+    typeof gate?.xRenderer === "string" && gate.xRenderer.endsWith(":list-picker");
+  if (gateAsksForAList) {
+    if (!namesNoList(answer)) return null;
+    if (!namesNoList(gate?.currentValues)) return null;
+    return LIST_ANSWER_NAMES_NO_LIST;
+  }
+  if (!answer) return null;
+  if ((answer as { type?: unknown }).type !== "list") return null;
+  return namesNoList(answer) ? LIST_ANSWER_NAMES_NO_LIST : null;
+}

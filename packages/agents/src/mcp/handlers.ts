@@ -279,6 +279,10 @@ import {
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
+import {
+  resumeAnswerIncompleteReason,
+  type ResumeGateContract,
+} from "../hitl-gate-submit";
 import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
 import { describeStartedRun } from "../run-status";
@@ -2176,6 +2180,38 @@ async function handleAgentBuilderRunResume(
       } else {
         resumeText = "[Approved by operator]";
       }
+      // A RUN DOES NOT WALK PAST A REVIEW STEP ON AN ANSWER THAT NAMES NOTHING,
+      // AT THIS SEAM TOO (cinatra#3358 acceptance 2). This is the OTHER resume
+      // dispatch — independent of `approveReviewTaskInternal`, which carries the
+      // same rule — so a resume arriving here on an answer that names no list
+      // would walk the run past its account-scope step exactly as the measured
+      // defect did. Refused BEFORE the prompt write and the `sendTask`, so the
+      // gate stays pending and the run stays parked where the reader left it.
+      // Fail-soft derivation, and generic: the pending gate's own renderer family
+      // and the answer's own contract, never a package name.
+      let resumeGate: ResumeGateContract | null = null;
+      try {
+        const { deriveRunHitlContext } = await import("../hitl-context");
+        const pendingGate = await deriveRunHitlContext(run);
+        if (pendingGate) {
+          resumeGate = {
+            xRenderer: pendingGate.xRenderer,
+            currentValues: pendingGate.currentValues,
+          };
+        }
+      } catch {
+        resumeGate = null;
+      }
+      const incompleteAnswer = resumeAnswerIncompleteReason(
+        { userResponse, approvalNote },
+        resumeGate,
+      );
+      if (incompleteAnswer) {
+        return {
+          error: `Run ${run.id} stays at this review step: ${incompleteAnswer}`,
+        };
+      }
+
       // Payload extraction. MCP handler input has no structured `valuesObj`, so on parse failure submittedValues stays null.
       let submittedValues: Record<string, unknown> | null = null;
       if (typeof userResponse === "string" && userResponse.trim().length > 0) {

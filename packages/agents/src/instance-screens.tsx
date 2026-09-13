@@ -1,5 +1,9 @@
 import { notFound, redirect } from "next/navigation";
-import { buildAgentInstancePath } from "@/lib/agent-url";
+import {
+  buildAgentInstancePath,
+  readCompletionReturn,
+  withCompletionReturn,
+} from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -21,7 +25,7 @@ import {
   readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
-import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
+import { readAgentTemplateBySlug, readAgentTemplateById, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
@@ -1269,9 +1273,63 @@ function serializeRunMessages(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A REFUSED LAUNCH ANSWERS (cinatra#3358).
+//
+// The generic `/agents/{vendor}/{packageName}/new` launcher below asks the run
+// coordinator to create-and-trigger a run. For ANY refusal it answered, the
+// screen used to render the instance "not found" — a 404 page on a link the
+// product itself had drawn. A refusal is not an absence: the package is there,
+// the route is there, and the coordinator said WHY it will not start (a
+// runtime-lifecycle or provisioning verdict carries its own actionable
+// sentence). This reading keeps that distinction, so the launcher can say what
+// happened instead of denying the page exists.
+//
+// GENERIC BY CONSTRUCTION: the outcome is read off the coordinator's own answer
+// and names no package. Exported so the rule is readable on its own — the same
+// way this screen's other decisions are — rather than buried in a branch.
+// ---------------------------------------------------------------------------
+
+/** What the generic new-run launcher does with the coordinator's answer. */
+export type NewRunLaunchOutcome =
+  /** The coordinator created the run — the launcher sends the reader to it. */
+  | { kind: "created"; runId: string }
+  /**
+   * The coordinator REFUSED to start the run and said why. NEVER a not-found:
+   * the page exists and the reader is owed the reason (cinatra#3358).
+   */
+  | { kind: "refused"; message: string };
+
+/** The refusal sentence shown when a refusal arrives with no reason attached. */
+export const NEW_RUN_REFUSAL_FALLBACK =
+  "This agent cannot start a run right now.";
+
+/**
+ * Read the run coordinator's create-and-trigger answer as the launcher's own
+ * outcome. A refusal keeps its sentence; a refusal with an empty or absent
+ * sentence gets the fallback, so the launcher always has something to show.
+ */
+export function newRunLaunchOutcome(
+  result:
+    | { ok: true; runId: string }
+    | { ok: false; error?: string | null }
+    | null
+    | undefined,
+): NewRunLaunchOutcome {
+  if (result && result.ok === true && typeof result.runId === "string" && result.runId.length > 0) {
+    return { kind: "created", runId: result.runId };
+  }
+  const error =
+    result && result.ok === false && typeof result.error === "string"
+      ? result.error.trim()
+      : "";
+  return { kind: "refused", message: error.length > 0 ? error : NEW_RUN_REFUSAL_FALLBACK };
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
+  searchParams,
   scopeBase,
   launchScope,
   scopeTitle,
@@ -1299,23 +1357,81 @@ export async function SetupScreen({
     // validates the union. A launcher on the bare global route mints nothing,
     // and its run is unanchored — the honest record of a launch made from no
     // vantage.
+    // THE COMPLETION CONTRACT THIS LAUNCH WAS OPENED UNDER (cinatra#3358): the
+    // offering step's name plus the id of the run parked at it, read off this
+    // launcher's own query. Generic — the launcher never learns which step or
+    // which package is at either end of it.
+    const completionReturn = readCompletionReturn(searchParams ?? null);
     const result = await createAndTriggerRunWithContext(
       actorUserId,
       actorOrgId,
       template,
       launchScopeAnchorForScope(launchScope ?? null, actorUserId),
     );
-    if (result.ok) {
+    // A REFUSED LAUNCH IS NOT A MISSING PAGE (cinatra#3358). This branch used to
+    // read `if (result.ok) redirect(...)` and then fall into `notFound()`, so
+    // EVERY refusal the run coordinator can answer — a runtime-lifecycle verdict,
+    // a provisioning verdict naming an uninstalled required dependency, an
+    // actionable connector/provider preflight — was drawn as "404 — Page not
+    // found" on a link the product itself had offered. Measured on a development
+    // boot with both packages installed: the same road answered 200 and created a
+    // run for a package the coordinator accepted, and the 404 page for one whose
+    // required dependency had no canonical install record. The refusal carries its
+    // own actionable sentence; the reader is owed it, not a denial that the page
+    // exists. No package is named here — the outcome is read off the coordinator's
+    // answer, so the road stays generic for every installed package.
+    const outcome = newRunLaunchOutcome(result);
+    if (outcome.kind === "created") {
       // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
       // launched from a vantage belongs to it, so the fresh run's address is
-      // this launcher's own scope base plus the one agent-path grammar.
+      // this launcher's own scope base plus the one agent-path grammar — and it
+      // CARRIES THE COMPLETION CONTRACT (cinatra#3358), which is what lets the
+      // run that was just created find its way back to the parked one.
       redirect(
-        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
-          scopeBase: scopeBase ?? null,
-        }),
+        withCompletionReturn(
+          buildAgentInstancePath(agentId, encodeURIComponent(outcome.runId), {
+            scopeBase: scopeBase ?? null,
+          }),
+          completionReturn,
+        ),
       );
     }
-    notFound();
+    return (
+      <Main className="min-h-screen">
+        <AgentPageLayout
+          agentId={agentId}
+          instanceId={instanceId}
+          scopeBase={scopeBase ?? null}
+          // THE ANSWER, NEVER THE LITERAL (Application Design — Agents, the run
+          // view's conditional-tab section, and the screen's own pin for it).
+          // This launcher draws no step inside the frame — there is no run yet —
+          // so it asks the same reading every other tab strip on this screen
+          // asks, with every step span empty.
+          activeTab={runPageActiveTab({
+            inputStepIsOpen: false,
+            inputStepsInRail: false,
+            scheduleStepInFrame: false,
+            gateStepInFrame: false,
+          })}
+          templateName={template.name}
+          initialRunName=""
+          runId={null}
+          isPublished={template.status === "published"}
+        >
+          <AgentPanelBody role="frame">
+            <div
+              className="soft-panel rounded-card p-6 flex flex-col gap-2"
+              data-testid="new-run-refused"
+            >
+              <h2 className="text-base font-semibold text-foreground">
+                This agent cannot start a run
+              </h2>
+              <p className="text-sm text-muted-foreground">{outcome.message}</p>
+            </div>
+          </AgentPanelBody>
+        </AgentPageLayout>
+      </Main>
+    );
   }
 
   // Better Auth stores role as "user,admin" for multi-role users; naive
@@ -1373,7 +1489,50 @@ export async function SetupScreen({
         anchor: parseLaunchScopeAnchor(run.launchScopeAnchor),
       }),
     );
-    if (home) redirect(home);
+    // A CANONICAL-HOME REDIRECT KEEPS THE COMPLETION CONTRACT (cinatra#3358). An
+    // anchored run opened at its bare address is sent to its vantage's address,
+    // and a redirect that dropped the two query keys would land the reader on a
+    // page that can no longer offer the way back — the road would answer and
+    // still lose its return. Null contract, unchanged path.
+    if (home) redirect(withCompletionReturn(home, readCompletionReturn(searchParams ?? null)));
+  }
+
+  // WHERE THIS RUN RETURNS TO (cinatra#3358). A run started from another run's
+  // step carries that step's completion contract in its own address, so the
+  // reader who finished the work here has one press back to the run that is
+  // still parked waiting for it. The parked run is resolved through the SAME
+  // access door this screen already cleared for its own run, so the affordance
+  // can never reveal a run the reader may not see; a contract naming a run that
+  // is gone, or one the reader may not read, simply draws nothing. Generic — the
+  // parked run's own template names its address, and nothing here is keyed to a
+  // package.
+  const completionReturn = readCompletionReturn(searchParams ?? null);
+  let completionReturnHref: string | null = null;
+  if (run && completionReturn && completionReturn.returnRunId !== run.id) {
+    try {
+      const parkedRun = await readAgentRunById(
+        completionReturn.returnRunId,
+        setupActor,
+        setupRoles,
+      );
+      const parkedTemplate = parkedRun?.templateId
+        ? await readAgentTemplateById(parkedRun.templateId)
+        : null;
+      const parkedPackageName = parkedTemplate?.packageName ?? null;
+      if (parkedRun && parkedPackageName) {
+        completionReturnHref = buildAgentInstancePath(
+          parkedPackageName.startsWith("@")
+            ? parkedPackageName.slice(1)
+            : parkedPackageName,
+          encodeURIComponent(parkedRun.id),
+          { scopeBase: null },
+        );
+      }
+    } catch (err) {
+      // An access refusal on the PARKED run is not this screen's failure — it
+      // just means there is no return to offer here.
+      if (!(err instanceof AuthzError)) throw err;
+    }
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -2083,6 +2242,23 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
+          {completionReturnHref ? (
+            <div
+              className="soft-panel rounded-card mb-4 flex flex-wrap items-center gap-2 px-4 py-3"
+              data-testid="completion-return-banner"
+            >
+              <p className="text-sm text-muted-foreground">
+                Another run is waiting on this one.
+              </p>
+              <Link
+                href={completionReturnHref}
+                className="text-sm font-medium text-primary underline"
+                data-testid="completion-return-link"
+              >
+                Back to the waiting run
+              </Link>
+            </div>
+          ) : null}
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
