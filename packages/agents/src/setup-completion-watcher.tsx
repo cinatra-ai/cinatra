@@ -114,6 +114,13 @@ type SetupCompletionWatcherProps = {
    * (cinatra#3047 fix leg 8).
    */
   railDrawsTheFrame?: boolean;
+  /**
+   * Forwarded to the panel unchanged: the two naming segments the run screen
+   * resolved for the rail beside this column (cinatra#3080, fix leg 8). See
+   * `AgenticRunPanel`'s own props.
+   */
+  reviewGateAgentLabel?: string | null;
+  reviewGateStep?: { index: number; total: number } | null;
 };
 
 export function SetupCompletionWatcher({
@@ -140,6 +147,8 @@ export function SetupCompletionWatcher({
   initialHitlContext,
   initialReviewGate,
   recommendationDecided,
+  reviewGateAgentLabel,
+  reviewGateStep,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -284,6 +293,8 @@ export function SetupCompletionWatcher({
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
+      reviewGateAgentLabel={reviewGateAgentLabel}
+      reviewGateStep={reviewGateStep}
     />
   );
 }

@@ -80,6 +80,8 @@ describe("the decision travels through the ONE existing core", () => {
       ACTOR,
       // cinatra#2571 — no suggestion partition on this body.
       null,
+      // cinatra#3080 — no picture prompt on this body.
+      null,
     );
     await expect(res.json()).resolves.toEqual({
       outcome: { kind: "decided", disposition: "approve", idempotent: false },
@@ -91,7 +93,7 @@ describe("the decision travels through the ONE existing core", () => {
       kind: "blocked",
       reason: "no-longer-pending",
     });
-    const res = await POST(post({ ref: REF, disposition: "reject", comment: "no" }));
+    const res = await POST(post({ ref: REF, disposition: "regenerate", comment: "again" }));
     await expect(res.json()).resolves.toEqual({
       outcome: { kind: "blocked", reason: "no-longer-pending" },
     });
@@ -105,6 +107,8 @@ describe("the decision travels through the ONE existing core", () => {
       "comment",
       "warmer opening",
       ACTOR,
+      null,
+      // cinatra#3080 — no picture prompt on this body.
       null,
     );
   });
@@ -155,7 +159,7 @@ describe("no oracle", () => {
     submitReviewDecisionAction.mockResolvedValue({
       kind: "not-permitted",
       message:
-        "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+        "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
     });
     const refused = await POST(post({ ref: REF, disposition: "approve" }));
     const forged = await POST(post({ ref: "nope", disposition: "approve" }));
@@ -178,6 +182,51 @@ describe("no oracle", () => {
     const res = await POST(post({ ref: REF, disposition: "changes_requested" }));
     expect(res.status).toBe(400);
     expect(submitReviewDecisionAction).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#3080 — THE FLOOR'S VOCABULARY ON THE WIRE.
+  // -------------------------------------------------------------------------
+  it("accepts the three floor actions and hands each to the ONE decision entry", async () => {
+    for (const action of ["comment", "regenerate", "continue"]) {
+      vi.clearAllMocks();
+      submitReviewDecisionAction.mockResolvedValue({ kind: "annotated" });
+      const res = await POST(post({ ref: REF, disposition: action, comment: "words" }));
+      expect(res.status).toBe(200);
+      expect(submitReviewDecisionAction.mock.calls[0]?.[2]).toBe(action);
+    }
+  });
+
+  it("still accepts `approve` — a shipped card that posts it gets Continue", async () => {
+    const res = await POST(post({ ref: REF, disposition: "approve" }));
+    expect(res.status).toBe(200);
+    expect(submitReviewDecisionAction.mock.calls[0]?.[2]).toBe("approve");
+  });
+
+  it("does not decide a `reject` at the schema — the ONE entry states the refusal", async () => {
+    // The word is still ACCEPTED by the wire so the answer is the platform's
+    // sentence rather than a bare 400 an old card would render as a fault. What
+    // makes the retirement real is that the entry (and the decision core beneath
+    // it) refuses it; this route asserts only that it forwards rather than decides.
+    submitReviewDecisionAction.mockResolvedValue({ kind: "error", message: "there is no reject" });
+    const res = await POST(post({ ref: REF, disposition: "reject", comment: "no" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ outcome: { kind: "error", message: "there is no reject" } });
+    expect(submitReviewDecisionAction.mock.calls[0]?.[2]).toBe("reject");
+  });
+
+  it("forwards a picture prompt as its own argument, never folded into the comment", async () => {
+    await POST(
+      post({
+        ref: REF,
+        disposition: "regenerate",
+        comment: "warmer light",
+        regeneratePrompt: "a red bicycle at golden hour",
+      }),
+    );
+    const call = submitReviewDecisionAction.mock.calls[0];
+    expect(call?.[3]).toBe("warmer light");
+    expect(call?.[6]).toBe("a red bicycle at golden hour");
   });
 });
 
@@ -243,6 +292,8 @@ describe("the suggestion partition", () => {
       null,
       ACTOR,
       { accepted: ["sug_1"], dismissed: ["sug_2"] },
+      // cinatra#3080 — no picture prompt on this body.
+      null,
     );
   });
 
@@ -255,6 +306,8 @@ describe("the suggestion partition", () => {
       null,
       ACTOR,
       { accepted: ["sug_1"], dismissed: [] },
+      // cinatra#3080 — no picture prompt on this body.
+      null,
     );
   });
 
@@ -271,6 +324,8 @@ describe("the suggestion partition", () => {
       null,
       ACTOR,
       { accepted: ["sug_forged"], dismissed: [] },
+      // cinatra#3080 — no picture prompt on this body.
+      null,
     );
   });
 
@@ -306,6 +361,8 @@ describe("the suggestion partition", () => {
       "approve",
       null,
       ACTOR,
+      null,
+      // cinatra#3080 — no picture prompt on this body.
       null,
     );
   });

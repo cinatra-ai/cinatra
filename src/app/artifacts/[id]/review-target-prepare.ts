@@ -50,12 +50,6 @@ import {
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 import {
-  buildArtifactContentProjection,
-  type ArtifactContentChannelPorts,
-  type ArtifactRepresentationForm,
-} from "@/lib/artifacts/artifact-content-channel";
-import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
-import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
   type PrepareReviewInput,
@@ -65,6 +59,15 @@ import {
   type RevisionMemberOutcome,
   isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
+
+import {
+  artifactContentCapFor,
+  buildArtifactContentProjection,
+  type ArtifactContentChannelPorts,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
+import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 
 import { pickArtifactRenderer } from "./renderer-dispatch";
 import {
@@ -81,6 +84,158 @@ export type ReviewRunGatePorts = Pick<
 >;
 
 /** Build the artifact-side ports bound to the reviewing actor + org. */
+// ---------------------------------------------------------------------------
+// THE CONTENT CHANNEL, WIRED FOR THE REVIEW TARGET (cinatra#3080, fix leg 7).
+//
+// THE DEFECT. This consumer passed `absentArtifactContent(...)` unconditionally
+// and said so in a comment — "this consumer is not wired to it yet". The
+// eighth proof round measured what that means on a real review: a run produced a
+// `text/markdown` post, the gate pinned its revision, and the markdown display
+// drew its `content-absent` floor — "No markdown is available to show for the
+// revision being viewed." — over a document that was sitting readable in the
+// blob store. §V of the ratified review drawing keeps the floor for the target
+// that does NOT resolve; a floor over a resolvable one tells the reviewer
+// something false about the work they are deciding on.
+//
+// WHAT IS WIRED, AND WHAT IS NOT. The TEXT arm reads the pinned revision's bytes
+// through `resolveArtifactVersionForServe` + the local blob store — the same
+// canonical server-side read the artifact page's own markdown handler uses. The
+// CONFIGURATION arm needs no read at all: a dashboard revision's pinned
+// configuration travels on the member the gate already resolved, with its own
+// stable digest. The `page` class (a `connectorRef` revision's remote content)
+// has no server-side reader on this surface, so it answers `null` and the
+// channel says `absent` — the same honest absence it says today, and named here
+// rather than hidden behind a comment.
+// ---------------------------------------------------------------------------
+
+/** The pinned revision's bytes as text, or `null` when they cannot be read. */
+async function readPinnedRevisionText(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  liveOnly: boolean;
+}): Promise<string | null> {
+  try {
+    // THE RESOLUTION READS THE DATABASE, so it belongs INSIDE the guard with
+    // the read it addresses (corrected at convergence). Outside it, a resolver
+    // that threw rejected `buildProps`, and the preparation core has no catch
+    // of its own: one unreadable revision took the WHOLE review surface down
+    // instead of flooring one target, which is the opposite of the channel's
+    // "every failure is a named absence" contract.
+    const resolved = resolveArtifactVersionForServe({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      // THE READING'S OWN BOUND travels with the read (absorbed from the default
+      // branch at the 2026-09-04 forward). A LIVE review must not resolve a
+      // tombstoned-but-pinned revision; the gate-authorized SETTLED reading
+      // (enabler 0.9) may, bounded instead by the frozen set the gate pinned.
+      // Only the caller knows which reading it is on, so the member says.
+      liveOnly: input.liveOnly,
+    });
+    if (!resolved) return null;
+    const store = createLocalDiskBlobStore();
+    const handle = await store.openByStorageKey({
+      orgId: input.orgId,
+      storageKey: resolved.storageKey,
+    });
+    // AND IT READS ONLY WHAT THE CHANNEL CAN CARRY (corrected at convergence).
+    // The projection is capped; buffering the whole object before the cap is
+    // applied let one authorized multi-megabyte text revision cost the server
+    // its full size for a payload that can never exceed the cap. Reading one
+    // byte PAST the cap keeps the channel's own `truncated` reading true.
+    const budget = artifactContentCapFor("text") + 1;
+    const chunks: Buffer[] = [];
+    let read = 0;
+    for await (const chunk of handle.stream) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      chunks.push(buf);
+      read += buf.byteLength;
+      if (read >= budget) break;
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } catch {
+    // A read that fails is an absence, never a throw: the channel's own contract
+    // is that "every failure is a NAMED absence", and the display floors on it.
+    return null;
+  }
+}
+
+/** The substance read for ONE pinned review target, over the member the gate
+ *  already resolved. Exported shape kept injectable so the wiring is testable
+ *  without a blob store. */
+export function reviewTargetSubstancePorts(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactContentChannelPorts {
+  const liveOnly = member.historical !== true;
+
+  // THE CONFIGURATION AND `page` ARMS ARE THE CANONICAL SHARED READER'S
+  // (resolved at the 2026-09-05 forward). The default branch extracted exactly
+  // this behaviour into `createPinnedSubstanceReader` — the carried record
+  // preferred, the row resolved when the member carries none, and a
+  // configuration with no recorded digest answered as an absence rather than
+  // sealed to a digest the gate never wrote — so a second copy here was one
+  // behaviour with two places to drift.
+  //
+  // THE TEXT ARM STAYS THIS SURFACE'S OWN. The shared reader answers a named
+  // ABSENCE for anything past its read ceiling; a review card must draw as much
+  // of the work as the channel can carry, so the read below stops one byte past
+  // the channel's own cap and lets the projection report itself `truncated`.
+  // That is what a reviewer sees on a long document, and it is pinned by
+  // `review-target-content-wiring-converge.test.ts`.
+  const shared = createPinnedSubstanceReader({
+    liveOnly,
+    carriedConfiguration:
+      member.configuration === undefined || member.configuration === null
+        ? null
+        : {
+            configuration: member.configuration,
+            digest: member.configurationDigest ?? null,
+          },
+  });
+
+  return {
+    async readPinnedSubstance(input) {
+      if (input.contentClass === "text") {
+        const text = await readPinnedRevisionText({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          representationRevisionId: input.representationRevisionId,
+          liveOnly,
+        });
+        return text === null ? null : { class: "text", text };
+      }
+      return shared.readPinnedSubstance(input);
+    },
+  };
+}
+
+/** Build ONE review target's content projection. The form is the SUBSTRATE's own
+ *  (`member.form`, defaulting to `file` exactly as `isFileFormMember` reads it),
+ *  never a caller claim. */
+export async function buildReviewTargetContentProjection(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    mime: string;
+    member: NonNullable<RevisionMemberOutcome>;
+  },
+  ports: ArtifactContentChannelPorts = reviewTargetSubstancePorts(input.member),
+): Promise<ArtifactContentProjection> {
+  const form: ArtifactRepresentationForm = input.member.form ?? "file";
+  return buildArtifactContentProjection(
+    {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      form,
+      mime: input.mime,
+    },
+    ports,
+  );
+}
+
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
@@ -360,47 +515,23 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS
-      // CONSUMER. The review card is the second surface the display is drawn on,
-      // and a display draws from its props and never fetches — so the card has
-      // to read the revision on the server exactly as the artifact page does, or
-      // it draws a named floor over a document whose text was in the store all
-      // along. That is precisely what a reviewer saw: correct chrome, correct
-      // pinned revision, and "no markdown is available to show".
-      //
-      // READ AT THE PINNED REVISION, never at a latest. `representationRevisionId`
-      // here is the revision the gate froze, which is what makes the card show
-      // what was approved rather than what the artifact has since become.
-      //
-      // THE FORM COMES FROM THE SUBSTRATES OWN RECORD on the member — never
-      // from a guess about the mime — and an absent form reads as `file`, which
-      // is what every caller written before enabler 0.10 meant. The builder
-      // resolves the class itself and names its own absence
-      // (`unsupported-form` for a class this port does not carry), so an
-      // unwired class still cannot read as a wired one that found nothing.
-      //
-      // The read is made under the SAME bound the membership answer was made
-      // under, so a settled card keeps its work and a live reading never
-      // replays a tombstoned pin; and the non-file membership answer already
-      // carried the pinned configuration record and its digest, so the channel
-      // takes THAT rather than resolving the same row a second time.
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED (fix leg 7),
+      // under the default branch's throw-degrade wrapper (2026-09-05 forward).
+      // `reviewTargetSubstancePorts` above says what each class reads and which
+      // one still answers an honest absence; the wrapper adds the one absence
+      // the ports cannot name themselves — a substrate resolver that THROWS —
+      // so one target's store fault floors THAT card and no other.
+      // `buildReviewTargetContentProjection` is the same read without the
+      // wrapper, kept for the seam its own tests drive.
       content: await readPinnedContentOrAbsence(
         {
-          orgId,
+          orgId: ctx.orgId,
           artifactId: artifact.artifactId,
           representationRevisionId,
           form: memberForm(input.member),
           mime,
         },
-        createPinnedSubstanceReader({
-          liveOnly: input.member.historical !== true,
-          carriedConfiguration: fileBacked
-            ? null
-            : {
-                configuration: input.member.configuration ?? null,
-                digest: input.member.configurationDigest ?? null,
-              },
-        }),
+        reviewTargetSubstancePorts(input.member),
       ),
     });
   };

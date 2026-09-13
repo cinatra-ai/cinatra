@@ -369,10 +369,22 @@ export function writeRunContextSelectionsBatchIdempotent(
   }
 }
 
+/** An audited selection row as READ back, carrying the moment it was written.
+ *  The store is append-only and its own contract says "corrections are a NEW
+ *  row, never a mutation" — so a reader that has to know WHICH answer a run
+ *  holds for a slot needs the write moment to tell the latest batch from the
+ *  batches it superseded. Writers are unaffected: they still supply
+ *  `Omit<RunContextSelectionRow, "id">` and the column is defaulted. */
+export type ReadRunContextSelectionRow = RunContextSelectionRow & {
+  /** `selected_at` as an ISO-8601 string. One finalize batch commits in one
+   *  transaction, so every row of one answer carries the SAME value. */
+  selectedAt: string;
+};
+
 export function readRunContextSelectionsForRun(input: {
   orgId: string;
   parentRunId: string;
-}): RunContextSelectionRow[] {
+}): ReadRunContextSelectionRow[] {
   ensurePostgresSchema();
   const schema = q();
   const [res] = runPostgresQueriesSync({
@@ -382,7 +394,7 @@ export function readRunContextSelectionsForRun(input: {
         text: `SELECT
   id, org_id, parent_run_id, parent_package_name, slot_id,
   artifact_id, representation_revision_id, semantic_assertion_id,
-  extension, source_scope, selected_by, selection_mode
+  extension, source_scope, selected_by, selection_mode, selected_at
 FROM "${schema}"."run_context_selections"
 WHERE org_id = $1 AND parent_run_id = $2
 ORDER BY selected_at ASC, id ASC`,
@@ -403,6 +415,7 @@ ORDER BY selected_at ASC, id ASC`,
     source_scope: RunContextSelectionRow["sourceScope"];
     selected_by: RunContextSelectionRow["selectedBy"];
     selection_mode: RunContextSelectionRow["selectionMode"];
+    selected_at: string | Date;
   };
   return (res?.rows ?? []).map((r) => {
     const row = r as Row;
@@ -419,6 +432,10 @@ ORDER BY selected_at ASC, id ASC`,
       sourceScope: row.source_scope,
       selectedBy: row.selected_by,
       selectionMode: row.selection_mode,
+      selectedAt:
+        row.selected_at instanceof Date
+          ? row.selected_at.toISOString()
+          : String(row.selected_at),
     };
   });
 }

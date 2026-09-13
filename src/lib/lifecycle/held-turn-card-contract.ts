@@ -513,10 +513,16 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     // §II's floor, on the shipped `ReviewDecisionBar` the card composes. The
     // three the bar really emits — a reader who may only comment keeps Comment,
     // so the set is what the card CAN offer, checked against the state it drew.
+    //
+    // REDRAWN BY cinatra#3080 to the ratified floor: Comment · Regenerate ·
+    // Continue. The retired `reject-review` name is emitted nowhere now, and
+    // `approve-review` became `continue-review` — naming either would fail the
+    // real mount on a control the component never draws, which is the exact
+    // defect this field exists to prevent.
     decisionControls: Object.freeze([
-      '[data-action="approve-review -> resolved"]',
-      '[data-action="reject-review -> resolved"]',
       '[data-action="comment-review -> annotated"]',
+      '[data-action="regenerate-review -> changes-requested"]',
+      '[data-action="continue-review -> resolved"]',
     ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",

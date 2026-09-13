@@ -58,8 +58,8 @@ describe("one open card binds on its own", () => {
     expect(out).toMatchObject({ kind: "bound", ref: "a" });
     expect((out as unknown as { controls: string[] }).controls).toEqual([
       "comment",
-      "approve",
-      "reject",
+      "regenerate",
+      "continue",
     ]);
   });
 });
@@ -264,7 +264,11 @@ describe("the ambiguity fact is the SERVER'S — convergence round 1, finding 5"
 });
 
 describe("what a SEND may lend today — convergence round 1, finding 1", () => {
-  it("a bound review lends COMMENT and nothing else", () => {
+  it("a bound review lends COMMENT for an ordinary sentence", () => {
+    // cinatra#3080 — the words now decide WHICH control a review lends
+    // (`typedControlFor`, tested per word in `review-typed-road.test.ts`). This
+    // is the floor of that ladder and the whole of the rule for every other card
+    // kind: a sentence that is not a floor word is a note.
     expect(primaryControlFor(review("a"))).toBe("comment");
   });
 

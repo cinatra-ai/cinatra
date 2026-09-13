@@ -134,8 +134,13 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
   it("keeps the label and the placeholder byte-identical", () => {
     const { container } = renderBar();
     const label = container.querySelector("label[for='review-rationale']")!;
+    // cinatra#3080 — the field is the drawing's NOTE, in the drawing's own
+    // words. What it IS did not change (one note field, subordinate to the
+    // conversation's chat box); what it is CALLED did: "Decision rationale
+    // (optional on Continue, expected on Regenerate)" was a paraphrase, and the
+    // ratified sentence says what the note is FOR on this floor.
     expect(label.textContent).toBe(
-      "Decision rationale (optional on approve, expected on reject)",
+      "Note (optional on Continue · the words a Regenerate works from)",
     );
     // The drawing's mono, 9px, wide-tracked, uppercase label — unchanged.
     const labelClasses = classesOf(label);
@@ -143,13 +148,13 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
       expect(labelClasses).toContain(cls);
     }
     expect(noteField().getAttribute("placeholder")).toBe(
-      "Add a note for the run and the audit trail…",
+      "Add a note, or say what to change before Regenerate…",
     );
   });
 
   it("DISABLED/SETTLED — keeps the same dashed rule at the platform's standard disabled opacity", async () => {
     renderBar({ kind: "decided", disposition: "approve", idempotent: false });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect((noteField() as HTMLTextAreaElement).disabled).toBe(true),

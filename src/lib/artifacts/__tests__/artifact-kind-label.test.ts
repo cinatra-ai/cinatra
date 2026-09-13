@@ -145,7 +145,17 @@ describe("the host holds exactly ONE kind-label derivation", () => {
   it("the review surface model keeps NO kind-label projection of its own", () => {
     const RSM = read("src/lib/artifacts/review-surface-model.ts");
     expect(RSM).not.toMatch(/reviewTypeLabel/);
-    expect(RSM).not.toMatch(/charAt\(0\)\.toUpperCase\(\)/);
+    // THE GUARD IS THE KIND LABEL'S OWN SURGERY, not every capital letter in the
+    // module (the forward merge onto main, 2026-09-11). The deleted projection
+    // was a derivation over the OBJECT-TYPE ID: strip the scope, cut at the
+    // colon, split the package name into words, drop the packaging noun and
+    // case the result. Each of those steps is pinned absent here. The identity
+    // line's row facts keep their own one-word capitalization ("Team",
+    // "Private"): they name no pack, read no type id and derive no kind, so a
+    // bare `charAt(0).toUpperCase()` is not by itself the thing this forbids.
+    expect(RSM).not.toMatch(/objectType[\s\S]{0,600}?toUpperCase\(\)/);
+    expect(RSM).not.toMatch(/split\("-"\)/);
+    expect(RSM).not.toMatch(/"artifacts?"/);
   });
 });
 

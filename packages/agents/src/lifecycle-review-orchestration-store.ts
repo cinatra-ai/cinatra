@@ -1566,6 +1566,15 @@ export interface GateMaintenanceSummary {
    * — the successor gate shows an uncaptured side. Ops-visible here as well as
    * logged, so a silently one-sided repair pair can never go unnoticed again. */
   cmsRepairsUncaptured: number;
+  /**
+   * cinatra#3080 — repairs COMPLETED by the generic producer completer: the
+   * repair run did its producing work and its successor gate is now open. The
+   * CMS counters above stay the CMS completer's own; these are every other
+   * producer's, which had no completer at all before this.
+   */
+  producerRepairsCompleted: number;
+  /** A repair the generic completer would not finalize on what it found. */
+  producerRepairsUnresolved: number;
 }
 
 /**
@@ -1598,6 +1607,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     cmsRepairsCompleted: 0,
     cmsRepairsUnresolved: 0,
     cmsRepairsUncaptured: 0,
+    producerRepairsCompleted: 0,
+    producerRepairsUnresolved: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1620,6 +1631,12 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   //    the repair response; a non-CMS repair (e.g. blog) is left untouched for
   //    its own producer's inline completion path.
   await completeCmsRepairs(summary);
+  // 3b. cinatra#3080 — and the SAME step for every other producer. Before this
+  //     the CMS completer was the only one, so a blog draft's Regenerate settled
+  //     its gate, minted its repair run, and then had nothing to open the
+  //     successor the drawing requires. The two completers never claim the same
+  //     row: the generic one skips a repair whose base target is a CMS snapshot.
+  await completeProducerRepairs(summary);
 
   return summary;
 }
@@ -1658,6 +1675,27 @@ async function completeCmsRepairs(summary: GateMaintenanceSummary): Promise<void
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] CMS repair completion drain failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/** Run the GENERIC repair-completion drain (cinatra#3080), folding its counters
+ * into the maintenance summary. Best-effort on the same contract as its CMS
+ * sibling: a failure never aborts the pass, the repair stays `dispatched`, and
+ * the next pass retries. Dynamically imported for the same reason. */
+async function completeProducerRepairs(summary: GateMaintenanceSummary): Promise<void> {
+  try {
+    const { completeDispatchedProducerRepairs } = await import(
+      "./lifecycle-repair-producer-completion-store"
+    );
+    const completion = await completeDispatchedProducerRepairs();
+    summary.producerRepairsCompleted += completion.completed;
+    summary.producerRepairsUnresolved += completion.unresolved;
+  } catch (err) {
+    console.error(
+      `[lifecycle-review-orchestration] producer repair completion drain failed: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

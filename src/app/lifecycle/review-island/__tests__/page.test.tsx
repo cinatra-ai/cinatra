@@ -468,7 +468,11 @@ describe("the island paints in the palette the host named", () => {
     for (const scheme of ["dark", "light"] as const) {
       const el = await renderIsland(REF, { scheme });
       expect(classOf(el)).toMatch(/(^| )text-foreground( |$)/);
-      expect(classOf(el)).toMatch(/(^| )min-h-dvh( |$)/);
+      // AND NOT THE FRAME'S FULL HEIGHT (cinatra#3080, fix leg 6): the frame is
+      // sized to this document, so a document that is always at least the
+      // frame's height could only ever measure the frame — and did, as 261 to
+      // 272 css px of empty panel under every reading of the sixth round.
+      expect(classOf(el)).not.toMatch(/(^| )min-h-dvh( |$)/);
     }
   });
 

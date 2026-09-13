@@ -182,9 +182,16 @@ export function AgentPageLayout({
     if (armedRef.current.epoch !== crumbEpoch) return;
     // UNDER THE SCOPE IT IS READ AT (cinatra#2809). The instance crumb targets a
     // crumb PATH, and on a scoped address that path carries the scope base in
-    // front of it — published at the bare path it matched nothing, and the
+    // front of it - published at the bare path it matched nothing, and the
     // trail fell back to the run id's abbreviation on every scoped run page.
-    const instancePath = `${scopeBase ?? ""}/agents/${agentId}/${instanceId}`;
+    //
+    // AND THE ID IS ENCODED AS THE SEGMENT IT IS (cinatra#3080). The prefix is
+    // matched against `usePathname()`, which is the ENCODED path. The
+    // server-decoded `instanceId` is not: a repair run's id carries a colon, so
+    // an unencoded prefix never matched its own page and the run lost its
+    // crumb. A uuid encodes to itself, so every ordinary run's prefix is
+    // byte-identical.
+    const instancePath = `${scopeBase ?? ""}/agents/${agentId}/${encodeURIComponent(instanceId)}`;
     publishCrumbContributions(pathname, crumbEpoch, [
       ...(JSON.parse(serializedScopeCrumbs) as CrumbContribution[]),
       { prefix: instancePath, label: crumbLabel },
