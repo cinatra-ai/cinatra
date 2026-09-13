@@ -321,6 +321,37 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
 const AGENT_INSTANCE_STEP_SUBROUTES: ReadonlySet<string> = new Set(["trigger"]);
 
 /**
+ * ANCESTRY INSERTIONS (cinatra#1738 consumes this; applied on the agents branch
+ * too by cinatra#3446): a contribution with `insertBefore` inserts a NEW crumb
+ * before the crumb whose path equals that prefix, in publisher declaration
+ * order; an absent target skips the insertion. Applied BEFORE truncation.
+ *
+ * ON BOTH BRANCHES, for the reason the appends below already are: a crumb a
+ * route published for the trail it is publishing for must never be silently
+ * dropped by that trail. The agent's own crumb ahead of the run's is exactly
+ * such a crumb — the collapsed agents trail composed one crumb for the instance
+ * and read every insertion as no crumb at all, which is half of why a run's two
+ * pages drew two different trails.
+ */
+function applyCrumbInsertions(
+  crumbs: BreadcrumbCrumb[],
+  crumbPaths: string[],
+  contributions: readonly CrumbContribution[],
+): void {
+  for (const c of contributions) {
+    if (!c.insertBefore) continue;
+    const at = crumbPaths.indexOf(c.insertBefore);
+    if (at === -1) continue;
+    crumbPaths.splice(at, 0, c.prefix);
+    crumbs.splice(at, 0, {
+      label: c.label,
+      href: c.href ?? c.prefix,
+      ...(c.nonNavigable !== undefined ? { nonNavigable: c.nonNavigable } : {}),
+    });
+  }
+}
+
+/**
  * POSITION APPENDS (cinatra#3068 fix leg 2): a contribution with `appendAfter`
  * puts a NEW crumb immediately after the crumb whose path equals that prefix,
  * in publisher declaration order; an absent target skips the append. The mirror
@@ -503,6 +534,13 @@ export function buildBreadcrumbTrail(
         agentCrumbPaths.push(pathname);
       }
     }
+    // AND THE AGENT ITSELF, AHEAD OF THE RUN (cinatra#3446). The run page named
+    // the agent and the run in one crumb and the review page named neither, so
+    // the two pages of one run drew two different trails. The agent's own crumb
+    // arrives as an ancestry insertion before the run's — the same channel the
+    // general branch has always applied, now applied here too, so both pages
+    // read "Agents > <the agent> > <the run> [> <the surface>]".
+    applyCrumbInsertions(crumbs, agentCrumbPaths, contributions);
     // AND THE STEP THE RUN DETAIL IS SHOWING, where the page named one. The
     // run's first step answers on the run's own path and has no segment above
     // to be named by, so it arrives as an append after the run's own crumb.
@@ -550,21 +588,8 @@ export function buildBreadcrumbTrail(
     };
   });
 
-  // Ancestry insertions (cinatra#1738 consumes this): a contribution with
-  // `insertBefore` inserts a NEW crumb before the crumb whose path equals
-  // that prefix, in publisher declaration order; an absent target skips the
-  // insertion. Applied BEFORE truncation.
-  for (const c of contributions) {
-    if (!c.insertBefore) continue;
-    const at = crumbPaths.indexOf(c.insertBefore);
-    if (at === -1) continue;
-    crumbPaths.splice(at, 0, c.prefix);
-    crumbs.splice(at, 0, {
-      label: c.label,
-      href: c.href ?? c.prefix,
-      ...(c.nonNavigable !== undefined ? { nonNavigable: c.nonNavigable } : {}),
-    });
-  }
+  // Ancestry insertions, then the position appends — see both helpers above.
+  applyCrumbInsertions(crumbs, crumbPaths, contributions);
 
   applyCrumbAppends(crumbs, crumbPaths, contributions);
 

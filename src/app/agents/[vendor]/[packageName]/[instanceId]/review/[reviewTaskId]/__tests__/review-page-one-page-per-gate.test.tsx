@@ -34,6 +34,9 @@ const mocks = vi.hoisted(() => ({
   loadReviewGateSurface: vi.fn(),
   loadPinnedCapturePair: vi.fn(() => null),
   readAgentRunById: vi.fn(async () => null),
+  ensureRunTitle: vi.fn(
+    async (run: { title: string | null }, baseName: string) => run.title ?? baseName,
+  ),
   readAgentTemplateById: vi.fn(async () => null),
   buildRunStepperSteps: vi.fn(() => []),
   readReviewGate: vi.fn(async () => null),
@@ -73,6 +76,10 @@ vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,
   readAgentTemplateById: mocks.readAgentTemplateById,
+  // The page names the run the way the run page does (cinatra#3446): a started
+  // run's label comes from `ensureRunTitle`, which returns an existing title
+  // unchanged. Nothing in this suite reads the trail; the export has to exist.
+  ensureRunTitle: mocks.ensureRunTitle,
 }));
 vi.mock("@cinatra-ai/agents/run-stepper-steps", () => ({
   buildRunStepperSteps: mocks.buildRunStepperSteps,

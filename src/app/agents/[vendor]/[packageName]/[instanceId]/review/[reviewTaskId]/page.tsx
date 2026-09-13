@@ -30,7 +30,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { Lock } from "lucide-react";
 
-import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
+import { ensureRunTitle, readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
 import {
   readReviewGate,
@@ -38,11 +38,16 @@ import {
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
 
+import {
+  CrumbContributions,
+  CrumbContributionsClear,
+} from "@/components/crumb-contributions";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { agentRunCrumbEntries } from "@/lib/breadcrumb-contributions";
 
 import {
   loadPinnedCapturePair,
@@ -98,17 +103,51 @@ type PageProps = {
  * template) yields an empty list, and the surface still shows the active Review
  * step. A synthetic "Review" step is appended as the ACTIVE (gated) step so the
  * left column always communicates "you are at this run's review".
+ *
+ * IT ALSO CARRIES THE RUN'S OWN TWO NAMES (cinatra#3446): the agent's name and
+ * the run's title, read from the very records this loader already opens. The
+ * page's trail is composed from them below — one read, and the trail this page
+ * draws cannot drift from the steps beside it.
  */
 async function loadRunStepsContext(
   runId: string,
-): Promise<{ steps: ReviewRunStep[]; activeStep: number; templateId: string | null }> {
+): Promise<{
+  steps: ReviewRunStep[];
+  activeStep: number;
+  templateId: string | null;
+  agentName: string;
+  runName: string;
+}> {
   let runSteps: ReviewRunStep[] = [];
   let templateId: string | null = null;
+  let agentName = "";
+  let runName = "";
   try {
     const run = await readAgentRunById(runId);
     if (run) {
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+      agentName = template?.name ?? "";
+      // THE RUN'S LABEL EXACTLY AS THE RUN PAGE COMPOSES IT (cinatra#3446). The run screen names a started run through
+      // `ensureRunTitle` — the template's name for a system run, a persisted
+      // "<template name> (N)" for an owned one — so reading `run.title` alone
+      // here drew a DIFFERENT word from the run page's on every run that had no
+      // title yet, which is the very divergence this issue is about. The helper
+      // is the one the run screen calls, is idempotent, and is documented for
+      // exactly this RSC use; a run still waiting for its input keeps the title
+      // it has, as it does there.
+      runName =
+        run.status !== "pending_input" && run.templateId && template
+          ? await ensureRunTitle(
+              {
+                id: run.id,
+                title: run.title ?? null,
+                templateId: run.templateId,
+                runBy: run.runBy ?? null,
+              },
+              template.name,
+            )
+          : (run.title ?? "");
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
       // The run's own record of each step, as the run page hands it over
       // (cinatra#3226): the two surfaces project ONE list, so a step the run
@@ -123,11 +162,11 @@ async function loadRunStepsContext(
   }
   const reviewIndex = runSteps.length + 1;
   const steps: ReviewRunStep[] = [...runSteps, { index: reviewIndex, label: "Review" }];
-  return { steps, activeStep: reviewIndex, templateId };
+  return { steps, activeStep: reviewIndex, templateId, agentName, runName };
 }
 
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+  const { vendor, packageName, instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
@@ -147,10 +186,26 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (isVerificationView) {
     const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
     if (!access.ok) return <ReviewNotAuthorizedPanel />;
+    // THE SAME TRAIL ON THIS READING OF THE PAGE TOO (cinatra#3446). The audit view is this same review route at the
+    // same address, and it returns here without reaching the publisher below —
+    // so it kept the id-placeholder trail the issue reports while the ordinary
+    // reading was fixed. Read AFTER the access check above, never before it.
+    const auditContext = await loadRunStepsContext(runId);
+    const auditCrumbs = (
+      <CrumbContributions
+        entries={agentRunCrumbEntries({
+          agentId: `${vendor}/${packageName}`,
+          instanceId: rawInstanceId,
+          templateName: auditContext.agentName,
+          runName: auditContext.runName,
+        })}
+      />
+    );
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) {
       return (
         <ReviewShell>
+          {auditCrumbs}
           <ReviewGateBlocked reason="no-longer-pending" />
         </ReviewShell>
       );
@@ -185,6 +240,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     const verificationCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
     return (
       <ReviewShell>
+        {auditCrumbs}
         {record ? (
           <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
@@ -225,7 +281,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
   // gate is the prompt window at the foot — see below.
 
-  const { steps, activeStep, templateId } = await loadRunStepsContext(runId);
+  const { steps, activeStep, templateId, agentName, runName } = await loadRunStepsContext(runId);
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
@@ -337,6 +393,34 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
 
   return (
     <ReviewShell>
+      {/* ONE TRAIL SHAPE FOR A RUN'S PAGES (cinatra#3446).
+
+          This page used to publish NOTHING on the crumb-contributions bus — it
+          broadcast its leaf title and nothing else — so the trail resolved the
+          run segment to the id's abbreviation and named the agent nowhere: the
+          two measured runs read "Agents > 00220c95... > Review" here and
+          "Agents > Blog Draft Writer Agent (4)" on the run's own page. The
+          issue's Expected is one shape for both: the agent's name, then the
+          run, then the step or surface.
+
+          THE ROAD IS THE ONE THE RUN PAGE TAKES (cinatra#1737), and the entries
+          are composed by the composer the run page's layout publishes — no new
+          mechanism and no second definition of what a run's crumbs say. The
+          "Review" crumb is not published at all: it is this route's own path
+          segment, which the trail names by itself.
+
+          AFTER THE GATE, NEVER BEFORE. The entries carry the agent's name and
+          the run's title, so the island is mounted here — below
+          `loadReviewGateSurface`, which is the read gate for this run — and
+          never on the not-authorized reading, which publishes nothing. */}
+      <CrumbContributions
+        entries={agentRunCrumbEntries({
+          agentId: `${vendor}/${packageName}`,
+          instanceId: rawInstanceId,
+          templateName: agentName,
+          runName,
+        })}
+      />
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -472,6 +556,14 @@ function ReviewShell({ children }: { children: React.ReactNode }) {
 function ReviewNotAuthorizedPanel() {
   return (
     <Main className="min-h-screen">
+      {/* A NEGATIVE SURFACE CLEARS THE BUS (cinatra#1737's ratified snapshot
+          semantics). This page now publishes the agent's
+          name and the run's title once a reader is authorized, so the panel a
+          later REFUSAL draws at the same address has to wipe the parked
+          snapshot — exactly as /not-authorized and the 404 boundary do — or the
+          refusal would still read the names the earlier authorized visit
+          published. */}
+      <CrumbContributionsClear />
       <PageHeader label="Agent run" title="Review" description="Not authorized" divider />
       <PageContent className="flex flex-col gap-6 pb-8">
         <div
