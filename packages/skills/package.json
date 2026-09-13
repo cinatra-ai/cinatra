@@ -8,7 +8,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./actions": "./src/actions.ts",
-    "./agent-assigned-skills-actions": "./src/agent-assigned-skills-actions.ts",
     "./agent-package-resolver": "./src/agent-package-resolver.ts",
     "./agent-skill-assignability": "./src/agent-skill-assignability.ts",
     "./assignable-skill-search": "./src/assignable-skill-search.ts",
