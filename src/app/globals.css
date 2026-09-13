@@ -159,7 +159,10 @@
      control sits on. In the light palette that is the full navy, unchanged;
      the dark palette declares its own value. Cascades through every shadcn
      primitive that uses `border-input`
-     (Input / Textarea / Select trigger / InputGroup). */
+     (Input / Textarea / InputGroup). The Select trigger and its popover no
+     longer draw from this token: rule 6 of the road keeps every hairline in
+     the navy family, and `--input` leaves that family on the dark ramp, so
+     they draw `--line-strong-control` instead (src/components/ui/select.tsx). */
   --line-control: var(--line-strong);
   /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
      resolved PER PALETTE (cinatra#3192, fix leg 2). Rule 6 of the road — "All
@@ -270,7 +273,10 @@
      control sits on. In the light palette that is the full navy, unchanged;
      the dark palette declares its own value. Cascades through every shadcn
      primitive that uses `border-input`
-     (Input / Textarea / Select trigger / InputGroup). */
+     (Input / Textarea / InputGroup). The Select trigger and its popover no
+     longer draw from this token: rule 6 of the road keeps every hairline in
+     the navy family, and `--input` leaves that family on the dark ramp, so
+     they draw `--line-strong-control` instead (src/components/ui/select.tsx). */
   --line-control: var(--line-strong);
   /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
      resolved PER PALETTE (cinatra#3192, fix leg 2). Rule 6 of the road — "All

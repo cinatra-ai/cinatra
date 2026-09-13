@@ -29,10 +29,26 @@ function SelectValue({
  * Dropdown section states outright ("Trigger mirrors Input chrome") and its
  * spec column repeats ("inherits input chrome"). Every chrome value below is
  * therefore READ OFF `Input`, not chosen here: pure-white `--surface-strong`
- * ground, the strong navy hairline (`border-input`), the 7px corner, the 32px
- * box at the default size, and Input's own 10px/4px padding — with the small
- * size one step down at 28px. `src/components/ui/__tests__/select-trigger-input-chrome.test.tsx`
+ * ground, the strong navy hairline, the 7px corner, the 32px box at the default
+ * size, and Input's own 10px/4px padding — with the small size one step down at
+ * 28px. `src/components/ui/__tests__/select-trigger-input-chrome.test.tsx`
  * asserts the mirror against Input's live classes, so the two cannot drift.
+ *
+ * The hairline is drawn from `--line-strong-control` rather than from Input's
+ * own `border-input`, because rule 6 of the application drawing — "Hairlines
+ * are navy, not grey … All hairlines use navy at low alpha … Never use a
+ * neutral grey on a divider" — governs the stroke in BOTH palettes and
+ * `--input` stops obeying it on the dark ramp, where it resolves through
+ * `--line-control` to `oklch(1 0 0 / 40%)`: a NEUTRAL white. Two facts make
+ * this the mirror rather than a break of it. In the LIGHT palette
+ * `--line-strong-control` is declared as the very same `var(--line-strong)`
+ * that `--input` resolves to, so the trigger's light hairline stays
+ * byte-identical to Input's own and the drawing's sentence holds where it is
+ * measured. On the dark ramp `--line-strong-control` is the palette's own
+ * navy-family hairline — the token the outline Button's stroke already draws —
+ * so the trigger sits on the same navy stroke as the button beside it instead
+ * of on a grey the drawing forbids. The rendered colour is pinned in both
+ * palettes by tests/e2e/design/conformance/primitive-chrome.spec.ts.
  */
 function SelectTrigger({
   className,
@@ -47,7 +63,7 @@ function SelectTrigger({
       data-slot='select-trigger'
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong px-2.5 py-1 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-input-fill/30 dark:hover:bg-input-fill/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-fit items-center justify-between gap-2 rounded-[7px] border border-line-strong-control bg-surface-strong px-2.5 py-1 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-input-fill/30 dark:hover:bg-input-fill/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
         className
       )}
       {...props}
@@ -65,13 +81,14 @@ function SelectTrigger({
  * popover sits on `--surface-strong` with the same hairline border, slightly
  * higher shadow", and the spec column's "inherits input chrome".
  *
- * "The same hairline border" is the TRIGGER's, so the panel draws `border-input`
- * — the strong navy hairline the trigger reads off Input — not the softer shared
+ * "The same hairline border" is the TRIGGER's, so the panel draws the trigger's
+ * own `border-line-strong-control` — the strong navy hairline, taken per palette
+ * from the token the trigger's note above explains — not the softer shared
  * `--border`, which measured `rgba(21, 33, 58, 0.14)` (it composites to
  * `rgb(222, 224, 227)` on the panel's white ground) against the trigger's opaque
- * `rgb(21, 33, 58)` in light, and `rgba(255, 255, 255, 0.1)` against
- * `rgba(255, 255, 255, 0.4)` in dark. "Inherits input chrome" takes the corner
- * with it: the panel draws the trigger's own 7px instead of the shared
+ * `rgb(21, 33, 58)` in light, and `rgba(255, 255, 255, 0.1)` against the
+ * trigger's own navy-family stroke in dark. "Inherits input chrome" takes the
+ * corner with it: the panel draws the trigger's own 7px instead of the shared
  * `rounded-md` band — `calc(var(--radius) - 2px)`, so 6px in light (`--radius`
  * 0.5rem) and 8px in dark (0.625rem) — never the drawn corner in either
  * palette. `shadow-md` over the trigger's `shadow-xs` is
@@ -89,7 +106,7 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot='select-content'
         className={cn(
-          'relative z-[160] max-h-(--radix-select-content-available-height) min-w-[8rem] origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-[7px] border border-input bg-popover text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+          'relative z-[160] max-h-(--radix-select-content-available-height) min-w-[8rem] origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-[7px] border border-line-strong-control bg-popover text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
           position === 'popper' &&
             'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
           className

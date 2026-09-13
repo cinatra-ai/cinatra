@@ -12,7 +12,10 @@
 //
 // The assertions READ Input's own rendered classes rather than restating them,
 // so the mirror cannot silently drift: change Input's chrome and this test
-// demands the trigger follow.
+// demands the trigger follow. The hairline is the ONE deliberate exception —
+// Input's `--input` leaves the navy family rule 6 requires on the dark ramp —
+// and the clause below states it, still reading Input's own class so the
+// divergence cannot widen unnoticed.
 //
 // jsdom applies no stylesheet, so this asserts the class contract; the computed
 // background, radius and border-box height are measured in the real browser by
@@ -84,9 +87,23 @@ describe("SelectTrigger — components drawing, Select / Dropdown section", () =
     expect(triggerChrome()).toContain(radius);
   });
 
-  it("mirrors Input's strong navy hairline", () => {
-    const border = inputValueFor(/^border-(?!0)/);
-    expect(triggerChrome()).toContain(border);
+  // The one chrome axis the trigger does NOT take from Input's own class.
+  // Rule 6 of the application drawing — "Hairlines are navy, not grey … All
+  // hairlines use navy at low alpha … Never use a neutral grey on a divider" —
+  // governs the stroke in BOTH palettes, and `--input` stops obeying it on the
+  // dark ramp, where it resolves through `--line-control` to `oklch(1 0 0 /
+  // 40%)`: a neutral white. The trigger therefore draws the strong-control
+  // hairline, which is declared as the very same `var(--line-strong)` as
+  // `--input` in the light palette — so the mirror stays byte-identical where
+  // the drawing measures it — and is the navy-family stroke the outline Button
+  // already draws on the dark ramp. Input's own class is still READ here, so a
+  // change to Input's hairline reds this clause and the divergence has to be
+  // reasoned about again rather than drifting quietly. The rendered colour in
+  // both palettes is pinned by
+  // tests/e2e/design/conformance/primitive-chrome.spec.ts.
+  it("draws the strong navy hairline, where Input's own token leaves the navy family on the dark ramp", () => {
+    expect(inputValueFor(/^border-(?!0)/)).toBe("border-input");
+    expect(triggerChrome()).toContain("border-line-strong-control");
   });
 
   it("mirrors Input's 32px box at the default size, one step down at sm", () => {
@@ -132,6 +149,18 @@ describe("SelectContent — components drawing, Select / Dropdown section", () =
 
   it("carries the same hairline border the sibling popover panels draw", () => {
     expect(contentClasses()).toContain("border");
+  });
+
+  // "Open popover sits on --surface-strong with the SAME hairline border" —
+  // the panel's stroke is whatever the trigger's is, read off the trigger
+  // rather than restated, so the two class lists cannot drift apart.
+  it("mirrors the trigger's own hairline class rather than restating it", () => {
+    const triggerHairline = triggerChrome().filter((c) => /^border-(?!0)/.test(c));
+    expect(
+      triggerHairline,
+      `the trigger must carry exactly one hairline class for the panel to mirror (${triggerHairline.join(", ")})`,
+    ).toHaveLength(1);
+    expect(contentClasses()).toContain(triggerHairline[0]!);
   });
 
   it("lifts on a higher shadow than the trigger it opens from", () => {

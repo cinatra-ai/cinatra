@@ -16,7 +16,10 @@
  *
  * The Select clauses are asserted as a COMPARISON against the live `Input`
  * rather than against pinned numbers, because the drawing states them that way:
- * "Trigger mirrors Input chrome". Change Input and the mirror must follow.
+ * "Trigger mirrors Input chrome". Change Input and the mirror must follow. The
+ * hairline is the one axis graded against the outline BUTTON instead: rule 6
+ * keeps every hairline in the navy family, which `--input` leaves on the dark
+ * ramp, so the trigger draws `--line-strong-control` there as the button does.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
@@ -897,6 +900,70 @@ test.describe("Select — 'Focus ring picks up --ring (indigo)', in BOTH palette
         await drawn(page, trigger, "border-top-color"),
         token,
         `${palette}: the focused edge — the ring's own colour`,
+      );
+    });
+  }
+});
+
+test.describe("Select — rule 6, 'Hairlines are navy, not grey', in BOTH palettes", () => {
+  for (const palette of PALETTES) {
+    test(`the resting trigger and its open panel draw the navy-family hairline, the same stroke the outline button draws (${palette})`, async ({
+      page,
+    }) => {
+      await openInPalette(page, palette);
+      const trigger = page.locator(`${SURFACE} [data-slot="select-trigger"]`);
+      await expect(trigger).toBeVisible();
+
+      // Read the RESTING stroke: opening the panel moves focus, and a
+      // focus-visible trigger draws the ring's colour on its edge instead. The
+      // resting premise is asserted rather than assumed — the trigger is shut
+      // and nothing has focused or hovered it at this point.
+      await expect(trigger).toHaveAttribute("data-state", "closed");
+      expect(
+        await trigger.evaluate(
+          (el) => el.matches(":focus-visible") || el.matches(":hover"),
+        ),
+        `${palette}: the trigger must be at rest — neither focused nor hovered — when its hairline is read`,
+      ).toBe(false);
+      const hairline = await drawn(page, trigger, "border-top-color");
+
+      // Rule 6, both halves, graded the way the same clause is graded on the
+      // outline button above: a NAVY, never a neutral grey. A neutral has no
+      // spread between its channels; the navy family always does, and leans
+      // blue. The dark ramp drew `oklch(1 0 0 / 40%)` here — a neutral white
+      // at 40 percent, spread zero — which is the departure this pins.
+      expect(
+        chromaSpread(hairline),
+        `${palette}: the trigger's hairline must be navy, not a neutral grey — rule 6, "Hairlines are navy, not grey"; measured rgba(${hairline.join(", ")})`,
+      ).toBeGreaterThan(8);
+      expect(
+        hairline[2],
+        `${palette}: the trigger's hairline must lean blue, not warm; measured rgba(${hairline.join(", ")})`,
+      ).toBeGreaterThan(hairline[0]);
+
+      // "All hairlines take the navy family" is ONE family per palette, so the
+      // trigger's stroke is graded against the stroke the outline button beside
+      // it already draws rather than against a second literal: in light both
+      // resolve to the full navy `--line-strong`, on the dark ramp both to the
+      // ramp's own `--line-strong-control`.
+      const outlineEdge = await drawn(
+        page,
+        button(page, "outline"),
+        "border-top-color",
+      );
+      expectColour(
+        hairline,
+        outlineEdge,
+        `${palette}: the trigger's hairline — the same navy-family stroke the outline button draws`,
+      );
+
+      // "Open popover sits on --surface-strong with the same hairline border":
+      // the panel mirrors the trigger, so rule 6 reaches it through the mirror.
+      const panel = await openPanel(page, trigger);
+      expectColour(
+        await drawn(page, panel, "border-top-color"),
+        outlineEdge,
+        `${palette}: the panel's hairline — the trigger's own navy-family stroke, mirrored`,
       );
     });
   }
