@@ -92,13 +92,19 @@ const PUBLIC_EXACT_PATHS = [
   "/setup/account", // cinatra#2386 — the first-account bootstrap step now lives INSIDE the setup wizard. A sessionless visitor must render the create-first-account form here (like /sign-up did before), not be 307'd to /sign-in. Exact path only — every other /setup/* route stays session-protected; the page itself re-checks hasAnyBetterAuthUsers()/the session before rendering (never trusts reachability alone), and its layout renders STATIC sign-up progress for the sessionless branch (no readiness-reader call, no setup-status disclosure to an unauthenticated visitor).
 ];
 
-// Internal design-system verification route. Static React server component;
-// renders only the shadcn primitive catalog, token swatches, and design
-// fixtures. No DB queries, no user data. Public access is gated to
-// non-production environments so the Playwright pixel-diff + axe-core harness
-// (`tests/e2e/design/design-fixtures.spec.ts`) can capture baselines from a CI
-// runner without an authenticated session, and so a production deployment still
-// requires auth. Public auth bypasses should not become production precedent.
+// Internal design-conformance harness routes. Each is a static React server
+// component mounting REAL components against deterministic fixtures: no DB
+// queries, no user data. Public access is gated to non-production environments
+// so the Playwright conformance suites can drive them from a CI runner without
+// an authenticated session, and so a production deployment still requires auth.
+// Public auth bypasses should not become production precedent.
+//
+// cinatra#3189 — the namespace ROOT (`/design-fixtures`) was the primitives
+// catalog: a second copy of the design system whose committed pixel baselines
+// were then read as proof that the primitives conform. The drawings are the
+// only source of truth, so the page was removed and its entry with it. The
+// list below is exact-match (no prefix wildcard), so the root now falls back
+// to the ordinary session guard.
 //
 // Exception for the CI harness: the design-visual-verify workflow now runs
 // against a PRODUCTION standalone build (NODE_ENV=production) — the legacy
@@ -111,9 +117,9 @@ const PUBLIC_EXACT_PATHS = [
 // deployment. The route is dataless, so this exposes no user data even if the
 // env were ever mis-set.
 // "/design-fixtures/marketplace-detail-modal" (cinatra#989/#739): the §V
-// detail-modal seeded-fixture route — same static, dataless, seeded-render
-// contract as the index page (its Playwright guard runs in the same
-// production-standalone design-visual-verify harness).
+// detail-modal seeded-fixture route — static, dataless, seeded-render
+// contract (its Playwright guard runs in the same production-standalone
+// design-visual-verify harness).
 // "/design-fixtures/conformance" (cinatra#985): the design-conformance
 // functional-acceptance harness — same static, dataless, seeded-render
 // contract (real components mounted with deterministic fixtures; no DB, no
@@ -172,7 +178,6 @@ const PUBLIC_EXACT_PATHS = [
 // unauthenticated harness to /sign-in before the fixture renders, and every
 // assertion then fails on a fixture that never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
-  "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
   "/design-fixtures/conformance",
   "/design-fixtures/conformance/seeded",

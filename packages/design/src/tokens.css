@@ -33,6 +33,10 @@
   --muted: #5a6477;
   /* Accent is canonical desaturated indigo. */
   --accent: #364e81;
+  /* Indigo in its TEXT / STROKE role (cinatra#3192, fix leg 2). Mirrors the
+     host token layer in `src/app/globals.css`; see the note there. On the cream
+     palette this is the same #364E81 the fill uses. */
+  --accent-ink: var(--accent);
   --accent-soft: #e6ede7;
   /* Hairlines are navy at low alpha, never grey. */
   --line: rgba(21, 33, 58, 0.14);
@@ -114,6 +118,11 @@
      control sits on. Kept identical to the host token layer in
      `src/app/globals.css`, which this package mirrors. */
   --line-control: var(--line-strong);
+  /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
+     resolved PER PALETTE (cinatra#3192, fix leg 2). Mirrors the host token
+     layer; in light this IS `--line-strong`. Kept apart from `--line-control`
+     so that token's control-boundary contrast floor is untouched. */
+  --line-strong-control: var(--line-strong);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -121,7 +130,7 @@
      pinned to the value `--input` carried before the boundary was raised.
      Consumed via `bg-input-fill` through the theme layer. */
   --input-fill: var(--line-strong);
-  --ring: var(--accent);
+  --ring: var(--accent-ink);
   --radius: 0.625rem;
 
   /* Accent-foreground + chart tokens.
@@ -149,6 +158,10 @@
   --toolbar-l3: #e9eae2;
   --muted: #5a6477;
   --accent: #364e81;
+  /* Indigo in its TEXT / STROKE role (cinatra#3192, fix leg 2). Mirrors the
+     host token layer in `src/app/globals.css`; see the note there. On the cream
+     palette this is the same #364E81 the fill uses. */
+  --accent-ink: var(--accent);
   --accent-soft: #e6ede7;
   /* Burgundy logo color — exclusive to themed mode. */
   --logo-color: #7a2e3a;
@@ -183,6 +196,11 @@
      control sits on. Kept identical to the host token layer in
      `src/app/globals.css`, which this package mirrors. */
   --line-control: var(--line-strong);
+  /* The drawing's `.btn.outline { border-color: var(--line-strong); }` stroke,
+     resolved PER PALETTE (cinatra#3192, fix leg 2). Mirrors the host token
+     layer; in light this IS `--line-strong`. Kept apart from `--line-control`
+     so that token's control-boundary contrast floor is untouched. */
+  --line-strong-control: var(--line-strong);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -190,7 +208,7 @@
      pinned to the value `--input` carried before the boundary was raised.
      Consumed via `bg-input-fill` through the theme layer. */
   --input-fill: var(--line-strong);
-  --ring: var(--accent);
+  --ring: var(--accent-ink);
   --radius: 0.5rem;
 
   --sidebar: #eceeea;
@@ -226,7 +244,16 @@
   --toolbar-l2: color-mix(in oklab, var(--toolbar) 72%, var(--background));
   --toolbar-l3: color-mix(in oklab, var(--toolbar) 45%, var(--background));
   --muted: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.929 0.013 255.508);
+  /* Rule 2 of the road names ONE indigo for filled primary buttons, focus
+     rings and links, and the dark ramp does not get a second one
+     (cinatra#3192, fix leg 2). This was the stock shadcn near-white slate, so
+     on the dark palette the primary button drew a slate fill with a navy
+     label. Mirrors `src/app/globals.css`, which this package tracks. */
+  --accent: #364e81;
+  /* The dark ramp's indigo INK — same hue, light end. #364E81 is a fill
+     colour; on this palette's near-black ground it measures about 2.2:1, so a
+     link label or a focus ring drawn in it is unreadable. */
+  --accent-ink: oklch(0.78 0.09 268);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
   /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
@@ -234,6 +261,11 @@
      control sits on. Kept identical to the host token layer in
      `src/app/globals.css`, which this package mirrors. */
   --line-control: oklch(1 0 0 / 40%);
+  /* The dark ramp's own `--line-strong-control` (cinatra#3192, fix leg 2). The
+     outline button drew `oklch(1 0 0 / 40%)` here — a NEUTRAL white, which
+     rule 6 forbids on a hairline. This keeps the navy hue the dark ramp is
+     built on and lifts its lightness so the stroke is findable. */
+  --line-strong-control: oklch(0.78 0.06 264 / 55%);
   --input: var(--line-control);
   /* Control FILL (cinatra#3107). shadcn reuses the boundary token as a tinted
      control ground (`dark:bg-input/30`, `/50`, `/80`). Strengthening the
@@ -251,14 +283,17 @@
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
   --sidebar-primary: oklch(0.929 0.013 255.508);
   --sidebar-primary-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-ring: oklch(0.929 0.013 255.508);
+  --sidebar-ring: var(--accent-ink);
 
   --r-card: 1rem;
   --r-panel: 0.875rem;
   --r-control: 0.625rem;
   --r-chip: 0.5rem;
   --radius: 0.625rem;
-  --primary-foreground: oklch(0.208 0.042 265.755);
+  /* `.btn.primary { color: var(--surface-strong); }` — the drawing pairs the
+     indigo fill with the palette's BRIGHTEST surface; on the dark ramp that is
+     `--foreground`. The former value paired with the slate fill above. */
+  --primary-foreground: var(--foreground);
   --secondary-foreground: var(--foreground);
   --accent-foreground: var(--foreground);
   --destructive: var(--cinatra-red);

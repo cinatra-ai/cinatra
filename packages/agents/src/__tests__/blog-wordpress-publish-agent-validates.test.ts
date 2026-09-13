@@ -89,8 +89,17 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = components.start as Record<string, unknown>;
     const meta = (start.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.required).toEqual(["projectId", "postId", "wordpressInstanceId"]);
-    expect(meta.hidden).toEqual([]);
+    // The flow takes an ARTIFACT REFERENCE, not a blog record: the pinned
+    // package's own contract reads "The flow takes an artifact reference
+    // (postArtifactId + postRepresentationRevisionId), never raw text and
+    // never a blog record". The retired `projectId`/`postId` pair is what a
+    // blog record was addressed by.
+    expect(meta.required).toEqual([
+      "postArtifactId",
+      "postRepresentationRevisionId",
+      "wordpressInstanceId",
+    ]);
+    expect(meta.hidden).toEqual(["cinatra_run_id"]);
   });
 
   it("Pin 7: EndNode outputs", () => {
@@ -99,43 +108,56 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const outputs = end.outputs as Array<{ title: string }>;
     const titles = outputs.map((o) => o.title).sort();
     expect(titles).toEqual([
+      "addressWritten",
       "approved",
-      "postId",
-      "projectId",
+      "postArtifactId",
+      "postRepresentationRevisionId",
+      "publishedExternalId",
+      "publishedUrl",
       "summary",
-      "wordpressAdminUrl",
-      "wordpressDraftId",
     ]);
   });
 });
 
 describe("blog-wordpress-publish-agent — inline instruction contract", () => {
-  it("uses status string 'succeeded' (NOT 'completed')", () => {
-    // Quote style differs between the OAS description and the inline prompt
-    // (cinatra#2090 folded the bundle in), so pin the STATEMENT, not the quoting.
-    expect(skill).toMatch(/status\b[^\n]*["']succeeded["']/);
-    const wrongMatches = skill.match(/status === ["']completed["']/g);
-    expect(wrongMatches ?? []).toEqual([]);
+  it("publishes an artifact revision — never raw text and never a blog record", () => {
+    expect(skill).toContain("never raw text and never a blog record");
+    expect(skill).toContain("postArtifactId");
+    expect(skill).toContain("postRepresentationRevisionId");
+    // The retired blog-record road is gone from the contract, not merely
+    // unused: the draft-generation poll, its status primitive and the
+    // draft-delete reject path were the shape of a blog record.
+    expect(skill).not.toContain("blog_project_get");
+    expect(skill).not.toContain("blog_post_publish_wordpress_status");
+    expect(skill).not.toContain("blog_post_publish_wordpress_delete");
+    expect(skill).not.toContain("wordpressDraftGeneration");
   });
 
-  it("polls blog_project_get (NOT blog_post_publish_wordpress_status)", () => {
-    expect(skill).toContain("blog_project_get");
-    // The status primitive needs a draftId we don't have yet; SKILL must
-    // explicitly avoid recommending it for polling.
-    expect(skill).toMatch(
-      /Do not call.*blog_post_publish_wordpress_status|do not.*blog_post_publish_wordpress_status/i,
-    );
+  it("names exactly the two WordPress site primitives and forbids the rest", () => {
+    expect(skill).toContain("wordpress_site_tools_list");
+    expect(skill).toContain("wordpress_site_tool_call");
+    expect(skill).toContain("Call NOTHING else.");
+    // The reads and the write-back belong to the deterministic steps around
+    // the orchestration step, not to it.
+    expect(skill).toContain("artifacts_get");
+    expect(skill).toContain("artifact_content_read");
+    expect(skill).toContain("objects_update");
   });
 
-  it("extracts adminUrl from wordpressDraftGeneration + wordpressDraftId from post.wordpressDrafts[]", () => {
-    expect(skill).toContain("wordpressDraftGeneration");
-    expect(skill).toContain("adminUrl");
-    expect(skill).toMatch(/post\.wordpressDrafts/);
+  it("only a publicly published page carries an address worth writing back", () => {
+    expect(skill).toContain("a draft has no public address");
+    expect(skill).toContain("The publish returns a receipt, never a new artifact.");
+    // On a decline nothing was created, so the retired delete-on-reject step
+    // has no subject any more.
+    expect(skill).toContain("there is nothing to remove");
   });
 
-  it("calls blog_post_publish_wordpress_delete with deleteInWordPress: true on reject", () => {
-    expect(skill).toContain("blog_post_publish_wordpress_delete");
-    expect(skill).toContain("deleteInWordPress: true");
+  it("the write-back patch key space is CLOSED at exactly three keys", () => {
+    expect(skill).toContain("The patch's key space is CLOSED");
+    expect(skill).toContain("wordpressPublishedUrl");
+    expect(skill).toContain("wordpressPublishedExternalId");
+    expect(skill).toContain("wordpressPublishedRevisionId");
+    expect(skill).toMatch(/`addressPatch` is `\{\}` exactly/);
   });
 
   it("declares the HITL renderer key explicitly", () => {

@@ -18,7 +18,7 @@
  *    accent inert — a plain <div>, default cursor, no modal, Run only.
  *
  * Assertion-based on purpose — no pixel baselines here (those stay owned by
- * design-fixtures.spec.ts), so the spec is platform-portable.
+ * the design harness), so the spec is platform-portable.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 

@@ -64,7 +64,7 @@ export const dynamic = "force-dynamic";
  * status filter (cinatra#1571); ?variant=loading mounts the delayed grid
  * instance.
  *
- * Kept OFF the pixel-diffed /design-fixtures index page; coverage here is
+ * Kept OFF the now-retired /design-fixtures catalog page; coverage here is
  * assertion-based (tests/e2e/design/conformance/functional-acceptance.spec.ts).
  */
 export default async function SeededConformanceHarnessPage({

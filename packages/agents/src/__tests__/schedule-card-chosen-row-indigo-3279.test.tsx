@@ -442,8 +442,17 @@ describe("the reading itself", () => {
     expect(declarations(grouped[0]!.body).get("--indigo-ink")).toBe("#ffffff");
   });
 
-  it("reads the near-white the defect painted when the row asks for the action token", () => {
-    expect(paints({ token: "primary", alpha: null }, "dark")).not.toBe(INDIGO);
-    expect(paints({ token: "primary", alpha: null }, "light")).toBe(INDIGO);
+  it("reads a token the dark ramp re-declares, not the root value behind it", () => {
+    // This case read the ACTION token until the shared-primitives grading
+    // landed: the dark ramp aliased it to the stock near-white slate, so a row
+    // keyed to it lost the drawn colour — the defect every reading in this
+    // file was written against. That ramp now carries the drawing's ONE
+    // indigo, so the action token paints the same colour in both palettes and
+    // can no longer show that this reading follows a per-palette
+    // re-declaration at all. The indigo's TEXT/STROKE role can: it is declared
+    // once at the light end and re-declared on the dark ramp, where the fill
+    // colour measures about 2.2:1 on the near-black ground and is unreadable.
+    expect(paints({ token: "accent-ink", alpha: null }, "dark")).not.toBe(INDIGO);
+    expect(paints({ token: "accent-ink", alpha: null }, "light")).toBe(INDIGO);
   });
 });

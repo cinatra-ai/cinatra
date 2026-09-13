@@ -110,8 +110,7 @@ function renderCard(className?: string) {
 }
 
 function renderInteractive(): HTMLElement {
-  const props = { interactive: true } as unknown as React.ComponentProps<typeof Card>;
-  return render(<Card {...props}>Agent tile</Card>).container;
+  return render(<Card interactive>Agent tile</Card>).container;
 }
 
 function slot(container: HTMLElement, name: string): HTMLElement {
@@ -279,55 +278,32 @@ describe('clause: "surface (default)"', () => {
   });
 });
 
-describe('RECORDED DEPARTURE (landing on the sibling change for this issue): clauses "surface-strong (interactive)", "1px line border" and "Hover lifts it 1px"', () => {
-  // RECORDED DEPARTURE — recorded, not fixed, and not because the clauses are
-  // in doubt. All three are already graded and repaired on the sibling change
-  // for this same issue (branch `fix/3189-primitives-button-select-card`),
-  // which turns the card's `ring-1` into a real `border border-border`, adds
-  // the `interactive` form that draws `--surface-strong` per rule #8, and
-  // gives that form the section's own 1px hover lift. Landing the same three
-  // repairs a second time here would put two changes to one primitive's base
-  // recipe in flight at once and conflict them against each other.
-  //
-  // They are graded here rather than left out, because a checklist that omits
-  // the clauses its primitive currently fails is not a checklist. Each of the
-  // three assertions below turns green the moment that sibling change lands,
-  // with nothing in this file to update.
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): draws a real 1px border rather than a ring — clause "1px line border"', () => {
-    // MEASURED: the base spells `ring-1 ring-foreground/10`, which paints as a
-    // box-shadow. The computed border-width is 0px, so a consumer that passes
-    // a border colour gets no stroke at all.
+describe('clauses "surface-strong (interactive)", "1px line border" and "Hover lifts it 1px"', () => {
+  // THE DEPARTURE THIS BLOCK RECORDED IS RETIRED. All three clauses were
+  // recorded here as open, against the sibling change for this same issue,
+  // which is the change this file now sits in: the card draws a real
+  // `border border-border` instead of the old `ring-1`, carries the
+  // `interactive` form the "White means interactive" rule reserves the white
+  // ground for, and lifts that form 1px on hover. The three assertions below
+  // are the SAME assertions the departure recorded, unchanged; only their
+  // expected-failure markers are gone, which is what the record said would
+  // have to happen on the day the repair landed.
+  it('draws a real 1px border rather than a ring — clause "1px line border"', () => {
+    // WHAT THIS REPLACED: the base spelled `ring-1 ring-foreground/10`, which
+    // paints as a box-shadow. Its computed border-width was 0px, so a consumer
+    // that passed a border colour got no stroke at all.
     expect(slot(renderCard(), "card").className).toMatch(/(^|\s)border(\s|$)/);
   });
 
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
-    // MEASURED: the primitive has one form, and it is the presentation one.
-    // Every surface that wants the white ground hand-rolls its own container.
-    //
-    // The prop is passed through a cast rather than written inline because it
-    // does not exist on this branch: a bare `interactive` would fail the
-    // typecheck here and a `@ts-expect-error` would fail it again, in the
-    // other direction, on the day the sibling change adds the prop.
+  it('offers the clickable form the rule reserves white for — clause "surface-strong (interactive)"', () => {
+    // WHAT THIS REPLACED: the primitive had one form, the presentation one, so
+    // every surface that wanted the white ground hand-rolled its own
+    // container — the drift this primitive exists to prevent.
     const container = renderInteractive();
     expect(slot(container, "card").getAttribute("data-interactive")).toBe("true");
   });
 
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (landing on the sibling change for this issue): lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
+  it('lifts the clickable form 1px on hover — the section example "Hover lifts it 1px."', () => {
     expect(slot(renderInteractive(), "card").className).toContain("hover:-translate-y-px");
   });
 });

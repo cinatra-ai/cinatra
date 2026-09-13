@@ -25,7 +25,7 @@
  * A redirect to /sign-in counts as PASS ONLY for genuinely public/unauth routes
  * (the allow-list derived from src/lib/auth-route-guard.ts — /sign-in, /sign-up,
  * /setup/*, /permissions/*, /accept-invitation, and the dev-public
- * /design-fixtures + /api/mcp/* pages). A /sign-in redirect on a should-render
+ * /api/mcp/* pages). A /sign-in redirect on a should-render
  * route is a FAIL (the admin session should have rendered it).
  *
  * A redirect to /not-authorized is ALWAYS a FAIL on a should-render route: it
@@ -147,9 +147,6 @@ const PUBLIC_EXACT_PATHS = new Set<string>([
   "/sign-in",
   "/sign-up",
   "/accept-invitation",
-  // Dataless dev-public design verification route; public only when
-  // NODE_ENV!=production OR CINATRA_E2E_SETUP_BYPASS=true (this suite sets it).
-  "/design-fixtures",
 ]);
 
 // Setup-wizard prefixes are auth-optional (gated by setup-completion, not a

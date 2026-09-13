@@ -13,7 +13,7 @@
 //     displayName links to the connector's own setup page;
 //   - empty:     every required connector configured → NO strip, card active.
 //
-// Kept OFF the pixel-diffed /design-fixtures index page (same convention as the
+// Kept OFF the now-retired /design-fixtures catalog page (same convention as the
 // sibling conformance fixtures): coverage here is assertion-based —
 // tests/e2e/design/conformance/functional-acceptance.spec.ts.
 // ---------------------------------------------------------------------------

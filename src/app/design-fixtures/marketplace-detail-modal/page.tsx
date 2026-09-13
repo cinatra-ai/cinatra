@@ -25,8 +25,8 @@ export const metadata: Metadata = {
  * drawing the modal renders NO banner or coloured ground (the hosted-banner
  * premise on #739 was a diagnosis error, not spec).
  *
- * Kept OFF the pixel-diffed /design-fixtures index page so the committed
- * baselines there stay untouched; the Playwright coverage for this route is
+ * Kept OFF the now-retired /design-fixtures catalog page which cinatra#3189
+ * removed; the Playwright coverage for this route is
  * assertion-based (tests/e2e/design/marketplace-detail-modal.spec.ts).
  *
  * Operational source: the design-system reference §V at
