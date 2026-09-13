@@ -103,3 +103,94 @@ export function buildAgentPackageBasePath(
 ): string {
   return `${normalizeScopeBase(scope)}/agents/${packageSegments(agentPackageName)}`;
 }
+
+// ---------------------------------------------------------------------------
+// THE COMPLETION CONTRACT A NEW-RUN LINK CARRIES (cinatra#3358).
+//
+// A step whose field needs something ANOTHER package produces offers a link to
+// that package's new-run route. The run that link starts has to know where to
+// go back to once it has produced what was missing, so the address carries the
+// contract: the NAME of the step that offered the road, and the ID of the run
+// parked at it. The generic new-run launcher reads it off its own query and
+// carries it onto the run it creates; the run surface reads it back.
+//
+// IT LIVES HERE, in the agent-path grammar, because that is what it is — two
+// query keys of the `/agents/{vendor}/{package}/{instance}` address and the
+// readers that put them on and take them off. It is also why it is NOT a module
+// of its own: this leaf has zero imports and every one of the routes that reach
+// the launcher already reach this file, so the grammar gains a rule and the
+// reachable module graph gains nothing (the route-graph ratchet's own finding is
+// that a dynamic import would not have helped — the metric is static
+// reachability).
+//
+// GENERIC BY CONSTRUCTION: a contract is a name plus a run id, and nothing here
+// learns which packages are at either end of it. The step's name is the step's
+// own; the parked run's address comes from the parked run's own template.
+// ---------------------------------------------------------------------------
+
+/** The query key naming the step that offered the road. */
+export const COMPLETION_RETURN_NAME_PARAM = "onComplete";
+/** The query key carrying the parked run's id. */
+export const COMPLETION_RETURN_RUN_PARAM = "onCompleteRunId";
+
+/**
+ * The completion contract a new-run link carries: the NAME of the step that
+ * offered the road, and the id of the run parked at it.
+ */
+export type CompletionReturn = { onComplete: string; returnRunId: string };
+
+function firstQueryString(value: string | string[] | undefined): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return typeof value[0] === "string" ? value[0].trim() : "";
+  return "";
+}
+
+/**
+ * Read a completion contract out of a screen's own search params. BOTH halves
+ * are required: a name with no parked run has nowhere to return to, and a run id
+ * with no name is not a contract this grammar recognizes.
+ */
+export function readCompletionReturn(
+  searchParams: Record<string, string | string[] | undefined> | null | undefined,
+): CompletionReturn | null {
+  if (!searchParams) return null;
+  const onComplete = firstQueryString(searchParams[COMPLETION_RETURN_NAME_PARAM]);
+  const returnRunId = firstQueryString(searchParams[COMPLETION_RETURN_RUN_PARAM]);
+  if (!onComplete || !returnRunId) return null;
+  return { onComplete, returnRunId };
+}
+
+/**
+ * Carry a completion contract onto a path the launcher is about to redirect to,
+ * preserving whatever query that path already holds.
+ */
+export function withCompletionReturn(path: string, ret: CompletionReturn | null): string {
+  if (!ret) return path;
+  const [base, existing = ""] = path.split("?", 2);
+  const params = new URLSearchParams(existing);
+  params.set(COMPLETION_RETURN_NAME_PARAM, ret.onComplete);
+  params.set(COMPLETION_RETURN_RUN_PARAM, ret.returnRunId);
+  return `${base}?${params.toString()}`;
+}
+
+/**
+ * The href a new-run link carries so the run it starts can come back: the
+ * offering step's name plus the parked run's id. A step with no run identity in
+ * hand offers the bare road — the link still opens, it just has no return.
+ */
+export function newRunHrefWithCompletionReturn(
+  newRunPath: string,
+  onComplete: string,
+  parkedRunId: string | null | undefined,
+): string {
+  const [base, existing = ""] = newRunPath.split("?", 2);
+  const params = new URLSearchParams(existing);
+  params.set(COMPLETION_RETURN_NAME_PARAM, onComplete);
+  const runId = typeof parkedRunId === "string" ? parkedRunId.trim() : "";
+  // No identity in hand offers the bare road, and that means DROPPING any run id
+  // the address already carried: keeping a stale one would point the return at
+  // another run entirely.
+  if (runId) params.set(COMPLETION_RETURN_RUN_PARAM, runId);
+  else params.delete(COMPLETION_RETURN_RUN_PARAM);
+  return `${base}?${params.toString()}`;
+}

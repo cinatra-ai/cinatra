@@ -183,6 +183,71 @@ export async function recordDevVersionForLoadedPackage(
   }
 }
 
+// INSTALL-RECORD HEAL for a loaded `kind:"skill"` package (cinatra#3358).
+//
+// THE MEASURED CAUSE OF A 404 ON A LINK THE PRODUCT ITSELF DRAWS. A skill
+// package that loads from the in-tree extension tree gets its SKILL.md
+// registered by this scan and NOTHING ELSE: no canonical `installed_extension`
+// row. The runtime-lifecycle + provisioning gate every run-start goes through
+// (`assertAgentPackageRunnable`) reads exactly that row for an agent's DIRECT
+// REQUIRED dependencies, so an agent package that declares a required skill
+// resolves as `missing-required-dependency` and refuses to start — and the
+// generic new-run launcher used to render that refusal as "404 — Page not
+// found". Measured on a development boot: the agent packages all carried a row
+// (the agent scan repairs its own, cinatra#2536) while only the bundled,
+// required-in-prod skills did; every other in-tree skill had none, so every
+// agent depending on one was unstartable.
+//
+// The repair is the SAME generic heal the artifact kind already fires
+// (`healMissingInstallRecord`, whose absent/inactive/unreadable policy lives in
+// its own module) — only the kind differs. It is therefore correct for ANY skill
+// package in the tree and singles none of them out.
+//
+// Idempotent (a healthy package is one read) and FAIL-SOFT: a heal failure must
+// never break a boot scan or a hot reload. Only invoked by the BOOT scan /
+// watcher call sites, which pass `healInstallRecords` explicitly — never by the
+// fixture-driven unit paths.
+export async function healSkillInstallRecordForLoadedPackage(
+  res: { kind: string; packageName?: string | null; packageVersion?: string | null },
+  pkgDir: string,
+): Promise<void> {
+  if (res.kind !== "skill" || !res.packageName) return;
+  try {
+    const { healMissingInstallRecord } = await import(
+      "@/lib/extension-install-anchor"
+    );
+    const outcome = await healMissingInstallRecord({
+      packageName: res.packageName,
+      kind: "skill",
+      packageDir: pkgDir,
+      version: res.packageVersion ?? undefined,
+    });
+    if (outcome.outcome === "repaired") {
+      console.info(
+        `[cinatra:extensions:skill] ${res.packageName} — REPAIRED a missing installed_extension ` +
+          `record (row ${outcome.rowId}); agents that require this skill can start again ` +
+          "(cinatra#3358)",
+      );
+      return;
+    }
+    if (outcome.outcome === "already-live") return; // healthy — stay quiet
+    // Every other outcome is a DELIBERATE refusal (archived, org-scoped,
+    // unverified, unreadable, disabled) or a failed write. Say so: an agent that
+    // requires this skill will refuse to start, and the reason belongs in the
+    // boot log rather than in a 404.
+    console.warn(
+      `[cinatra:extensions:skill] ${res.packageName} has NO usable installed_extension record ` +
+        `(${outcome.outcome}${outcome.reason ? `: ${outcome.reason}` : ""}). Agents that declare it ` +
+        "as a required dependency will refuse to start until it is installed (cinatra#3358).",
+    );
+  } catch (err) {
+    console.warn(
+      `[cinatra:extensions:skill] install-record heal skipped (${res.packageName}):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 // INSTALL-RECORD HEAL for a loaded `kind:"artifact"` package (cinatra#2536).
 //
 // An artifact package that LOADS from the in-tree/bundled extension tree but has
@@ -570,6 +635,10 @@ export async function loadAllExtensionPackages(
       // materializable on this boot (fail-soft, idempotent — see helper).
       if (opts?.healInstallRecords) {
         await healArtifactInstallRecordForLoadedPackage(res, pkgDir);
+        // Repair a loaded SKILL package with NO canonical install record, so an
+        // agent that declares it as a required dependency is actually startable
+        // on this boot (cinatra#3358 — fail-soft, idempotent; see helper).
+        await healSkillInstallRecordForLoadedPackage(res, pkgDir);
       }
       // Emit one per-package line for skill + connector kinds,
       // at visual parity with the per-agent
@@ -757,6 +826,14 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
             console.info(
               `[cinatra:extensions:skill] reloaded ${vendorSlug} (skill — ${res.skillsRegistered} SKILL.md re-registered)`,
             );
+            // A newly-added / re-registered skill package still needs a live
+            // install record for an agent that requires it to be startable
+            // (cinatra#3358) — the same repair the whole-tree scan fires, on the
+            // path that actually runs in an editor. Without it a skill added or
+            // retried after boot stays unrunnable until the next full scan, and
+            // the launcher refuses the run the product itself offered.
+            // Idempotent and fail-soft, exactly like the artifact branch below.
+            await healSkillInstallRecordForLoadedPackage(res, pkgDir);
           } else if (res.kind === "connector") {
             console.info(
               `[cinatra:extensions:connector] ${vendorSlug} changed (connector — workspace-compiled; ` +

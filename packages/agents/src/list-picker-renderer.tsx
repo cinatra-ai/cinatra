@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
+import { newRunHrefWithCompletionReturn } from "@/lib/agent-url";
 import type {
   FieldRendererProps,
 } from "./field-renderer-registry";
@@ -178,8 +179,19 @@ export function ListPickerRenderer({
           "Build a list with AI" CTA.
           Deep-links to a NEW list-curator-agent run. The operator completes
           the curator's two HITL gates (scrape-schema-review + final-list-review)
-          there; on completion they return to this picker with the new listId
-          pre-selected via the ?onComplete query param.
+          there; on completion they return to THIS run's step with the new list
+          on offer.
+
+          THE RETURN IS ADDRESSED, NOT DESCRIBED (cinatra#3358). The href used to
+          carry `onComplete=list-picker` alone, which named the step that offered
+          the road but not the run parked at it — so nothing downstream could
+          work out where to go back to, and the completion contract was read
+          nowhere. The link now carries this run's own identity beside the name,
+          and the generic new-run launcher carries the pair onto the run it
+          creates (the contract's two query keys and their readers live in the
+          agent-path grammar, `@/lib/agent-url`). A step with no run identity
+          in hand still offers the bare road: the link opens, it just has no
+          return.
 
           Separate-run UX (not nested HITL): the WayFlow runtime does not yet
           support surfacing child HITL gates in a parent run, so deep-linking
@@ -187,7 +199,11 @@ export function ListPickerRenderer({
         */}
         <Button asChild type="button" variant="default" disabled={disabled}>
           <Link
-            href="/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker"
+            href={newRunHrefWithCompletionReturn(
+              "/agents/cinatra-ai/list-curator-agent/new",
+              "list-picker",
+              runId,
+            )}
             target="_blank"
             rel="noreferrer"
             data-testid="build-list-with-ai-cta"
