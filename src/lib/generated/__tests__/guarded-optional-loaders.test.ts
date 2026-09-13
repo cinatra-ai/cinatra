@@ -171,7 +171,6 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/blog-image-artifact::detail", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/blog-image-artifact::listRow", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/blog-image-artifact::preview", resolution: "guardedOptional" },
-  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/blog-post-artifact::detail", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/blog-post-artifact::preview", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::detail", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::preview", resolution: "guardedOptional" },

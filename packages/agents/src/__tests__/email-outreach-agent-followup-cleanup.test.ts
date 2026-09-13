@@ -1,5 +1,6 @@
 /**
- * Regression gate for email follow-up cleanup.
+ * Regression gate for email follow-up cleanup, and for the drafting step's
+ * declared `draftBundleRef` plus the removal of the dead `campaignId` input.
  *
  * Verifies orphan `approvedFollowupBundleRef` and `email-follow-up-agent`
  * references are removed from email-outreach-agent. The follow-ups CONTROL
@@ -62,6 +63,55 @@ describe("email-outreach-agent follow-up cleanup", () => {
 
   it("OAS still parses as valid JSON", () => {
     expect(() => JSON.parse(oasText)).not.toThrow();
+  });
+
+  it("the drafting step's StartNode declares draftBundleRef on its inputs and hidden list", () => {
+    const oas = JSON.parse(oasText) as Record<string, unknown>;
+    let draftsStart: Record<string, unknown> | undefined;
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      if (node === null || typeof node !== "object") return;
+      const obj = node as Record<string, unknown>;
+      const subRefs = (obj.$referenced_components ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      if ("drafts-start" in subRefs) draftsStart = subRefs["drafts-start"];
+      for (const value of Object.values(obj)) walk(value);
+    };
+    walk(oas);
+    expect(draftsStart).toBeDefined();
+    const inputs = (draftsStart!.inputs ?? []) as Array<Record<string, unknown>>;
+    expect(inputs.map((i) => i.title as string)).toContain("draftBundleRef");
+    const hidden =
+      ((draftsStart!.metadata as Record<string, Record<string, unknown>>)?.cinatra
+        ?.hidden as string[]) ?? [];
+    expect(hidden).toContain("draftBundleRef");
+  });
+
+  it("the campaign summary step no longer takes a campaignId input, and nothing feeds one", () => {
+    const oas = JSON.parse(oasText) as Record<string, unknown>;
+    const refs = (oas.$referenced_components ?? {}) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const summary = refs.campaign_summary;
+    expect(summary).toBeDefined();
+    const inputs = (summary!.inputs ?? []) as Array<Record<string, unknown>>;
+    expect(inputs.map((i) => i.title as string)).not.toContain("campaignId");
+    const dfc = (oas.data_flow_connections ?? []) as Array<Record<string, unknown>>;
+    const toSummary = dfc.filter(
+      (e) =>
+        (e.destination_node as { $component_ref?: string } | undefined)
+          ?.$component_ref === "campaign_summary",
+    );
+    expect(toSummary.length).toBeGreaterThan(0);
+    expect(toSummary.map((e) => e.destination_input as string)).not.toContain(
+      "campaignId",
+    );
   });
 
   it("sender-start hidden inputs do not include approvedFollowupBundleRef", () => {

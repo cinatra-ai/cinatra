@@ -115,6 +115,21 @@
      that tint's own value text would not clear the contrast floor. Consumed as
      `text-mustard-ink` through the @theme inline binding below. */
   --mustard-ink: #7a5a1f;
+  /* THE DRAWING'S INDIGO, THEME-INVARIANT (cinatra#3279). The ratified
+     lifecycle-cards drawing §VI draws the chosen option row "taking the indigo
+     edge and tint", and the scheduling step's own drawing writes that edge
+     literally — `1px solid var(--blue)` over
+     `linear-gradient(rgba(54,78,129,0.05), rgba(54,78,129,0.05))`. Both
+     palettes draw the SAME indigo there: the colour MARKS THE CHOICE, it is
+     not the palette's own action colour, so it cannot be carried by a token a
+     palette re-declares. `--accent` is re-declared near-white below in `.dark`
+     and `--primary` aliases it, which is exactly how the chosen row lost the
+     drawn colour in the dark palette.
+     DECLARED HERE ONLY — like the type scale above, no `.cinatra` and no
+     `.dark` override — so the literal inherits into every palette unchanged.
+     Consumed as `border-indigo-ink` / `bg-indigo-ink/5` through the @theme
+     inline binding below. */
+  --indigo-ink: #364e81;
   /* Marketplace review stars (design spec §V reviews drawing): the storefront
      rating amber + its empty-star warm grey. Deliberately OUTSIDE the status
      palette — star ratings mirror the public storefront's commerce chrome,
@@ -590,6 +605,11 @@
      The drawing names this colour by itself and it has no counterpart among the
      status tokens — `--warning` is the TINT it is read on, never the reading. */
   --color-mustard-ink: var(--mustard-ink);
+  /* INDIGO INK utility: border-indigo-ink / bg-indigo-ink / text-indigo-ink.
+     The drawing names this colour by itself for the chosen row's edge, dot and
+     tint, and it holds in BOTH palettes — `--primary` is the palette's action
+     colour, which the dark palette moves, and this one does not move. */
+  --color-indigo-ink: var(--indigo-ink);
   /* Attention-counter digit utility (spec §IV bell badge): always-white text
      on the solid red attention pill, theme-invariant by construction. */
   --color-attention-foreground: var(--attention-foreground);
