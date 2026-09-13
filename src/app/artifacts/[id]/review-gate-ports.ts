@@ -49,15 +49,16 @@ import {
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import {
+  type BeginReviewResult,
   type PrepareReviewInput,
-  type PrepareReviewResult,
   type ResolvedRendererMount,
-  type PreparedReviewTarget,
+  type ReviewTargetPreparation,
   type RunAccessOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
 import {
-  pinnedCaptureKey,
+  type ReviewDecisionPermissions,
   type ReviewSurfaceModel,
+  type ReviewTargetStream,
 } from "@/lib/artifacts/review-surface-model";
 import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-store";
 import {
@@ -78,8 +79,8 @@ import {
 } from "@/lib/artifacts/artifact-review-decision";
 
 import {
+  beginArtifactReviewTargets,
   bindArtifactReviewPorts,
-  prepareArtifactReviewTargets,
   type ReviewRunGatePorts,
 } from "./review-target-prepare";
 
@@ -116,18 +117,22 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
  * well (`loadReviewGateSurface`'s settled answer, and nowhere else); every
  * decision path leaves it unset and is refused on a gate that is no longer
  * pending, exactly as before.
+ *
+ * It ANSWERS AT THE END OF THE PREFLIGHT (cinatra#3334) and hands back the
+ * ordered per-target preparations, already running behind the core's fan-out
+ * cap. Every hard failure is still decided before a single target is read.
  */
-export async function prepareReviewTargets(args: {
+export async function beginReviewTargets(args: {
   input: PrepareReviewInput;
   actorCtx: ReviewActorContext;
-}): Promise<PrepareReviewResult> {
+}): Promise<BeginReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
     actorCtx.actor,
     actorCtx.orgId,
     actorCtx.roleHints,
   );
-  return prepareArtifactReviewTargets({
+  return beginArtifactReviewTargets({
     input: args.input,
     orgId: actorCtx.orgId,
     actor: kernelActor,
@@ -404,7 +409,7 @@ export async function loadReviewGateSurface(args: {
     // The gate answered `resolved` a line ago; a set that is gone underneath is
     // a row that can no longer be read, which is blocked, not decided.
     if (!pinned) return { kind: "blocked", reason: "no-longer-pending" };
-    const history = await prepareReviewTargets({
+    const history = await beginReviewTargets({
       input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
       actorCtx,
     });
@@ -415,13 +420,12 @@ export async function loadReviewGateSurface(args: {
     }
     return {
       kind: "settled",
-      targets: history.prepared,
-      pinnedCapturePairs: await loadPinnedCapturePairsForTargets(
+      // The decided reading streams exactly as the pending one does: the same
+      // frozen set, one boundary per reviewed target (cinatra#3334).
+      targets: streamReviewTargets(
         actorCtx.orgId,
-        history.prepared,
-        isRepairSuccessorTaskId(reviewTaskId)
-          ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
-          : null,
+        history.targets,
+        repairPairingOnce(runId, reviewTaskId),
       ),
       // As on the ready path: no gate/run column carries a producer summary in
       // this slice, so the chrome renders nothing rather than an empty summary.
@@ -429,9 +433,16 @@ export async function loadReviewGateSurface(args: {
     };
   }
 
-  // 3. Prepare EVERY pinned target through the fully-bound core (never-blank
+  // 3. START every pinned target through the fully-bound core (never-blank
   //    floor per target; a substituted/absent gate races to a blocked state).
-  const prepared = await prepareReviewTargets({
+  //
+  //    THE SURFACE IS ANSWERED AT THE END OF THE PREFLIGHT (cinatra#3334).
+  //    Run access, gate provenance and the substitution check are all complete
+  //    when this returns — in that order, before any target was read — and what
+  //    comes back is the ordered per-target preparations, running. Awaiting the
+  //    whole set here is what put a multi-target gate past the card's twelve-
+  //    second bound while every target was, in fact, arriving.
+  const prepared = await beginReviewTargets({
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
   });
@@ -456,52 +467,137 @@ export async function loadReviewGateSurface(args: {
     }
   }
 
-  // 4. Decision permissions (§V): terminal Approve/Reject need approve access;
-  //    Comment needs respond access. Resolved against the ACTUAL reviewing actor.
-  const [decide, comment] = await Promise.all([
-    enforceReviewRunAccess(runId, actorCtx.actor, "approveHitl", actorCtx.roleHints),
-    enforceReviewRunAccess(runId, actorCtx.actor, "respondToHitl", actorCtx.roleHints),
-  ]);
-
-  const targets: PreparedReviewTarget[] = prepared.prepared;
-
-  // cinatra#2286 S10 (PR1) — a REPAIR-SUCCESSOR gate's pinned pair is the
-  // repair comparison (reviewed vs repaired), never the generic "review" pair
-  // off its own single target (the wiring gap DESIGN identifies: this loader
-  // previously hardcoded "review" for every gate with no awareness of
-  // `isRepairSuccessorTaskId`). `readRepairBySuccessorGateId` is keyed on the
-  // gate's own row id, not its `reviewTaskId` string, so that id is resolved
-  // here — only for a repair-successor task — via one extra `readReviewGate`
-  // read (the gate row was already confirmed pending above; this re-read is
-  // for its id alone).
-  const repairSuccessorGateId = isRepairSuccessorTaskId(reviewTaskId)
-    ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
-    : null;
-
-  const pinnedCapturePairs = await loadPinnedCapturePairsForTargets(
-    actorCtx.orgId,
-    targets,
-    repairSuccessorGateId,
-  );
-
   return {
     kind: "ready",
     runId,
     reviewTaskId,
-    targets,
-    // S6 (#2044 L-B + L-D) — the PINNED before/after PAIR for each pinned
-    // target. A STORE read
-    // only: the surface shows the picture taken at gate creation and performs no
-    // network fetch at view time (the inert-by-contract rule, asserted by
-    // `cms-preview-capture-view.test.ts`). A target with no capture yields an
-    // empty list and renders nothing.
-    pinnedCapturePairs,
+    // The ordered per-target preparation + capture promises. Each one carries
+    // the work that used to run AFTER the whole set was prepared — its pinned
+    // capture — so no target's picture holds another target's body.
+    targets: streamReviewTargets(
+      actorCtx.orgId,
+      prepared.targets,
+      repairPairingOnce(runId, reviewTaskId),
+    ),
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
     agentSummary: null,
-    permissions: { canDecide: decide.ok, canComment: comment.ok },
+    // 4. Decision permissions (§V): terminal Approve/Reject need approve access;
+    //    Comment needs respond access. Resolved against the ACTUAL reviewing
+    //    actor — and, since cinatra#3334, resolved BESIDE the targets rather
+    //    than after them: it answers the card's floor, below the frame, and no
+    //    target body waits on it.
+    permissions: resolveDecisionPermissions(runId, actorCtx),
   };
+}
+
+/**
+ * WHAT A GATE'S PICTURES ARE READ AGAINST — resolved once per gate.
+ *
+ * `ordinary` is the everyday gate (live page vs proposal). `repair` is a
+ * repair-successor gate, whose pair is keyed on the gate's own ROW id rather
+ * than its `reviewTaskId` string, so that id costs one extra `readReviewGate`.
+ * `unresolved` is the third answer and the reason this is an enum rather than a
+ * nullable id: a repair gate whose row could not be read is NOT an ordinary
+ * gate, and answering it with the ordinary pair would put the wrong comparison
+ * (live vs proposal) where reviewed-vs-repaired belongs. It degrades to NO
+ * pair, which is the honest fallback the capture reads themselves take (#2044).
+ */
+type RepairPairing =
+  | { kind: "ordinary" }
+  | { kind: "repair"; gateId: string }
+  | { kind: "unresolved" };
+
+/**
+ * The gate's pairing, read AT MOST ONCE and only when a target asks for it.
+ *
+ * Shared by every target's capture promise (one read for the whole gate) and
+ * deliberately LAZY: starting it while the surface is still being composed
+ * would put a gate read back in front of the shell the preflight just freed.
+ */
+function repairPairingOnce(runId: string, reviewTaskId: string): () => Promise<RepairPairing> {
+  let pending: Promise<RepairPairing> | null = null;
+  return () => {
+    pending ??= !isRepairSuccessorTaskId(reviewTaskId)
+      ? Promise.resolve<RepairPairing>({ kind: "ordinary" })
+      : readReviewGate(runId, reviewTaskId)
+          .then<RepairPairing>((gate) =>
+            gate?.id ? { kind: "repair", gateId: gate.id } : { kind: "unresolved" },
+          )
+          .catch<RepairPairing>(() => ({ kind: "unresolved" }));
+    return pending;
+  };
+}
+
+/**
+ * Compose the STREAMING surface's targets (cinatra#3334): each target's started
+ * preparation beside the promise of its own pinned capture pair.
+ *
+ * THE PAIR IS READ BEHIND THAT TARGET'S OWN PREPARATION, and that is load-
+ * bearing rather than cosmetic: the pinned capture read is SYNCHRONOUS against
+ * the store, and a callback chained onto an already-settled promise runs in a
+ * microtask BEFORE the awaiting caller of this surface resumes — so composing
+ * the pairs eagerly would run every target's store read in front of the shell
+ * the preflight was moved forward to release. The panel that consumes a pair is
+ * the same one that awaits `prepared`, so waiting for it costs the picture
+ * nothing and keeps the surface's own answer free of target work.
+ */
+export function streamReviewTargets(
+  orgId: string,
+  started: readonly ReviewTargetPreparation[],
+  pairing: () => Promise<RepairPairing>,
+): ReviewTargetStream[] {
+  return started.map(({ target, prepared }) => ({
+    target,
+    prepared,
+    capturePair: prepared
+      .then(() => pairing())
+      .then((resolved) => {
+        switch (resolved.kind) {
+          case "repair":
+            return loadPinnedRepairPair(orgId, resolved.gateId, target);
+          case "ordinary":
+            return loadPinnedCapturePair(orgId, target, "review");
+          case "unresolved":
+            // A repair gate we could not key: no pair rather than the wrong one.
+            return null;
+        }
+      })
+      // Both readers already degrade to null on a store failure (#2044's
+      // honest-fallback rule); this is the same answer for the one thing they
+      // cannot catch for themselves — and for a preparation that rejected, in
+      // which case the panel never draws a picture anyway.
+      .catch(() => null),
+  }));
+}
+
+/**
+ * The reviewer's decision axis (§V), resolved off the surface's own path.
+ *
+ * FAIL-CLOSED. Nothing awaits this before the surface is answered, so a
+ * permission read that throws can no longer take the whole load down with it —
+ * and the only safe reading of a permission that could not be resolved is that
+ * it was not granted. It is the axis this MODEL reports, not the card's own
+ * floor: the card resolves what it may do through its own lifecycle read, so a
+ * closed answer here narrows this model and disables nothing on screen.
+ */
+function resolveDecisionPermissions(
+  runId: string,
+  actorCtx: ReviewActorContext,
+): Promise<ReviewDecisionPermissions> {
+  return Promise.all([
+    enforceReviewRunAccess(runId, actorCtx.actor, "approveHitl", actorCtx.roleHints),
+    enforceReviewRunAccess(runId, actorCtx.actor, "respondToHitl", actorCtx.roleHints),
+  ])
+    .then(([decide, comment]) => ({ canDecide: decide.ok, canComment: comment.ok }))
+    .catch((err) => {
+      console.warn(
+        "[review-gate-ports] decision permissions could not be resolved (the floor stays closed):",
+        err instanceof Error ? err.message : err,
+      );
+      return { canDecide: false, canComment: false };
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -615,17 +711,4 @@ export async function loadPinnedRepairPair(
   }
 }
 
-async function loadPinnedCapturePairsForTargets(
-  orgId: string,
-  targets: readonly PreparedReviewTarget[],
-  repairSuccessorGateId: string | null,
-): Promise<Record<string, PinnedCapturePairView>> {
-  const out: Record<string, PinnedCapturePairView> = {};
-  for (const prepared of targets) {
-    const pair = repairSuccessorGateId
-      ? await loadPinnedRepairPair(orgId, repairSuccessorGateId, prepared.target)
-      : loadPinnedCapturePair(orgId, prepared.target, "review");
-    if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
-  }
-  return out;
-}
+
