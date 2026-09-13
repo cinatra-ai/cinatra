@@ -145,18 +145,26 @@ adoption, never the whole of it.
 
 **None.** All five pins read `match` against the published manifests,
 including on the `push`-to-`main` arm that is red on any non-`match` outcome.
-Two adoptions got them there and both are recorded below: the 2026-09-10
+Three adoptions got them there and all three are recorded below: the 2026-09-10
 adoption of `app-connectors`, whose published body redeclares the manifest
 (three sharing surfaces gained) and therefore moves with the drivers and
-harness mounts that answer those surfaces — it landed with cinatra#3374 — and
-the 2026-09-12 hashes-only re-pin of `app`, `app-components` and
-`app-extensions`. `app-notifications` has not moved since 2026-08-30.
+harness mounts that answer those surfaces — it landed with cinatra#3374 — the
+2026-09-12 hashes-only re-pin of `app`, `app-components` and `app-extensions`,
+and the 2026-09-13 hashes-only re-pin of `app-extensions` alone, after the
+design source republished its spec under a byte-identical drawing.
+`app-notifications` has not moved since 2026-08-30.
+
+A published manifest can republish more than once under one drawing, and
+`app-extensions` now has: the 2026-09-12 round adopted its republication, and
+the 2026-09-13 round below adopted the next one. Each round keeps its own
+frozen pair — the bodies it adopted and the bodies it superseded — so neither
+record has to be rewritten for the other to be true.
 
 The bodies a pin named before an adoption are kept as the checker's own drift
-input (see `superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/`
-beside the frozen published ones, and every row a later frozen fetch
-superseded), because a gate whose drift path has no input is a gate whose drift
-path is untested.
+input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/` and
+`superseded-pins-2026-09-13/` beside the frozen published ones, and every row a
+later frozen fetch superseded), because a gate whose drift path has no input is
+a gate whose drift path is untested.
 
 ## Reconciliation record
 
@@ -287,6 +295,34 @@ mounts with it and is adopted where those live — landed with cinatra#3374, the
 2026-09-10 record above, which pins the same body this capture froze. Until it
 landed, the `push`-to-`main` arm — red on any non-`match` outcome — reported
 that single drift; the four other pins read `match` on both arms.
+
+## Reconciliation record — 2026-09-13
+
+Measured 2026-09-13 against the manifests published under `publishedBaseUrl`.
+`app-extensions` republished a second time: its body was fetched into a scratch
+directory outside the tree and compared, as parsed JSON, with the committed copy
+under `tests/e2e/design/conformance/manifests/`. `schemaVersion`, `spec` and the
+whole `surfaces` array — thirteen surfaces, the same ids in the same order,
+field-for-field identical — are unchanged; `contentHash` alone moved. That is
+again the second of the two cases "why a hash-only re-pin is refused" names, the
+one nothing downstream catches: the spec source changed under an unchanged
+drawing. The committed artifact of that row is now the verbatim published body,
+and both hashes in `conformance-pins.json` were re-derived from it through the
+checker's own functions, never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations (13 surfaces) | re-pin |
+| `app-connectors` | `drift` | three surfaces gained (`connector-sharing`, `connector-sharing-locked`, `connector-sharing-rollup`) — adopted with its drivers by the pull request of #3374 | not this diff |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+`app-connectors` is again the one pin this reconciliation does not adopt, for
+the reason the record above already gives, and its published body has not moved
+since that round measured it. Until the adoption that owns it lands, the
+`push`-to-`main` arm reports that single drift; the four other pins read `match`
+on both arms.
 
 ## Running it locally
 
