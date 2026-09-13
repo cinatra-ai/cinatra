@@ -23,14 +23,19 @@ permissions:
   contents: read
   checks: read
   pull-requests: read
+  # the evaluator resolves each check suite to its workflow through the
+  # actions runs listing of the head
+  actions: read
 
 jobs:
   merge-readiness:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Shorter than the queue's check_response_timeout_minutes (120): this job
-    # must report a readable failure before the queue times the entry out.
-    # The script's own DEADLINE_MINUTES budget (90) sits inside this ceiling.
-    timeout-minutes: 100
+    # must report before the queue times the entry out. The script's wait
+    # follows the longest job budget of the workflows it evaluates, capped at
+    # MAX_WAIT_MINUTES (105), and that cap plus this job's setup phase sits
+    # inside this ceiling.
+    timeout-minutes: 115
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
