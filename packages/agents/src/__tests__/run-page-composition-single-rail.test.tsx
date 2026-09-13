@@ -383,11 +383,18 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
     const { container } = await renderRunPage();
 
     const columns = railColumns(container);
-    // The live reading before this fix: 2 — "Setup Setup" in one column and
-    // "1 Draft the post 2 Pick the image" in the other.
+    // The live reading before the first leg: 2 — "Setup Setup" in one column
+    // and "1 Draft the post 2 Pick the image" in the other.
     expect(columns.length).toBe(1);
     const entries = railEntries(columns[0]);
-    expect(entries).toEqual(["Setup", "Setup", "3Draft the post", "4Pick the image"]);
+    // AND EACH STEP ONCE (cinatra#3478, second leg). The first leg merged the
+    // two columns and kept the reading the merged column then had, which still
+    // carried "Setup" TWICE — the agent asks two inputs, neither declares a
+    // name of its own, and both entries took the setup's own name. The drawing
+    // lists "the run's steps in order", so the run's setup is one entry and the
+    // work steps follow it.
+    expect(entries).toEqual(["Setup", "2Draft the post", "3Pick the image"]);
+    expect(new Set(entries).size).toBe(entries.length);
   });
 
   it("keeps the run's steps above the run's own record on a finished run", async () => {
