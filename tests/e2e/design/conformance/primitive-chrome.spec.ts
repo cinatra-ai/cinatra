@@ -716,3 +716,234 @@ test.describe("Button — the same rules on the dark ramp", () => {
     );
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Fix leg 4 (cinatra#3192) — the Select's own two clauses, in BOTH palettes.
+ *
+ * The 2026-09-13 proof round shot the select cell on real product surfaces and
+ * counted two departures the leg-2 assertions could not see, because each of
+ * them ran in one palette only:
+ *
+ *   * the trigger painted NO focus ring in the light palette — not one pixel
+ *     changed outside its box with `:focus-visible` true — while dark drew the
+ *     drawn 3px halo. The light palette cancelled the ring in `globals.css`,
+ *     and the branch's only ring assertion ran on the dark ramp.
+ *   * the open panel did not carry "the same hairline border" as its trigger in
+ *     either palette (light: the panel drew rgba(21, 33, 58, 0.14), which
+ *     composites to rgb(222, 224, 227) on its white ground, against the
+ *     trigger's opaque rgb(21, 33, 58); dark: rgba(255, 255, 255, 0.1) against
+ *     rgba(255, 255, 255, 0.4)), and its corner departed from the trigger's in
+ *     both — the panel took the shared `rounded-md` band,
+ *     `calc(var(--radius) - 2px)`, 6px in light and 8px in dark, against the
+ *     7px the trigger reads off Input.
+ *
+ * The drawing's own sentences for this block, quoted:
+ *
+ *   Select / Dropdown  "Trigger mirrors Input chrome. Open popover sits on
+ *                      --surface-strong with the same hairline border,
+ *                      slightly higher shadow. Use scrollbar-thin on long
+ *                      lists."   · spec column: "inherits input chrome"
+ *   Input / Textarea   "Always pure white background. Border is the strong
+ *                      navy hairline. Focus ring picks up --ring (indigo)."
+ *                      · spec column: "7px radius", "focus = ring indigo"
+ *
+ * Both clauses are therefore graded in BOTH palettes, and the hairline and the
+ * corner are graded as a COMPARISON against the live trigger: "the same
+ * hairline border" names the trigger's own, so the panel cannot pass by drawing
+ * some other hairline that happens to be one pixel wide.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** The two palettes the product ships, both graded against the one drawing. */
+const PALETTES: Palette[] = ["cinatra", "dark"];
+
+/**
+ * `focus-visible:ring-[3px]` — the drawn halo as the browser serialises a ring
+ * of that width: the colour, then zero offsets and blur, then the 3px spread.
+ * Anchored at the end of its own shadow, so the 3px is pinned by construction
+ * rather than asserted separately.
+ */
+const RING_SHAPE = /^(.*?)\s+0px 0px 0px 3px$/;
+
+/** Split a computed `box-shadow` into its comma-separated shadows. */
+function shadowSegments(boxShadow: string): string[] {
+  const segments: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const character of boxShadow) {
+    if (character === "(") depth += 1;
+    if (character === ")") depth -= 1;
+    if (character === "," && depth === 0) {
+      segments.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+/**
+ * The colour of the 3px-spread shadow — the ring itself — or null when nothing
+ * in the box-shadow draws a ring of that width. `null` is exactly what the
+ * light palette measured on the focused trigger in the failed round.
+ */
+function ringColour(boxShadow: string): string | null {
+  for (const shadow of shadowSegments(boxShadow)) {
+    const shape = RING_SHAPE.exec(shadow);
+    if (shape?.[1]) return shape[1].trim();
+  }
+  return null;
+}
+
+/**
+ * Focus a control the way the drawing's ring is reached — THROUGH THE KEYBOARD.
+ * The keypress sets the browser's keyboard modality first, so `:focus-visible`
+ * matches; the poll proves it matched rather than assuming it, since the whole
+ * clause hangs on that state being true at the moment the ring is measured.
+ */
+async function focusThroughKeyboard(page: Page, target: Locator) {
+  await page.keyboard.press("Tab");
+  await target.evaluate((el: HTMLElement) => {
+    el.focus();
+  });
+  await expect
+    .poll(async () => target.evaluate((el) => el.matches(":focus-visible")))
+    .toBe(true);
+}
+
+/**
+ * The trigger animates its box-shadow (`transition-[color,box-shadow]`), so the
+ * ring has to be read once that transition has SETTLED rather than on the first
+ * frame after focus: read mid-flight, the dark ramp measured a 0.53px spread at
+ * a twentieth of the ring's alpha — the drawn ring on its way in, not a
+ * departure. Two identical consecutive readings is the settled value.
+ */
+async function settledBoxShadow(target: Locator): Promise<string> {
+  let previous = "";
+  await expect
+    .poll(
+      async () => {
+        const current = await computedValue(target, "box-shadow");
+        const stable = current === previous;
+        previous = current;
+        return stable;
+      },
+      { intervals: [150, 150, 250, 500] },
+    )
+    .toBe(true);
+  return previous;
+}
+
+/**
+ * Open the panel and hand back its locator. The click is retried while the panel
+ * is absent, because the first click can land before the page is interactive and
+ * a lost pointer event is not a defect in the panel; it is only ever sent while
+ * nothing is open, so a retry cannot toggle the panel shut.
+ */
+async function openPanel(page: Page, trigger: Locator): Promise<Locator> {
+  const panel = page.locator('[data-slot="select-content"]');
+  await expect
+    .poll(
+      async () => {
+        if ((await panel.count()) === 0) {
+          await trigger.click({ timeout: 5_000 }).catch(() => undefined);
+        }
+        return panel.count();
+      },
+      { intervals: [250, 500, 1_000, 2_000], message: "the panel must open" },
+    )
+    .toBeGreaterThan(0);
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+test.describe("Select — 'Focus ring picks up --ring (indigo)', in BOTH palettes", () => {
+  for (const palette of PALETTES) {
+    test(`the trigger paints the drawn 3px ring under keyboard focus (${palette})`, async ({
+      page,
+    }) => {
+      await openInPalette(page, palette);
+      const trigger = page.locator(`${SURFACE} [data-slot="select-trigger"]`);
+      await expect(trigger).toBeVisible();
+
+      // At rest there is no ring. The clause is about the focused state, and
+      // this pins that what is measured below is the ring and not the chrome.
+      expect(
+        ringColour(await settledBoxShadow(trigger)),
+        `${palette}: the resting trigger must not already draw a ring`,
+      ).toBeNull();
+
+      await focusThroughKeyboard(page, trigger);
+
+      const focused = await settledBoxShadow(trigger);
+      const ring = ringColour(focused);
+      expect(
+        ring,
+        `${palette}: the focused trigger must paint the drawing's 3px ring; measured box-shadow ${focused}`,
+      ).not.toBeNull();
+      // The ring is drawn at the ring utility's own half alpha over the
+      // palette's own `--ring`, so dark is graded against the same sentence on
+      // the dark ramp's indigo rather than against a second literal.
+      const token = await paletteToken(page, "--ring");
+      expectColour(
+        await toRgba(page, ring!),
+        [token[0]!, token[1]!, token[2]!, 0.5],
+        `${palette}: ring colour — "Focus ring picks up --ring (indigo)"`,
+      );
+      // `focus-visible:border-ring` takes the edge to the same colour, which is
+      // what makes the halo read as one ring instead of two edges.
+      expectColour(
+        await drawn(page, trigger, "border-top-color"),
+        token,
+        `${palette}: the focused edge — the ring's own colour`,
+      );
+    });
+  }
+});
+
+test.describe("Select — 'the same hairline border' and the drawn corner on the open panel", () => {
+  for (const palette of PALETTES) {
+    test(`the open panel draws the trigger's hairline and its 7px corner (${palette})`, async ({
+      page,
+    }) => {
+      await openInPalette(page, palette);
+      const trigger = page.locator(`${SURFACE} [data-slot="select-trigger"]`);
+      await expect(trigger).toBeVisible();
+
+      // Read the trigger's own chrome BEFORE the panel opens: opening moves
+      // focus, and a focus-visible trigger draws the ring's colour on its edge.
+      const hairline = await drawn(page, trigger, "border-top-color");
+      const hairlineWidth = await computedValue(trigger, "border-top-width");
+      const corner = await computedValue(trigger, "border-top-left-radius");
+      // Input's own corner and Input's own hairline WIDTH, which the trigger
+      // mirrors — both pinned to the drawing's own literals so the comparisons
+      // below cannot pass by moving both sides off the drawing together (two
+      // 2px borders, or two missing ones, would satisfy equality alone).
+      expect(
+        corner,
+        `${palette}: the trigger's corner — Input's own "7px radius"`,
+      ).toBe("7px");
+      expect(
+        hairlineWidth,
+        `${palette}: the trigger's hairline — "the strong navy hairline", one pixel`,
+      ).toBe("1px");
+
+      const panel = await openPanel(page, trigger);
+
+      expectColour(
+        await drawn(page, panel, "border-top-color"),
+        hairline,
+        `${palette}: the panel's hairline — "Open popover sits on --surface-strong with the same hairline border"`,
+      );
+      expect(
+        await computedValue(panel, "border-top-width"),
+        `${palette}: the panel's hairline width — the trigger's own`,
+      ).toBe(hairlineWidth);
+      expect(
+        await computedValue(panel, "border-top-left-radius"),
+        `${palette}: the panel's corner — the spec column's "inherits input chrome"`,
+      ).toBe(corner);
+    });
+  }
+});

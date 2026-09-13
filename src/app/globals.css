@@ -459,9 +459,23 @@
 .cinatra input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([data-slot="input-group-control"]),
 .cinatra select,
 .cinatra textarea:not([data-slot="input-group-control"]),
-.cinatra [data-slot="input-group"],
+.cinatra [data-slot="input-group"] {
+  background: var(--surface-strong);
+  box-shadow: none;
+}
+
+/* The Select trigger mirrors that ground — the components drawing's Select
+   section opens "Trigger mirrors Input chrome" — but its box-shadow must NOT be
+   cancelled while it is focused. The drawn focus ring (Input's own spec column:
+   "focus = ring indigo") compiles to a box-shadow, so cancelling it here
+   painted NO ring at all in the light palette, while the dark ramp, which
+   carries no equivalent cancel for the trigger, drew the drawn 3px halo. The
+   cancel is therefore scoped to the RESTING trigger: the Input mirror at rest
+   is unchanged and the ring now survives in both palettes (cinatra#3189). */
 .cinatra [data-slot="select-trigger"] {
   background: var(--surface-strong);
+}
+.cinatra [data-slot="select-trigger"]:not(:focus-visible) {
   box-shadow: none;
 }
 
