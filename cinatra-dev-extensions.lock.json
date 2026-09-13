@@ -220,7 +220,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "ee1998d55c877ab38479a3e595a7d5c810261b25"
+      "resolvedSha": "c11a6dfda78d47532280de7c744f641661c91b73"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -285,7 +285,7 @@
     {
       "packageName": "@cinatra-ai/list-curator-agent",
       "repo": "cinatra-ai/list-curator-agent",
-      "resolvedSha": "66ba92b01565ab3ba7e5edac06b84555ac6964b2"
+      "resolvedSha": "ba22c381a3b012bba034ba98bb47a3ef14d5405b"
     },
     {
       "packageName": "@cinatra-ai/marketing-icp-artifact",

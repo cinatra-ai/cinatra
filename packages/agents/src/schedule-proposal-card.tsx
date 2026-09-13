@@ -1546,8 +1546,16 @@ function ScheduleOptionRows({
               <SelectTrigger data-field="recurring-minute" aria-label="Minute" className="w-20">
                 <SelectValue />
               </SelectTrigger>
+              {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278). The options were
+                  the twelve multiples of five, so a schedule stored at 05:12
+                  had no option to match and the segment drew blank beside an
+                  hour that drew 05. Section VI admits no raw cron field — "the
+                  schedule the reader stated is what the reader sees and
+                  confirms" — so the minute the schedule holds has to be one
+                  this control can draw. The parse and the cron are untouched;
+                  only the option set changes, on the same drawn picker. */}
               <SelectContent>
-                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                {Array.from({ length: 60 }, (_, m) => (
                   <SelectItem key={m} value={String(m)}>
                     {String(m).padStart(2, "0")}
                   </SelectItem>
@@ -1693,8 +1701,16 @@ function Field({ label, children }: { label: string; children: ReactElement }): 
 
 /**
  * One option row. The CHOSEN one takes the indigo edge and tint and owns its
- * fields (§VI) — the same `border-primary bg-primary/5` pair the shipped
+ * fields (§VI) — the same `border-indigo-ink bg-indigo-ink/5` pair the shipped
  * scheduling step marks its selection with.
+ *
+ * THE EDGE IS THE DRAWING'S INDIGO IN BOTH PALETTES (cinatra#3279). The pair
+ * used to be `border-primary bg-primary/5`, and `--primary` is the palette's
+ * ACTION colour: the dark palette re-declares it to a near-white, so the
+ * chosen row's edge, its radio dot and the tint mixed from it all went
+ * near-white and the row read as a plain highlighted box. `--indigo-ink` is
+ * the drawn colour itself, declared once in `src/app/globals.css` and
+ * re-declared by no palette, so the row marks the choice the same way in both.
  */
 function OptionRow({
   rowKind,
@@ -1732,7 +1748,7 @@ function OptionRow({
       aria-checked={readOnly ? chosen : undefined}
       aria-disabled={readOnly ? true : undefined}
       className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors ${
-        chosen ? "border-primary bg-primary/5" : "border-input"
+        chosen ? "border-indigo-ink bg-indigo-ink/5" : "border-input"
       }`}
     >
       {readOnly ? (
@@ -1740,10 +1756,10 @@ function OptionRow({
           <span
             aria-hidden="true"
             className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-              chosen ? "border-primary" : "border-muted-foreground"
+              chosen ? "border-indigo-ink" : "border-muted-foreground"
             }`}
           >
-            {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
+            {chosen ? <span className="size-2 rounded-full bg-indigo-ink" /> : null}
           </span>
           {icon}
           <span className="text-sm font-medium text-foreground">{label}</span>
@@ -1759,10 +1775,10 @@ function OptionRow({
         >
           <span
             className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-              chosen ? "border-primary" : "border-muted-foreground"
+              chosen ? "border-indigo-ink" : "border-muted-foreground"
             }`}
           >
-            {chosen ? <span className="size-2 rounded-full bg-primary" /> : null}
+            {chosen ? <span className="size-2 rounded-full bg-indigo-ink" /> : null}
           </span>
           {icon}
           <span className="text-sm font-medium text-foreground">{label}</span>

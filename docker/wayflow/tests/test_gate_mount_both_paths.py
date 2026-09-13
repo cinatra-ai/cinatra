@@ -16,8 +16,12 @@ they agree:
   ``AgentSpecLoader`` ever sees it.
 
 * **ORCHESTRATED** — the same gate inlined as a subflow of
-  ``email-outreach-agent``. Those inlined copies declare NO gate ``inputs``, so
-  they mount NATIVELY and never touch the shim.
+  ``email-outreach-agent``. Those inlined copies USED to declare no gate
+  ``inputs``, so they mounted natively and never touched the shim. Since the
+  pack's pull request 50 (``email-outreach-agent`` commit ``82eb439``, the
+  lifecycle-d W8 rework of the outreach flow) they declare ``inputs`` exactly
+  like the standalone packages, so both encodings now travel the SAME shim. The
+  pin that first carries that encoding into this repo is ``c11a6dfd``.
 
 Because the two encodings travel different code, either side can move without
 the other noticing — which is exactly how cinatra#2140 was reported (the
@@ -29,8 +33,8 @@ form does not). This module pins BOTH paths against the same ruled contract:
 2. the same standalone OAS is REJECTED by a bare load, with the documented
    message — so if pyagentspec ever starts accepting declared gate inputs (or an
    author "fixes" the OAS into the native form), this fails visibly;
-3. the orchestrator mounts through the pipeline AND bare — its inlined gate
-   copies need no shim;
+3. the orchestrator mounts through the pipeline, and the shim demonstrably
+   fired on each inlined gate copy with the ``inputs`` that copy declares;
 4. every ``InputMessageNode`` in the discovered tree satisfies the ruled
    contract (native, or in a shape the shim can repair, with exactly one
    output);
@@ -109,11 +113,15 @@ _STANDALONE_GATE_AGENTS: Dict[str, Tuple[str, str]] = {
     "email-recipient-selection-agent": ("approval_gate", "confirmedRecipients"),
 }
 _ORCHESTRATOR = "email-outreach-agent"
-#: The orchestrator's INLINED copies of the same two gates. Named explicitly so
-#: the orchestrated assertions cannot pass vacuously if the gates disappear, and
-#: so an unrelated future declared-input gate elsewhere in the orchestrator does
-#: not red this suite.
-_ORCHESTRATED_GATE_IDS = ("recipients-review_gate", "drafts-approval_gate")
+#: The orchestrator's INLINED copies of the same two gates, mapped to the gate
+#: ``inputs`` each one declares at the current pin. Named explicitly so the
+#: orchestrated assertions cannot pass vacuously if the gates disappear, and so
+#: an unrelated declared-input gate elsewhere in the orchestrator (the flow's
+#: ``sender-approval_gate`` declares inputs too) does not red this suite.
+_ORCHESTRATED_GATE_INPUTS: Dict[str, Tuple[str, ...]] = {
+    "recipients-review_gate": ("confirmedRecipients", "recipientCount"),
+    "drafts-approval_gate": ("draftBodyArtifacts", "draftBundleRef"),
+}
 
 
 def _oas_path(slug: str) -> Path:
@@ -228,12 +236,35 @@ def test_orchestrator_mounts_through_the_real_pipeline() -> None:
     assert AgentSpecLoader().load_json(substituted) is not None
 
 
-def test_orchestrated_inlined_gates_need_no_shim() -> None:
-    """The orchestrator's inlined copies of the same gates use the NATIVE (no
-    declared inputs) encoding, so they mount without the shim. Asserting this
-    explicitly is what makes a future drift on EITHER side visible: if the
-    inlined copies grow declared inputs, this fails here; if the standalone
-    packages lose theirs, the standalone tests above fail."""
+def test_orchestrated_inlined_gates_mount_through_the_shim() -> None:
+    """The orchestrator's inlined copies of the same gates DECLARE ``inputs``
+    and mount THROUGH the reconcile shim — exactly as the standalone packages
+    above do.
+
+    This is the deliberate reconciliation of what the test pinned before the pin
+    advance to ``c11a6dfd``. Until then the inlined copies carried the native
+    (no declared inputs) encoding and mounted without the shim. The pack's pull
+    request 50 (``email-outreach-agent`` commit ``82eb439``, the lifecycle-d W8
+    rework of the outreach flow) re-authored them in the ruled cinatra HITL form
+    — declared ``inputs`` fed by a ``DataFlowEdge`` — so the orchestrated
+    encoding now AGREES with the standalone one instead of diverging from it,
+    and both travel ``agent_loader._reconcile_input_message_gates``. The two
+    encodings are reconciled here, deliberately: no allowlist, no skip.
+
+    Drift on EITHER side stays visible. If an inlined copy returns to the native
+    encoding its shim-report entry disappears and this fails; if the declared
+    inputs are renamed or dropped the per-gate input assertion fails; if the
+    standalone packages lose theirs, the standalone tests above fail.
+
+    There is deliberately NO bare-load assertion on this path any more. With
+    declared inputs an unreconciled orchestrator is refused — but at this pin
+    it is refused for a STRUCTURAL reason first (inlined subflow components
+    "appear multiple times at different levels in referenced components"), which
+    says nothing about the gate encoding. Pinning that message would pin the
+    flow's inlining layout rather than the contract this module guards; the
+    standalone half above keeps the declared-input rejection pinned with its own
+    documented message.
+    """
     doc = json.loads(_require(_ORCHESTRATOR).read_text(encoding="utf-8"))
 
     # The gates must actually BE there — otherwise deleting them would make
@@ -241,25 +272,32 @@ def test_orchestrated_inlined_gates_need_no_shim() -> None:
     present = {
         gate.get("id")
         for gate in _iter_gates(doc)
-        if gate.get("id") in _ORCHESTRATED_GATE_IDS
+        if gate.get("id") in _ORCHESTRATED_GATE_INPUTS
     }
-    assert present == set(_ORCHESTRATED_GATE_IDS), (
-        f"{_ORCHESTRATOR} no longer inlines {sorted(set(_ORCHESTRATED_GATE_IDS) - present)}. "
+    assert present == set(_ORCHESTRATED_GATE_INPUTS), (
+        f"{_ORCHESTRATOR} no longer inlines "
+        f"{sorted(set(_ORCHESTRATED_GATE_INPUTS) - present)}. "
         "The orchestrated encoding of the #2140 gates is what this suite pins "
-        "against the standalone one — re-point _ORCHESTRATED_GATE_IDS deliberately."
+        "against the standalone one — re-point _ORCHESTRATED_GATE_INPUTS deliberately."
     )
 
-    _substituted, gate_report = _preload(doc, _ORCHESTRATOR)
-    drifted = [
-        entry for entry in gate_report if entry["node"] in _ORCHESTRATED_GATE_IDS
-    ]
-    assert drifted == [], (
-        f"{_ORCHESTRATOR}'s inlined gates now need the reconcile shim "
-        f"({drifted!r}) — the orchestrated encoding drifted toward the "
-        "standalone one. Reconcile the two deliberately, then update this test."
-    )
+    substituted, gate_report = _preload(doc, _ORCHESTRATOR)
+    reconciled = {entry["node"]: entry for entry in gate_report}
+    for gate_id, declared_inputs in sorted(_ORCHESTRATED_GATE_INPUTS.items()):
+        assert gate_id in reconciled, (
+            f"{_ORCHESTRATOR}: expected the loader shim to reconcile inlined gate "
+            f"{gate_id!r}; report={gate_report!r}. If the inlined copy moved back "
+            "to the native (no declared inputs) encoding, the orchestrated form "
+            "drifted away from the standalone one — reconcile the two "
+            "deliberately, then update this test."
+        )
+        assert tuple(sorted(reconciled[gate_id]["inputs"])) == tuple(sorted(declared_inputs)), (
+            f"{_ORCHESTRATOR}: inlined gate {gate_id!r} declares "
+            f"{sorted(reconciled[gate_id]['inputs'])!r}, pinned "
+            f"{sorted(declared_inputs)!r}."
+        )
 
-    assert AgentSpecLoader().load_json(_bare(doc)) is not None
+    assert AgentSpecLoader().load_json(substituted) is not None
 
 
 # --------------------------------------------------------------------------
