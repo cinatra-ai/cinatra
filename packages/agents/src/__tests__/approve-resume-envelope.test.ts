@@ -71,6 +71,11 @@ const storeMock = vi.hoisted(() => ({
   setAgentRunTokenHash: vi.fn(async () => {}),
   readAgentTemplateById: vi.fn(),
   writeHitlPrompt: vi.fn(async (_input: { submittedValues?: unknown }) => undefined),
+  // cinatra#3423: the answer CLAIMS the gate with one conditional transition
+  // before it records anything or dispatches. This suite is about the envelope
+  // on the wire, so the claim simply succeeds here — the race it settles has its
+  // own suite (review-gate-decided-once-3423).
+  transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
 

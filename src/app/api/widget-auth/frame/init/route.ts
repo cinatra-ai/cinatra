@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import { createAuthTransaction } from "@/lib/widget-user-auth";
-import { deriveFrameBinding, isSameOriginFrameRequest } from "@/lib/widget-frame-auth";
+import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { allowNamedRateLimit } from "@/lib/connect-rate-limit";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 
@@ -67,8 +67,12 @@ export async function POST(request: Request): Promise<Response> {
 
   // 1. SAME-ORIGIN GATE FIRST, before any body work. Defense in depth (headers
   //    are forgeable off-browser); the real wall is that the authorization code
-  //    is postMessage'd to the Cinatra origin alone.
-  if (!isSameOriginFrameRequest(request)) {
+  //    is postMessage'd to the Cinatra origin alone. The gate matches the frame's
+  //    `Origin` against the operator's canonical-origin allowlist and hands back
+  //    the member it matched — the token route runs the SAME gate, so the two
+  //    routes cannot disagree about which origin this instance is (cinatra#3330).
+  const frameOrigin = resolveFrameRequestOrigin(request);
+  if (!frameOrigin.ok) {
     emitWidgetAuthAudit("init_failure", { ip, ua, reason: "not_same_origin" });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -183,7 +187,11 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: created.reason }, { status });
   }
 
-  const issuerOrigin = new URL(request.url).origin;
+  // The CANONICAL origin the gate matched, not `new URL(request.url).origin`:
+  // the frame rejects an authorize URL whose origin is not its own, and on a boot
+  // whose public address differs from its bind address that is exactly what a
+  // request-derived origin would produce (cinatra#3330).
+  const issuerOrigin = frameOrigin.canonicalOrigin;
   const authorizeUrl = `${issuerOrigin}/widget-auth?txn=${encodeURIComponent(created.txnId)}`;
 
   emitWidgetAuthAudit("init_success", {

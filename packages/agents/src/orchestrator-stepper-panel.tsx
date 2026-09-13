@@ -2096,6 +2096,63 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     read: slotReader,
   });
 
+  // -------------------------------------------------------------------------
+  // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
+  // (cinatra#3423).
+  //
+  // The tab that presses Continue and loses the race is answered: the decision
+  // road refuses it with the typed no-longer-pending outcome and the submit
+  // paths above draw the blocked state from it. The tab that was ASLEEP while
+  // the gate was decided somewhere else is answered by nobody. It wakes holding
+  // a gate that is gone, its own gate read comes back empty, and the surface had
+  // nothing to draw for "parked, with no gate": the reader is left in front of a
+  // region that says nothing and never resolves.
+  //
+  // So the surface re-reads on RESUME — the two events that mean the reader came
+  // back, a window focus and a visibility change — and when the answer is still
+  // "no gate" it draws the state the surface already draws for a gate that is no
+  // longer open, ratified copy and Refresh and all.
+  //
+  // A tab that never slept fires neither event, so the ordinary flicker of the
+  // gate context (the poll tick that briefly nulls it while the stream re-derives
+  // state) is never mistaken for a decided gate; and the moment a gate is
+  // drawable again the reading is released.
+  //
+  // AND ONLY FOR A TAB THAT ACTUALLY HELD THE GATE. A null interrupt context does
+  // not mean "there is no gate": the server synthesizes a context for every
+  // paused run, so a surface holding null was told NOTHING YET — the state of
+  // every healthy first paint, and of the tick between one gate being answered
+  // and the next one arriving. Those keep the waiting spinner they have always
+  // had: a gate that has not ARRIVED is not a gate that "was already settled or
+  // the run moved on", and drawing the settled state over one would be the stale
+  // reading the drawing's section IV exists to prevent. So the resume reading is
+  // armed only once this surface has actually drawn a gate for this run.
+  const heldAGateRef = useRef(false);
+  useEffect(() => {
+    if (effectiveInterruptContext !== null) heldAGateRef.current = true;
+  }, [effectiveInterruptContext]);
+  const parkedWithNoGate =
+    status === "pending_approval" &&
+    effectiveInterruptContext === null &&
+    heldAGateRef.current;
+  const [gateGoneOnResume, setGateGoneOnResume] = useState(false);
+  useEffect(() => {
+    if (!parkedWithNoGate) {
+      setGateGoneOnResume(false);
+      return;
+    }
+    const onResume = () => {
+      if (document.visibilityState === "hidden") return;
+      setGateGoneOnResume(true);
+    };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [parkedWithNoGate]);
+
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
@@ -2177,6 +2234,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         }}
         embedMode={embedMode}
       />
+    );
+  } else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {
+    // cinatra#3423 — the reader came back to a gate this surface was holding and
+    // that is no longer here. Drawn INSTEAD of the waiting spinner below, whose
+    // "Processing response…" says "working" about a gate nobody is going to
+    // answer and which therefore never resolves. `awaitingNextStep` is excluded
+    // because that is this tab's OWN answer being processed, which the spinner is
+    // right about.
+    stageCard = (
+      <Card>
+        <CardContent className="p-6">
+          <ReviewGateBlocked reason="no-longer-pending" />
+        </CardContent>
+      </Card>
     );
   } else if (
     awaitingNextStep ||
