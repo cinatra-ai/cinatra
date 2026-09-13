@@ -28,9 +28,15 @@
 //     - the verification-boundary predicate (the LAST boundary record for the
 //       head is `candidate` or `promoted`).
 //
-//   Its deadline (DEADLINE_MINUTES) is shorter than the queue's 120-minute
-//   `check_response_timeout_minutes`, so this job loses the race and reports a
-//   readable failure instead of the queue silently timing the entry out.
+//   Its wait is bounded by the LONGEST JOB BUDGET of the workflows it
+//   evaluates — each expected entry carries the `timeout-minutes` of the job
+//   that reports it — plus WAIT_MARGIN_MINUTES, capped at MAX_WAIT_MINUTES so
+//   the job still reports before the queue's 120-minute
+//   `check_response_timeout_minutes`. Reaching that bound is NOT a verdict on
+//   the candidate: a required run still `queued` or `in_progress` when the
+//   wait runs out is reported PENDING (cinatra#3391) — a distinct, named
+//   outcome with its own exit code, so a re-run picks up where it left off
+//   instead of a loaded runner turning a green candidate red.
 //
 // FAIL CLOSED everywhere: an unparseable inventory, an unknown event, a
 // missing payload field or an unreadable record is a FAILURE, never a skip.
@@ -45,14 +51,32 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 /**
- * The job's own wall-clock budget, in minutes. MUST stay below the queue's
- * `check_response_timeout_minutes` (120, engineering#658 item 5) so this job
- * reports first. Asserted by the unit tests.
+ * The FALLBACK wall-clock budget, in minutes, used when no expected context
+ * applies to the candidate and there is therefore no job budget to follow.
+ * MUST stay below the queue's `check_response_timeout_minutes` (120,
+ * engineering#658 item 5) so this job reports first. Asserted by the unit tests.
  */
 export const DEADLINE_MINUTES = 90;
 
 /** The queue's own timeout this deadline must stay under (item 5). */
 export const QUEUE_TIMEOUT_MINUTES = 120;
+
+/** The margin added on top of the longest job budget the wait follows. */
+export const WAIT_MARGIN_MINUTES = 10;
+
+/**
+ * The upper bound the wait may reach: the evaluator's own job budget in
+ * .github/workflows/merge-readiness-reusable.yml (115) less the job's setup
+ * phase, and short of the queue's check_response_timeout_minutes, so the job
+ * always reports before either ceiling.
+ */
+export const MAX_WAIT_MINUTES = 105;
+
+/** GitHub's own default job budget, used for a job that declares none. */
+export const DEFAULT_JOB_TIMEOUT_MINUTES = 360;
+
+/** The exit code a PENDING outcome carries — non-zero, and not a FAIL's 1. */
+export const EXIT_PENDING = 2;
 
 export const INVENTORY_PATH = ".github/merge-readiness.json";
 
@@ -93,6 +117,13 @@ export function validateInventory(inv) {
       }
       if (e.skippable !== undefined && typeof e.skippable !== "boolean") {
         bad(`expected context '${e.context}' has a non-boolean 'skippable' flag`);
+      }
+      if (
+        e.timeoutMinutes !== undefined &&
+        e.timeoutMinutes !== null &&
+        !(Number.isInteger(e.timeoutMinutes) && e.timeoutMinutes > 0)
+      ) {
+        bad(`expected context '${e.context}' has a malformed 'timeoutMinutes' job budget (a positive integer, or null when the job declares none)`);
       }
     }
     if (seen.has(inv.selfContext)) bad(`inventory 'expected' contains the job's own context '${inv.selfContext}' — the job would wait on itself`);
@@ -283,8 +314,47 @@ export function pathsApply(globs, changedPaths) {
  * The source string a check run is attributed to. Two check runs sharing an
  * expected context name but not this string are a DUPLICATE SOURCE: which one
  * the branch protection would match is ambiguous, so the job fails closed.
+ *
+ * `workflow` is the WORKFLOW the run came from once `resolveCheckWorkflows`
+ * has resolved it (see below); the check-suite id stands in for a run no
+ * workflow owns.
  */
 export const sourceOf = (c) => `${c.app ?? "?"}:${c.workflow ?? "?"}`;
+
+/**
+ * Index one head's workflow-run listing (`GET /repos/{repo}/actions/runs?head_sha=`)
+ * by check-suite id: `check_suite_id` -> the run's repo-relative workflow `path`.
+ * Several runs of one workflow at one head (a re-run, a draft-to-ready flip, a
+ * synchronize) carry DIFFERENT check-suite ids and the SAME path, so the index
+ * is what collapses them to one source.
+ */
+export function workflowPathsBySuite(runs) {
+  const bySuite = new Map();
+  for (const r of runs ?? []) {
+    const id = typeof r?.check_suite_id === "number" && Number.isFinite(r.check_suite_id) ? r.check_suite_id : null;
+    const wfPath = typeof r?.path === "string" && r.path !== "" ? r.path : null;
+    if (id === null || wfPath === null) continue;
+    if (!bySuite.has(id)) bySuite.set(id, wfPath);
+  }
+  return bySuite;
+}
+
+/**
+ * Resolve every check run's check-suite id to the workflow that produced it.
+ * A check-run payload carries no workflow identity, only its check suite, so a
+ * suite that maps to a workflow run becomes the source `<app>:<workflow path>`
+ * (cinatra#3391: the draft stub and the ready-for-review run of ONE workflow
+ * are two suites and were read as two sources); a suite no workflow run owns
+ * (an app outside Actions) keeps the check-suite-id source it already had.
+ */
+export function resolveCheckWorkflows(checks, suiteWorkflows) {
+  const bySuite = suiteWorkflows instanceof Map ? suiteWorkflows : new Map();
+  return (checks ?? []).map((c) => {
+    const wfPath = c?.checkSuiteId != null ? bySuite.get(c.checkSuiteId) : undefined;
+    if (typeof wfPath !== "string" || wfPath === "") return { ...c, workflowResolved: false };
+    return { ...c, workflow: wfPath, workflowResolved: true };
+  });
+}
 
 /**
  * Which of several check runs of ONE name from ONE source branch protection
@@ -326,11 +396,15 @@ const CONCLUSION_FAIL_LABEL = {
  * @param {Array|null} args.changedPaths  paths changed by the candidate (null = unknown)
  * @param {string} args.eventName
  * @param {object} [args.queue]     merge_group arm: { approvedHead, pullRequestHead, recordText }
- * @returns {{ok: boolean, verdict: "PASS"|"FAIL", failures: string[], reports: string[], waitedOn: string[]}}
+ * @param {number} [args.waitedMinutes] the wait this run actually spent, named
+ *                 in the pending text (defaults to the inventory's fallback).
+ * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[]}}
  */
-export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue }) {
+export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes }) {
   const failures = [];
+  const pending = [];
   const reports = [];
+  const waited = Number.isFinite(waitedMinutes) && waitedMinutes > 0 ? waitedMinutes : inventory.deadlineMinutes;
 
   const applicable = inventory.expected.filter(
     (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
@@ -367,8 +441,19 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
       failures.push(`untrusted-source: '${e.context}' was reported by app '${run.app}', but the inventory trusts '${e.app}'`);
       continue;
     }
+    // The inventory records the workflow path of every expected context, so a
+    // RESOLVED path that is not that one is a foreign workflow claiming the
+    // context (a tightening; an unresolved run is judged exactly as before).
+    if (run.workflowResolved === true && typeof e.workflow === "string" && run.workflow !== e.workflow) {
+      failures.push(
+        `untrusted-source: '${e.context}' was reported by workflow '${run.workflow}', but the inventory expects '${e.workflow}'`,
+      );
+      continue;
+    }
     if (run.status !== "completed") {
-      failures.push(`timed out: '${e.context}' is still '${run.status}' at the ${inventory.deadlineMinutes}-minute deadline`);
+      // A deadline is never a readiness verdict (cinatra#3391): the candidate
+      // is not red, its check has simply not reported yet.
+      pending.push(`pending: '${e.context}' is still '${run.status}' after ${waited} minutes — not a failure`);
       continue;
     }
     if (run.conclusion === "skipped" && e.skippable === true) {
@@ -403,13 +488,44 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
     if (!boundary.ok) failures.push(`verification-boundary: ${boundary.reason}`);
   }
 
+  // A real red outranks an unfinished run: a FAIL stays a FAIL.
+  const verdict = failures.length > 0 ? "FAIL" : pending.length > 0 ? "PENDING" : "PASS";
   return {
-    ok: failures.length === 0,
-    verdict: failures.length === 0 ? "PASS" : "FAIL",
+    ok: verdict === "PASS",
+    verdict,
     failures,
+    pending,
     reports,
     waitedOn: applicable.map((e) => e.context),
   };
+}
+
+/**
+ * The wait this run is allowed: the LONGEST job budget among the expected
+ * contexts that apply to this candidate (each entry's `timeoutMinutes`, the
+ * `timeout-minutes` of the job that reports it; GitHub's own default budget
+ * when the job declares none) plus WAIT_MARGIN_MINUTES, capped at
+ * MAX_WAIT_MINUTES. With no applicable context there is no budget to follow
+ * and the inventory's fallback deadline is used.
+ */
+export function waitBudgetMinutes({ inventory, changedPaths }) {
+  const applicable = inventory.expected.filter(
+    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
+  );
+  if (applicable.length === 0) return Math.min(inventory.deadlineMinutes, MAX_WAIT_MINUTES);
+  const longest = Math.max(
+    ...applicable.map((e) =>
+      Number.isInteger(e.timeoutMinutes) && e.timeoutMinutes > 0 ? e.timeoutMinutes : DEFAULT_JOB_TIMEOUT_MINUTES,
+    ),
+  );
+  return Math.min(longest + WAIT_MARGIN_MINUTES, MAX_WAIT_MINUTES);
+}
+
+/** PASS 0, PENDING its own code, FAIL 1 — a pending run is not a red run. */
+export function exitCodeFor(result) {
+  if (result.verdict === "PASS") return 0;
+  if (result.verdict === "PENDING") return EXIT_PENDING;
+  return 1;
 }
 
 /**
@@ -438,6 +554,7 @@ export function renderSummary({ candidateSha, lookupSha, eventName, result }) {
   }
   lines.push(`  waited on ${result.waitedOn.length} expected context(s)`);
   for (const r of result.reports) lines.push(`  report: ${r}`);
+  for (const p of result.pending ?? []) lines.push(`  ${p}`);
   for (const f of result.failures) lines.push(`  FAIL: ${f}`);
   return lines.join("\n");
 }
@@ -472,12 +589,25 @@ async function listChecks(token, repo, sha) {
         conclusion: c.conclusion,
         completedAt: c.completed_at ?? null,
         app: c.app?.slug ?? null,
+        checkSuiteId: typeof c.check_suite?.id === "number" ? c.check_suite.id : null,
         workflow: c.check_suite?.id != null ? `check_suite:${c.check_suite.id}` : (c.html_url ?? "?"),
       });
     }
     if ((body.check_runs ?? []).length < 100) break;
   }
   return out;
+}
+
+/** The workflow runs of one head, indexed by check-suite id (see workflowPathsBySuite). */
+async function listWorkflowPaths(token, repo, sha) {
+  const runs = [];
+  for (let page = 1; page <= 10; page++) {
+    const body = await api(token, `/repos/${repo}/actions/runs?head_sha=${sha}&per_page=100&page=${page}`);
+    const got = body.workflow_runs ?? [];
+    for (const r of got) runs.push(r);
+    if (got.length < 100) break;
+  }
+  return workflowPathsBySuite(runs);
 }
 
 async function listChangedPaths(token, repo, prNumber) {
@@ -530,7 +660,9 @@ async function main() {
 
   const changedPaths = prNumber ? await listChangedPaths(token, repo, prNumber) : null;
 
-  const deadline = Date.now() + inventory.deadlineMinutes * 60_000;
+  const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths });
+  const startedAt = Date.now();
+  const deadline = startedAt + budgetMinutes * 60_000;
   const intervalMs = Number(process.env.MERGE_READINESS_POLL_MS ?? 30_000);
   let checks = [];
   for (;;) {
@@ -539,6 +671,10 @@ async function main() {
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+
+  // A check run names its check suite, never its workflow: resolve the suites
+  // of this head to workflows before the sources are judged.
+  checks = resolveCheckWorkflows(checks, await listWorkflowPaths(token, repo, lookupSha));
 
   let queue;
   if (eventName === "merge_group") {
@@ -554,16 +690,21 @@ async function main() {
     };
   }
 
-  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue });
+  const waitedMinutes = Math.max(1, Math.round((Date.now() - startedAt) / 60_000));
+  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes });
   const summary = renderSummary({ candidateSha: recordedSha, lookupSha, eventName, result });
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n\`\`\`\n${summary}\n\`\`\`\n`);
   }
-  if (!result.ok) {
-    for (const f of result.failures) console.error(`::error::merge-readiness: ${f}`);
-    process.exit(1);
+  for (const p of result.pending) console.warn(`::warning::merge-readiness: ${p}`);
+  for (const f of result.failures) console.error(`::error::merge-readiness: ${f}`);
+  if (result.verdict === "PENDING") {
+    console.error(
+      `::error::merge-readiness: pending after ${waitedMinutes} of ${budgetMinutes} allowed minutes — not a failure of this candidate; re-run this job to continue the wait.`,
+    );
   }
+  process.exit(exitCodeFor(result));
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
