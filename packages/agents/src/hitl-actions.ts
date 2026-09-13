@@ -48,9 +48,30 @@ export async function approveReviewTask(
   }
 }
 
+/**
+ * THE REJECT TWIN ANSWERS THE SAME WAY (cinatra#3423).
+ *
+ * Declining a gate is the other half of deciding it, and it loses the same race:
+ * the gate was approved, rejected or overtaken somewhere else between the moment
+ * this screen drew it and the moment the button was pressed. The approve half
+ * above has returned that refusal as DATA since cinatra#3219; this half threw it
+ * away — the underlying action swallowed the lost compare-and-swap and returned
+ * `void`, so no caller could tell a landed decline from a refused one, and the
+ * review surface had nothing to draw its blocked state from.
+ *
+ * Same classification, same discriminated result, same reason from the surface's
+ * closed set. Every other failure still throws.
+ */
 export async function rejectReviewTask(
   taskId: string,
   reason?: string,
-): Promise<void> {
-  return _rejectReviewTask(taskId, reason);
+): Promise<GateSubmitOutcome> {
+  try {
+    await _rejectReviewTask(taskId, reason);
+    return { ok: true };
+  } catch (err) {
+    const blocked = classifyGateRejection(err);
+    if (blocked) return { ok: false, blocked };
+    throw err;
+  }
 }
