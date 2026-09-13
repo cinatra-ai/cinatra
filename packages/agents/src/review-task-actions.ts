@@ -1,5 +1,5 @@
 import "server-only";
-import { GateNotPendingError } from "./run-status";
+import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { randomUUID } from "node:crypto";
 
@@ -23,6 +23,10 @@ import {
   readAgentRunByTaskId,
   readAgentTemplateById,
   readRunCoOwners,
+  // cinatra#3423: the canonical guarded conditional status writer — the ONE
+  // statement the WayFlow gate is claimed with, mirroring the org-scoped CAS the
+  // setup- branch already runs through `resumeRunFromSetupApproval`.
+  transitionRunStatus,
   writeHitlPrompt,
 } from "./store";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
@@ -632,6 +636,52 @@ export async function approveReviewTaskInternal(
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
 
+    // -------------------------------------------------------------------
+    // THE GATE IS DECIDED ONCE (cinatra#3423).
+    // -------------------------------------------------------------------
+    //
+    // Two people holding the same pending gate answered it at the same moment.
+    // Both passed the `run.status` read above — it is a READ, and between it and
+    // the dispatch below the gate is still open to everyone else — so both
+    // resumed the SAME paused WayFlow conversation, and the run died with
+    // "WayFlow task failed". A read-then-check is not a decision.
+    //
+    // So the answer CLAIMS the gate before it records anything and before it
+    // dispatches: ONE conditional statement on the gate row's status
+    // (`pending_approval -> running`, the resume edge the state machine already
+    // carries, org-scoped and guarded like every other run write). Exactly one
+    // caller can win it.
+    //
+    // The loser reads the winner's disposition back off the row and is refused
+    // with the TYPED no-longer-pending outcome — the one the boundary in
+    // `hitl-actions.ts` turns into `{ ok: false, blocked: "no-longer-pending" }`
+    // and the run surface draws its blocked state from. Nothing of the loser's
+    // answer is recorded, nothing is dispatched, and the run goes on with the
+    // first answer rather than failing.
+    try {
+      await transitionRunStatus(
+        run.id,
+        "pending_approval",
+        "running",
+        undefined,
+        resumeAuthority,
+      );
+    } catch (e) {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") {
+        // The winner's disposition, read back off the row the CAS lost to.
+        const decided = await readAgentRunById(run.id).catch(() => null);
+        const currentStatus = decided?.status ?? "unknown";
+        throw new GateNotPendingError({
+          runId: run.id,
+          currentStatus,
+          message:
+            `WayFlow approval rejected: gate ${taskId} on run ${run.id} was already ` +
+            `decided (status: ${currentStatus})`,
+        });
+      }
+      throw e;
+    }
+
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
     //      Renderers wanting structured round-trip MUST set this to JSON.stringify
@@ -698,108 +748,151 @@ export async function approveReviewTaskInternal(
       if (Object.keys(rest).length > 0) submittedValues = rest;
     }
 
-    // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
-    // ""). Bare-approval flagged excluded=true.
-    await writeHitlPrompt({
-      runId: run.id,
-      agentId: template.packageName,
-      stepKey: taskId,
-      message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
-      submittedValues,                                // null when no structured payload at all
-      schemaSnapshot: schemaSnapshot ?? null,
-      excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
-    }).catch((e) => {
-      console.warn(`[approveReviewTaskInternal] writeHitlPrompt failed run=${run.id}`, e);
-    });
+    // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
+    //
+    // Everything between here and the dispatch is this answer's own bookkeeping,
+    // and parts of it fail closed by design (the answered-gate provenance mint
+    // says so in as many words). Before the claim existed such a failure left the
+    // gate open and the person could press Continue again; the claim must not
+    // turn that into a run stranded in `running` with nothing dispatched. So a
+    // failure BEFORE the dispatch puts the gate back the way it was found.
+    //
+    // A failure OF the dispatch is not released: WayFlow may already have taken
+    // the message, and re-opening the gate there is the double resume this whole
+    // section exists to prevent.
+    let dispatchStarted = false;
+    try {
+      // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
+      // ""). Bare-approval flagged excluded=true.
+      await writeHitlPrompt({
+        runId: run.id,
+        agentId: template.packageName,
+        stepKey: taskId,
+        message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
+        submittedValues,                                // null when no structured payload at all
+        schemaSnapshot: schemaSnapshot ?? null,
+        excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
+      }).catch((e) => {
+        // The first argument of a console call is a CONSTANT: a caller-derived
+        // value in it is read as a format string, not as text (cinatra#3423).
+        console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
+      });
 
-    // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
-    // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
-    // node's run-scoped PERSIST primitive can bind its write to THIS operator
-    // answer (run + exact gate task id + canonical payload), single-use. Only the
-    // STRUCTURED userResponse path is minted — the persist-driving gates
-    // (#1959/#1960/#1961) always carry one; a bare click-to-approve / note has no
-    // structured payload to persist and needs no binding. Keyed by the bare gate
-    // `taskId` (== the passthrough seam's `verifiedSubmissionId`, which resolves
-    // the same latest-task id set at this gate's interrupt-emit). AWAITED and
-    // fail-closed: a Redis failure THROWS and the resume is NOT dispatched (an
-    // unrecorded answer means the persist denies rather than persisting an unbound
-    // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
-    // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
-    // apply node as `resumePayloadJson`, which the persist seam re-hashes.
-    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
-      const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
-        await import("@cinatra-ai/a2a");
-      // RE-ASSERT the latest-task join key to THIS answered gate before minting.
-      // The passthrough seam derives the persist's `verifiedSubmissionId` from the
-      // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
-      // pending PAST that TTL before the operator answers would leave the key
-      // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
-      // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
-      // immediate post-resume consume resolves the same gate identity we mint
-      // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
-      // a time and `taskId` IS that gate, so this only re-writes the value already
-      // present (or restores it after a TTL expiry); concurrent answers to the
-      // same gate write the identical `taskId`, and the next gate's interrupt-emit
-      // legitimately advances the key afterwards.
-      await rememberLatestWayflowGateTask(run.id, taskId);
-      await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
+      // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
+      // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
+      // node's run-scoped PERSIST primitive can bind its write to THIS operator
+      // answer (run + exact gate task id + canonical payload), single-use. Only the
+      // STRUCTURED userResponse path is minted — the persist-driving gates
+      // (#1959/#1960/#1961) always carry one; a bare click-to-approve / note has no
+      // structured payload to persist and needs no binding. Keyed by the bare gate
+      // `taskId` (== the passthrough seam's `verifiedSubmissionId`, which resolves
+      // the same latest-task id set at this gate's interrupt-emit). AWAITED and
+      // fail-closed: a Redis failure THROWS and the resume is NOT dispatched (an
+      // unrecorded answer means the persist denies rather than persisting an unbound
+      // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
+      // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
+      // apply node as `resumePayloadJson`, which the persist seam re-hashes.
+      if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+        const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
+          await import("@cinatra-ai/a2a");
+        // RE-ASSERT the latest-task join key to THIS answered gate before minting.
+        // The passthrough seam derives the persist's `verifiedSubmissionId` from the
+        // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
+        // pending PAST that TTL before the operator answers would leave the key
+        // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
+        // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
+        // immediate post-resume consume resolves the same gate identity we mint
+        // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
+        // a time and `taskId` IS that gate, so this only re-writes the value already
+        // present (or restores it after a TTL expiry); concurrent answers to the
+        // same gate write the identical `taskId`, and the next gate's interrupt-emit
+        // legitimately advances the key afterwards.
+        await rememberLatestWayflowGateTask(run.id, taskId);
+        await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
+      }
+
+      // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
+      // module load time (review-task-actions is imported by actions.ts which is
+      // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends
+      // on @cinatra/agent-builder for handler registration).
+      const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
+      const { randomUUID } = await import("node:crypto");
+
+      const client = await createExternalA2AClient({
+        agentUrl: wayflowUrl,
+        // 24h ceiling + custom undici dispatcher aligned with wayflow's
+        // batch-LLM timeout patches (docker/wayflow/agent_loader.py).
+        // `createWayflowFetch()` builds a fetch with long
+        // headersTimeout/bodyTimeout — globalThis.fetch's default 300s
+        // headersTimeout would kill the connection before the 24h
+        // AbortSignal fires.
+        timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
+        fetchImpl: createWayflowFetch(),
+      });
+
+      // Capture the Task returned by sendTask and pass it through the canonical
+      // state-machine handler. Discarding the Task and unconditionally
+      // transitioning pending_approval -> running would drop multi-gate flows
+      // after the first HITL gate.
+      // #1193 resume carrier: mint this leg's per-run credential and persist its
+      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
+      // message METADATA. This is the HITL-gate resume, so it is the leg in which
+      // /api/context-finalize executes — without the carrier the interactive
+      // context selection has no run identity at all. Metadata (not text) because
+      // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
+      const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // Past this line the answer is on the wire.
+      dispatchStarted = true;
+      const task = await client.sendTask({
+        message: {
+          role: "user",
+          kind: "message",
+          messageId: randomUUID(),
+          contextId: run.a2aContextId,
+          parts: [{ kind: "text", text: resumeText }],
+          metadata: resumeMetadata,
+        },
+        configuration: { acceptedOutputModes: ["text"] },
+      });
+
+      // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
+      // index.ts ← @cinatra-ai/a2a).
+      //
+      // `fromStatus` is "running" because the claim above already moved the row off
+      // `pending_approval` (cinatra#3423): the handler's park and terminal
+      // transitions are taken from where the run ACTUALLY is, and every edge it
+      // needs out of `running` — to `pending_approval` for the next gate, to
+      // `completed`, `failed` or `waiting_trigger` — the state machine already
+      // carries. resumeAuthority was minted above (before sendTask).
+      const { handleWayflowTaskState } = await import("./execution");
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
+
+      console.log("[approveReviewTaskInternal] wayflow-path resumed", {
+        runId: run.id,
+        taskId,
+        actorId,
+        resultState: task.status?.state,
+      });
+      return;
+    } catch (e) {
+      if (!dispatchStarted) {
+        await transitionRunStatus(
+          run.id,
+          "running",
+          "pending_approval",
+          undefined,
+          resumeAuthority,
+        ).catch((releaseError) => {
+          console.warn(
+            "[approveReviewTaskInternal] could not release the gate claim",
+            { runId: run.id, taskId },
+            releaseError,
+          );
+        });
+      }
+      throw e;
     }
-
-    // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
-    // module load time (review-task-actions is imported by actions.ts which is
-    // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends
-    // on @cinatra/agent-builder for handler registration).
-    const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
-    const { randomUUID } = await import("node:crypto");
-
-    const client = await createExternalA2AClient({
-      agentUrl: wayflowUrl,
-      // 24h ceiling + custom undici dispatcher aligned with wayflow's
-      // batch-LLM timeout patches (docker/wayflow/agent_loader.py).
-      // `createWayflowFetch()` builds a fetch with long
-      // headersTimeout/bodyTimeout — globalThis.fetch's default 300s
-      // headersTimeout would kill the connection before the 24h
-      // AbortSignal fires.
-      timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
-      fetchImpl: createWayflowFetch(),
-    });
-
-    // Capture the Task returned by sendTask and pass it through the canonical
-    // state-machine handler. Discarding the Task and unconditionally
-    // transitioning pending_approval -> running would drop multi-gate flows
-    // after the first HITL gate.
-    // #1193 resume carrier: mint this leg's per-run credential and persist its
-    // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
-    // message METADATA. This is the HITL-gate resume, so it is the leg in which
-    // /api/context-finalize executes — without the carrier the interactive
-    // context selection has no run identity at all. Metadata (not text) because
-    // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
-    const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
-    const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-    const task = await client.sendTask({
-      message: {
-        role: "user",
-        kind: "message",
-        messageId: randomUUID(),
-        contextId: run.a2aContextId,
-        parts: [{ kind: "text", text: resumeText }],
-        metadata: resumeMetadata,
-      },
-      configuration: { acceptedOutputModes: ["text"] },
-    });
-
-    // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
-    // index.ts ← @cinatra-ai/a2a). fromStatus is the literal "pending_approval"
-    // because the guard at line 180 already enforced run.status === "pending_approval"
-    // before we reached here. resumeAuthority was minted above (before sendTask).
-    const { handleWayflowTaskState } = await import("./execution");
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
-
-    console.log(
-      `[approveReviewTaskInternal] wayflow-path resumed run=${run.id} task=${taskId} ` +
-      `actor=${actorId} resultState=${task.status?.state}`,
-    );
-    return;
   }
 
   // ---------------------------------------------------------------------------

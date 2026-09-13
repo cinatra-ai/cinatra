@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import { redeemUserAuthCode } from "@/lib/widget-user-auth";
-import { deriveFrameBinding, isSameOriginFrameRequest } from "@/lib/widget-frame-auth";
+import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { mintWidgetStreamToken } from "@/lib/widget-token-broker";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
@@ -65,7 +65,10 @@ export async function POST(request: Request): Promise<Response> {
   const ip = clientIp(request);
   const ua = request.headers.get("user-agent");
 
-  if (!isSameOriginFrameRequest(request)) {
+  // THE SAME GATE the init route runs, against the same operator-controlled
+  // canonical-origin allowlist, returning the same matched member (cinatra#3330).
+  const frameOrigin = resolveFrameRequestOrigin(request);
+  if (!frameOrigin.ok) {
     emitWidgetAuthAudit("redeem_failure", { ip, ua, reason: "not_same_origin" });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -128,7 +131,10 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json(INVALID_GRANT, { status: 400 });
   }
 
-  const issuerBaseUrl = new URL(request.url).origin;
+  // The CANONICAL origin the gate matched — the same value the init route put in
+  // the authorize URL, so the user token and the transport token are issued
+  // against the origin the frame actually runs on (cinatra#3330).
+  const issuerBaseUrl = frameOrigin.canonicalOrigin;
   const redeemed = redeemUserAuthCode({ code, codeVerifier, site, issuerBaseUrl });
   if (!redeemed.ok) {
     emitWidgetAuthAudit("redeem_failure", {
