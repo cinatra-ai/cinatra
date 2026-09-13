@@ -212,6 +212,7 @@ vi.mock("../inline-agent-run-card", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
 import { mountSurface } from "./conversation-column-harness";
 import type { UiMessage } from "../types";
 
@@ -250,9 +251,15 @@ const HELD: HoldState = {
   holdRef: "hold-ref-2821",
 };
 
-/** The card's own decision controls, as the SHIPPED §V row draws them. */
-const CHIP_CONFIRM = `[data-skill-action="confirm"][data-skill-id="${HELD_SKILL_ID}"]`;
-const CHIP_SKIP = `[data-skill-action="skip"][data-skill-id="${HELD_SKILL_ID}"]`;
+/**
+ * The card's own decision controls, as the SHIPPED §V row draws them on this
+ * host (cinatra#3062): a checkbox in front of each label, and ONE Continue
+ * beneath the list. A confirm is Continue with the box as the scorer left it; a
+ * skip is Continue with every box cleared — §V: "clearing every box and pressing
+ * Continue is an ordinary answer to the same question".
+ */
+const SKILL_BOX = `[data-skills-step-checkbox][data-skill-id="${HELD_SKILL_ID}"]`;
+const SKILLS_CONTINUE = "[data-skills-step-continue]";
 
 /**
  * A PERSISTED transcript of a held dispatch turn: the deterministic answer and
@@ -462,6 +469,12 @@ function mountRealCardInto(container: HTMLElement) {
 }
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, and several of them are NEGATIVE controls, so
+  // each declares a reader who has been shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
   routerPush.mockReset();
   routerReplace.mockReset();
@@ -742,12 +755,11 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     });
     mountRealCardInto(triggerContainer);
 
-    // THE CONTROL THE SHIPPED CARD DRAWS, not a name it once used. §V's
-    // redraw moved the decision onto the chip: this is the Confirm on the one
-    // candidate, and pressing it decides every chip the row offers, which is
-    // what releases the hold.
+    // THE CONTROL THE SHIPPED CARD DRAWS, not a name it once used. §V answers
+    // the whole row at once: the one candidate is recommended, so its box is
+    // ticked, and Continue records that selection and releases the hold.
     const confirm = await waitFor(() => {
-      const el = root.querySelector<HTMLButtonElement>(CHIP_CONFIRM);
+      const el = root.querySelector<HTMLButtonElement>(SKILLS_CONTINUE);
       if (!el) throw new Error("the actionable card never appeared");
       return el;
     });
@@ -792,9 +804,17 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     mountRealCardInto(triggerContainer);
 
     const skip = await waitFor(() => {
-      const el = root.querySelector<HTMLButtonElement>(CHIP_SKIP);
+      const el = root.querySelector<HTMLButtonElement>(SKILLS_CONTINUE);
       if (!el) throw new Error("the actionable card never appeared");
       return el;
+    });
+    // CLEARING THE ONLY BOX IS THE SKIP. There is no skip control to press: §V
+    // withdrew it, and an all-clear row released with Continue is what "the run
+    // goes ahead with no recommended skill applied" means.
+    const box = root.querySelector<HTMLButtonElement>(SKILL_BOX);
+    if (!box) throw new Error("the offered skill drew no box");
+    await act(async () => {
+      fireEvent.click(box);
     });
     const urlBefore = window.location.href;
 
