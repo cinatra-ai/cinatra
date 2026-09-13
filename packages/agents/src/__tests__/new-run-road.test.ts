@@ -177,9 +177,16 @@ describe("the completion contract survives the launcher (cinatra#3358)", () => {
       fileURLToPath(new URL("../instance-screens.tsx", import.meta.url)),
       "utf8",
     );
-    expect(SRC).toContain(
-      "if (home) redirect(withCompletionReturn(home, readCompletionReturn(searchParams ?? null)));",
-    );
+    // THE SPELLING MOVED, THE RULE DID NOT (convergence round, cinatra#3448).
+    // The redirect now carries a THIRD key — what the finished run produced for
+    // the parked step — so it is no longer one line. This pin therefore reads
+    // the composition rather than the line: the redirect is built from the
+    // contract's writer and never from the bare home.
+    const redirectAt = SRC.indexOf("if (home)");
+    expect(redirectAt, "the canonical-home redirect is gone").toBeGreaterThan(-1);
+    const redirectText = SRC.slice(redirectAt, redirectAt + 600);
+    expect(redirectText).toContain("withCompletionReturn(home");
+    expect(redirectText).toContain("readCompletionReturn(searchParams ?? null)");
     expect(SRC).not.toContain("\n    if (home) redirect(home);");
   });
 });

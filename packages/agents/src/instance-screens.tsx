@@ -1,7 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import {
   buildAgentInstancePath,
+  readCompletionProducedParam,
   readCompletionReturn,
+  withCompletionProduced,
   withCompletionReturn,
 } from "@/lib/agent-url";
 import {
@@ -87,6 +89,8 @@ import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
+import { Button } from "@/components/ui/button";
+import { producedIdFromRunCompletion } from "./hitl-gate-submit";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 // cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
@@ -1494,7 +1498,19 @@ export async function SetupScreen({
     // and a redirect that dropped the two query keys would land the reader on a
     // page that can no longer offer the way back — the road would answer and
     // still lose its return. Null contract, unchanged path.
-    if (home) redirect(withCompletionReturn(home, readCompletionReturn(searchParams ?? null)));
+    // ALL THREE KEYS, not two. The contract's two keys carry the way back; the
+    // third carries what the finished run PRODUCED for the parked step. An
+    // anchored parked run is addressed at its bare route and sent here to its
+    // vantage's address, so a redirect that carried only the first two would
+    // land the reader on the parked step with the offer silently gone — the
+    // road would answer and still make the reader find the thing again.
+    if (home)
+      redirect(
+        withCompletionProduced(
+          withCompletionReturn(home, readCompletionReturn(searchParams ?? null)),
+          readCompletionProducedParam(searchParams ?? null),
+        ),
+      );
   }
 
   // WHERE THIS RUN RETURNS TO (cinatra#3358). A run started from another run's
@@ -1520,12 +1536,23 @@ export async function SetupScreen({
         : null;
       const parkedPackageName = parkedTemplate?.packageName ?? null;
       if (parkedRun && parkedPackageName) {
-        completionReturnHref = buildAgentInstancePath(
-          parkedPackageName.startsWith("@")
-            ? parkedPackageName.slice(1)
-            : parkedPackageName,
-          encodeURIComponent(parkedRun.id),
-          { scopeBase: null },
+        // AND IT CARRIES WHAT THIS RUN MADE (cinatra#3358). The return used to
+        // be an address and nothing else, so a reader who had just produced the
+        // missing thing arrived at the parked step and was asked to find it
+        // again. The id of what this run produced FOR that step rides the
+        // address, read off this run's own completion through the step-family
+        // rule both ends of the submit already share (./hitl-gate-submit). A
+        // run that completed without producing anything carries nothing extra,
+        // and the parked step opens on its honest empty reading.
+        completionReturnHref = withCompletionProduced(
+          buildAgentInstancePath(
+            parkedPackageName.startsWith("@")
+              ? parkedPackageName.slice(1)
+              : parkedPackageName,
+            encodeURIComponent(parkedRun.id),
+            { scopeBase: null },
+          ),
+          producedIdFromRunCompletion(completionReturn.onComplete, run.stepResults),
         );
       }
     } catch (err) {
@@ -2219,16 +2246,36 @@ export async function SetupScreen({
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
         actions={
-          run && run.status === "pending_input" && !recommendationHeld ? (
-            <RunAgentButton
-              runId={run.id}
-              templateSlug={agentId}
-              agentName={template.name}
-              allStepsComplete={true}
-              runStatus={run.status}
-              redirectTo={`/agents/${agentId}/${encodeURIComponent(run.id)}`}
-            />
-          ) : undefined
+          <>
+            {/* THE WAY BACK IS AN ACTION OF THE RUN, NOT A BANNER ACROSS IT
+                (cinatra#3358). It was drawn as a full-width panel above the run
+                detail — chrome the drawing does not give this surface, and a
+                second thing competing with the step rail for the reader's first
+                look. The run surface is a two-column frame whose actions belong
+                to the page header (Agent run & review §I), so the return sits
+                there with the run's other action, and the frame beneath is the
+                rail and the detail, exactly as drawn. */}
+            {completionReturnHref ? (
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  href={completionReturnHref}
+                  data-testid="completion-return-link"
+                >
+                  Back to the waiting run
+                </Link>
+              </Button>
+            ) : null}
+            {run && run.status === "pending_input" && !recommendationHeld ? (
+              <RunAgentButton
+                runId={run.id}
+                templateSlug={agentId}
+                agentName={template.name}
+                allStepsComplete={true}
+                runStatus={run.status}
+                redirectTo={`/agents/${agentId}/${encodeURIComponent(run.id)}`}
+              />
+            ) : null}
+          </>
         }
       >
         {run ? (
@@ -2242,23 +2289,6 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
-          {completionReturnHref ? (
-            <div
-              className="soft-panel rounded-card mb-4 flex flex-wrap items-center gap-2 px-4 py-3"
-              data-testid="completion-return-banner"
-            >
-              <p className="text-sm text-muted-foreground">
-                Another run is waiting on this one.
-              </p>
-              <Link
-                href={completionReturnHref}
-                className="text-sm font-medium text-primary underline"
-                data-testid="completion-return-link"
-              >
-                Back to the waiting run
-              </Link>
-            </div>
-          ) : null}
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),

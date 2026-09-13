@@ -278,11 +278,8 @@ import {
   cleanupForAgent,
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
-import { approveReviewTaskInternal } from "../review-task-actions";
-import {
-  resumeAnswerIncompleteReason,
-  type ResumeGateContract,
-} from "../hitl-gate-submit";
+import { approveReviewTaskInternal, resumeGateContractForRun } from "../review-task-actions";
+import { resumeAnswerIncompleteReason, resumeTextForAnswer, jsonObjectOrNull } from "../hitl-gate-submit";
 import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
 import { describeStartedRun } from "../run-status";
@@ -2162,68 +2159,23 @@ async function handleAgentBuilderRunResume(
         timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
         fetchImpl: createWayflowFetch(),
       });
-      // Precedence for the WayFlow resume message — kept identical to
-      // approveReviewTaskInternal (review-task-actions.ts) so UI and MCP paths
-      // stay in lockstep:
-      //   1. userResponse (string, non-empty after trim)  — structured-form path,
-      //      passed through UNCHANGED to preserve JSON formatting.
-      //   2. approvalNote (string, non-empty after trim) — legacy bare-approval, trimmed.
-      //   3. fallback "[Approved by operator]"           — bare click-to-approve.
-      // userResponse wins over approvalNote when both are present; renderers needing
-      // the approval note delivered to WayFlow must embed it inside the JSON payload.
       const trimmedNote = typeof approvalNote === "string" ? approvalNote.trim() : "";
-      let resumeText: string;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        resumeText = userResponse;
-      } else if (trimmedNote.length > 0) {
-        resumeText = trimmedNote;
-      } else {
-        resumeText = "[Approved by operator]";
-      }
-      // A RUN DOES NOT WALK PAST A REVIEW STEP ON AN ANSWER THAT NAMES NOTHING,
-      // AT THIS SEAM TOO (cinatra#3358 acceptance 2). This is the OTHER resume
-      // dispatch — independent of `approveReviewTaskInternal`, which carries the
-      // same rule — so a resume arriving here on an answer that names no list
-      // would walk the run past its account-scope step exactly as the measured
-      // defect did. Refused BEFORE the prompt write and the `sendTask`, so the
-      // gate stays pending and the run stays parked where the reader left it.
-      // Fail-soft derivation, and generic: the pending gate's own renderer family
-      // and the answer's own contract, never a package name.
-      let resumeGate: ResumeGateContract | null = null;
-      try {
-        const { deriveRunHitlContext } = await import("../hitl-context");
-        const pendingGate = await deriveRunHitlContext(run);
-        if (pendingGate) {
-          resumeGate = {
-            xRenderer: pendingGate.xRenderer,
-            currentValues: pendingGate.currentValues,
-          };
-        }
-      } catch {
-        resumeGate = null;
-      }
+      const resumeText = resumeTextForAnswer(userResponse, trimmedNote);
+      // A run does not walk past a review step on an answer that names nothing,
+      // at this OTHER resume dispatch too (cinatra#3358 acceptance 2) — refused
+      // BEFORE the prompt write and the `sendTask`, so the gate stays pending
+      // and the run stays parked where the reader left it.
       const incompleteAnswer = resumeAnswerIncompleteReason(
         { userResponse, approvalNote },
-        resumeGate,
+        await resumeGateContractForRun(run),
       );
       if (incompleteAnswer) {
-        return {
-          error: `Run ${run.id} stays at this review step: ${incompleteAnswer}`,
-        };
+        return { error: `Run ${run.id} stays at this review step: ${incompleteAnswer}` };
       }
 
-      // Payload extraction. MCP handler input has no structured `valuesObj`, so on parse failure submittedValues stays null.
-      let submittedValues: Record<string, unknown> | null = null;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        try {
-          const parsed = JSON.parse(userResponse);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            submittedValues = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // No structured fallback in MCP path — leave null.
-        }
-      }
+      // MCP input carries no structured `valuesObj`, so a payload that is not a
+      // JSON object leaves submittedValues null.
+      const submittedValues = jsonObjectOrNull(userResponse);
 
       await writeHitlPrompt({
         runId: run.id,

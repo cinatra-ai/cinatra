@@ -177,7 +177,11 @@ describe("the instance surface decides the canonical home", () => {
     // The spelling of the redirect moved with cinatra#3358 — it now carries the
     // completion contract across the canonical hop instead of dropping it — while
     // the rule THIS pin holds (after the door, before any content) is unchanged.
-    const redirectAt = screens.indexOf("if (home) redirect(withCompletionReturn(");
+    // The spelling moved again in the convergence round (cinatra#3448): the
+    // redirect carries a third key and is no longer one line. The rule THIS pin
+    // holds (after the door, before any content) is unchanged, so it anchors on
+    // the condition rather than on the call it wraps.
+    const redirectAt = screens.indexOf("if (home)");
     expect(door).toBeGreaterThan(0);
     expect(redirectAt).toBeGreaterThan(door);
   });

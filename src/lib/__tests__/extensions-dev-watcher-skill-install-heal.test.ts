@@ -62,13 +62,13 @@ describe("healSkillInstallRecordForLoadedPackage (cinatra#3358)", () => {
     healMissingInstallRecordMock.mockResolvedValueOnce({ outcome: "repaired", rowId: "row-9" });
     await healSkillInstallRecordForLoadedPackage(
       { kind: "skill", packageName: "@cinatra-ai/some-curation-skill", packageVersion: "0.1.0" },
-      "/tmp/extensions/cinatra-ai/some-curation-skill",
+      "/tmp/pkg-skill",
     );
     expect(healMissingInstallRecordMock).toHaveBeenCalledTimes(1);
     expect(healMissingInstallRecordMock).toHaveBeenCalledWith({
       packageName: "@cinatra-ai/some-curation-skill",
       kind: "skill",
-      packageDir: "/tmp/extensions/cinatra-ai/some-curation-skill",
+      packageDir: "/tmp/pkg-skill",
       version: "0.1.0",
     });
     expect(info).toHaveBeenCalled();

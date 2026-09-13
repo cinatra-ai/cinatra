@@ -173,6 +173,74 @@ export function withCompletionReturn(path: string, ret: CompletionReturn | null)
   return `${base}?${params.toString()}`;
 }
 
+/** The query key carrying what the finished run PRODUCED for the step that
+ *  offered the road. */
+export const COMPLETION_PRODUCED_PARAM = "onCompleteProduced";
+
+/**
+ * WHAT THE FINISHED RUN HANDS BACK (cinatra#3358).
+ *
+ * The contract above carries a reader FORWARD to the run that makes the missing
+ * thing. This key carries the thing itself BACK: when the run the road started
+ * completes having produced what the parked step was waiting for, its id rides
+ * the return address, so the parked step opens with that thing already on offer
+ * instead of asking the reader to find it again in a list it has just grown.
+ *
+ * GENERIC BY CONSTRUCTION, exactly like the two keys above: one query key
+ * carrying one opaque id. Nothing here learns what kind of thing it is, which
+ * package produced it, or which step is waiting for it — the step's own renderer
+ * family decides what to do with what it is handed.
+ */
+export function withCompletionProduced(
+  path: string,
+  producedId: string | null | undefined,
+): string {
+  const id = typeof producedId === "string" ? producedId.trim() : "";
+  if (!id) return path;
+  // THE FRAGMENT AND THE REST OF THE QUERY SURVIVE. A naive `split("?", 2)`
+  // reads a `#fragment?...` as a query and drops everything after a SECOND
+  // question mark, so an address carrying a fragment came back with the key
+  // inside the fragment (unreadable from the search string) and an address
+  // whose own value contained a question mark came back truncated. The
+  // fragment is separated first and re-attached last, and the query is cut at
+  // its FIRST question mark only.
+  const hashAt = path.indexOf("#");
+  const fragment = hashAt === -1 ? "" : path.slice(hashAt);
+  const addressed = hashAt === -1 ? path : path.slice(0, hashAt);
+  const queryAt = addressed.indexOf("?");
+  const base = queryAt === -1 ? addressed : addressed.slice(0, queryAt);
+  const existing = queryAt === -1 ? "" : addressed.slice(queryAt + 1);
+  const params = new URLSearchParams(existing);
+  params.set(COMPLETION_PRODUCED_PARAM, id);
+  return `${base}?${params.toString()}${fragment}`;
+}
+
+/**
+ * Read back what a finished run produced, off a search string the parked run's
+ * own address carries (`?a=b&...`, with or without the leading `?`). Empty when
+ * the address carries none, which is every address that was not reached from a
+ * completed run.
+ */
+export function readCompletionProduced(search: string | null | undefined): string {
+  if (!search) return "";
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const value = params.get(COMPLETION_PRODUCED_PARAM);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The same reading, off a SCREEN'S OWN search params rather than off a search
+ * string — the shape a server screen is handed, and the shape
+ * `readCompletionReturn` above already reads. A canonical-home redirect must
+ * carry this key across with the other two, so the redirect needs this reader.
+ */
+export function readCompletionProducedParam(
+  searchParams: Record<string, string | string[] | undefined> | null | undefined,
+): string {
+  if (!searchParams) return "";
+  return firstQueryString(searchParams[COMPLETION_PRODUCED_PARAM]);
+}
+
 /**
  * The href a new-run link carries so the run it starts can come back: the
  * offering step's name plus the parked run's id. A step with no run identity in

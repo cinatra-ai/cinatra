@@ -34,7 +34,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
-import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
+import { AlertCircle, ArrowRight, Check, Loader2, Pause, X } from "lucide-react";
 
 import {
   Stepper,
@@ -48,10 +48,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
@@ -918,6 +915,14 @@ function HitlApprovalCard({
   // coexist fine; their inner button still works and the outer button is a
   // redundant alternate.
   const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
+  // Nothing picked and nothing pickable — the same rule the press itself reads
+  // (./hitl-gate-submit), asked BEFORE the control is drawn.
+  const gateContinueUnavailable =
+    gateAnswerIncompleteReason(
+      interruptContext.xRenderer,
+      bufferedHitlValue,
+      interruptContext.values,
+    ) !== null;
 
   const cardBody = (
     <>
@@ -1075,8 +1080,26 @@ function HitlApprovalCard({
         ) : null}
 
         {showContinueButton && (
+          // THE CONTROL FLOOR — the primary Continue, right-aligned over a
+          // hairline (Agent run & review §I.1: "the primary Continue,
+          // right-aligned over a hairline floor: the same control floor every
+          // gate page draws").
+          //
+          // AND IT IS UNAVAILABLE WHILE THE STEP HAS NOTHING TO ANSWER WITH
+          // (cinatra#3358). The drawing is explicit that this control waits for
+          // the reader — "the Continue stays unavailable until a row is picked"
+          // — and the step kept it live and answered a press with a refusal
+          // instead. The reason is the shared rule, so a live control and a
+          // refused press can never disagree: what would be refused is simply
+          // not offered. Every other gate family reads `null` here and keeps
+          // the control it has always had.
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              disabled={isApproving || gateContinueUnavailable}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -1387,24 +1410,16 @@ function StepperColumn({
                         {s.label}
                       </StepperTitle>
                     </StepperTrigger>
-                    {s.description && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span
-                            role="button"
-                            tabIndex={-1}
-                            data-rail-step-info=""
-                            className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-default"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Info className="h-3.5 w-3.5" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" className="max-w-[220px] whitespace-normal text-left">
-                          {s.description}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
+                    {/* NO INFO ICON ON A RAIL ENTRY (cinatra#3358). The rail
+                        is drawn as the run's ordered steps and nothing else
+                        (Agent run & review §I: "a step rail down the left NAMES
+                        the run's ordered steps"); a second affordance on every
+                        row that carried a description put a control on the rail
+                        the drawing does not give it, and on the account-scope
+                        step it sat beside the very row the reader is meant to
+                        press. The step's description belongs to the step's own
+                        page in the run detail, which is where the reader opens
+                        it. */}
                   </div>
                   {!isLast && <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />}
                 </StepperItem>

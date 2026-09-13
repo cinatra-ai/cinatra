@@ -249,9 +249,17 @@ describe("both ends are wired where they keep the run parked", () => {
    * Anchored on STATEMENTS, never on prose: every one of these names is also
    * written about in the comments around it, and a pin that matched a sentence
    * would read the explanation instead of the code.
+   *
+   * The anchor is the START OF A LINE plus its indentation, at whatever depth
+   * the statement sits — a nesting depth is not what any of these pins is
+   * about, and reading one made the pin break on a reindent that changed
+   * nothing it asserts. Prose stays excluded because a comment line carries
+   * `*` or `//` between the indentation and the text.
    */
   const statementAt = (src: string, statement: string): number => {
-    const at = src.indexOf(`\n    ${statement}`);
+    const at = src.search(
+      new RegExp(`\\n[ \\t]*${statement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
     expect(at, `no statement \`${statement}\``).toBeGreaterThan(-1);
     return at;
   };

@@ -26,6 +26,7 @@ import {
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
   writeHitlPrompt,
+  type AgentRunRecord,
 } from "./store";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -36,6 +37,7 @@ import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 // continued, or does its answer still name nothing? Pure leaf module, no React.
 import {
   resumeAnswerIncompleteReason,
+  resumeTextForAnswer,
   type ResumeGateContract,
 } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
@@ -183,6 +185,34 @@ async function assertRunScopeOrDeny(
       throw new Error("Run access denied.");
     }
     throw err;
+  }
+}
+
+/**
+ * THE PENDING GATE A RESUME IS ABOUT TO ANSWER, as the refusal rule reads it —
+ * derived from the run the seam already holds, for BOTH resume seams (this
+ * file's UI path and the MCP run-resume path in mcp/handlers.ts), so the rule
+ * is handed the same contract wherever a resume arrives.
+ *
+ * `expectReviewTaskId`, when given, keeps the reading to THIS gate: a run whose
+ * pending gate is a different review task is not the gate being answered.
+ *
+ * Fail-soft by design: a derivation that cannot answer (no interrupt row yet, a
+ * store read that throws) must never break a legitimate resume — the rule's
+ * reading of the answer's own contract still stands on its own.
+ */
+export async function resumeGateContractForRun(
+  run: AgentRunRecord,
+  expectReviewTaskId?: string | null,
+): Promise<ResumeGateContract | null> {
+  try {
+    const { deriveRunHitlContext } = await import("./hitl-context");
+    const pendingGate = await deriveRunHitlContext(run);
+    if (!pendingGate) return null;
+    if (expectReviewTaskId != null && pendingGate.reviewTaskId !== expectReviewTaskId) return null;
+    return { xRenderer: pendingGate.xRenderer, currentValues: pendingGate.currentValues };
+  } catch {
+    return null;
   }
 }
 
@@ -719,19 +749,7 @@ export async function approveReviewTaskInternal(
     // holds and is only used when it IS this gate; fail-soft, because a
     // derivation that cannot answer must never break a legitimate resume — the
     // answer-contract reading inside the rule still stands on its own.
-    let resumeGate: ResumeGateContract | null = null;
-    try {
-      const { deriveRunHitlContext } = await import("./hitl-context");
-      const pendingGate = await deriveRunHitlContext(run);
-      if (pendingGate && pendingGate.reviewTaskId === reviewTaskId) {
-        resumeGate = {
-          xRenderer: pendingGate.xRenderer,
-          currentValues: pendingGate.currentValues,
-        };
-      }
-    } catch {
-      resumeGate = null;
-    }
+    const resumeGate = await resumeGateContractForRun(run, reviewTaskId);
     const incompleteAnswer = resumeAnswerIncompleteReason(values, resumeGate);
     if (incompleteAnswer) {
       throw new Error(
@@ -739,14 +757,7 @@ export async function approveReviewTaskInternal(
       );
     }
 
-    let resumeText: string;
-    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
-      resumeText = userResponseRaw;
-    } else if (trimmedNote.length > 0) {
-      resumeText = trimmedNote;
-    } else {
-      resumeText = "[Approved by operator]";
-    }
+    const resumeText = resumeTextForAnswer(userResponseRaw, trimmedNote);
 
     // Extract structured submission payload (parsed userResponse JSON, else
     // values minus userResponse, else null).

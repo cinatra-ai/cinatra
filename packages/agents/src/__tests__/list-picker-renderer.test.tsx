@@ -3,13 +3,13 @@
  * Unit tests for ListPickerRenderer.
  *
  * Locks the renderer contract:
- *   - Mount renders heading-equivalent label + "Create new list" CTA + search input.
+ *   - Mount renders the step's question heading (no "Create new list" CTA, and
+ *     no search field — the drawing gives the gate neither).
  *   - Lists from fetchAvailableLists() render as clickable cards with name +
  *     member count + memberType badge.
- *   - Search input filters by name (case-insensitive substring).
  *   - Clicking a card calls onChange with the canonical
  *     { scope: "list", listId, listName, memberCount } shape.
- *   - Empty results render the EmptyState copy.
+ *   - The zero-content reading is the drawn Empty pattern.
  *   - mixed-memberType lists render with the SAME affordances as
  *     contact-typed lists and produce the same onChange payload shape
  *     so the picker accepts both `contact` and `mixed` rows.
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("ListPickerRenderer", () => {
-  it("renders label + search input on mount (no create-new-list link; retired)", async () => {
+  it("renders the step's question on mount (no create-new-list link; retired)", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
 
@@ -84,7 +84,12 @@ describe("ListPickerRenderer", () => {
     expect(
       screen.queryByRole("link", { name: /create new list/i }),
     ).toBeNull();
-    expect(screen.getByPlaceholderText(/search lists/i)).toBeTruthy();
+    // AND THE SEARCH FIELD IS GONE (cinatra#3358). The gate that lists is drawn
+    // in Agent run & review §I.1 as rows, a make-one road and a Continue — it is
+    // given no search field, so the step no longer draws one. Pinned in
+    // list-picker-gate-drawn.test.tsx.
+    expect(screen.queryByPlaceholderText(/search lists/i)).toBeNull();
+    expect(screen.getByTestId("list-picker-question")).toBeTruthy();
   });
 
   // cinatra#3358 — THE OFFERED ROAD CARRIES ITS RETURN. The CTA used to name
@@ -157,33 +162,9 @@ describe("ListPickerRenderer", () => {
     expect(screen.getByText("Hot Leads")).toBeTruthy();
   });
 
-  it("filters cards by search substring (case-insensitive)", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([
-      {
-        id: "l1",
-        name: "Beta Prospects",
-        memberCount: 42,
-        lastUpdated: null,
-        memberType: "contact",
-      },
-      {
-        id: "l2",
-        name: "Hot Leads",
-        memberCount: 18,
-        lastUpdated: null,
-        memberType: "contact",
-      },
-    ]);
-    render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() => screen.getByText("Beta Prospects"));
-    fireEvent.change(screen.getByPlaceholderText(/search lists/i), {
-      target: { value: "HOT" },
-    });
-
-    expect(screen.queryByText("Beta Prospects")).toBeNull();
-    expect(screen.getByText("Hot Leads")).toBeTruthy();
-  });
+  // THE SEARCH FILTER IS RETIRED (cinatra#3358). It was a client-side filter on
+  // a field the ratified drawing does not give this gate; the rows are the whole
+  // page (Agent run & review §I.1). Nothing replaces it here.
 
   it("invokes onChange with the canonical value shape when a card is clicked", async () => {
     const onChange = vi.fn();

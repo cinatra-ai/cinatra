@@ -537,6 +537,33 @@ function namesNoList(answer: unknown): boolean {
 }
 
 /**
+ * The same read against a finished run's own completion record — the per-step
+ * result list a completed run persists. The declared output values of a run's
+ * end are surfaced on each entry's `output_data`, so both shapes are asked:
+ * the entry itself, and the values it declared. The FIRST id found wins, and a
+ * completion carrying none answers the empty string.
+ */
+export function producedIdFromRunCompletion(
+  onCompleteName: string,
+  stepResults: unknown,
+): string {
+  if (!Array.isArray(stepResults)) {
+    return producedIdForOfferingStep(onCompleteName, stepResults);
+  }
+  for (const entry of stepResults) {
+    const direct = producedIdForOfferingStep(onCompleteName, entry);
+    if (direct) return direct;
+    const declared =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>).output_data
+        : null;
+    const lifted = producedIdForOfferingStep(onCompleteName, declared);
+    if (lifted) return lifted;
+  }
+  return "";
+}
+
+/**
  * THE CLIENT END. Why a step about to be continued may not be: read off the
  * renderer family and the answer the step actually holds. `null` = nothing in
  * the way, which is every gate of every other family.
@@ -548,6 +575,47 @@ function namesNoList(answer: unknown): boolean {
  * click). A step that already holds a list is not a step that names none, so it
  * is not refused.
  */
+// ---------------------------------------------------------------------------
+// WHAT A FINISHED RUN PRODUCED FOR THE STEP THAT SENT IT (cinatra#3358).
+//
+// The step that offered the road is named in the completion contract the link
+// carried (`@/lib/agent-url`). When the run that road started COMPLETES, the
+// screen that draws it holds two things: that name, and the finished run's own
+// completion. This rule is the one place that reads the second through the
+// first, so the parked step can be handed what was made for it.
+//
+// GENERIC BY THE SAME CONSTRUCTION as the refusal above: it keys on the STEP
+// FAMILY the contract names — never on a package — and one entry per family says
+// which id in a completion belongs to it. A family with no entry reads nothing,
+// which is every step that offers no road.
+//
+// THE PACKAGE'S OWN HALF IS NOT THIS. A completion that names no list has
+// nothing here to read, and this rule invents none: a run that finished without
+// raising its own gate hands back an empty string and the parked step opens on
+// the honest "no list yet" reading.
+// ---------------------------------------------------------------------------
+
+/** Which id in a completion belongs to which offering step family. */
+const PRODUCED_ID_KEY_BY_STEP_FAMILY: Record<string, string> = {
+  "list-picker": "listId",
+};
+
+/**
+ * The id a finished run produced FOR the step that offered the road, read off
+ * that run's completion. Empty when the family is unknown to this rule, when the
+ * completion is not an object, or when it names nothing.
+ */
+export function producedIdForOfferingStep(
+  onCompleteName: string,
+  completion: unknown,
+): string {
+  const key = PRODUCED_ID_KEY_BY_STEP_FAMILY[onCompleteName?.trim() ?? ""];
+  if (!key) return "";
+  if (!completion || typeof completion !== "object" || Array.isArray(completion)) return "";
+  const value = (completion as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export function gateAnswerIncompleteReason(
   xRenderer: string,
   buffered: Record<string, unknown> | null | undefined,
@@ -590,6 +658,45 @@ function effectiveStructuredAnswer(values: unknown): Record<string, unknown> | n
 }
 
 /** The pending gate a resume is answering, as the server derived it itself. */
+/**
+ * THE RESUME MESSAGE'S PRECEDENCE, in ONE place for both seams.
+ *
+ * The UI seam (`approveReviewTaskInternal`, review-task-actions.ts) and the MCP
+ * run-resume seam (mcp/handlers.ts) drive the SAME gate, so the text the gate
+ * receives must be derived the same way — it was kept in lockstep by a comment
+ * on each side, which is a lockstep only for as long as both are read together:
+ *   1. userResponse (string, non-empty after trim) — the structured-form path,
+ *      passed through UNCHANGED so its JSON formatting survives.
+ *   2. the trimmed approval note — the legacy bare-approval path.
+ *   3. "[Approved by operator]" — a bare click-to-approve.
+ * userResponse wins over the note when both are present; a renderer that needs
+ * the note delivered onward embeds it inside the JSON payload.
+ */
+export function resumeTextForAnswer(userResponse: unknown, trimmedNote: string): string {
+  if (typeof userResponse === "string" && userResponse.trim().length > 0) return userResponse;
+  if (trimmedNote.length > 0) return trimmedNote;
+  return "[Approved by operator]";
+}
+
+/**
+ * A resume payload read as the structured submission it claims to be: the JSON
+ * OBJECT a renderer sent, or null for anything else (a bare note, an array, a
+ * scalar, unparseable text). Callers that carry a second source of values apply
+ * their own fallback on top of this reading.
+ */
+export function jsonObjectOrNull(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "string" || raw.trim().length === 0) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export type ResumeGateContract = {
   /** The renderer family the pending gate declared, or null when unknown. */
   xRenderer?: string | null;
