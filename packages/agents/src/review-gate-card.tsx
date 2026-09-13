@@ -1572,12 +1572,19 @@ function ReviewTargetIsland({
   src,
   credentialed,
   onRetryResolve,
+  framed = true,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
+  /** Does this body draw its OWN border, or is it a section of a block that
+   *  already draws one? A target's body sits INSIDE its artifact's one block
+   *  (cinatra#3356), under that block's own header and inside that block's own
+   *  border; a second border there is a second card. The gate's whole pinned set,
+   *  framed when the answer named no headers, still draws its own. */
+  framed?: boolean;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -1650,8 +1657,11 @@ function ReviewTargetIsland({
       data-conformance-id="review-target-island"
       data-island-load-state={state}
       // No clipping and no held height: what the frame draws is in the page's own
-      // flow, and the page is what scrolls (cinatra#3456).
-      className="relative rounded-control border border-line bg-surface-strong"
+      // flow, and the page is what scrolls (cinatra#3456). The border is the
+      // BLOCK's when this body is a section of one (cinatra#3356).
+      className={
+        framed ? "relative rounded-control border border-line bg-surface-strong" : "relative bg-surface-strong"
+      }
       style={measured === null ? { minHeight: ISLAND_PLACEHOLDER_MIN_HEIGHT } : undefined}
     >
       <iframe
@@ -1832,14 +1842,35 @@ function revisionMarker(revisionId: string): { short: string; full: string } {
 }
 
 /**
- * The header for ONE target. Drawn above the island, inside the gate's frame.
+ * The header for ONE target. Drawn directly over that target's own body, inside
+ * the one block the two of them make (cinatra#3356).
+ *
+ * §IV of the ratified drawing draws the pair as ONE bordered block — "Every
+ * target opens with a header that names what is under review and fixes it in
+ * place" and "Beneath the header sits the representation slot" — so inside a
+ * block the header takes no border of its own: it is the block's top section,
+ * divided from the body by a hairline and by nothing else. Drawn ALONE (the
+ * header family's own composition, `ReviewTargetHeaders`) it still carries the
+ * frame it has always carried.
  */
-export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }): ReactElement {
+export function ReviewTargetHeader({
+  header,
+  framed = true,
+}: {
+  header: LifecycleTargetHeader;
+  /** Does this header draw its OWN card, or is it the top section of a block
+   *  that already draws one? */
+  framed?: boolean;
+}): ReactElement {
   const revision = revisionMarker(header.revisionId);
   return (
     <div
       data-conformance-id="review-target-header"
-      className="rounded-control border border-line bg-surface-strong px-4 py-3"
+      className={
+        framed
+          ? "rounded-control border border-line bg-surface-strong px-4 py-3"
+          : "border-b border-line px-4 py-3"
+      }
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-sans text-sm font-bold text-foreground">{header.title}</span>
@@ -1941,13 +1972,20 @@ export function ReviewTargetBlocks({
           key={`${header.revisionId}:${header.objectType}`}
           data-conformance-id="review-target-block"
           data-target-index={index}
-          className="flex w-full flex-col gap-2"
+          // ONE BLOCK, ONE BORDER (cinatra#3356). The header and the body are
+          // sections of the SAME bordered block — the drawing's §IV shape, and
+          // the one this card's own loading skeleton has always drawn: a
+          // hairline between them, and no page ground at all. Two bordered
+          // cards with a gap between them read as two things to a reviewer, and
+          // the head of an artifact is not a thing of its own.
+          className="flex w-full flex-col overflow-hidden rounded-control border border-line bg-surface-strong"
         >
-          <ReviewTargetHeader header={header} />
+          <ReviewTargetHeader header={header} framed={false} />
           <ReviewTargetIsland
             src={reviewTargetIslandSrcForTarget(islandSrc, header.revisionId)}
             credentialed={islandCredentialed}
             onRetryResolve={onRetryResolve}
+            framed={false}
           />
         </div>
       ))}

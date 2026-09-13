@@ -489,6 +489,40 @@ describe("#3356 — one block per artifact: its head directly over its own body"
     }
   });
 
+  it("ONE bordered block per artifact — the head and its own body inside the SAME border", async () => {
+    // THE MEASURED DEPARTURE (round 2). The head sat in its own bordered card and
+    // the body in a second one, with 8 CSS px of page ground between them: two
+    // cards where the drawing draws one thing. §IV puts the two
+    // halves in ONE block — "Every target opens with a header …" and "Beneath the
+    // header sits the representation slot" — and the card's own loading skeleton
+    // has always drawn exactly that: one bordered box, a hairline, the body.
+    const { container } = await renderBlocks();
+    expect(blocks(container)).toHaveLength(2);
+    for (const block of [...blocks(container)]) {
+      const head = block.querySelector('[data-conformance-id="review-target-header"]')!;
+      const body = block.querySelector('[data-conformance-id="review-target-island"]')!;
+      // The BLOCK is the one bordered container.
+      expect(block.className, "the block draws the border").toMatch(/\bborder border-line\b/);
+      expect(block.className).toContain("rounded-control");
+      // Neither half draws a card of its own inside it.
+      expect(head.className, "the head draws no card of its own").not.toMatch(
+        /\bborder border-line\b/,
+      );
+      expect(head.className).not.toContain("rounded-control");
+      expect(body.className, "the body draws no card of its own").not.toMatch(
+        /\bborder border-line\b/,
+      );
+      expect(body.className).not.toContain("rounded-control");
+      // What divides them is a hairline, not a gap.
+      expect(head.className, "a hairline under the head").toContain("border-b");
+      expect(
+        block.className,
+        "no page ground between the head and its own body",
+      ).not.toMatch(/\bgap-/);
+      expect(head.nextElementSibling, "the body follows its head with nothing between").toBe(body);
+    }
+  });
+
   it("never a column of heads followed by a region of bodies", async () => {
     const { container } = await renderBlocks();
     const [firstHead, secondHead] = [...headers(container)];

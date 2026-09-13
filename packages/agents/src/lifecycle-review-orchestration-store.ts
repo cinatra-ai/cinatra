@@ -63,10 +63,13 @@ import {
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
+import { parseArtifactBindingDeclaration } from "./artifact-binding";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-store";
 
+import { setRepresentingTargetIds } from "@/lib/artifacts/artifact-review-target";
+import { isExternalEffectClass } from "@/lib/lifecycle/lifecycle-policy";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
   proveReviewBinding,
@@ -210,11 +213,17 @@ function parseCompiledManifest(raw: string | null): CompiledManifestLifecycle | 
 type ProducerDeclarations = {
   manifest: CompiledManifestLifecycle | undefined;
   hasArtifactBindings: boolean | null;
+  /** The object types the production DECLARES it produces, in the extension's
+   *  own words (cinatra#3458) — the fact that tells a member of the produced set
+   *  apart from the payload written ABOUT that set. Empty when the template
+   *  declares none, or when this version may not speak for the run. */
+  producedTypes: readonly string[];
 };
 
 const NO_DECLARATIONS: ProducerDeclarations = {
   manifest: undefined,
   hasArtifactBindings: null,
+  producedTypes: [],
 };
 
 async function resolveProducerDeclarations(
@@ -232,6 +241,7 @@ async function resolveProducerDeclarations(
       .select({
         lifecycleConfig: agentTemplates.lifecycleConfig,
         hasArtifactBindings: agentTemplates.hasArtifactBindings,
+        artifactBindings: agentTemplates.artifactBindings,
         packageVersion: agentTemplates.packageVersion,
       })
       .from(agentTemplates)
@@ -261,6 +271,15 @@ async function resolveProducerDeclarations(
       run.packageVersion.length > 0 &&
       typeof tmpl?.packageVersion === "string" &&
       tmpl.packageVersion !== run.packageVersion;
+    // THE DECLARED PRODUCED TYPES ride the MANIFEST's rule, not the flag's, and
+    // for the manifest's reason (cinatra#3458): they decide which named artifact
+    // a gate leaves OUT, so a template PROVABLY on another version than the run
+    // must not supply them — while an UNPINNED run keeps the declaration, exactly
+    // as it keeps its manifest. The declared review's server half resolves the
+    // same column by the same rule; one reading of one declaration, two callers.
+    const bindings = pinContradicted
+      ? null
+      : parseArtifactBindingDeclaration(tmpl?.artifactBindings ?? null);
     return {
       manifest: pinContradicted
         ? undefined
@@ -269,6 +288,9 @@ async function resolveProducerDeclarations(
         pinHolds && typeof tmpl?.hasArtifactBindings === "boolean"
           ? tmpl.hasArtifactBindings
           : null,
+      producedTypes: (bindings?.producesRefs ?? [])
+        .map((ref) => ref.objectTypeId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
     };
   } catch {
     return NO_DECLARATIONS;
@@ -1069,7 +1091,18 @@ async function orchestrateProducedBatch(
   const orgId = group[0].orgId;
   const runId = group[0].producerRunId!;
 
-  const fired: FiredCreateGate[] = [];
+  let fired: FiredCreateGate[] = [];
+  /** ONE semantic object type per fired member — the fact the set-payload rule
+   *  reads, taken from the SAME context row the policy was answered from. */
+  const firedFacts: { artifactId: string; objectType: string | null }[] = [];
+  /** What this PRODUCTION declares it produces. The group is keyed on one
+   *  `(orgId, producerRunId)`, so every member resolves the same declaration —
+   *  but it resolves it in its OWN read, and a read that failed (or that caught a
+   *  template mid-update) answers with none. The UNION of what the members read
+   *  is therefore taken rather than the last member's answer: a declaration one
+   *  member saw can only ever KEEP a target that another member's empty answer
+   *  would have dropped, never the other way round. */
+  const declaredProducedTypeSet = new Set<string>();
   for (const row of group) {
     // Already linked by a prior (crashed) pass — finish it PARK-SAFE, never re-gate.
     if (row.continuationAddress) {
@@ -1100,7 +1133,73 @@ async function orchestrateProducedBatch(
       continue;
     }
     fired.push({ row, plan });
+    firedFacts.push({ artifactId: row.artifactId, objectType: context.ctx.artifactType });
+    for (const type of memberDeclarations.producedTypes) declaredProducedTypeSet.add(type);
   }
+
+  // cinatra#3458 — A SET-REPRESENTING ARTIFACT IS NEVER PINNED, AND THIS IS THE
+  // PATH A PRODUCTION ACTUALLY TAKES.
+  //
+  // "The JSON is not supposed to be presented in the review, because it
+  // represents a list of artifacts, not the artifact itself." The rule landed on
+  // the DECLARED review's server half first, where a caller names its targets —
+  // but a run that writes several artifacts at once reaches a review through
+  // HERE, and this path pinned whatever it fired: a production whose five members
+  // came with the structured list payload written ABOUT them put all six on one
+  // gate, and the review drew the list beside its own members.
+  //
+  // The rule is the same one, read the same way, at the one moment this path has
+  // both facts in hand: the artifact types it just resolved per member, and the
+  // types the production declared it produces. It runs BEFORE the seal, because
+  // the sealed membership is what the partitions — and so the pinned targets —
+  // are derived from; an exclusion after the seal would pin the payload and then
+  // argue with itself. An excluded member is SETTLED, not left pending: the
+  // answer is final, exactly as it is for a member the policy did not fire on.
+  const setPayloads = setRepresentingTargetIds({
+    targets: fired.map((f) => ({
+      artifactId: f.row.artifactId,
+      representationRevisionId: f.row.representationRevisionId,
+    })),
+    facts: firedFacts,
+    declaredProducedTypes: [...declaredProducedTypeSet],
+  });
+  if (setPayloads.size > 0) {
+    // TWO FAIL-CLOSED GUARDS on the exclusion itself — a target is only ever
+    // dropped where dropping it can take nothing away from anybody:
+    //
+    // (i) AN EXTERNAL EFFECT IS NEVER DROPPED. An excluded member is settled with
+    // no continuation address, and `evaluateEffectHold` reads an orchestrated
+    // external event with no linked gate as the lattice having permitted it —
+    // `ungated`. Dropping such a member would release its publish with no review
+    // at all, ahead of the very decision its siblings are waiting for. A
+    // production's structured list payload carries destination `none` (it is a
+    // reading of the set, not a thing to publish); anything that does carry an
+    // external effect stays pinned, and the reviewer sees one block more.
+    //
+    // (ii) A FROZEN MEMBERSHIP IS HONOURED AS FROZEN. `sealBatchEpoch` reuses an
+    // OPEN epoch's membership whatever the current candidates are, and the
+    // partition gate ids hash that frozen set — so an epoch sealed before this
+    // rule existed would pin the payload anyway while this pass had already
+    // settled it and never linked it. A member already frozen into an open epoch
+    // is therefore left in the batch and gated with its siblings.
+    const openEpoch = await resolveOpenBatchEpoch(orgId, runId);
+    const frozenIds = new Set((openEpoch?.membership ?? []).map((m) => m.artifactId));
+    const members: FiredCreateGate[] = [];
+    for (const f of fired) {
+      const dropped =
+        setPayloads.has(f.row.artifactId) &&
+        !isExternalEffectClass(f.row.destinationClass as DestinationClass) &&
+        !frozenIds.has(f.row.artifactId);
+      if (!dropped) {
+        members.push(f);
+        continue;
+      }
+      await markProducedEventProcessed(f.row.eventId);
+      summary.noGate += 1;
+    }
+    fired = members;
+  }
+
   if (fired.length === 0) {
     // No firing members this pass, but a prior epoch may be fully processed yet
     // still open (a crash between the last mark and the close) — close it so the
