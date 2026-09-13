@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  AGENT_HITL_RULE_ISSUE,
   KNOWN_FIELD_RENDERER_KINDS,
   KNOWN_A2UI_TRANSLATOR_KINDS,
   BINDING_ID_RE,
@@ -206,5 +207,77 @@ describe("mergeRoleDeclarations", () => {
       { packageName: "p2", roles: ["Bad Role!"] },
     ]);
     expect(errors).toHaveLength(2);
+  });
+});
+
+// THE THREE-KIND RULE (cinatra#3470, epic cinatra#2926): "Connectors render the
+// setup page themselves. Artifacts render the artifact view themselves. Agents
+// do NOT render the HITL view themselves." The `component` channel
+// (cinatra#1625, epic #1620 S8/M3) was opened for kind:"artifact" claimants; the
+// validator accepted it from ANY kind, so a kind:"agent" package could start
+// drawing its own pause screen with nothing to stop it. The declarations that
+// exist today are grandfathered by the shrink-only ratchet baseline
+// (scripts/extensions/agent-hitl-renders-nothing.baseline.json), which the
+// CALLER reads and hands in — this validator stays fs-free because the runtime
+// collector runs it too.
+describe("validateFieldRendererDeclarations — the agent clause of THE THREE-KIND RULE", () => {
+  const WITH_COMPONENT = {
+    id: `${PKG}:review`,
+    kind: "cta",
+    priority: 90,
+    component: { entry: "./src/renderers/review.tsx" },
+  };
+
+  it("refuses a component on a kind:agent binding that is NOT baselined", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT], {
+      kind: "agent",
+    });
+    expect(entries).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(AGENT_HITL_RULE_ISSUE);
+    expect(errors[0]).toContain("Agents do NOT render the HITL view themselves");
+    expect(errors[0]).toContain(`${PKG}:review`);
+    expect(errors[0]).toContain("agent-hitl-renders-nothing.baseline.json");
+  });
+
+  it("accepts the SAME declaration once the binding id is baselined", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT], {
+      kind: "agent",
+      baselinedComponentBindingIds: [`${PKG}:review`],
+    });
+    expect(errors).toEqual([]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].component).toEqual({ entry: "./src/renderers/review.tsx" });
+  });
+
+  it("refuses a SECOND, un-baselined binding on an otherwise baselined agent package", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(
+      PKG,
+      [WITH_COMPONENT, { ...WITH_COMPONENT, id: `${PKG}:second` }],
+      { kind: "agent", baselinedComponentBindingIds: [`${PKG}:review`] },
+    );
+    expect(entries).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`${PKG}:second`);
+  });
+
+  it("accepts a component on kind:connector and kind:artifact (the rule is agent-only)", () => {
+    for (const kind of ["connector", "artifact"]) {
+      const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT], { kind });
+      expect(errors, kind).toEqual([]);
+      expect(entries, kind).toHaveLength(1);
+    }
+  });
+
+  it("leaves a kind:agent binding WITHOUT a component alone (the host renders it)", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [VALID], { kind: "agent" });
+    expect(errors).toEqual([]);
+    expect(entries).toHaveLength(1);
+  });
+
+  it("with no options (the runtime collector's two-argument call) behaves exactly as before", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT]);
+    expect(errors).toEqual([]);
+    expect(entries).toHaveLength(1);
   });
 });

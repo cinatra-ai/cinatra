@@ -55,6 +55,12 @@ import {
   mergeFieldRendererBindings,
   mergeRoleDeclarations,
 } from "./agent-binding-kinds.mjs";
+// THE THREE-KIND RULE's agent clause (cinatra#3470): the shrink-only ratchet
+// baseline of the agent packages that already ship a field-renderer component.
+// The shared validator is fs-free, so the baseline is read HERE and handed to
+// it per package — a NEW kind:"agent" `component` declaration is then red under
+// `--check`, not only in the standalone gate.
+import { baselinedComponentBindingIdsFor } from "./agent-hitl-renders-nothing-gate.mjs";
 import { validateArtifactObjectTypeClaims } from "./artifact-objecttypes-claims.mjs";
 // Assistant declaration (`cinatra/config.json` `assistant` block) build-time
 // validator (cinatra#1874, Epic #1873 W1). The generator is plain .mjs and
@@ -2454,7 +2460,14 @@ export async function buildManifest() {
   const roleDeclarations = [];
   for (const r of records) {
     const cin = readCinatraManifest(r.sourceDir);
-    const { entries, errors } = validateFieldRendererDeclarations(r.packageName, cin.fieldRenderers);
+    const { entries, errors } = validateFieldRendererDeclarations(
+      r.packageName,
+      cin.fieldRenderers,
+      {
+        kind: cin.kind,
+        baselinedComponentBindingIds: baselinedComponentBindingIdsFor(r.packageName),
+      },
+    );
     bindingErrors.push(...errors);
     allFieldRendererEntries.push(...entries);
     if (cin.roles !== undefined) {

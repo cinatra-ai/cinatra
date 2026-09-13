@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -163,6 +163,50 @@ describe("the vendored lib source stays free of app-shell geometry", () => {
   it("no planned vendored file is the overlay-collision module", () => {
     for (const file of plannedFiles()) {
       expect(file.source).not.toContain("overlay-collision");
+    }
+  });
+});
+
+// THE THREE-KIND RULE (cinatra#3470, epic cinatra#2926): "Connectors render the
+// setup page themselves. Artifacts render the artifact view themselves. Agents
+// do NOT render the HITL view themselves." An agent therefore has no
+// design-registry primitive to vendor, and the three S8/M3 agent claimants that
+// were listed here (list-curator-agent, blog-linkedin-publish-agent,
+// blog-wordpress-publish-agent) were dropped from the manifest: their copies
+// stay on disk in their own repositories until #3470's migration removes them,
+// recorded as existing pairs in the agent-HITL ratchet baseline. The provenance
+// check is green without them — it simply no longer counts an agent package.
+describe("the vendoring manifest carries no kind:agent package (cinatra#3470)", () => {
+  const DROPPED_AGENT_DIRS = [
+    "extensions/cinatra-ai/list-curator-agent",
+    "extensions/cinatra-ai/blog-linkedin-publish-agent",
+    "extensions/cinatra-ai/blog-wordpress-publish-agent",
+  ];
+
+  it("no VENDOR_MANIFEST entry is a package whose manifest declares kind agent", () => {
+    const agents = VENDOR_MANIFEST.filter((entry) => {
+      const pkgPath = join(REPO_ROOT, entry.extensionDir, "package.json");
+      if (!existsSync(pkgPath)) return false;
+      return JSON.parse(readFileSync(pkgPath, "utf8"))?.cinatra?.kind === "agent";
+    }).map((entry) => entry.extensionDir);
+    expect(agents).toEqual([]);
+  });
+
+  it("plans no file under a dropped agent extension dir", () => {
+    const targets = plannedFiles().map((f) => f.target);
+    for (const dir of DROPPED_AGENT_DIRS) {
+      expect(
+        targets.filter((t) => t.startsWith(`${dir}/`)),
+        `${dir} is still vendored through this channel`,
+      ).toEqual([]);
+    }
+  });
+
+  it("reports no orphan for a dropped agent dir (its copies are out of the channel, not stale)", () => {
+    for (const orphan of findOrphans()) {
+      for (const dir of DROPPED_AGENT_DIRS) {
+        expect(orphan.startsWith(`${dir}/`), `${orphan} scanned as an orphan`).toBe(false);
+      }
     }
   });
 });
