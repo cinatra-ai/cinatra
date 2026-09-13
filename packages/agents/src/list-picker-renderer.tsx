@@ -20,6 +20,119 @@ import type {
 } from "./field-renderer-registry";
 
 // ---------------------------------------------------------------------------
+// THE HAND-BACK HALF OF THE CTA'S `?onComplete` CONTRACT
+// (cinatra#3369, acceptance item 2)
+// ---------------------------------------------------------------------------
+//
+// The CTA at the foot of this file opens a NEW list-curator run in a second tab
+// at `?onComplete=list-picker`. The launcher-side half of that contract -- the
+// param and the two functions that carry it onto the fresh run's address --
+// lives in `on-complete-return.ts`. THIS half is the finish coming back: the
+// key a completed curator run leaves its finish under, and the two functions
+// that write and take it.
+//
+// IT LIVES IN THIS MODULE, and that is measured rather than stylistic.
+// `scripts/route-graph.mjs` counts the reachable first-party module graph of the
+// locked routes; this renderer is already inside the graph of all four tracked
+// application routes through the field-renderer registry, so a separate leaf
+// imported from here is a NEW module on every one of them (measured at exactly
+// +1 on each, over their pinned ceilings), while the same functions stated here
+// are +0. The picker owns the CTA and is the one module that reads the finish
+// back, so the contract is stated where it is read; the curator run's watcher
+// (`list-picker-return-watcher.tsx`) imports the writer from here, and adds no
+// module to any tracked route because none of them reach it.
+
+/** Where a finished curator run leaves its finish for the picker's tab. */
+export const LIST_PICKER_RETURN_KEY = "cinatra.agents.list-picker-return";
+
+/** What it leaves there: which run finished, and when. */
+export type ListPickerReturn = {
+  /** The curator run that finished. */
+  runId: string;
+  /** Epoch milliseconds at which it finished, so a stale hand-back is refused. */
+  at: number;
+};
+
+/** The slice of the browser store these two functions use. */
+export type ListPickerReturnStore = {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+};
+
+/**
+ * The same-origin store, or `null` when the browser refuses the ACCESSOR.
+ *
+ * `window.localStorage` itself throws in a browser with site data blocked, so
+ * reading it inside an argument list would throw before either guarded function
+ * below could refuse. Both sides of the hand-back take the store from here.
+ */
+export function listPickerReturnStore(): ListPickerReturnStore | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The finished curator run's hand-back.
+ *
+ * Every access is guarded: a browser with site data blocked throws on the
+ * accessor itself, and a curator run that cannot hand back must still finish
+ * normally -- the operator then returns to a picker that re-reads nothing,
+ * which is the pre-existing behaviour, not a broken run.
+ */
+export function publishListPickerReturn(
+  store: ListPickerReturnStore | null | undefined,
+  value: ListPickerReturn,
+): void {
+  if (!store) return;
+  try {
+    store.setItem(LIST_PICKER_RETURN_KEY, JSON.stringify(value));
+  } catch {
+    // Site data blocked. Nothing to hand back through.
+  }
+}
+
+/**
+ * Read the hand-back AND take it, in one act.
+ *
+ * It is consumed on read so one finished curator run moves the picker once:
+ * the picker re-reads its options on every return to the tab, and a hand-back
+ * left lying there would re-select a list on each of them.
+ */
+export function consumeListPickerReturn(
+  store: ListPickerReturnStore | null | undefined,
+): ListPickerReturn | null {
+  if (!store) return null;
+  let raw: string | null = null;
+  try {
+    raw = store.getItem(LIST_PICKER_RETURN_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    store.removeItem(LIST_PICKER_RETURN_KEY);
+  } catch {
+    // Readable but not writable: the timestamp check below still refuses it twice.
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.runId !== "string" || record.runId === "") return null;
+  if (typeof record.at !== "number" || !Number.isFinite(record.at)) return null;
+  return { runId: record.runId, at: record.at };
+}
+
+// ---------------------------------------------------------------------------
 // Condition
 // ---------------------------------------------------------------------------
 
@@ -91,6 +204,42 @@ export function ListPickerRenderer({
     onChangeRef.current = onChange;
   });
 
+  // The options this picker is currently offering. Held in a ref beside the
+  // state so a re-read can tell a list that arrived while the operator was away
+  // from one that was already on offer — which is the whole of "the NEW listId".
+  const listsRef = useRef<AvailableListSummary[]>([]);
+
+  // Has the first load answered? Until it has, `listsRef` is not yet the set
+  // this picker was offering, so "the option that was not there before" cannot
+  // be asked — a hand-back arriving in that window is left where it is and read
+  // on the next return instead of selecting the first list that loads.
+  const offeringSettledRef = useRef(false);
+
+  // When this picker was drawn. A hand-back stamped before that belongs to a
+  // curator run the operator finished before this step was on screen; it is
+  // taken (so it stops lying around) and discarded rather than acted on.
+  const drawnAtRef = useRef(Date.now());
+
+  // Did THIS picker open the curator? The hand-back key is one same-origin
+  // slot, so a second outreach run's picker in another tab hears the same
+  // browser event; without this, whichever picker read first would take a
+  // finish it never asked for and re-select ITS campaign's audience. Only the
+  // picker whose own CTA was clicked acts on a finish.
+  const launchedRef = useRef(false);
+
+  // Did the first load answer with a real set of options? A load that FAILED
+  // leaves `listsRef` empty, and an empty baseline makes every list look new —
+  // the re-read would then pre-select the first list in the account as the
+  // campaign's audience. Without a baseline the re-read still offers what it
+  // reads; it selects nothing.
+  const baselineKnownRef = useRef(false);
+
+  // The same "has the first load answered" fact as `offeringSettledRef`, held
+  // as state as well so the return effect re-runs when it becomes true: a
+  // hand-back that arrived while the first load was in flight is read then,
+  // rather than waiting for another browser event that may never come.
+  const [offeringSettled, setOfferingSettled] = useState(false);
+
   // The run whose step this renderer is drawing. `context.runId` is the shared
   // field-renderer contract's run identity
   // (packages/sdk-ui/src/field-renderer-props.ts). It is what authorizes the
@@ -104,15 +253,28 @@ export function ListPickerRenderer({
   // runId that only arrives after mount re-issues the (now authorized) load.
   useEffect(() => {
     let cancelled = false;
+    // A new run identity is a new offering: until THIS load answers, the set in
+    // `listsRef` belongs to the previous one and cannot be the baseline for
+    // "the option that was not there before".
+    offeringSettledRef.current = false;
+    baselineKnownRef.current = false;
+    setOfferingSettled(false);
     fetchAvailableLists(runId ?? "")
       .then((items) => {
         if (!cancelled) {
+          listsRef.current = items;
+          offeringSettledRef.current = true;
+          baselineKnownRef.current = true;
+          setOfferingSettled(true);
           setLists(items);
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
+          offeringSettledRef.current = true;
+          baselineKnownRef.current = false;
+          setOfferingSettled(true);
           setLoading(false);
           toast.error("Could not load lists.");
         }
@@ -121,6 +283,114 @@ export function ListPickerRenderer({
       cancelled = true;
     };
   }, [runId]);
+
+  // THE RETURN HALF OF THE CTA'S CONTRACT (cinatra#3369, acceptance item 2).
+  //
+  // "on completion they return to this picker with the new listId pre-selected
+  // via the ?onComplete query param" — the sentence stated beside the CTA
+  // below. The curator runs in a SECOND TAB (`target="_blank"`), so the return
+  // is the operator coming back to this one, and what has to be true when they
+  // do is that this picker knows about the list they just built.
+  //
+  // A proof round on a development boot measured that it never was: the run
+  // finished and this step was unchanged — no list offered, the picker still
+  // empty.
+  //
+  // The finished curator run leaves its finish in the same-origin store
+  // (`list-picker-return-watcher.tsx`, mounted on that run because its address
+  // carries the query). This reads it on the two occasions that can carry it:
+  //
+  //   storage          — the other tab wrote while this one was open, which the
+  //                      browser delivers here whether or not it is focused;
+  //   focus /
+  //   visibilitychange — the operator came back to this tab. The wake channel
+  //                      this package already re-resolves on when the reader
+  //                      returns from deciding something elsewhere
+  //                      (`run-recommendation-chip-row.tsx`).
+  //
+  // Neither fires on an idle focused tab, so this adds no steady-state traffic,
+  // and the hand-back is TAKEN on read, so one finished run moves this picker
+  // exactly once.
+  useEffect(() => {
+    let cancelled = false;
+
+    const readOptionsBack = () => {
+      if (disabled) return;
+      if (!offeringSettledRef.current) return;
+      const handBack = consumeListPickerReturn(listPickerReturnStore());
+      // ONLY THIS PICKER'S OWN LAUNCH. A finish left by a curator run this
+      // picker did not open belongs to someone else's step; it is left where it
+      // is (the taking above is undone) and this picker does nothing.
+      if (!launchedRef.current) {
+        if (handBack) publishListPickerReturn(listPickerReturnStore(), handBack);
+        return;
+      }
+      // Stamped before this step was drawn: a finish from before this picker
+      // existed. Taken, so it stops lying around, and discarded.
+      if (handBack && handBack.at < drawnAtRef.current) return;
+      const baselineKnown = baselineKnownRef.current;
+      const alreadyOffered = new Set(listsRef.current.map((l) => l.id));
+      fetchAvailableLists(runId ?? "")
+        .then((items) => {
+          if (cancelled) return;
+          listsRef.current = items;
+          baselineKnownRef.current = true;
+          setLists(items);
+          setLoading(false);
+          // The one option that was not on offer before the operator left is
+          // the list they just built. Nothing new means the CRM has not
+          // published it yet — the re-read still put every list it does have on
+          // offer, which is the "list offered" half, and the next return asks
+          // again rather than selecting something the operator did not build.
+          // With no baseline (the first load failed) nothing can be shown to be
+          // new, so the options are offered and nothing is selected.
+          if (!baselineKnown) return;
+          const built = items.find((l) => !alreadyOffered.has(l.id));
+          if (!built) return;
+          // This launch has been answered; later returns to the tab go back to
+          // reading nothing until the operator builds another list.
+          launchedRef.current = false;
+          setSelectedId(built.id);
+          onChangeRef.current({
+            scope: "list",
+            listId: built.id,
+            listName: built.name,
+            memberCount: built.memberCount,
+          });
+        })
+        .catch(() => {
+          // The options stay as they were. The finish is PUT BACK so the next
+          // return asks again: a failed re-read is not an answer about what the
+          // operator built, and a taken-and-dropped finish would never return.
+          if (handBack) publishListPickerReturn(listPickerReturnStore(), handBack);
+        });
+    };
+
+    const onStorage = (event: StorageEvent) => {
+      // A `null` key is a whole-store clear, which this key does not survive
+      // either — both are occasions to look.
+      if (event.key !== null && event.key !== LIST_PICKER_RETURN_KEY) return;
+      readOptionsBack();
+    };
+    const onWake = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      readOptionsBack();
+    };
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    // The first load may have been in flight when the finish arrived, and a
+    // `storage` event does not come twice. This is that read, taken as soon as
+    // the offering settles.
+    if (offeringSettled) readOptionsBack();
+    return () => {
+      cancelled = true;
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [runId, disabled, offeringSettled]);
 
   // v1: client-side search filter only. The crm_list_search facade accepts a
   // server-side query param, but the v1 dataset is small enough that
@@ -191,6 +461,11 @@ export function ListPickerRenderer({
             target="_blank"
             rel="noreferrer"
             data-testid="build-list-with-ai-cta"
+            // THIS picker opened the curator. The finish the curator leaves is
+            // acted on only here — see the return effect above.
+            onClick={() => {
+              launchedRef.current = true;
+            }}
           >
             Build a list with AI
           </Link>
