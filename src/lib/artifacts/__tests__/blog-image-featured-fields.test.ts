@@ -29,9 +29,10 @@ import { registerArtifactExtensions } from "@cinatra-ai/objects/register-artifac
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
-  FEATURED_PLACEMENT,
   buildFeaturedImageFields,
+  readFeaturedImageFieldContract,
   readFeaturedImageFields,
+  type FeaturedImageFieldContract,
 } from "../featured-image-fields";
 
 const EXT_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "extensions");
@@ -63,6 +64,16 @@ beforeAll(() => {
   registerArtifactExtensions(EXT_ROOT);
 });
 
+// THE TYPE'S OWN FIELD NAMES (cinatra#3251), read off the registered picture
+// type rather than restated here — the same road the host's write side takes.
+function contract(): FeaturedImageFieldContract {
+  const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
+  const read = readFeaturedImageFieldContract(def?.declaredSchema);
+  expect(read.ok, JSON.stringify(read)).toBe(true);
+  if (!read.ok) throw new Error("unreachable");
+  return read.contract;
+}
+
 describe("the picture type's two declared fields, against the live pinned tree", () => {
   it("declares post and placement as REQUIRED — the plain file envelope no longer satisfies it", () => {
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
@@ -72,7 +83,7 @@ describe("the picture type's two declared fields, against the live pinned tree",
 
   it("accepts the row once the host supplies the two declared fields", () => {
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
-    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
+    const data = objectDataFor(buildFeaturedImageFields(contract(), { post: POST_ID }));
     expect(def!.schema.safeParse(data).success).toBe(true);
   });
 
@@ -85,7 +96,7 @@ describe("the picture type's two declared fields, against the live pinned tree",
 
 describe("the typed-data road into the artifact row's object data", () => {
   it("carries the declared fields alongside the envelope, changing nothing else", () => {
-    const data = objectDataFor({ post: POST_ID, placement: FEATURED_PLACEMENT });
+    const data = objectDataFor({ post: POST_ID, placement: contract().placementValue });
     expect(data).toMatchObject(fileEnvelope);
     expect(data).toMatchObject({ post: POST_ID, placement: "featured" });
   });
@@ -108,8 +119,8 @@ describe("the typed-data road into the artifact row's object data", () => {
 
 describe("the host reads the featured image's fields back", () => {
   it("reads the post it belongs to and its placement", () => {
-    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
-    expect(readFeaturedImageFields(data)).toEqual({
+    const data = objectDataFor(buildFeaturedImageFields(contract(), { post: POST_ID }));
+    expect(readFeaturedImageFields(contract(), data)).toEqual({
       ok: true,
       post: POST_ID,
       placement: "featured",
@@ -117,17 +128,17 @@ describe("the host reads the featured image's fields back", () => {
   });
 
   it("names why it cannot read them, instead of guessing", () => {
-    expect(readFeaturedImageFields(fileEnvelope)).toEqual({ ok: false, reason: "no-post" });
-    expect(readFeaturedImageFields({ ...fileEnvelope, post: POST_ID })).toEqual({
+    expect(readFeaturedImageFields(contract(), fileEnvelope)).toEqual({ ok: false, reason: "no-post" });
+    expect(readFeaturedImageFields(contract(), { ...fileEnvelope, post: POST_ID })).toEqual({
       ok: false,
       reason: "no-placement",
     });
     expect(
-      readFeaturedImageFields({ ...fileEnvelope, post: POST_ID, placement: "body" }),
+      readFeaturedImageFields(contract(), { ...fileEnvelope, post: POST_ID, placement: "body" }),
     ).toEqual({ ok: false, reason: "unknown-placement" });
-    expect(readFeaturedImageFields(null)).toEqual({ ok: false, reason: "no-data" });
-    expect(readFeaturedImageFields("not an object")).toEqual({ ok: false, reason: "no-data" });
-    expect(readFeaturedImageFields({ ...fileEnvelope, post: "", placement: "featured" })).toEqual({
+    expect(readFeaturedImageFields(contract(), null)).toEqual({ ok: false, reason: "no-data" });
+    expect(readFeaturedImageFields(contract(), "not an object")).toEqual({ ok: false, reason: "no-data" });
+    expect(readFeaturedImageFields(contract(), { ...fileEnvelope, post: "", placement: "featured" })).toEqual({
       ok: false,
       reason: "no-post",
     });

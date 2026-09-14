@@ -11,6 +11,7 @@ import { z } from "zod";
 // `@/lib/blog-project-store`, so keeping blog registration out of this package
 // avoids a `packages/objects` -> host `src/lib` layer inversion.
 import { objectTypeRegistry } from "../registry";
+import { readClaimedTypeRepresentationForms } from "./register-artifact-extensions";
 import { GENERIC_OBJECT_TYPE_ID } from "../namespace";
 import {
   CONNECTOR_REF_ARTIFACT_TYPE,
@@ -572,9 +573,14 @@ function registerEmailObjectTypes(): void {
 // established email/campaigns identityKey idiom).
 // ---------------------------------------------------------------------------
 
-function registerLinkedinObjectTypes(): void {
+function registerLinkedinObjectTypes(opts?: { extensionsRoot?: string }): void {
+  const postDraftTypeId = "@cinatra-ai/linkedin:post-draft";
+  // THE CLAIMING PACK'S OWN DECLARATION (cinatra#3251), read through the
+  // same parse the bridge performs on the same manifest. Null when no
+  // installed pack claims the id.
+  const declaredForms = readClaimedTypeRepresentationForms(postDraftTypeId, opts);
   objectTypeRegistry.register({
-    type: "@cinatra-ai/linkedin:post-draft",
+    type: postDraftTypeId,
     // Type-driven disposition (epic #1785): relocated from the
     // @cinatra-ai/linkedin-artifacts pack claim (parity pinned by test).
     dispositions: {
@@ -604,13 +610,20 @@ function registerLinkedinObjectTypes(): void {
     // without minting a second registrar (which would let a pack uninstall reap
     // a host type).
     //
-    // It states the REPRESENTATION FORMS ONLY — the same pair the claiming pack
-    // declares, pinned against drift by a test — and NO renderer `ui` block:
-    // presentation stays the pack's, resolved through the semantic renderer
-    // registry the bridge populates from the claim.
-    isArtifact: {
-      accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
-    },
+    // It states the REPRESENTATION FORMS ONLY — and it does not state them
+    // ITSELF (cinatra#3251). They are the claiming pack's fact about its own
+    // work product, so they are DERIVED from that pack's declared manifest
+    // through the same parse the bridge performs on the same file; a host-side
+    // copy is a second source that drifts the day the pack edits its manifest.
+    // There is NO renderer `ui` block either: presentation stays the pack's,
+    // resolved through the semantic renderer registry the bridge populates from
+    // the claim.
+    //
+    // NOTHING IS INVENTED WHEN THERE IS NOTHING TO READ. In a universe with no
+    // claiming pack installed, the runtime RECORD still stands — the host is
+    // this type's single registrar — but it carries no artifact descriptor,
+    // because the descriptor's content was never the host's to state.
+    ...(declaredForms ? { isArtifact: { accepts: declaredForms } } : {}),
     category: "content",
     schema: z.object({
       content: z.string().optional(),
@@ -1177,14 +1190,20 @@ export function registerWordPressObjectTypes(): void {
   });
 }
 
-export function registerAllObjectTypes(): void {
+/**
+ * @param opts.extensionsRoot Where the installed packs live, for the ONE
+ * registration whose representation forms are a claiming pack's declaration
+ * to state (cinatra#3251). Absent, the read falls back to the bundled layout
+ * the artifact bridge scans.
+ */
+export function registerAllObjectTypes(opts?: { extensionsRoot?: string }): void {
   registerGenericObjectType();
   registerCampaignType();
   registerCampaignContextType();
   registerCampaignRecipientsType();
   registerCampaignBundleTypes();
   registerEmailObjectTypes();
-  registerLinkedinObjectTypes();
+  registerLinkedinObjectTypes(opts);
   registerDrupalObjectTypes();
   registerMemoryConceptType();
   registerWordPressObjectTypes();

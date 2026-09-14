@@ -1475,6 +1475,10 @@ describe("the generated display map imports through package exports, never a hos
     // are companion, dev-universe extensions, so they take the
     // guarded-optional alias road the CMS snapshot display already takes,
     // and each publishes the very same subpath through its OWN `exports`.
+    //
+    // The screenshot and slide-deck displays this wave advances beside
+    // cms-snapshot are on that same road for the same reason: companion,
+    // dev-universe extensions whose alias is their resolution road.
     const buildConfig = buildConfigAliases();
     const emitted = emittedRendererSpecifiers();
     const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
@@ -1492,6 +1496,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/linkedin-artifacts/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
+      "@cinatra-ai/screenshot-artifact/src/renderers/detail",
+      "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
     ];
     expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)));
     // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.

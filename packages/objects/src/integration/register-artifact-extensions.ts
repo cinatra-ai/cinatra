@@ -495,6 +495,12 @@ function registerDeclaredArtifactTypes(
         // artifact-safe default (an explicit payload so `def.dispositions != null`
         // marks it disposition-governed, distinct from a plain data object).
         dispositions: claim.dispositions ?? { projection: "artifact-safe" },
+        // THE DECLARATION ITSELF, beside its compiled validator (cinatra#3251).
+        // `schema` above answers only whether a row satisfies the type; a host
+        // surface that must write or read a field the TYPE declares needs the
+        // declared names and admitted values, and reading them from here is what
+        // keeps them from being restated as host constants.
+        ...(claim.schema ? { declaredSchema: claim.schema } : {}),
       },
       // Provenance = the owning package, so removeByPackage reaps every declared
       // type on archive/uninstall.
@@ -615,4 +621,93 @@ export function registerArtifactExtensions(root: string): number {
     registered += scanDirForArtifacts(path.join(root, dirent.name));
   }
   return registered;
+}
+
+// ---------------------------------------------------------------------------
+// THE CLAIMING PACK'S OWN DECLARATION, READ FOR A HOST-REGISTERED TYPE
+// (cinatra#3251).
+//
+// A pack may CLAIM a type id in another namespace; ownership is by namespace,
+// so the host stays that type's single runtime registrar (epic #1448 principle
+// 5) and the bridge registers the pack's renderers for it, never the type. The
+// registration's REPRESENTATION FORMS, though, are the pack's fact about its
+// own work product, not the host's — and a host that restates them by hand is a
+// second source that drifts the moment the pack edits its manifest.
+//
+// This read is what removes the copy: given a type id, it finds the pack that
+// claims it and answers that pack's DECLARED representation forms. It lives
+// HERE, in the bridge, so it walks the bridge's OWN scan layout (the same
+// `isArtifactExtensionDirName` predicate at both depths) and parses through the
+// bridge's OWN `parseSemanticArtifactManifest` — one manifest can never be read
+// two ways — and so it adds no module to any route's first-party graph that the
+// bridge did not already put there.
+//
+// IT REGISTERS NOTHING and it names no pack: the claim identifies the claimant,
+// so a pack that renames itself, or a second pack that takes the claim over,
+// needs no edit here.
+// ---------------------------------------------------------------------------
+
+/** One pack directory's DECLARED manifest, parsed, or null when the directory
+ *  holds no parseable `kind:"artifact"` manifest. */
+function readDeclaredArtifactManifest(dir: string): SemanticArtifactManifest | null {
+  const pkgPath = path.join(dir, "package.json");
+  if (!existsSync(pkgPath)) return null;
+  let pkg: { cinatra?: { kind?: unknown; artifact?: unknown } };
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  } catch {
+    return null;
+  }
+  if (pkg?.cinatra?.kind !== "artifact") return null;
+  const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
+  return parsed.ok ? parsed.manifest : null;
+}
+
+function scanDirForClaimant(dir: string, typeId: string): SemanticArtifactManifest | null {
+  if (!existsSync(dir)) return null;
+  for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+    if (!dirent.isDirectory() || !isArtifactExtensionDirName(dirent.name)) continue;
+    const manifest = readDeclaredArtifactManifest(path.join(dir, dirent.name));
+    if (manifest && (manifest.objectTypes ?? []).some((claim) => claim.type === typeId)) {
+      return manifest;
+    }
+  }
+  return null;
+}
+
+/**
+ * The DECLARED manifest of the pack that claims `typeId` under `root`, or null
+ * when no installed pack claims it. Robust to caller depth exactly as
+ * `registerArtifactExtensions` is: both the vendor-flat and the vendor-nested
+ * layouts are walked.
+ */
+function readClaimingPackManifest(typeId: string, root: string): SemanticArtifactManifest | null {
+  if (!existsSync(root)) return null;
+  const direct = scanDirForClaimant(root, typeId);
+  if (direct) return direct;
+  for (const dirent of readdirSync(root, { withFileTypes: true })) {
+    if (!dirent.isDirectory() || isArtifactExtensionDirName(dirent.name)) continue;
+    const found = scanDirForClaimant(path.join(root, dirent.name), typeId);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * The REPRESENTATION FORMS the claiming pack declares for `typeId`, or null
+ * when no installed pack claims it.
+ *
+ * Null is the FAIL-CLOSED answer and the caller's job is to state nothing
+ * rather than invent a form: a reduced universe carrying no claimant simply has
+ * no declaration to register, and a guessed pair would be exactly the host-side
+ * copy this read exists to remove.
+ *
+ * `root` defaults to the bundled `extensions/` layout the bridge scans.
+ */
+export function readClaimedTypeRepresentationForms(
+  typeId: string,
+  opts?: { extensionsRoot?: string },
+): SemanticArtifactManifest["accepts"] | null {
+  const root = opts?.extensionsRoot ?? path.join(process.cwd(), "extensions");
+  return readClaimingPackManifest(typeId, root)?.accepts ?? null;
 }

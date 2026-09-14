@@ -21,7 +21,21 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { buildFeaturedImageFields, readFeaturedImageFields } from "@/lib/artifacts/featured-image-fields";
+import {
+  buildFeaturedImageFields,
+  readFeaturedImageFields,
+  type FeaturedImageFieldContract,
+} from "@/lib/artifacts/featured-image-fields";
+
+// The picture type's declared contract, stated here because this tier warms no
+// registry. The suite that reads it off the LIVE registered type is
+// `src/lib/artifacts/__tests__/featured-image-fields-from-registered-schema.test.ts`
+// (cinatra#3251); this one is about the post REFERENCE the host resolves.
+const CONTRACT: FeaturedImageFieldContract = {
+  post: "post",
+  placement: "placement",
+  placementValue: "featured",
+};
 import { postReferenceForDraft } from "@/lib/blog-image-materializer";
 
 const GENERATION_SRC = readFileSync(
@@ -58,10 +72,10 @@ describe("the image-regeneration job names the post its picture belongs to", () 
   });
 
   it("what the host resolves satisfies the host's reader", () => {
-    const fields = buildFeaturedImageFields({
+    const fields = buildFeaturedImageFields(CONTRACT, {
       post: postReferenceForDraft({ id: "draft-1", postArtifactId: "art-1" }) as string,
     });
-    expect(readFeaturedImageFields(fields)).toEqual({
+    expect(readFeaturedImageFields(CONTRACT, fields)).toEqual({
       ok: true,
       post: "art-1",
       placement: "featured",
@@ -69,7 +83,7 @@ describe("the image-regeneration job names the post its picture belongs to", () 
   });
 
   it("a picture that names no post is READ as such rather than drawn wrong", () => {
-    expect(readFeaturedImageFields({ mime: "image/png" })).toEqual({
+    expect(readFeaturedImageFields(CONTRACT, { mime: "image/png" })).toEqual({
       ok: false,
       reason: "no-post",
     });

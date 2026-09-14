@@ -56,6 +56,13 @@ vi.mock("@cinatra-ai/agents/integration/register-object-types", () => ({
 }));
 vi.mock("@cinatra-ai/objects/register-artifact-extensions", () => ({
   registerArtifactExtensions: vi.fn(),
+  // The claim registrar also READS the claiming pack's declared representation
+  // forms through this module (cinatra#3251). In this unit process the
+  // filesystem extension scan is deliberately absent, so the mock answers with
+  // the real function's own FAIL-CLOSED no-claimant value (null): a reduced
+  // universe carrying no installed claimant has no declaration to register, and
+  // a stubbed-in pair would be exactly the host-side copy that read removes.
+  readClaimedTypeRepresentationForms: vi.fn(() => null),
 }));
 
 // The org-chain DB claim registry (winner arbitration reads these rows).

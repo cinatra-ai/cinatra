@@ -267,6 +267,24 @@ export type ObjectTypeDefinition<T = unknown> = {
    */
   isArtifact?: ArtifactDescriptor;
   /**
+   * The type's OWN DECLARED JSON Schema, exactly as its package declared it
+   * (cinatra#3251). Populated at registration by the artifact bridge from the
+   * pack's `objectTypes[].schema`; absent for a type that declares none and for
+   * a host built-in whose schema is authored in code.
+   *
+   * `schema` above is the COMPILED validator — it answers "does this row
+   * satisfy the type?" and nothing else. A host surface that must write or read
+   * a field the TYPE declares needs the declaration itself: which fields are
+   * required, and which values a field admits. Carrying the source declaration
+   * here is what lets such a surface read those names from the type instead of
+   * restating them as host constants, which is a second source that drifts the
+   * day the pack edits its schema.
+   *
+   * READ-ONLY provenance: nothing validates against this field, and no
+   * authorization is ever decided from it.
+   */
+  declaredSchema?: Record<string, unknown>;
+  /**
    * The projection disposition this type DECLARES (epic #1785 type-driven seam).
    * Populated at registration from the extension's manifest `objectTypes`
    * self-claim (via the artifact bridge) or declared directly on a host

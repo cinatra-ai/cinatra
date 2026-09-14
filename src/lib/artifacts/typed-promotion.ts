@@ -67,7 +67,8 @@ export type TypedPromotionRefusal =
   | "extension-owns-no-type"
   /** The row already carries the extension's own type — nothing to promote. */
   | "already-promoted"
-  /** No matcher assertion associates this row with the extension. */
+  /** Neither authority holds: no matcher assertion associates this row with the
+   *  extension, and the person asserted nothing of their own. */
   | "no-matcher-assertion"
   /** The matcher's confidence is below the extension's declared threshold. */
   | "below-threshold"
@@ -115,6 +116,58 @@ export interface MatcherAssociation {
   threshold: number;
 }
 
+/**
+ * THE ROAD'S ENTRY, and the reason it has one.
+ *
+ * The road runs against ONE type: the type the confirmed extension owns. The
+ * surface resolves that from the object-type registry, and the count it finds is
+ * not always one — so the entry is a decision, not a lookup, and every outcome
+ * of it is named:
+ *
+ *   - EXACTLY ONE registered artifact type: the road runs against it.
+ *   - SEVERAL: a package-keyed confirmation cannot say which type was meant, so
+ *     the road is left alone rather than guessing.
+ *   - NONE, and the pack ships no display for an unregistered type: a pure
+ *     matcher pack. There is nothing to promote INTO and nothing worth
+ *     reporting — the road does not apply.
+ *   - NONE, and the pack DOES ship a display for a type no package registers:
+ *     the pack owns nothing to promote into AND carries an UNREACHABLE display
+ *     — its target type is registered by no installed package, so no row can
+ *     ever carry it. This is deliberately stated as the CONDITION and not as a
+ *     diagnosis of intent: a cross-namespace display target is a supported
+ *     shape, so this reading cannot tell "the pack meant to own the type and
+ *     used the wrong namespace" apart from "the package that owns the target
+ *     type is not installed". Both are broken installations from the road's
+ *     seat and both earn the same answer — the road's own named refusal,
+ *     `extension-owns-no-type`, instead of silence. Naming WHICH of the two it
+ *     is needs manifest and dependency evidence this leaf is not handed.
+ *
+ * The last case is the one the wave-3 proof leg measured: a deck confirmation that
+ * retyped nothing and reported nothing.
+ */
+export type PromotionEntryPlan =
+  | { kind: "run"; typeId: string }
+  | { kind: "refuse"; reason: TypedPromotionRefusal }
+  | { kind: "not-applicable" };
+
+export function planPromotionEntry(input: {
+  /** The artifact types this package actually registered, read from the
+   *  object-type registry. */
+  ownedRegisteredTypes: readonly string[];
+  /** True when the package registered a semantic display whose target object
+   *  type NO installed package registers — an unreachable display, whether the
+   *  target was a refused self-claim or an absent owner's type. */
+  shipsDisplayForUnregisteredType: boolean;
+}): PromotionEntryPlan {
+  if (input.ownedRegisteredTypes.length === 1) {
+    return { kind: "run", typeId: input.ownedRegisteredTypes[0]! };
+  }
+  if (input.ownedRegisteredTypes.length === 0 && input.shipsDisplayForUnregisteredType) {
+    return { kind: "refuse", reason: "extension-owns-no-type" };
+  }
+  return { kind: "not-applicable" };
+}
+
 export type TypedPromotionPlan =
   | {
       ok: true;
@@ -137,15 +190,25 @@ export type TypedPromotionPlan =
  *
  * ORDER IS LOAD-BEARING, because more than one refusal can be true and the first
  * is the honest one: a row that does not exist is not "unconfirmed", and a row
- * that already carries the target type is not "below threshold". The AUTHORITIES
- * are checked LAST, and there are TWO ROADS to them. On the MATCHER's road the
- * matcher's assertion and the person's confirmation are checked BOTH, because
- * neither substitutes for the other: a high-confidence match without a
- * confirmation retypes nothing, and a confirmation on a row the matcher never
- * associated retypes nothing either. The PERSON's own assertion is the other
- * road, and it outranks the matcher's — it carries the whole authority by
- * itself, so a pack that ships no matcher at all is still promotable when the
- * person says what the file means.
+ * that already carries the target type is not "below threshold".
+ *
+ * TWO ROADS ONTO THE PROMOTION, AND THE DRAWING GIVES BOTH (artifact-review
+ * §XI.10): "Promotion happens only on the matcher's assertion at its threshold
+ * and with the person's confirmation, OR ON THE PERSON'S OWN ASSERTION, WHICH
+ * OUTRANKS THE MATCHER." This planner used to give one — it required a matcher
+ * association under every confirmation — so a person who asserted a meaning the
+ * matcher had never guessed at moved the row's label and nothing else: the type
+ * stayed put, the mono line kept naming the base, and the base display kept
+ * drawing. That is what the fourth proof round measured on the screenshot.
+ *
+ * The person's own assertion is therefore an AUTHORITY, not a confirmation of
+ * someone else's: where it holds, the matcher is not consulted at all, which is
+ * what "outranks" means. Where it does not, the matcher road is unchanged — a
+ * high-confidence match without a confirmation retypes nothing, and a
+ * confirmation on a row nothing associated retypes nothing either.
+ *
+ * NEITHER ROAD SKIPS THE FORM. The content is shared unchanged either way, so
+ * the type it lands under must still accept it.
  */
 export function planTypedPromotion(input: {
   row: PromotableRow | null;
@@ -153,13 +216,9 @@ export function planTypedPromotion(input: {
   matcher: MatcherAssociation | null;
   /** The person's confirmation, from the surface that already asks for one. */
   confirmed: boolean;
-  /**
-   * THE PERSON'S OWN MEANING ASSERTION naming this extension — the
-   * user-sourced assertion the library's §VI.1 pick writes, never the mere
-   * confirmation of a matcher's suggestion. It is an AUTHORITY OF ITS OWN and it
-   * OUTRANKS the matcher, so it needs neither an association nor a threshold.
-   */
-  personAsserted?: boolean;
+  /** The person's OWN meaning assertion for this (row, extension) — the second
+   *  road §XI.10 gives, and the one that outranks the matcher. */
+  personAsserted: boolean;
 }): TypedPromotionPlan {
   const refuse = (reason: TypedPromotionRefusal): TypedPromotionPlan => ({ ok: false, reason });
 
@@ -168,18 +227,10 @@ export function planTypedPromotion(input: {
   if (input.row.objectType === input.ownType.typeId) return refuse("already-promoted");
   if (!input.row.latestRevision) return refuse("no-content");
 
-  // THE TWO ROADS, AND THE PERSON'S OWN ONE OUTRANKS THE MATCHER'S. The ratified
-  // drawing (app-artifact-review §XI.10, "The promoted row"): "Promotion happens
-  // only on the matcher's assertion at its threshold and with the person's
-  // confirmation, or on the person's own assertion, which outranks the matcher."
-  // So the ladder below is the MATCHER road alone. A person who chose the meaning
-  // themselves has already said what the file means: no association is owed, and
-  // no threshold applies — which is also the only road a pack that ships NO
-  // matcher can ever be promoted into, because nothing can associate a row with a
-  // classifier that does not exist. An association on its own still promotes
-  // nothing: `personAsserted` is the person's OWN assertion, and a bare
-  // confirmation of a match that was never made is still refused below.
-  if (input.personAsserted !== true) {
+  // THE PERSON'S OWN ASSERTION IS ITS OWN AUTHORITY. Where it holds the matcher
+  // road is not walked at all — an assertion that outranks the matcher cannot be
+  // held back by what the matcher did or did not guess.
+  if (!input.personAsserted) {
     if (!input.matcher) return refuse("no-matcher-assertion");
     if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
     if (!input.confirmed) return refuse("not-confirmed");
