@@ -532,7 +532,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-opt1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-opt1" },
+      { jobId: "resume-setup-run-opt1-field-ideaCount-db3eb011" },
     );
   });
 
@@ -637,7 +637,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-def1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-def1" },
+      { jobId: "resume-setup-run-def1-field-ideaCount-db3eb011" },
     );
   });
 
@@ -798,7 +798,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-clear1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-clear1" },
+      { jobId: "resume-setup-run-clear1-field-ideaCount-db3eb011" },
     );
   });
 
