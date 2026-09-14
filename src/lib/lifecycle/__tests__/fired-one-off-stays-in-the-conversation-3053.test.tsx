@@ -197,6 +197,11 @@ describe.each(["chat_thread", "site_widget"] as const)(
               kind: "trigger_schedule_proposal",
               state: card.state,
               body: card.view,
+              // THE FIRED READING RIDES THE ANSWER, exactly as the endpoint
+              // composes it (cinatra#3174 fix leg 1): a one-off's gate stamp is
+              // no longer read as its firing on its own, so the reading the
+              // producer resolved travels beside the body.
+              ...(card.firedOnce ? { firedOnce: true } : {}),
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -242,15 +247,14 @@ describe.each(["chat_thread", "site_widget"] as const)(
       expect(rows).not.toBeNull();
       expect(rows!.querySelectorAll("input, select, textarea").length).toBe(0);
       expect(rows!.querySelectorAll('[role="combobox"]').length).toBe(0);
-      // The rows themselves stay drawn and stay unpressable: the reading keeps
-      // all three, and not one of them takes a change.
+      // The rows themselves stay drawn, and not one of them is a control any
+      // more: "the pickers gone" reaches the ROW as well as the fields inside
+      // it (cinatra#3174 fix leg 1). The reading keeps all three rows, drawn as
+      // markers and labels, with nothing in the rows to press.
       expect(rows!.querySelectorAll("[data-schedule-option]").length).toBe(3);
-      const rowControls = Array.from(
-        rows!.querySelectorAll<HTMLButtonElement>("button"),
-      );
-      expect(rowControls.length).toBeGreaterThan(0);
-      for (const control of rowControls) {
-        expect(control.disabled).toBe(true);
+      expect(rows!.querySelectorAll("button").length).toBe(0);
+      for (const row of rows!.querySelectorAll("[data-schedule-option]")) {
+        expect(row.textContent?.length ?? 0).toBeGreaterThan(0);
       }
     });
   },

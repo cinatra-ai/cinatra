@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   gates:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,7 +214,7 @@ jobs:
   # install (a superset of the two sources' --ignore-scripts variant). Commands
   # are verbatim from the retired workflows.
   gates-pnpm:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -264,7 +264,7 @@ jobs:
   # context to .github/branch-protections.json (rollout step b). Pure node,
   # no dependency install, so it costs a runner slot and nothing else.
   design-pin-drift:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -320,7 +320,7 @@ jobs:
   # See scripts/ci/design-pin-freshness.mjs and
   # docs/internals/contracts/design-conformance-pin-drift.md.
   design-pin-freshness:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -401,7 +401,7 @@ jobs:
   # request adds it to .github/branch-protections.json, so the state is visible
   # without blocking anything. See scripts/ci/design-anchor-resolution.mjs.
   design-anchor-resolution:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -467,7 +467,7 @@ jobs:
   # WARN-FIRST beside its two siblings: its context is not required until a
   # separate pull request adds it. See scripts/ci/design-record-grammar.mjs.
   design-record-grammar:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

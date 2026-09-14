@@ -321,3 +321,99 @@ describe("RunCompletionCard (cinatra#2482)", () => {
     expect(document.querySelector('[data-run-completion="no-output"]')).toBeNull();
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// THE HOST'S OWN FACT, AS A FLOOR (cinatra#3002, fix leg 4)
+// ---------------------------------------------------------------------------
+//
+// A host that is ALREADY drawing this run's produced output beneath the card
+// knows something the card's asynchronous read has not learned yet. It states
+// it with `transcriptCarriesOutput`, and the card takes it as a floor: it can
+// only ADD the transcript fact. These pins hold both halves of that — what it
+// fixes, and what it must NOT quietly widen into.
+describe("RunCompletionCard — transcriptCarriesOutput (cinatra#3002)", () => {
+  it("names the transcript while the read is still in flight", async () => {
+    readRunOutputEvidenceMock.mockImplementationOnce(
+      () => new Promise<never>(() => {}),
+    );
+    const { RunCompletionCard } = await import("../run-completion-affordances");
+    render(
+      <RunCompletionCard
+        runId="run-3002"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="transcript"
+        transcriptCarriesOutput
+      />,
+    );
+
+    expect(
+      screen.queryByText(/its output is in the run transcript below/i),
+    ).not.toBeNull();
+    expect(screen.queryByText(/could not be loaded here/i)).toBeNull();
+  });
+
+  // FIX LEG 5 (cinatra#3002) CORRECTS THIS PIN. The floor staying off is the
+  // part that matters and is unchanged; the sentence underneath it is not the
+  // load-failure one, because this read is merely still out. The failed-read
+  // and unlinkable-rows pins above keep that sentence honest.
+  it("keeps the conservative reading, without claiming a failure, when the host claims nothing", async () => {
+    readRunOutputEvidenceMock.mockImplementationOnce(
+      () => new Promise<never>(() => {}),
+    );
+    const { RunCompletionCard } = await import("../run-completion-affordances");
+    render(
+      <RunCompletionCard
+        runId="run-3002"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="transcript"
+      />,
+    );
+
+    expect(screen.queryByText(/could not be loaded here/i)).toBeNull();
+    expect(
+      screen.queryByText(/its output is in the run transcript below/i),
+    ).toBeNull();
+    expect(
+      document
+        .querySelector("[data-run-completion]")
+        ?.getAttribute("data-run-completion-evidence"),
+    ).toBe("pending");
+  });
+
+  it("never turns a run that produced nothing into one that did", async () => {
+    const { RunCompletionCard } = await import("../run-completion-affordances");
+    render(
+      <RunCompletionCard
+        runId="run-3002"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="transcript"
+        initialEvidence={{ outputs: [], hasTranscript: false, hasStepResults: false }}
+      />,
+    );
+
+    // The host is not claiming rows here, so the empty reading stands whole.
+    expect(document.querySelector('[data-run-completion="no-output"]')).not.toBeNull();
+  });
+
+  it("leaves a linked output's own reading alone", async () => {
+    const { RunCompletionCard } = await import("../run-completion-affordances");
+    render(
+      <RunCompletionCard
+        runId="run-3002"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="transcript"
+        transcriptCarriesOutput
+        initialEvidence={{
+          outputs: [{ id: "obj-draft", type: "blog_post", title: "The draft" }],
+          hasTranscript: false,
+          hasStepResults: false,
+        }}
+      />,
+    );
+
+    // A saved output is the stronger reading and still wins over the floor.
+    expect(screen.queryByText(/finished and saved its output/i)).not.toBeNull();
+    expect(screen.queryByRole("link", { name: "The draft" })).not.toBeNull();
+  });
+});

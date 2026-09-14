@@ -193,6 +193,46 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
     const owner = read("packages/agents/src/run-recommendation-chip-row.tsx");
     expect(owner).toMatch(/<\s*RunRecommendationChipRow\b/);
   });
+
+  // THE DISTINCTION THIS RULE KEEPS, pinned after cinatra#3160 hit it: a HARNESS
+  // is not an exemption. A design-fixture module that declares the host and then
+  // draws the row itself is the same second renderer as a page that does — it
+  // hands the row a reading the card would have RESOLVED, so the two can
+  // disagree, and a harness that draws its own reading is asserting the harness.
+  // The three cases below pin the whole distinction: the host declaration buys
+  // nothing, the CARD is the way through, and the allowlist stays the owner's
+  // definition module alone.
+  it("a DESIGN-FIXTURE mount is NOT an exemption: declaring the host does not license the row", () => {
+    const src = [
+      '<LifecycleCardSurfaceProvider host="chat_thread">',
+      "  <RunRecommendationChipRow runId={id} initialRecommendations={fixture} />",
+      "</LifecycleCardSurfaceProvider>",
+    ].join("\n");
+    const hits = scanModule(
+      "src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx",
+      src,
+    );
+    expect(hits.map((h) => h.rule)).toContain("R2");
+    expect(hits.find((h) => h.rule === "R2").detail).toContain("direct-chip-row-mount");
+  });
+
+  it("…and the way through is the CARD, on that same harness path", () => {
+    const src = [
+      '<LifecycleCardSurfaceProvider host="chat_thread">',
+      "  <RecommendationHoldCard runId={id} />",
+      "</LifecycleCardSurfaceProvider>",
+    ].join("\n");
+    const hits = scanModule(
+      "src/app/design-fixtures/conformance/lifecycle-recommendation-fixtures.tsx",
+      src,
+    );
+    expect(hits.filter((h) => h.rule === "R2")).toEqual([]);
+  });
+
+  it("the row's allowlist is the OWNER module and nothing else — no harness may join it", () => {
+    const entry = RETIRED_PARALLELS.find((p) => p.id === "direct-chip-row-mount");
+    expect(entry.allow).toEqual(["packages/agents/src/run-recommendation-chip-row.tsx"]);
+  });
 });
 
 describe("R3 — a card mount must be host-declared", () => {
@@ -599,6 +639,59 @@ describe("R6 — the owner consumes its authorized body", () => {
     const source = PROPER_OWNER.replace("{state.title}", "{\"a fixed string\"}");
     const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
     expect(hits.map((h) => h.detail).join(" ")).toMatch(/body field 'title' is never consumed/);
+  });
+});
+
+describe("R6 — a retired reading leaves the authorized list, and stays on the wire (cinatra#3174)", () => {
+  // WHY THIS PAIR EXISTS. Fix leg 1 stopped keying any reading on `released`:
+  // it marks the side-effect gate OPENING, not the firing, and §VI's five
+  // readings — first shown, configured, expired, fired one-off, fired
+  // recurring — are keyed on the phase and on whether the schedule has fired,
+  // never on the gate. §VI is explicit that nothing else may stand in for a
+  // reading ("No summary box is ever drawn, no status label, and nothing
+  // stands between the reader and the form — the rows are the reading"), so the
+  // status label that was the field's last reader is gone and no drawn reading
+  // replaces it. An authorized body field is a field a drawing reads, so it
+  // leaves the list — exactly the road `canRelease` took when the same section
+  // withdrew Run now (cinatra#2972).
+  //
+  // The two tests below are the two ways that retirement could become a lie.
+  // Delisting is honest only while the card really has stopped reading the
+  // field, and only while the producer really goes on SENDING it: a stale
+  // bundle's own copy of the settled schema declares `released` a REQUIRED key
+  // and fails the parse without it, so dropping the emission would blank every
+  // settled schedule card on such a tab — a wider harm than one dead boolean on the wire, and the
+  // reason the pruning is a wire change with its own version story rather than
+  // part of this leg.
+  const SCHEDULE = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal;
+
+  it("'released' is NOT an authorized body field — no §VI reading is keyed on the gate opening", () => {
+    expect(SCHEDULE.body.fields).not.toContain("released");
+  });
+
+  it("it is delisted because the card REALLY stopped reading it — put it back and R6 fires", () => {
+    // The matcher is the gate's own, over the live owner module, so this cannot
+    // pass by agreeing with a list. If a reading ever comes back, this test
+    // goes green-the-wrong-way and the field has to rejoin the list with it.
+    const restored = {
+      ...SCHEDULE,
+      body: { ...SCHEDULE.body, fields: [...SCHEDULE.body.fields, "released"] },
+    };
+    const hits = scanOwnerModule("trigger_schedule_proposal", restored, {
+      [SCHEDULE.owner]: read(SCHEDULE.owner),
+    });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(
+      /body field 'released' is never consumed/,
+    );
+  });
+
+  it("the producer still SENDS it — a retired reading may not blank a stale tab", () => {
+    expect(
+      read("packages/agent-ui-protocol/src/renderable-views/trigger-schedule-proposal-view.ts"),
+    ).toMatch(/\n\s*released: z\.boolean\(\),/);
+    expect(read("src/lib/lifecycle/trigger-schedule-proposal-card.ts")).toMatch(
+      /\n\s*released: resolved\.released,/,
+    );
   });
 });
 

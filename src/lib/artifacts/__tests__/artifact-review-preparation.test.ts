@@ -30,6 +30,7 @@ function fakeArtifact(id: string): ArtifactSummary {
 function fakeProps(): ArtifactRendererProps {
   return {
     propsApiVersion: 1,
+    edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
     artifact: {
       id: "art",
       title: "t",
@@ -63,6 +64,7 @@ function descriptor(): SerializedRuntimeRendererDescriptor {
       digest: "d".repeat(64),
       entry: "client/detail.js",
       propsApiVersion: 1,
+      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
       sdkAbiRange: "^2.4.0",
       reactPeerRange: "^19.0.0",
       reactDomPeerRange: "^19.0.0",
@@ -281,5 +283,69 @@ describe("prepareReviewTargetsCore — host-resolved loadable mounts (renderer f
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("unreachable");
     expect(r.prepared.map((p) => p.target)).toEqual([t("a", "1"), t("b", "2")]);
+  });
+});
+
+/**
+ * THE CONTENT CHANNEL REACHES THE REVIEW CARD (enabler 0.3 wired for this
+ * consumer, enabler 0.20).
+ *
+ * The card used to hand every display an ABSENT content projection with a note
+ * that this consumer was "not wired yet". A markdown display handed an absent
+ * projection draws its named floor — "no markdown is available to show for the
+ * revision being viewed" — with no document and no tabs, which is exactly what a
+ * reviewer saw on a revision whose text was sitting in the store all along.
+ *
+ * Reading the pinned revision is a SERVER read, so the props builder is
+ * asynchronous by contract (the same shape enabler 0.3 gives the artifact page).
+ * The core awaits it; that is what this pins, over a port that answers late.
+ */
+describe("prepareReviewTargetsCore — the props builder may read the pinned revision", () => {
+  it("AWAITS an asynchronous props builder and carries what it resolved", async () => {
+    const built = {
+      ...fakeProps(),
+      content: {
+        kind: "text" as const,
+        channelVersion: 1,
+        representationRevisionId: "1",
+        text: "# The pinned draft\n",
+        encoding: "utf-8" as const,
+        byteLength: 19,
+        projectedByteLength: 19,
+        cap: 262144,
+        truncated: false,
+      },
+    };
+    const buildProps = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return built;
+    });
+
+    const r = await prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets: [t("a", "1")] },
+      ports({ buildProps }),
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(buildProps).toHaveBeenCalledTimes(1);
+    // The props must be the RESOLVED value, never the pending promise.
+    expect(r.prepared[0].props).toBe(built);
+    expect(r.prepared[0].props?.content).toMatchObject({
+      kind: "text",
+      text: "# The pinned draft\n",
+      representationRevisionId: "1",
+    });
+  });
+
+  it("still accepts a SYNCHRONOUS props builder — the port takes either", async () => {
+    const built = fakeProps();
+    const r = await prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets: [t("a", "1")] },
+      ports({ buildProps: () => built }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.prepared[0].props).toBe(built);
   });
 });

@@ -84,6 +84,7 @@ describe("enabler 0.10 — a non-file revision is a MEMBER, not a floor", () => 
           downloadHref: isFileFormMember(input.member) ? "/content" : null,
           propsApiVersion: input.propsApiVersion,
           content: absentArtifactContent(input.representationRevisionId),
+          edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
         }),
     };
     const result = await prepareReviewTargetsCore(
@@ -116,6 +117,7 @@ describe("enabler 0.10 — a non-file revision is a MEMBER, not a floor", () => 
           downloadHref: isFileFormMember(input.member) ? "/content" : null,
           propsApiVersion: input.propsApiVersion,
           content: absentArtifactContent(input.representationRevisionId),
+          edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
         }),
     };
     const result = await prepareReviewTargetsCore(

@@ -70,7 +70,9 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -84,7 +86,9 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs,
       outputRenderedBelow: false,
+      outputEvidence: "outputs",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -98,11 +102,17 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
-  it("counts step results as output", () => {
+  // cinatra#3002 — step results still count as output, but they are REPORTED AS
+  // step results. Folded into one boolean they made a run whose only record was
+  // a step result look exactly like a run with a transcript, and the transcript
+  // host then named a transcript that was never written.
+  it("counts step results as output, and names them as the evidence", () => {
     expect(
       resolveRunTerminalOutcome({
         status: "completed",
@@ -112,7 +122,27 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "step-results",
       evidenceIndeterminate: false,
+      evidencePending: false,
+    });
+  });
+
+  // A transcript outranks a step result when a run holds both: it is the
+  // stronger claim, and it is what the transcript host actually renders.
+  it("names the transcript when the run holds both kinds of evidence", () => {
+    expect(
+      resolveRunTerminalOutcome({
+        status: "completed",
+        evidence: { outputs: [], hasTranscript: true, hasStepResults: true },
+      }),
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      outputEvidence: "transcript",
+      evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -135,7 +165,9 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: true,
+      outputEvidence: "transcript",
       evidenceIndeterminate: false,
+      evidencePending: false,
     });
   });
 
@@ -153,8 +185,37 @@ describe("resolveRunTerminalOutcome", () => {
       // rendered below. The panel suppresses its "No messages yet." line under
       // this card, so that claim pointed the user at blank space.
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
+      // FIX LEG 5: and it is still ON ITS WAY. A caller that does not track its
+      // read means exactly this by a null evidence, and the reading it owes the
+      // user here is not the one it owes a read that came back empty-handed.
+      evidencePending: true,
     });
+  });
+
+  // FIX LEG 5 (cinatra#3002). The SAME null evidence, with the caller stating
+  // that its read has come back and could not say. The fifth proof round read
+  // the conversation at the live completion instant and saw "could not be
+  // loaded" over a run whose row was written seconds before and arrived
+  // seconds after, with no reload — because these two states were one.
+  it("separates a read still in flight from a read that came back with nothing", () => {
+    const stillReading = resolveRunTerminalOutcome({
+      status: "completed",
+      evidence: null,
+      evidenceRead: "pending",
+    });
+    const cameBackEmptyHanded = resolveRunTerminalOutcome({
+      status: "completed",
+      evidence: null,
+      evidenceRead: "settled",
+    });
+    // Both stay conservative: neither may name a place or claim emptiness.
+    expect(stillReading).toMatchObject({ evidenceIndeterminate: true, outputEvidence: "none" });
+    expect(cameBackEmptyHanded).toMatchObject({ evidenceIndeterminate: true, outputEvidence: "none" });
+    // And they are told apart, which is the whole point.
+    expect(stillReading).toMatchObject({ evidencePending: true });
+    expect(cameBackEmptyHanded).toMatchObject({ evidencePending: false });
   });
 
   // Codex round-2 finding. A BROKEN output read used to be swallowed into an
@@ -176,7 +237,10 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read came back; whatever else is unknown, it is not still running.
+      evidencePending: false,
     });
   });
 
@@ -201,7 +265,10 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs: [],
       outputRenderedBelow: false,
+      outputEvidence: "none",
       evidenceIndeterminate: true,
+      // The read came back; whatever else is unknown, it is not still running.
+      evidencePending: false,
     });
   });
 

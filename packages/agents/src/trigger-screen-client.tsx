@@ -1,5 +1,6 @@
 "use client";
 
+import { durationCopyFor } from "./duration-copy";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, type DefaultValues } from "react-hook-form";
@@ -26,6 +27,7 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
 // `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
@@ -83,12 +85,6 @@ export type TriggerScreenFormValues = FormValues;
 // Helpers
 // -----------------------------------------------------------------------------
 
-function formatRange(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} hr`;
-}
-
 /**
  * THE DURATION LINE READS ONLY WHAT THE DRAWING GIVES IT (cinatra#3182 item 5).
  *
@@ -103,12 +99,14 @@ function formatRange(seconds: number): string {
  * LINE: where the drawing gives nothing, nothing is drawn. Inventing an
  * estimate for a run with no history would be a worse answer than withholding
  * a line that has nothing to say.
+ *
+ * THE RENDERER ITSELF LIVES IN ITS OWN LEAF (cinatra#3174 fix leg 1). The
+ * schedule card in a conversation draws this same line, and its producer is a
+ * server module that cannot import this client component — so one pure leaf
+ * renders it for both surfaces rather than two copies rounding differently.
+ * Re-exported here under the name this module's own readers already use.
  */
-export function durationCopy(d: DurationEstimate): string {
-  const min = formatRange(d.prepMinSeconds + d.gatedMinSeconds);
-  const max = formatRange(d.prepMaxSeconds + d.gatedMaxSeconds);
-  return `About ${min} – ${max}.`;
-}
+export const durationCopy = (d: DurationEstimate): string => durationCopyFor(d);
 
 /**
  * THE OPTION ROW, AS THE DRAWING DRAWS IT (cinatra#3182 items 2, 3 and 4).
@@ -117,7 +115,11 @@ export function durationCopy(d: DurationEstimate): string {
  * (`background: var(--surface-strong)`), and the chosen row layers the primary
  * tint on that same base (`linear-gradient(rgba(54,78,129,0.05),
  * rgba(54,78,129,0.05)), var(--surface-strong)`) inside a
- * `1px solid var(--blue)` edge. `--blue` is this palette's `--primary`; the
+ * `1px solid var(--blue)` edge. `--blue` is the drawing's own indigo, carried
+ * by `--indigo-ink` — the app token declared once and re-declared by no
+ * palette, so the chosen row marks the choice with the same colour in both
+ * (cinatra#3279: keyed to `--primary`, the palette's ACTION colour, the edge,
+ * the dot and the tint all went near-white in the dark palette); the
  * boundary of an unchosen row is the control boundary `--input`, which carries
  * `--line-strong`'s own value in the light palette and the raised dark value
  * cinatra#3107 pinned for a control edge on a dark ground.
@@ -134,17 +136,17 @@ export function optionRowClass(chosen: boolean, interactive: boolean): string {
     "flex flex-col gap-3 rounded-control border bg-surface-strong px-4 py-3 text-left transition-colors",
     interactive ? "cursor-pointer" : "",
     chosen
-      ? "border-primary bg-linear-to-b from-primary/5 to-primary/5"
+      ? "border-indigo-ink bg-linear-to-b from-indigo-ink/5 to-indigo-ink/5"
       : "border-input",
   ]
     .filter(Boolean)
     .join(" ");
 }
 
-/** The radio disc: `2px solid var(--line-strong)`, the primary token once chosen. */
+/** The radio disc: `2px solid var(--line-strong)`, the drawn indigo once chosen. */
 export function optionDiscClass(chosen: boolean): string {
   return `flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
-    chosen ? "border-primary" : "border-input"
+    chosen ? "border-indigo-ink" : "border-input"
   }`;
 }
 
@@ -257,6 +259,12 @@ export type TriggerScreenClientProps = {
    */
   statedSchedule?: ProposedSchedule | null;
   durationEstimate?: DurationEstimate | null;
+  /**
+   * How many steps the agent declares (cinatra#3224). Where the estimator has
+   * no reading — a freshly installed agent, no history — the Estimated run
+   * duration line is drawn over this count instead of being withheld.
+   */
+  declaredStepCount?: number | null;
   inputParams?: unknown;
   requiredFields?: unknown;
   properties?: unknown;
@@ -647,7 +655,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "immediate")}>
-                    {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <Zap aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Run right after setup</span>
@@ -680,7 +688,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "scheduled")}>
-                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <CalendarClock aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Schedule for later</span>
@@ -775,7 +783,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   className={OPTION_HEAD_CLASS}
                 >
                   <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "recurring")}>
-                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
                   <Repeat aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
                   <span data-schedule-option-label="" className="text-sm font-semibold">Recurring</span>
@@ -962,8 +970,13 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <span className="text-muted-foreground">:</span>
                     <Select value={String(recurring.minute)} onValueChange={(v) => updateRecurring({ minute: Number(v) })}>
                       <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278) — the same
+                          defect the schedule card carried: a stated 05:12 found
+                          no option for 12 and drew a blank minute. Only the
+                          option set changes; the cron this row builds is the
+                          same builder it always was. */}
                       <SelectContent>
-                        {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                        {Array.from({ length: 60 }, (_, m) => (
                           <SelectItem key={m} value={String(m)}>{String(m).padStart(2, "0")}</SelectItem>
                         ))}
                       </SelectContent>
@@ -999,14 +1012,21 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             </div>
           </div>
 
-          {/* Estimated run duration — drawn only where there IS one to draw
-              (cinatra#3182 item 5, see `durationCopy`). */}
-          {props.durationEstimate ? (
-            <div className="flex flex-col gap-1">
-              <Label>Estimated run duration</Label>
-              <p className="text-sm text-muted-foreground">{durationCopy(props.durationEstimate)}</p>
-            </div>
-          ) : null}
+          {/* THE ESTIMATED RUN DURATION LINE, ALWAYS (cinatra#3224). The ratified
+              drawing gives it as part of the step's anatomy with no condition
+              on it — "An Estimated run duration line sits above the actions" —
+              and the re-opened Schedule step shows "the same Estimated run
+              duration". Where the estimator has no reading the line is drawn
+              over the agent's declared step count (`declaredDurationEstimate`),
+              never withheld and never a sentence saying it has no answer; this
+              supersedes the withheld-line rule the note above `durationCopy`
+              records from cinatra#3182 item 5. */}
+          <div className="flex flex-col gap-1" data-schedule-duration="">
+            <Label>Estimated run duration</Label>
+            <p className="text-sm text-muted-foreground" data-schedule-duration-copy="">
+              {durationCopy(props.durationEstimate ?? declaredDurationEstimate(props.declaredStepCount))}
+            </p>
+          </div>
 
           {/* Submit — absent entirely in the read-only reading (cinatra#2980):
               "no controls at all". A disabled Continue would still be a control,

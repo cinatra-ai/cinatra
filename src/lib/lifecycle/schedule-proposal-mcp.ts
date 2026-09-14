@@ -191,9 +191,31 @@ const inputSchema = z
 
 export const SCHEDULE_PROPOSAL_TOOL_NAME = "schedule_proposal_render";
 
+/**
+ * THE CARD IS THE WHOLE READING, AND THE MODEL IS TOLD SO (cinatra#3174 fix leg
+ * 3).
+ *
+ * The second graded proof round measured a three-bullet schedule summary —
+ * schedule, timezone, agent — drawn above the configured card, and failed four
+ * checklist items per palette on it. Nothing in this tree composes that text:
+ * the producer answers with an envelope, the platform's own start sentence is
+ * one line, and the card draws no summary box of its own (its renderer is
+ * asserted for exactly that). It is the assistant's own prose, and the one
+ * place the product can rule it is the instruction this tool carries, which the
+ * model reads on every turn that can draw this card.
+ *
+ * The rule is the drawing's own sentence: "No summary box is ever drawn, no
+ * status label, and nothing stands between the reader and the form — the rows
+ * are the reading."
+ */
+export const SCHEDULE_PROPOSAL_SAY_NOTHING_OVER_THE_CARD =
+  "The card is the whole reading: after calling this, do NOT restate the schedule, the timezone, the agent or the recurrence in your reply, and draw no summary, list or status line above or below the card — the rows are the reading. One short sentence introducing the card is all a reply needs.";
+
 export const SCHEDULE_PROPOSAL_TOOL_META = {
   description:
-    "PROPOSE a schedule for an agent and show it in the conversation as its scheduling card. Name the agent the way the person did — pass `packageName` (the canonical scoped form looks like '@cinatra-ai/<slug>'), or `templateId` when a prior tool result returned one; pass exactly one. Creates NOTHING: no run, no schedule, no server record — the card asks the person to Confirm or Adjust, and only their Confirm arms anything. Use it whenever the person asks for an agent to run later or on a repeating schedule. Give the schedule the way the scheduling form expresses it (immediate / a local date-time / a recurrence), never as a cron expression. Answers a fixed 'not available to you' when the proposal cannot be made.",
+    "PROPOSE a schedule for an agent and show it in the conversation as its scheduling card. " +
+    SCHEDULE_PROPOSAL_SAY_NOTHING_OVER_THE_CARD +
+    " Name the agent the way the person did — pass `packageName` (the canonical scoped form looks like '@cinatra-ai/<slug>'), or `templateId` when a prior tool result returned one; pass exactly one. Creates NOTHING: no run, no schedule, no server record — the card asks the person to Confirm or Adjust, and only their Confirm arms anything. Use it whenever the person asks for an agent to run later or on a repeating schedule. Give the schedule the way the scheduling form expresses it (immediate / a local date-time / a recurrence), never as a cron expression. Answers a fixed 'not available to you' when the proposal cannot be made.",
   inputSchema,
 } as const;
 

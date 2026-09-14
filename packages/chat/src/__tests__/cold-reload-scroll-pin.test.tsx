@@ -35,7 +35,7 @@
 // ---------------------------------------------------------------------------
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 // The mounted list reaches two cookie-bound server actions and the AG-UI run
 // panel. Replaced here for the reasons set out in
@@ -86,7 +86,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
 
 import { startScrollSettlePin, type ScrollSettleEnv } from "../scroll-settle";
-import { chatSurfaceElement } from "./conversation-column-harness";
+import { chatSurfaceElement, mountSurface } from "./conversation-column-harness";
 
 afterEach(cleanup);
 
@@ -452,10 +452,15 @@ describe("the conversation column arms the settle pass on a cold thread load", (
 
   /** Mount `/chat` and hand back its scroll container, measurable. */
   async function mountChatThread(threadId: string) {
-    const view = render(chatSurfaceElement({ threadId }));
-    await waitFor(() =>
-      expect(view.container.querySelector("[data-conversation-list]")).not.toBeNull(),
-    );
+    // Mounted through the SHARED harness, which waits for the lazily loaded
+    // list under the established cold-mount budget rather than the test
+    // library's default one-second window (cinatra#3344). The list sits behind
+    // the column's own lazy-import boundary, so the FIRST mount in a worker
+    // pays the whole chunk's import cost — on a loaded runner that is a race
+    // against the default budget, not a measurement of the settle pass. What is
+    // asserted below is unchanged: the pass is still driven by the fake
+    // observer and the injected frame queue.
+    const view = await mountSurface("chat", { threadId });
     const scroller = view.container.querySelector<HTMLElement>(
       "[data-parity-surface='chat'] > div > div.overflow-y-auto",
     );

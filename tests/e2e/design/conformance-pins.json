@@ -6,29 +6,29 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "e3e59dfd5b832f408bcba30649234f1bd0fb4f5774531347a0c8fad19fc77ddc",
-      "specContentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168"
+      "manifestSha256": "7bd7505f5cb4b60ec77975718ed7759a62b78179bbcaeee6200373c9a780de8b",
+      "specContentHash": "sha256:5e39a2f6b4360194511415a8bcfdbef45e5abcf3009d09ce0c45357ce327c025"
     },
     {
       "id": "app-components",
       "file": "app-components.json",
       "source": "repo",
-      "manifestSha256": "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
-      "specContentHash": "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add"
+      "manifestSha256": "ddfcd50b57cea849063d6bb067c3a710169b5f48282154b6397f3ba1f6de9928",
+      "specContentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "manifestSha256": "9513577bfe20c16af19d93d2000bc7da3bf91aba1fea48e6301cd0b8e27a02b9",
-      "specContentHash": "sha256:60465f0e227f0308c18a215c9a2d14c95efda2f064800a2c4c59c729491b019b"
+      "manifestSha256": "c7cd9ef550e35ed57299bcd5c0a3c9819f7fc91e1f1f66632d9389428f05ddff",
+      "specContentHash": "sha256:ee7de0e23e82e89543b00431472fb7978567277006076f692cd7e865880e179a"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
-      "source": "repo",
-      "manifestSha256": "be135a4a4e8d5bf8ae3aaa9afad238cef5050864c4b874f07428f39cb683f223",
-      "specContentHash": "sha256:a7b53676fceb18aed9d3b3991f45824627e1d5ea373b7f48b03926ebe822cd47"
+      "source": "published",
+      "manifestSha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
+      "specContentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
     },
     {
       "id": "app-notifications",

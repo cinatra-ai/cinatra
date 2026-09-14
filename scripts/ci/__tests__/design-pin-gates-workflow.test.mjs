@@ -108,6 +108,12 @@ const INSTALLS = [
   "pnpm/action-setup",
 ];
 
+// Every job in this workflow routes through the repository's runner-class
+// variable rather than a hardcoded runner label, so a routing change stays one
+// edit for the whole file. A job that keeps the literal label silently opts out
+// of that routing.
+const RUNNER_CLASS = "${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-latest\"') }}";
+
 const GATES = [
   ["the spec-freshness gate", FRESHNESS_CHECKER_PATH],
   ["the anchor-resolution gate", ANCHOR_RESOLUTION_CHECKER_PATH],
@@ -129,6 +135,14 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
       for (const install of INSTALLS) {
         expect(block, `${label} — ${install}`).not.toContain(install);
       }
+    });
+  it(`${label} routes to the runner class its siblings route to`, () => {
+      const running = [...jobBlocks(workflow())].filter(([, block]) => block.includes(checker));
+      expect(running, label).toHaveLength(1);
+      const [, block] = running[0];
+      const runsOn = /^ {4}runs-on: (.+)$/m.exec(block);
+      expect(runsOn, `${label} - runs-on`).not.toBeNull();
+      expect(runsOn[1].trim(), label).toBe(RUNNER_CLASS);
     });
   }
 

@@ -176,7 +176,13 @@ function absFor(storageKey: string): string {
 
 // Minimal dependency-free magic-byte sniff (no new deps per repo constraint).
 // Common types only; unknown → declaredMime (if safe) → octet-stream.
-function sniffMime(head: Uint8Array, declaredRaw?: string): string {
+//
+// EXPORTED (cinatra#3029, epic #3023 W5): the detection ladder's SIGNATURE rung
+// is "the store's sniffer as it is" (plan section 8.6) - the ladder imports THIS
+// function rather than carrying a second copy of the same magic bytes. It stays
+// here, in the store that owns it, so the identity arms the artifact-UI boundary
+// gate already dispositions keep their home and their baseline entries.
+export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   const b = head;
   // CANONICALIZE the declared MIME up front: strip parameters (`; charset=…`),
   // trim, and lowercase. The stored/detected MIME must be canonical — the preview

@@ -78,6 +78,7 @@ import {
 } from "@/lib/authz/audit";
 import { createDurableExecutionAuditWriter } from "@/lib/execution/execution-broker-construct";
 import { drainAuditPasses } from "@/lib/execution/execution-broker-remote-construct";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The harness's fixed identities. Imported rather than retyped so a rename on
 // either side breaks the build instead of the arm.
@@ -94,7 +95,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const SCHEMA = process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra";
 

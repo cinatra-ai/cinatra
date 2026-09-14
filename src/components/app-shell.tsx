@@ -27,6 +27,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  agentInstanceTabLabel,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
@@ -654,30 +655,42 @@ export function AppShell({
     // new/empty chat (no title) on the route's own "Chat" tab title.
     const isChatThread = isChatPathname(pathname);
     const segments = pathname.split("/").filter(Boolean);
-    const isAgentInstance = segments.length >= 4 && segments[0] === "agents";
-    const agentLabel = isAgentInstance
-      ? crumbContributions.find(
-          (c) =>
-            // Position-targeted entries are not replacements (cinatra#3068 fix
-            // leg 2 convergence) -- an appended step crumb must never become
-            // the browser-tab title of the run it was appended to.
-            !c.insertBefore &&
-            !c.appendAfter &&
-            c.prefix === "/" + segments.slice(0, 4).join("/"),
-        )?.label
-      : undefined;
+    // THE AGENT INSTANCE'S OWN LABEL (cinatra#2809): read through the trail's
+    // own rule, so the tab mirrors the trail on the bare tree and under every
+    // scope base alike. A null leaves the title to the branches below.
+    const agentLabel = agentInstanceTabLabel(pathname, breadcrumbSegments);
+    let resolved: string | null = null;
     if (isChatThread && chatThreadTitle) {
-      document.title = `${chatThreadTitle} | Cinatra`;
-    } else if (isAgentInstance && agentLabel) {
-      document.title = `${agentLabel} | Cinatra`;
+      resolved = `${chatThreadTitle} | Cinatra`;
+    } else if (agentLabel) {
+      resolved = `${agentLabel} | Cinatra`;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
       // correct server title with humanized hex. Deliberately no write.
+      resolved = null;
     } else {
-      document.title = deriveDocumentTitle(pathname, activeHeader?.title);
+      resolved = deriveDocumentTitle(pathname, activeHeader?.title);
     }
-  }, [activeHeader?.title, pathname, chatThreadTitle, crumbContributions]);
+    if (!resolved) return;
+    const apply = () => {
+      if (document.title !== resolved) document.title = resolved;
+    };
+    apply();
+    // THE ROUTE'S OWN METADATA CAN LAND AFTER US (cinatra#2809). On a client
+    // transition — the launch redirect above all, which replaces the launcher
+    // address with the created instance's own — React commits the route's
+    // `<title>` from `generateMetadata` after this effect has already run, and
+    // the resolved title we just wrote is replaced by the route's generic one
+    // while the trail beside it goes on naming the run. The tab has to keep
+    // mirroring the trail, so re-assert when that commit lands. The guard above
+    // makes the re-assert a no-op once the two agree, so this cannot loop.
+    const head = document.head;
+    if (!head || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(apply);
+    observer.observe(head, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.

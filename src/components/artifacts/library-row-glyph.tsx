@@ -27,6 +27,7 @@ import {
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   absentArtifactContent,
   buildArtifactRendererProps,
+  readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import {
   classifyLoadablePath,
@@ -94,6 +95,8 @@ export async function LibraryRowGlyph({
       });
       if (result.ok) {
         const props = buildArtifactRendererProps({
+          // A list row draws, it never edits (enabler 0.20).
+          edit: readOnlyArtifactEdit("read-only-surface"),
           artifact: summary,
           representation: null,
           previewHref: null,

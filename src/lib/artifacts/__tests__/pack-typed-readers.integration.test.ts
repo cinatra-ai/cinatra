@@ -34,6 +34,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import { z } from "zod";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -56,7 +57,7 @@ vi.mock("@/lib/register-all-object-types", () => ({
 }));
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_pack_readers_1785_a4";
 const ORG = "org-a4";
 const PACK_TYPE = "@cinatra-ai/pdf-artifact:document";

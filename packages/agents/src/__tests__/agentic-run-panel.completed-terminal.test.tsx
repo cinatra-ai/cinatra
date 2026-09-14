@@ -238,13 +238,20 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     expect(screen.queryByText(/no messages yet/i)).toBeNull();
   });
 
-  it("leaves Start new run off the chat mount — it navigates out of the thread", async () => {
+  // THE SECOND PIN OF THE SUPERSEDED CONTRACT (cinatra#3002, fix leg 4). This
+  // case read the inverse until the fourth proof round found "Start new run"
+  // missing from the completion card on the conversation on all four of its
+  // frames. The ratified drawing does not let a host make that call: "A host
+  // supplies the frame and the measure a card is laid out at; it never drops a
+  // region, a state or an affordance the card's own section draws, and never
+  // adds one" — and the card's own section draws it.
+  it("draws Start new run on the chat mount too — the card's own affordance", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps({ surface: "chat" })} />);
 
     await waitFor(() =>
       expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
     );
-    expect(screen.queryByText(/Start new run/i)).toBeNull();
+    expect(screen.queryByText(/Start new run/i)).not.toBeNull();
   });
 });

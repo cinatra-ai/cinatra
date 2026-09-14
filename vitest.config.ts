@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import * as path from "node:path";
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "./vitest.placeholder-db-url";
 
 // Minimal root-level vitest config for src/** unit tests.
 // Package-scoped tests still live in each workspace package (packages/*)
@@ -405,6 +406,12 @@ export default defineConfig({
     // load on a constrained CI runner and trips the 5s vitest default. 30s gives
     // those scanners headroom without masking a genuinely hung unit test.
     testTimeout: 30_000,
+    // The wholesale root suite also runs beforeAll/beforeEach hooks that
+    // import large slices of the app's module graph. Under the same
+    // constrained-runner load, that import time crosses vitest's 10s hook
+    // default even though the hook logic itself is trivial. Give hooks the
+    // same headroom as tests; a genuinely hung hook still fails at 30s.
+    hookTimeout: 30_000,
     include: [
       "src/**/__tests__/**/*.test.{ts,tsx}",
       "src/components/**/*.test.{ts,tsx}",
@@ -583,9 +590,10 @@ export default defineConfig({
       "src/__tests__/mcp-server-tool-count.test.ts",
     ],
     env: {
+      // The placeholder sits off the PostgreSQL default port and nothing in
+      // the test environment answers it (see the module's comment).
       SUPABASE_DB_URL:
-        process.env.SUPABASE_DB_URL ??
-        "postgres://unused:unused@localhost:5432/unused",
+        process.env.SUPABASE_DB_URL ?? ROOT_SUITE_PLACEHOLDER_DB_URL,
       // rename-vendor-action.test.ts uses the real instance-secrets module
       // (no vi.mock for it), so encryptSecret needs a valid 32-byte key.
       // 64 hex chars = 32 bytes. Tests that want to assert the missing-key

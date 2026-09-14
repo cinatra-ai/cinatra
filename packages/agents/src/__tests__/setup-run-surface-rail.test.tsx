@@ -417,11 +417,18 @@ describe("the setup run page draws the two-column run surface", () => {
     }
     // The rail column carries the rows and the marks between them, and nothing
     // else: three entries, and one separator standing between each adjacent
-    // pair (cinatra#3188 item 2).
-    const railChildren = Array.from(railColumn(container)[0].children);
-    expect(railChildren.length).toBe(5);
+    // pair (cinatra#3188 item 2). A row and the mark beneath it share ONE box
+    // (cinatra#3225 items 2 and 3, fix leg 9), so the count is taken over the
+    // rows and marks the column contains rather than over its direct children.
+    const column = railColumn(container)[0];
+    const railParts = Array.from(
+      column.querySelectorAll(
+        "[data-run-surface-rail-step], [data-run-surface-rail-separator]",
+      ),
+    );
+    expect(railParts.length).toBe(5);
     expect(
-      railChildren.filter((child) => child.matches("[data-run-surface-rail-separator]")).length,
+      railParts.filter((child) => child.matches("[data-run-surface-rail-separator]")).length,
     ).toBe(2);
   });
 

@@ -10,8 +10,12 @@
  *      awaiting human approval" banner. That banner appearing on one entry path
  *      and the form on another is defect 2 of the issue.
  *   2. A run that finishes in a conversation renders its completion card there,
- *      linking the artifact it produced, and WITHOUT the "Start new run" button
- *      (which navigates out of the conversation).
+ *      linking the artifact it produced, and WITH the "Start new run" button —
+ *      the card's own section draws that control, and the ratified drawing's
+ *      host rule is that a host "never drops a region, a state or an affordance
+ *      the card's own section draws" (cinatra#3002, fix leg 4; this pin was the
+ *      inverse until the fourth proof round read the control missing on the
+ *      conversation on all four of its frames).
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/agentic-run-panel.chat-lifecycle.test.tsx
@@ -253,11 +257,11 @@ describe("a run that finishes in the conversation shows its artifact there", () 
     expect(link.getAttribute("href")).toBe("/artifacts/art-1");
   });
 
-  it("leaves out Start new run in chat — it navigates out of the conversation", async () => {
+  it("draws Start new run in chat too — a host never drops the card's affordance", async () => {
     await renderCompleted("chat");
 
     await screen.findByText("Draft: human purpose");
-    expect(screen.queryByText(/Start new run/i)).toBeNull();
+    expect(screen.queryByText(/Start new run/i)).not.toBeNull();
   });
 
   it("keeps Start new run on the run page", async () => {

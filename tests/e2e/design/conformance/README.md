@@ -247,8 +247,23 @@ REMOVE the corresponding exemption in the same PR.
 ```sh
 node scripts/design/check-conformance-testids.mjs
 node scripts/design/check-conformance-ratchet.mjs origin/main
-pnpm test:e2e:design   # runs pixel-diff + this suite (boots pnpm dev locally)
+pnpm test:e2e:design        # runs the families your diff can affect
+pnpm test:e2e:design:plan   # prints that selection without running anything
+DESIGN_SELECT=all pnpm test:e2e:design   # every family, as CI runs it on main
 ```
+
+`pnpm test:e2e:design` no longer runs every family every time. It first runs
+`scripts/ci/design-select.mjs`, which diffs against the merge base with
+`origin/main` and picks the spec families whose own graph (the spec file, the
+`/design-fixtures` routes it drives, and everything those import) contains a
+changed file. That graph follows the ROOT layout and the tsconfig aliases
+back into the workspace packages, so a module a fixture reaches only
+indirectly still selects its families. A change with no UI in it runs no
+Playwright at all; a shared
+primitive, a workspace package, a stylesheet, a dependency, a pinned manifest,
+an app layout or an unresolvable diff base runs every family. `DESIGN_SELECT=all`
+forces the whole suite, and a golden-refresh run (`RENDER_PARITY_UPDATE=1`,
+`RENDER_PARITY_VISUAL=1`, `test:e2e:design:update`) is never narrowed.
 
 The seeded data-contract surfaces additionally need a reachable
 `SUPABASE_DB_URL` (the suite auto-provisions the "local" run namespace via

@@ -348,6 +348,23 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      // THE RUN FOLDER'S RETENTION TIER (cinatra#3030, item 0.21): "deleted
+      // after pickup plus a grace period". The sweep is pure and takes no
+      // lock, so it runs where the pickup runs — once at boot, and again after
+      // every pickup (see default-road-pickup-run.ts). Without a caller the
+      // grace period would be a rule nothing applies.
+      name: "run-folder-retention-sweep",
+      policy: "retryable",
+      run: async () => {
+        const { sweepRunFolders } = await import("@/lib/artifacts/run-folder-retention");
+        const summary = await sweepRunFolders();
+        console.log(
+          `[run-folder-retention] boot sweep: ${summary.deleted} of ${summary.scanned} ` +
+            "run folder(s) deleted",
+        );
+      },
+    },
+    {
       name: "seed-unbound-output-derive-sweep",
       policy: "retryable",
       run: async () => {
@@ -366,6 +383,25 @@ export function systemLoopPhases(): BootPhase[] {
         // (even dynamically) from it. Register BEFORE seeding so neither the loop
         // NOR the one-shot derive handler can observe an empty slot on a healthy
         // boot.
+        // THE DEFAULT ROAD's pickup core (cinatra#3029, epic #3023 W5) is
+        // registered into its runner slot HERE, on the boot-only graph, for the
+        // same route-graph-ratchet reason the derivation runner is: the WayFlow
+        // terminal path (packages/agents/src/execution.ts) sits in the reachable
+        // graph of the LOCKED dev-perf routes, so it reads the slot instead of
+        // importing the pickup, the ladder, the artifact writer and the pooled-db
+        // modules behind them. Registered FIRST, before anything can complete a
+        // run in this bundle.
+        const { registerDefaultRoadPickupRunner } = await import(
+          "@cinatra-ai/agents"
+        );
+        const { runDefaultRoadPickup } = await import(
+          "@/lib/artifacts/default-road-pickup-run"
+        );
+        registerDefaultRoadPickupRunner({
+          pickup: (input) => runDefaultRoadPickup(input),
+        });
+        console.log("[default-road] pickup runner registered");
+
         const { registerUnboundOutputDerivationRunner } = await import(
           "@/lib/background-jobs-registry"
         );

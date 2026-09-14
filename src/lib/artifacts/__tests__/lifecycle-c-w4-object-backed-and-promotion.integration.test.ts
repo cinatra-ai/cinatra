@@ -28,6 +28,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import * as zod from "zod";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -53,7 +54,7 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
 const ORG = "org-3028-w4";
 const EXT = "@cinatra-ai/campaigns-artifact";
@@ -193,6 +194,21 @@ function seedMatcherAssertion(input: { objectId: string; extension: string; conf
        (id, org_id, artifact_id, extension, asserted_by, eligibility, confidence)
      VALUES ($1,$2,$3,$4,'matcher','draft',$5)`,
     [nextId("assert"), ORG, input.objectId, input.extension, input.confidence],
+  );
+}
+
+/** A PERSON'S OWN classic assertion — the second road §XI.10 gives onto the
+ *  promotion, seeded with the principal who is acting. */
+function seedPersonAssertion(input: {
+  objectId: string;
+  extension: string;
+  principal: string | null;
+}) {
+  sql(
+    `INSERT INTO "${S()}"."semantic_assertion"
+       (id, org_id, artifact_id, extension, asserted_by, eligibility, asserted_by_principal)
+     VALUES ($1,$2,$3,$4,'user','eligible',$5)`,
+    [nextId("assert"), ORG, input.objectId, input.extension, input.principal],
   );
 }
 
@@ -570,6 +586,69 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     });
     expect(out).toEqual({ ok: false, reason: "already-promoted" });
     expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  // THE PERSON'S OWN ROAD, AT THE CONVERGING BRANCH (fix leg 2, convergence
+  // round). It carries the same two conditions as the matcher's: the acting
+  // person's own assertion, and the confirmation.
+  it("REFUSES the converging append to an unconfirmed caller on the person's road too", async () => {
+    const objectId = nextId("obj-carries-person-unconfirmed");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-3143" });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: false,
+      principal: "principal-3143",
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "already-promoted" });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("REFUSES the converging append to a person who is not the one who asserted", async () => {
+    const objectId = nextId("obj-carries-other-person");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      principal: "principal-bob",
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "already-promoted" });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("COMPLETES the converging append for the person who asserted, once confirmed", async () => {
+    const objectId = nextId("obj-carries-own-person");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      principal: "principal-alice",
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out.ok).toBe(true);
+    expect(representationsOf(objectId)).toHaveLength(2);
   });
 
   it("REFUSES without the person's confirmation, however confident the match", async () => {

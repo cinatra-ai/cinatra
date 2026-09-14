@@ -31,6 +31,18 @@ const GATE = path.resolve(
   "dev-boot-route-gate.mjs",
 );
 
+// THE BOUNDS THIS TIER GIVES THE GATE, in one place, so a wait can be DERIVED
+// from them instead of guessed (cinatra#3368). Every `runGate` below passes
+// exactly these on the command line.
+const GATE_HEALTH_BOUND_MS = 20_000;
+const GATE_ROUTE_BOUND_MS = 1_200;
+const GATE_SHUTDOWN_GRACE_MS = 2_000;
+// The one bound the gate keeps to itself: after it stops an unrouted boot it
+// waits this long for the application port to come free before the next boot
+// binds it (`waitForPortFree(..., 60_000)` in scripts/ci/dev-boot-route-gate.mjs).
+// It is not settable from the command line, so it is mirrored here.
+const GATE_PORT_FREE_BOUND_MS = 60_000;
+
 /**
  * The stand-in development server.
  *
@@ -155,13 +167,13 @@ function runGate({
       "--route",
       "POST:/api/auth/sign-up/email",
       "--health-bound-ms",
-      "20000",
+      String(GATE_HEALTH_BOUND_MS),
       "--route-bound-ms",
-      "1200",
+      String(GATE_ROUTE_BOUND_MS),
       "--max-boots",
       String(maxBoots),
       "--shutdown-grace-ms",
-      "2000",
+      String(GATE_SHUTDOWN_GRACE_MS),
       "--child-command",
       `"${process.execPath}" "${standin}" ${appPort} "${counter}" ${poisonedBoots} ${dieAfterMs} ${dieAfterRouteHits}`,
     ],
@@ -187,6 +199,44 @@ async function waitUntil(predicate, boundMs) {
   }
   return false;
 }
+
+/**
+ * Wait for a line the GATE ITSELF printed, or for the gate to exit — whichever
+ * happens first.
+ *
+ * This is what makes a reading event-driven rather than a wall-clock guess: the
+ * gate announces what it is about to do, so the test can wait on the
+ * announcement instead of on a number it chose. A gate that exits has nothing
+ * left to announce, so the wait ends there rather than burning its failsafe.
+ */
+async function waitForGateLine(run, needle, boundMs) {
+  let hasExited = false;
+  run.exited.then(() => {
+    hasExited = true;
+  });
+  const deadline = Date.now() + boundMs;
+  while (Date.now() < deadline) {
+    if (run.read().includes(needle)) return true;
+    if (hasExited) return run.read().includes(needle);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+// THE FAILSAFE CEILING FOR A TWO-BOOT REPLACEMENT, DERIVED — never guessed.
+//
+// A poisoned first boot costs the health bound plus the route bound; the
+// replacement costs the shutdown grace and the gate's own wait for the
+// application port to come free; the second boot costs a health bound and a
+// route bound again. This is the arithmetic of the bounds this file configures,
+// not a number picked to look generous — which is precisely what failed before
+// (cinatra#3368): a fixed 25 s ceiling, unrelated to the bounds the same test
+// had just handed the gate, ended the wait while a loaded box was still on the
+// second boot.
+const TWO_BOOT_CEILING_MS =
+  2 * (GATE_HEALTH_BOUND_MS + GATE_ROUTE_BOUND_MS) +
+  GATE_SHUTDOWN_GRACE_MS +
+  GATE_PORT_FREE_BOUND_MS;
 
 describe("parseGateArgs", () => {
   it("spends the readiness bound the Playwright tier spends, by default", () => {
@@ -222,14 +272,36 @@ describe("a boot that never registers the route", () => {
     const gatePort = await freePort();
     const run = runGate({ poisonedBoots: 1, maxBoots: 2, appPort, gatePort });
 
-    const opened = await waitUntil(() => gateAnswers(gatePort), 25_000);
+    // THE READING IS THE GATE'S OWN SIGNAL, then the port.
+    //
+    // `opening the gate on :PORT` is printed immediately before the listener is
+    // bound, so waiting for that line waits for the event rather than for a
+    // clock; only then is the port probed, with whatever is left of the derived
+    // two-boot ceiling above (never less than one route bound) as the settling
+    // window. Under load the line arrives late and the wait simply lasts longer;
+    // it no longer ends before the gate has had the time its own bounds allow.
+    const deadline = Date.now() + TWO_BOOT_CEILING_MS;
+    const announced = await waitForGateLine(
+      run,
+      `opening the gate on :${gatePort}`,
+      TWO_BOOT_CEILING_MS,
+    );
+    const opened =
+      announced &&
+      (await waitUntil(
+        () => gateAnswers(gatePort),
+        Math.max(GATE_ROUTE_BOUND_MS, deadline - Date.now()),
+      ));
     expect(run.read()).toContain("boot 1/2");
     // The gate must have DIAGNOSED the boot rather than merely timed out on it.
     expect(run.read()).toContain("not-found DOCUMENT");
     expect(run.read()).toContain("Replacing the boot");
     expect(run.read()).toContain("boot 2/2");
     expect(opened).toBe(true);
-  });
+    // The case may spend the derived ceiling above, so it is given that ceiling
+    // plus a probe's worth of settling — the file's 30 s default would otherwise
+    // cut the derived wait short again.
+  }, TWO_BOOT_CEILING_MS + GATE_ROUTE_BOUND_MS + 5_000);
 
   it("never opens the gate while every boot in the budget is unrouted, and says which route", async () => {
     const appPort = await freePort();

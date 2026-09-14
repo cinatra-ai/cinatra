@@ -89,6 +89,26 @@ const RECURRING_CANCELLED: TriggerScheduleProposalViewBody = {
   canCancel: false,
 };
 
+// THE FIRED READING RIDES THE ANSWER, BESIDE THE BODY (cinatra#3174 fix leg 1).
+// A one-off's gate stamp is no longer read as its firing on its own: the run
+// the gate opened over has to have actually run, which only the server can say,
+// so the resolver's answer carries the reading. These fixtures have always used
+// `released: true` on a NON-recurring settled body to mean "this schedule
+// fired", so the mock states that reading exactly where the fixture means it.
+function firedAside(body: unknown): { firedOnce?: true } {
+  const b = body as {
+    phase?: string;
+    released?: boolean;
+    triggerType?: string;
+  } | null;
+  return b !== null &&
+    b.phase === "settled" &&
+    b.released === true &&
+    b.triggerType !== "recurring"
+    ? { firedOnce: true }
+    : {};
+}
+
 function mountStep(body: TriggerScheduleProposalViewBody) {
   const fetchMock = vi.fn(
     async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -97,6 +117,7 @@ function mountStep(body: TriggerScheduleProposalViewBody) {
           kind: "trigger_schedule_proposal",
           state: { state: "settled" },
           body,
+          ...firedAside(body),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
