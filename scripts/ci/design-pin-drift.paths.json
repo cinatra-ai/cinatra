@@ -41,6 +41,8 @@
       "src/app/design-fixtures/conformance/connector-setup-fixture.tsx",
       "src/app/design-fixtures/conformance/connector-setup-seed.ts",
       "src/app/design-fixtures/conformance/connector-multi-connection-fixture.tsx",
+      "src/app/design-fixtures/conformance/connector-sharing-seed.ts",
+      "src/app/design-fixtures/conformance/connector-sharing-fixture.tsx",
       "src/app/design-fixtures/conformance/seed-data.ts",
       "src/app/design-fixtures/conformance/seeded/page.tsx",
       "src/app/design-fixtures/conformance/seeded/connector-grid-fixture.tsx"

@@ -18,6 +18,7 @@ import {
   ConnectorConnectionsFixture,
   ConnectorMultiConnectionFixture,
 } from "./connector-multi-connection-fixture";
+import { ConnectorSharingFixture } from "./connector-sharing-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
@@ -198,6 +199,24 @@ export default function ConformanceHarnessPage() {
             <ConnectorConnectionsFixture variant="populated" />
             <ConnectorConnectionsFixture variant="empty" />
             <ConnectorConnectionsFixture variant="loading" />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Connector setup — the Sharing tab (surfaces: connector-sharing,
+              connector-sharing-rollup, connector-sharing-locked)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-8">
+            <ConnectorSharingFixture variant="populated" />
+            {/* A connector that declares a ceiling, and one that only
+                recommends a scope — the two halves of the drawing's paragraph. */}
+            <ConnectorSharingFixture variant="locked" />
+            <ConnectorSharingFixture variant="recommended" />
+            {/* The `loading` state the surface declares. */}
+            <ConnectorSharingFixture variant="loading" />
           </CardContent>
         </Card>
 

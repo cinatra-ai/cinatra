@@ -82,6 +82,10 @@ import {
   prepareArtifactReviewTargets,
   type ReviewRunGatePorts,
 } from "./review-target-prepare";
+// TYPE-ONLY (wave 3): the roads are constructed on the surfaces that choose
+// them, so the four locked routes that reach this module carry none of their
+// graphs. See `./review-surface-roads`.
+import type { ReviewSurfaceRoads } from "./review-surface-roads";
 
 /** The reviewing principal + org + role hints threaded to every port. */
 export interface ReviewActorContext {
@@ -120,6 +124,9 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
 export async function prepareReviewTargets(args: {
   input: PrepareReviewInput;
   actorCtx: ReviewActorContext;
+  /** The roads this surface named (wave 3). Absent ⇒ the session byte routes,
+   *  the channel's named absence, and the first-party capture pair. */
+  roads?: ReviewSurfaceRoads | null;
 }): Promise<PrepareReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
@@ -132,6 +139,10 @@ export async function prepareReviewTargets(args: {
     orgId: actorCtx.orgId,
     actor: kernelActor,
     runGatePorts: bindReviewRunGatePorts(actorCtx),
+    // WAVE 3 — the roads. A surface that named one gets its addresses and its
+    // content; every other caller passes nothing and keeps exactly what it had.
+    byteMinter: args.roads?.byteMinter,
+    buildContent: args.roads?.buildContent,
   });
 }
 
@@ -354,8 +365,24 @@ export async function loadReviewGateSurface(args: {
   runId: string;
   reviewTaskId: string;
   actorCtx: ReviewActorContext;
+  /**
+   * THE ROADS THIS SURFACE NAMED (wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
+   *
+   * The island renders the same gate, for the same reader, through this same
+   * loader — that is why the card and the page cannot drift — but its reader
+   * holds a broker bearer and no cookie, so every address the surface hands out
+   * has to be one a subresource load can actually fetch. Naming the roads here
+   * is what switches all of it at once: the media displays' byte addresses, the
+   * CMS picture pair's, and the content the three browser fetchers stop
+   * fetching.
+   *
+   * ABSENT IS THE UNCHANGED ANSWER, in every particular.
+   */
+  roads?: ReviewSurfaceRoads | null;
 }): Promise<ReviewSurfaceModel> {
   const { runId, reviewTaskId, actorCtx } = args;
+  const roads = args.roads ?? null;
 
   // 1. Read access (§V) — no run read ⇒ never reach the surface.
   const readAccess = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
@@ -407,6 +434,7 @@ export async function loadReviewGateSurface(args: {
     const history = await prepareReviewTargets({
       input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
       actorCtx,
+      roads,
     });
     if (!history.ok) {
       return history.error.kind === "run-access-denied"
@@ -422,6 +450,7 @@ export async function loadReviewGateSurface(args: {
         isRepairSuccessorTaskId(reviewTaskId)
           ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
           : null,
+        roads,
       ),
       // As on the ready path: no gate/run column carries a producer summary in
       // this slice, so the chrome renders nothing rather than an empty summary.
@@ -434,6 +463,7 @@ export async function loadReviewGateSurface(args: {
   const prepared = await prepareReviewTargets({
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
+    roads,
   });
   if (!prepared.ok) {
     switch (prepared.error.kind) {
@@ -482,6 +512,7 @@ export async function loadReviewGateSurface(args: {
     actorCtx.orgId,
     targets,
     repairSuccessorGateId,
+    roads,
   );
 
   return {
@@ -619,12 +650,33 @@ async function loadPinnedCapturePairsForTargets(
   orgId: string,
   targets: readonly PreparedReviewTarget[],
   repairSuccessorGateId: string | null,
+  roads: ReviewSurfaceRoads | null = null,
 ): Promise<Record<string, PinnedCapturePairView>> {
   const out: Record<string, PinnedCapturePairView> = {};
   for (const prepared of targets) {
+    // WAVE 3 — "The CMS picture pair's broker minter — built today, with no
+    // caller — is wired here, so the pair loads inside a third-party
+    // application as well." This is that caller. The broker builder reads the
+    // SAME store rows and projects them through the SAME pure pair builder as
+    // the first-party arm below; only the address each picture carries differs,
+    // so the two tiers cannot show different comparisons.
+    //
+    // THE REPAIR SUCCESSOR'S PAIR IS NOT THIS BUILDER'S TO MAKE. A repair
+    // reading's pair is a comparison ACROSS two targets — the base gate's
+    // current picture against the successor's repaired one, with the drifted
+    // regions — and a per-target minter can only ever mint the successor's own
+    // two. Letting it answer here would silently replace the comparison the
+    // reviewer is being asked about with a different one, and the base
+    // picture's capability would in any case be sealed to a gate that does not
+    // pin the base target. So the surface's road is asked ONLY where the pair
+    // is a single target's; a repair successor keeps the first-party pair, and
+    // its pictures on the session road are a named gap rather than a wrong
+    // comparison drawn confidently.
     const pair = repairSuccessorGateId
       ? await loadPinnedRepairPair(orgId, repairSuccessorGateId, prepared.target)
-      : loadPinnedCapturePair(orgId, prepared.target, "review");
+      : roads?.capturePair
+        ? roads.capturePair(prepared.target)
+        : loadPinnedCapturePair(orgId, prepared.target, "review");
     if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
   }
   return out;
