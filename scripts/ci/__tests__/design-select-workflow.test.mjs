@@ -165,7 +165,12 @@ describe("the dependency-free contract checks move, they are not copied", () => 
   });
 
   it("keeps the ratchet's fail-closed base guard with them", () => {
-    expect(SELECT).toContain("BASE_SHA: ${{ github.event.pull_request.base.sha }}");
+    // The event's OWN frozen base: a queue candidate carries no
+    // pull_request payload (engineering#658 item 1).
+    expect(SELECT).toContain(
+      "BASE_SHA: ${{ github.event_name == 'merge_group' && " +
+        "github.event.merge_group.base_sha || github.event.pull_request.base.sha }}",
+    );
     expect(SELECT).toMatch(/conformance ratchet FAILED[\s\S]*exit 1/);
   });
 });
@@ -173,7 +178,8 @@ describe("the dependency-free contract checks move, they are not copied", () => 
 describe("the selection is bound to the event's frozen base commit", () => {
   it("hands the selector the frozen base sha, not a live branch tip", () => {
     expect(SELECT).toContain(
-      "DESIGN_SELECT_DIFF_BASE: ${{ github.event.pull_request.base.sha }}",
+      "DESIGN_SELECT_DIFF_BASE: ${{ github.event_name == 'merge_group' && " +
+        "github.event.merge_group.base_sha || github.event.pull_request.base.sha }}",
     );
     expect(SELECT).not.toContain("DESIGN_SELECT_DIFF_BASE: origin/");
   });
