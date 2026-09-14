@@ -76,7 +76,8 @@
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 70
     },
     {
       "context": "A2A protocol unit tests",
@@ -105,7 +106,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "Agents integration — gated set (+ full-tier report)",
@@ -262,7 +264,8 @@
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 10
     },
     {
       "context": "design suite verdict",
@@ -309,7 +312,8 @@
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "design-pin-drift",
@@ -396,7 +400,8 @@
         "scripts/ci/vitest-tier-coverage.mjs",
         ".github/workflows/execution-plane-e2e.yml"
       ],
-      "skippable": true
+      "skippable": true,
+      "timeoutMinutes": 5
     },
     {
       "context": "Execution-plane battery tier",
@@ -413,7 +418,8 @@
         "scripts/ci/vitest-tier-coverage.mjs",
         ".github/workflows/execution-plane-e2e.yml"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "Execution-plane unit tests",
@@ -462,7 +468,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "Hosted-MCP wire gate",
@@ -579,7 +586,8 @@
         "scripts/ci/vitest-tier-coverage.mjs",
         ".github/workflows/execution-plane-e2e.yml"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 5
     },
     {
       "context": "RBAC authz unit tests",
@@ -618,7 +626,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": null
     },
     {
       "context": "secrets-required-gate / secrets-required-gate",
@@ -667,7 +676,8 @@
       "paths": [
         "**"
       ],
-      "skippable": false
+      "skippable": false,
+      "timeoutMinutes": 10
     },
     {
       "context": "Trigger prod deploy in ops",
