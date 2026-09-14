@@ -280,6 +280,50 @@ function readOutputContent(value: unknown): OutputContent | null {
   };
 }
 
+/** The id the binding rung mints for ONE member of a FAN-OUT binding:
+ *  `<output name>[<index>]` (`ideas[0]` … `ideas[4]`), one per member of the
+ *  list the binding fanned out. */
+const FAN_OUT_MEMBER_OUTPUT_ID = /^(.+)\[(0|[1-9]\d*)\]$/;
+
+/**
+ * THE LIST IS NOT AN ARTIFACT, IT IS A LIST OF ARTIFACTS (cinatra#3476).
+ *
+ * A fan-out binding claims an end-node output by filing ONE ARTIFACT PER MEMBER,
+ * so the ids it reports back are the members' (`ideas[0]`…`ideas[4]`) and the
+ * bare key (`ideas`) appears in NO binding's id list. Read literally, the bare
+ * key then looks like a name no binding took: the road JSON-stringifies the
+ * whole list and files it as one MORE artifact beside the members — a list of
+ * artifacts saved as an artifact of its own.
+ *
+ * The members ARE the artifacts. An output whose members were filed through a
+ * fan-out binding is BOUND, so the bare key takes no road. Derived from the id
+ * SHAPE, never from a key name, so the rule holds for every end-node output that
+ * is a list whose members were filed as artifacts, whatever it is called.
+ */
+export function fanOutBoundOutputIds(
+  boundOutputIds: readonly string[],
+  endNodeOutputs: unknown,
+): string[] {
+  const outputs =
+    endNodeOutputs !== null && typeof endNodeOutputs === "object"
+      ? (endNodeOutputs as Record<string, unknown>)
+      : null;
+  if (outputs === null) return [];
+  const bare: string[] = [];
+  for (const id of boundOutputIds) {
+    const member = FAN_OUT_MEMBER_OUTPUT_ID.exec(id);
+    if (member === null) continue;
+    const key = member[1];
+    // The parent must BE the list whose members were filed. A bound id that
+    // merely LOOKS like a member (an output literally named `report[0]`) never
+    // suppresses an unrelated output called `report`: the rule speaks about a
+    // list whose members are the artifacts, so the bare key answers only when
+    // the output under it is that list.
+    if (key.length > 0 && Array.isArray(outputs[key])) bare.push(key);
+  }
+  return bare;
+}
+
 /**
  * Run the default road over one terminally-successful run's end-node outputs.
  * NEVER throws: every refusal is a visible per-output outcome.
@@ -296,7 +340,13 @@ export async function pickUpDefaultRoadOutputs(
   const runFiles = input.runFiles ?? [];
   if (names.length === 0 && runFiles.length === 0) return [];
 
-  const bound = new Set(input.boundOutputIds);
+  // The binding rung's own ids, PLUS the bare key of every output a fan-out
+  // binding claimed through its members (cinatra#3476): the members are the
+  // artifacts, and the list of them is not one.
+  const bound = new Set([
+    ...input.boundOutputIds,
+    ...fanOutBoundOutputIds(input.boundOutputIds, outputs),
+  ]);
   // ONE model-rung cache per run: at most one call per DISTINCT ambiguous output.
   const ladderDeps: LadderDeps = {
     cache: new Map<string, DetectionVerdict>(),
