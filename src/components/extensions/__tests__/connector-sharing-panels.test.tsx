@@ -2,10 +2,12 @@
 //
 // The Sharing tab's body (cinatra#3374), against the ratified drawing
 // (design/specs/app-connectors.html §II, "Sharing tab"):
-//  - "The roll-up card is the Connections status card of the Setup tab, with no
+//  - "the roll-up card heads the list, and only when there is more than one
+//    connection to roll up" — so a single connection heads NO roll-up and the
+//    list starts with that connection's panel; and where it does head the list,
+//    "The roll-up card is the Connections status card of the Setup tab, with no
 //    Check and no All connections link: the list it counts is directly beneath
-//    it" — so it heads the list whenever there IS a list, not only when there is
-//    more than one connection (its Setup-tab sibling's plural rule);
+//    it";
 //  - each panel is "a connection row — … carrying its name and mono line and
 //    nothing else: no status badge and no per-row action";
 //  - "Beneath each row sits the shared permissions card";
@@ -78,12 +80,29 @@ describe("the sharing conformance seed — the access binding is falsifiable (#3
 });
 
 describe("ConnectorSharingPanels", () => {
-  it("heads the list with the roll-up card even for a SINGLE owned connection", async () => {
+  it("draws NO roll-up card above a SINGLE connection — the list starts with the panel", async () => {
+    // The drawing's own words: "the roll-up card heads the list, and only when
+    // there is more than one connection to roll up". One connection is nothing
+    // to roll up, so the list starts with that connection's own panel. ONE rule
+    // for every mount — the Sharing tab and the pages that draw no tab strip
+    // (the bundled-react setup pages and the §II error treatments) alike.
     await render(<ConnectorSharingPanels panels={[panel(0)]} />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    // FIRST in the list: the connection's panel, its identity row and its card.
+    const first = container.querySelector('[data-conformance-id="connector-sharing"]');
+    expect(first).toBeTruthy();
+    expect(first!.querySelector('[data-slot="connection-row"]')).toBeTruthy();
+    expect(first!.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+  });
+
+  it("heads the list with the roll-up card once a SECOND connection is listed", async () => {
+    await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} />);
     const rollup = container.querySelector('[data-conformance-id="connector-sharing-rollup"]');
     expect(rollup).toBeTruthy();
     // The count it carries is the list beneath it.
-    expect(rollup!.textContent).toContain("1");
+    expect(rollup!.textContent).toContain("2");
     // No Check and no "All connections" link — the card gets no action slot.
     expect(rollup!.querySelector("button")).toBeNull();
     expect(rollup!.querySelector("a")).toBeNull();
@@ -93,28 +112,6 @@ describe("ConnectorSharingPanels", () => {
     expect(
       rollup!.compareDocumentPosition(firstPanel) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-  });
-
-  it('keeps the plural-only roll-up on a `multiple` mount (the pages with no tab strip)', async () => {
-    // The bundled-react setup pages and the §II error treatments mount the
-    // section directly. This issue does not change them: one connection there
-    // still heads no roll-up, exactly as before.
-    await render(<ConnectorSharingPanels panels={[panel(0)]} rollup="multiple" />);
-    expect(
-      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
-    ).toBeNull();
-    expect(container.querySelector('[data-slot="connection-row"]')).toBeTruthy();
-  });
-
-  it('heads a `multiple` mount once it holds more than one connection', async () => {
-    await render(
-      <ConnectorSharingPanels panels={[panel(0), panel(1)]} rollup="multiple" />,
-    );
-    const rollup = container.querySelector(
-      '[data-conformance-id="connector-sharing-rollup"]',
-    );
-    expect(rollup).toBeTruthy();
-    expect(rollup!.textContent).toContain("2");
   });
 
   it("draws one panel per connection: the row (no badge, no action) over the permissions card", async () => {

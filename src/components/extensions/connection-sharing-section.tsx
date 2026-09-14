@@ -298,14 +298,10 @@ export async function ConnectionSharingSection({
         <h2 className="text-base font-semibold text-foreground">Connection sharing</h2>
         <p className="text-xs text-muted-foreground">{CONNECTOR_SHARING_INTRO}</p>
       </div>
-      {/* The Sharing tab heads its list with the roll-up whenever there is a
-          list (§II). The mounts that draw no tab strip keep the plural-only
-          rule they already had — this issue moves the section onto a tab, it
-          does not restyle the pages it left behind. */}
-      <ConnectorSharingPanels
-        panels={panelViews}
-        rollup={variant === "tab" ? "always" : "multiple"}
-      />
+      {/* The roll-up heads the list only when there is more than one
+          connection to roll up (§II) — one rule for every mount, the Sharing
+          tab and the pages that draw no tab strip alike. */}
+      <ConnectorSharingPanels panels={panelViews} />
     </section>
   );
 }

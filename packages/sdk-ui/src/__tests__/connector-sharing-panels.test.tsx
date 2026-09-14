@@ -11,7 +11,8 @@
 //
 // This is the package's own rendering test of the anatomy the ratified drawing
 // pins for the tab (§II, the Sharing tab): the roll-up card above the list it
-// counts, one panel per owned connection (its identity row — name and mono
+// counts, and only where there is more than one connection to roll up; one
+// panel per owned connection (its identity row — name and mono
 // line, no status badge and no per-row action — over the access picker and
 // ownership card, handed in as a node), the locked and recommended marks where
 // the connector constrains the scope, and the declared loading treatment.
@@ -39,6 +40,10 @@ const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")) as {
 const readmeSrc = readFileSync(join(PKG_DIR, "README.md"), "utf8");
 const indexSrc = readFileSync(join(PKG_DIR, "src", "index.ts"), "utf8");
 const marketplaceSrc = readFileSync(join(PKG_DIR, "src", "marketplace.ts"), "utf8");
+const componentSrc = readFileSync(
+  join(PKG_DIR, "src", "connector-sharing-panels.tsx"),
+  "utf8",
+);
 
 /**
  * The three surfaces this component emits — the ids the functional-acceptance
@@ -84,14 +89,29 @@ async function render(node: React.ReactElement) {
 }
 
 describe("ConnectorSharingPanels — the roll-up card", () => {
-  it("heads the list even for a SINGLE owned connection, with no Check and no link", async () => {
+  it("draws NO card above a SINGLE owned connection — the list starts with the panel", async () => {
+    // The drawing's own words: "the roll-up card heads the list, and only when
+    // there is more than one connection to roll up". One connection is nothing
+    // to roll up, so the list starts with that connection's own panel — one
+    // rule for every page that draws this component.
     await render(<ConnectorSharingPanels panels={[panel(0)]} />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    const first = container.querySelector('[data-conformance-id="connector-sharing"]');
+    expect(first).toBeTruthy();
+    expect(first!.querySelector('[data-slot="connection-row"]')).toBeTruthy();
+    expect(first!.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+  });
+
+  it("heads the list once a SECOND connection is listed, with no Check and no link", async () => {
+    await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} />);
     const rollup = container.querySelector(
       '[data-conformance-id="connector-sharing-rollup"]',
     );
     expect(rollup).toBeTruthy();
     // The count it carries is the list directly beneath it.
-    expect(rollup!.textContent).toContain("1");
+    expect(rollup!.textContent).toContain("2");
     // No action slot at all: that is what drops the Check and the "All
     // connections" link the Setup tab's sibling card carries.
     expect(rollup!.querySelector("button")).toBeNull();
@@ -104,23 +124,10 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     ).toBeTruthy();
   });
 
-  it("keeps the plural-only rule on a `multiple` mount", async () => {
-    await render(<ConnectorSharingPanels panels={[panel(0)]} rollup="multiple" />);
-    expect(
-      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
-    ).toBeNull();
-    expect(container.querySelector('[data-slot="connection-row"]')).toBeTruthy();
-  });
-
-  it("heads a `multiple` mount once it holds more than one connection", async () => {
-    await render(
-      <ConnectorSharingPanels panels={[panel(0), panel(1)]} rollup="multiple" />,
-    );
-    const rollup = container.querySelector(
-      '[data-conformance-id="connector-sharing-rollup"]',
-    );
-    expect(rollup).toBeTruthy();
-    expect(rollup!.textContent).toContain("2");
+  it("carries no mode switch at all — the component takes no `rollup` prop", () => {
+    // ONE rule for every mount, so there is nothing for a caller to choose.
+    expect(componentSrc).not.toContain("rollup ===");
+    expect(componentSrc).toContain("panels.length > 1 ?");
   });
 });
 
@@ -219,6 +226,5 @@ describe("ConnectorSharingPanels — the one addition a pack makes", () => {
     // is the one that leaves `cinatra.uiSurface` off `schema-config`.
     expect(readmeSrc).toContain("cinatra.uiSurface");
     expect(readmeSrc).toContain("scopeConstraint");
-    expect(readmeSrc).toContain("rollup");
   });
 });

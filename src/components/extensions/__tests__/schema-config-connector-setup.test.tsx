@@ -24,6 +24,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorSetup } from "@/components/extensions/schema-config-connector-setup";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: () => {},
+    push: () => {},
+    replace: () => {},
+    prefetch: () => {},
+    back: () => {},
+    forward: () => {},
+  }),
+}));
+
+
 // The flash-toast island reads the live router's search params; it is not what
 // these tests assert, so it is stubbed to nothing.
 vi.mock("@/components/search-param-toast", () => ({
