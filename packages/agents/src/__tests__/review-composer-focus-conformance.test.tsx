@@ -97,6 +97,20 @@ describe("#3159 the composer-focus row names its control as the drawing does", (
     );
   });
 
+  // #3080 item 6: the bound row SAYS WHAT THE DRAWING SAYS. The reading matters
+  // because it is the sentence the reader acts on: a typed "continue" performs
+  // the decision, so a row promising that the next message "becomes a comment"
+  // states the opposite of what the typed road does. specs/app-lifecycle-cards.html
+  // §I gives the bound row one sentence, and this pins it verbatim.
+  it("BOUND: the row reads the drawing's own sentence for where a typed message goes", () => {
+    const container = mount(["gate-a"], createComposerFocusStore());
+    const bound = container.querySelector('[data-conformance-id="review-composer-bound"]');
+    expect(bound, "the bound reading draws its sentence").not.toBeNull();
+    expect(bound!.textContent!.replace(/\s+/g, " ").trim()).toBe(
+      "Your next chat message goes to Cinatra, which can use this review's own controls for you. Press again to chat normally.",
+    );
+  });
+
   it("NOT BOUND: the same control offers the drawing's focus action and its outcome", () => {
     // Two open reviews and no choice yet: the resolver says ambiguous, so the
     // control is the one that TAKES the binding.
