@@ -114,6 +114,22 @@ const reviewGates = vi.hoisted(() => ({
   }>,
 }));
 
+/**
+ * THE RUN'S TRIGGER ROW, AS THE STORE HOLDS IT (cinatra#3478, the re-cut's
+ * first leg) — the one fact that says whether the run CARRIES A SCHEDULE, and
+ * of which kind. `null` is a run that carries none; `releasedAt` is the fired
+ * stamp the schedule's own record keeps, for an immediate fire as much as for a
+ * scheduled one.
+ */
+const triggerRow = vi.hoisted(() => ({
+  row: null as { triggerType: string; releasedAt: Date | null } | null,
+}));
+
+/** The trigger row of a run dispatched with "Run right after setup", fired. */
+function firedImmediateTrigger() {
+  return { triggerType: "immediate", releasedAt: new Date("2026-09-14T08:10:00Z") };
+}
+
 /** One gate row of the shape `listReviewGatesForRun` returns. */
 function gateRow(status: "pending" | "resolved") {
   return {
@@ -277,7 +293,9 @@ vi.mock("../run-actions", () => ({
   readRunOutputEvidence: vi.fn(async () => ({ hasOutput: false, hasArtifacts: false })),
 }));
 
-vi.mock("../trigger-store", () => ({ readRunTriggerByRunId: vi.fn(async () => null) }));
+vi.mock("../trigger-store", () => ({
+  readRunTriggerByRunId: vi.fn(async () => triggerRow.row),
+}));
 
 vi.mock("../trigger-schedule-proposal-store", () => ({
   readProposalConsumeByRunId: vi.fn(async () => null),
@@ -341,6 +359,7 @@ beforeEach(() => {
   reviewSlot.awaiting = false;
   reviewSlot.reviewTaskId = null;
   reviewGates.rows = [];
+  triggerRow.row = null;
 });
 
 afterEach(() => {
@@ -383,12 +402,24 @@ function railColumns(container: HTMLElement): HTMLElement[] {
 function railEntries(column: HTMLElement): string[] {
   return Array.from(
     column.querySelectorAll<HTMLElement>(
-      "[data-run-surface-rail-step],[data-rail-kind],[data-rail-status]",
+      // AND THE GATE ROWS THAT DRAW THEIR OWN ROW COMPONENT (cinatra#3478, the
+      // re-cut's first leg). The schedule's row and the Skills row carry their
+      // own anchors rather than the shared rail row's, so a rail read through
+      // the shared anchor alone reported a rail those entries were missing
+      // from — which is exactly the omission this leg fixes.
+      "[data-run-surface-rail-step],[data-rail-kind],[data-rail-status]," +
+        "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
     .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0);
+}
+
+/** The same entries, read as the words a person sees — the rail's numerals
+ *  belong to the series, not to the order this suite grades. */
+function railEntryLabels(column: HTMLElement): string[] {
+  return railEntries(column).map((text) => text.replace(/^\d+/, ""));
 }
 
 describe("the run page draws exactly one step rail (cinatra#3478)", () => {
@@ -633,5 +664,193 @@ describe("a drawn control of a parked step takes a real click (cinatra#3478)", (
     fireEvent.click(control!);
 
     expect(detail!.getAttribute("data-run-surface-selected-step")).toBe(key);
+  });
+});
+
+describe("the run's schedule heads the one rail (cinatra#3478)", () => {
+  /**
+   * WHAT THE THIRD PROOF ROUND OF THIS PULL REQUEST COUNTED. The run was
+   * dispatched with "Run right after setup" and its page drew a merged rail
+   * with NO Schedule entry on it at all: the page-level rail carried one, the
+   * stepper's rail did not, and the first leg's merge of the two dropped it.
+   *
+   * The ratified drawing, `specs/app-artifact-review.html` section I: "Where the
+   * run carries a schedule, the rail's first entry is Schedule, above the run's
+   * work steps and above Review", and "A run set to Run right after setup or
+   * Schedule for later is spent when it fires: its Schedule entry settles on
+   * the rail".
+   */
+  it("lists Schedule FIRST, settled, for a run that fired Run right after setup", async () => {
+    triggerRow.row = firedImmediateTrigger();
+    row.status = "running";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    // Still ONE column: the first leg's answer is not spent by this one.
+    expect(columns.length).toBe(1);
+    const labels = railEntryLabels(columns[0]);
+    // The live reading at db8fb255: ["Setup", "Draft the post", "Pick the
+    // image"] — the run's own schedule nowhere on the rail.
+    expect(labels).toEqual(["Schedule", "Setup", "Draft the post", "Pick the image"]);
+    // Each work step once, the schedule included.
+    expect(new Set(labels).size).toBe(labels.length);
+
+    // And it is drawn as the spent step it is: the completed circle, not a
+    // numeral the reader would read as the step the run is standing on.
+    const schedule = columns[0].querySelector<HTMLElement>("[data-schedule-rail-step]");
+    expect(schedule).not.toBeNull();
+    expect(schedule!.getAttribute("data-schedule-step-settled")).toBe("true");
+  });
+
+  it("stands the schedule above the pause and the run's own record", async () => {
+    // The reading the proof cell photographs: the run fired its schedule, ran,
+    // and is parked at its review gate. Schedule settled at the head, the run's
+    // work beneath it, the record last and still to come.
+    triggerRow.row = firedImmediateTrigger();
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    // THE RUN THE CELL PHOTOGRAPHS ASKS ITS SETUP AND IS HELD AT ITS REVIEW
+    // (convergence round 1): with no declared field and no gate row this
+    // composition drew neither a Setup entry nor the pause, so a case that read
+    // only the first and last entries graded a rail the cell never shows.
+    row.required = ["idea"];
+    reviewSlot.awaiting = true;
+    reviewSlot.reviewTaskId = "task-review-1";
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns.length).toBe(1);
+    const labels = railEntryLabels(columns[0]);
+    // THE WHOLE RAIL, IN ORDER — the reading CELL1 photographs: the run's
+    // schedule at the head, its setup once, the pause merged inline at the
+    // point the run reached it, and the run's own record last.
+    expect(labels).toEqual([
+      "Schedule",
+      "Setup",
+      "Review",
+      "Draft the post",
+      "Pick the image",
+      "What this run made",
+    ]);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels[0]).toBe("Schedule");
+    expect(labels[labels.length - 1]).toBe("What this run made");
+    // The record is still to come while the gate holds the run — the third
+    // leg's answer, unchanged by this one.
+    const made = Array.from(
+      columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("false");
+  });
+
+  it("draws NO Schedule entry for a run that carries no schedule", async () => {
+    // "Where the run carries a schedule" is the whole condition: a run with no
+    // trigger row has no schedule, and the rail invents none for it.
+    triggerRow.row = null;
+    row.status = "running";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns.length).toBe(1);
+    expect(columns[0].querySelector("[data-schedule-rail-step]")).toBeNull();
+    expect(railEntryLabels(columns[0])).toEqual([
+      "Setup",
+      "Draft the post",
+      "Pick the image",
+    ]);
+  });
+
+  it("leaves the schedule unsettled while it has not fired yet", async () => {
+    // "settled once it fired" — and not before. A schedule still waiting is the
+    // step the reader can still change, so it carries no completed circle.
+    triggerRow.row = { triggerType: "scheduled", releasedAt: null };
+    row.status = "running";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns.length).toBe(1);
+    expect(railEntryLabels(columns[0])[0]).toBe("Schedule");
+    const schedule = columns[0].querySelector<HTMLElement>("[data-schedule-rail-step]");
+    expect(schedule).not.toBeNull();
+    expect(schedule!.getAttribute("data-schedule-step-settled")).toBe("false");
+  });
+
+  it("keeps a fired RECURRING schedule an ordinary reachable row", async () => {
+    // "A run set to Recurring is not spent — it has runs still to come — so its
+    // Schedule entry stays an ordinary reachable row on the rail."
+    triggerRow.row = { triggerType: "recurring", releasedAt: new Date("2026-09-14T08:10:00Z") };
+    row.status = "running";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns.length).toBe(1);
+    expect(railEntryLabels(columns[0])[0]).toBe("Schedule");
+    const schedule = columns[0].querySelector<HTMLElement>("[data-schedule-rail-step]");
+    expect(schedule).not.toBeNull();
+    expect(schedule!.getAttribute("data-schedule-step-settled")).toBe("false");
+  });
+
+  it("draws ONE Schedule entry for a run parked at its schedule that holds a trigger row", async () => {
+    // CONVERGENCE ROUND 1 (cinatra#3478, the re-cut's first leg). The block
+    // that draws the schedule step of a run PARKED at its schedule was guarded
+    // on "this run has no schedule CARD" — and a run dispatched with "Run right
+    // after setup" holds a trigger row while resolving to no card, so once the
+    // entry above is composed from the trigger row the two blocks pushed the
+    // key "schedule" twice for one run.
+    //
+    // The live reading with the guard removed, measured on this composition:
+    // ["1Schedule", "Setup", "3Schedule", "4Review", "5Draft the post",
+    // "6Pick the image"] — two Schedule rows on one rail, both answering the
+    // same selection, and a duplicate rail key with them.
+    triggerRow.row = { triggerType: "immediate", releasedAt: null };
+    row.status = "armed";
+    row.lifecycleMoment = "schedule";
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns.length).toBe(1);
+    const labels = railEntryLabels(columns[0]);
+    expect(labels.filter((label) => label === "Schedule")).toHaveLength(1);
+    expect(labels).toEqual(["Schedule", "Setup", "Review", "Draft the post", "Pick the image"]);
+    // AND ONE NUMBERED SERIES WITH IT: no numeral drawn twice, and none out of
+    // order. This is the reading that dies if the offset handed to the input
+    // steps is dropped — the schedule and the first numbered work step would
+    // both draw a 1.
+    const numerals = railEntries(columns[0])
+      .map((text) => /^(\d+)/.exec(text)?.[1])
+      .filter((numeral): numeral is string => numeral != null)
+      .map(Number);
+    expect(numerals).toEqual([...new Set(numerals)]);
+    expect(numerals).toEqual([...numerals].sort((a, b) => a - b));
+    expect(numerals[0]).toBe(1);
   });
 });

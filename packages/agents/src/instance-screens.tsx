@@ -1523,6 +1523,25 @@ export async function SetupScreen({
     }) === "rail_step"
       ? encodeScheduleRunRef({ runId: run.id })
       : null;
+  // AND WHETHER THE RUN CARRIES A SCHEDULE AT ALL IS A DIFFERENT QUESTION
+  // (cinatra#3478, the re-cut's first leg).
+  //
+  // `scheduleRailRef` above answers which CARD the schedule step opens onto,
+  // and it is null for a run dispatched with "Run right after setup" that no
+  // conversation proposed: that row resolves to no card. The rail's own
+  // question is the run's history — the ratified drawing, section I: "Where the
+  // run carries a schedule, the rail's first entry is Schedule", and "A run set
+  // to Run right after setup or Schedule for later is spent when it fires: its
+  // Schedule entry settles on the rail". A run dispatched on a schedule carries
+  // one whatever kind it was, so the trigger ROW is the whole answer, and the
+  // third proof round of this pull request counted the omission: the merged
+  // rail drew no Schedule entry for exactly that run.
+  const runCarriesScheduleStep = trigger !== null;
+  // SPENT, OR STILL THE READER'S TO CHANGE — the predicate the screen already
+  // reads for the same rule (cinatra#2980), asked once more rather than
+  // restated: everything that is not recurring is a one-off, and a one-off is
+  // frozen by its own fired stamp.
+  const scheduleStepSettled = shouldFreezeFiredOneOffSchedule(trigger);
   // cinatra#2487: ONE predicate for the strip on every route (was an inline
   // duplicate of shouldShowPersistentTab here, `!!run` on /trigger, and nothing
   // at all on /permissions — so the strip's contents changed between tabs).
@@ -2274,7 +2293,13 @@ export async function SetupScreen({
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
                     inputStepInRail={inputStepIsOpen}
-                    railDrawsTheFrame={railFramesTheRunDetail}
+                    // AND THE SCHEDULE ENTRY FRAMES IT TOO (cinatra#3478):
+                    // the rail draws a Schedule row for the schedule the run
+                    // CARRIES, not only for the one that opens a card, so a run
+                    // whose rail is that row and its work steps still stands
+                    // this panel's own column down — or the page draws two
+                    // rails again.
+                    railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -2317,7 +2342,13 @@ export async function SetupScreen({
                     // the run's own park row, before the first paint.
                     recommendationDecided={recommendationDecided}
                     inputStepInRail={inputStepIsOpen}
-                    railDrawsTheFrame={railFramesTheRunDetail}
+                    // AND THE SCHEDULE ENTRY FRAMES IT TOO (cinatra#3478):
+                    // the rail draws a Schedule row for the schedule the run
+                    // CARRIES, not only for the one that opens a card, so a run
+                    // whose rail is that row and its work steps still stands
+                    // this panel's own column down — or the page draws two
+                    // rails again.
+                    railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
                   />
                 )
               )}
@@ -2374,6 +2405,66 @@ export async function SetupScreen({
                   reached: recommendationRailStepReached,
                 });
               }
+              // THE RUN'S SCHEDULE HEADS THE RAIL (cinatra#3478, the
+              // re-cut's first leg).
+              //
+              // The ratified drawing, section I: "Where the run carries a
+              // schedule, the rail's first entry is Schedule, above the run's
+              // work steps and above Review." The third proof round of this
+              // pull request counted two departures from that in one rail:
+              //
+              //   • the entry was composed AFTER the run's input steps, so
+              //     where it was drawn at all it stood beneath the work it
+              //     comes before;
+              //   • and for the run that was actually photographed — dispatched
+              //     with "Run right after setup" — it was not composed at all,
+              //     because the presence test was the ref that names the card
+              //     rather than the schedule the run carries.
+              //
+              // IT OPENS ONTO NOTHING IT CANNOT DRAW. Where the step has a card
+              // (`scheduleRailRef`), it opens it, exactly as it always has.
+              // Where it has none, the surface is nullish and the frame falls
+              // back to the run detail — the same fallback the parked schedule
+              // step below takes, and never an empty column.
+              if (runCarriesScheduleStep) {
+                const scheduleRailStep: RunSurfaceRailStep = {
+                  key: "schedule",
+                  // THE RUN HAS BEEN THROUGH IT: the schedule is how the run
+                  // was dispatched, so the reader may open it wherever the run
+                  // now stands.
+                  reached: true,
+                  settled: scheduleStepSettled,
+                  surface: scheduleRailRef ? (
+                    <ScheduleStepSurface
+                      host="run_card"
+                      cardRef={scheduleRailRef}
+                      promptWindowTemplateId={template.id}
+                      // cinatra#2933 -- the window under this scheduler is the
+                      // RUN's conversation, gated on the run's own access.
+                      runId={run?.id ?? null}
+                      canRespondInWindow={canRespondInWindow}
+                    />
+                  ) : null,
+                  row: null,
+                };
+                railSteps.push({
+                  ...scheduleRailStep,
+                  row: (
+                    <ScheduleRailStepRow
+                      host="run_card"
+                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
+                      // (cinatra#3047). The Skills entry above draws the
+                      // drawing's own glyph and consumes no numeral, so the
+                      // schedule is "1" whether or not it is the second gate
+                      // row — which is exactly what the drawing shows.
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                      settled={scheduleStepSettled}
+                    />
+                  ),
+                });
+              }
               // AND THE RUN'S OWN INPUT FORMS BENEATH IT (cinatra#3068, order
               // corrected by cinatra#3047 fix leg 8). One entry per form the
               // agent asks, in the order it asks them; each opens the run
@@ -2390,40 +2481,12 @@ export async function SetupScreen({
               // is no second drawn sentence to weigh, and the Skills entry
               // stands above these.
               if (inputStepsInRail) {
-                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
-              }
-              if (scheduleRailRef) {
-                railSteps.push({
-                  key: "schedule",
-                  row: (
-                    <ScheduleRailStepRow
-                      host="run_card"
-                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
-                      // (cinatra#3047). The Skills entry above draws the
-                      // drawing's own glyph and consumes no numeral, so the
-                      // schedule is "1" whether or not it is the second gate
-                      // row — which is exactly what the drawing shows.
-                      displayStep={
-                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
-                      }
-                    />
-                  ),
-                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
-                  // — "The run page's prompt window shows below the scheduler"
-                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
-                  // none: the plan names the run page.
-                  surface: (
-                    <ScheduleStepSurface
-                      host="run_card"
-                      cardRef={scheduleRailRef}
-                      promptWindowTemplateId={template.id}
-                      // cinatra#2933 -- the window under this scheduler is the
-                      // RUN's conversation, gated on the run's own access.
-                      runId={run?.id ?? null}
-                      canRespondInWindow={canRespondInWindow}
-                    />
-                  ),
-                });
+                // BENEATH THE SCHEDULE, AND NUMBERED AFTER IT (cinatra#3478).
+                // These rows number themselves from their own index, so an
+                // entry standing above them has to be counted here, or two rows
+                // carry the numeral 1.
+                const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode, railRowsAboveTheInputSteps));
               }
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
@@ -2441,7 +2504,17 @@ export async function SetupScreen({
               // states: the schedule form the reader is answering already stands
               // there, and a surface of its own would be a second mount of it.
               // A nullish surface falls back to that detail.
-              if (!scheduleRailRef && parkedScheduleStep) {
+              // AND ONLY WHERE THE BLOCK ABOVE DREW NONE (cinatra#3478, the
+              // re-cut first leg, convergence round 1). This block is written
+              // for the run that holds NO trigger row yet — its own words, two
+              // paragraphs up. Its guard asked that as "no schedule CARD", and a
+              // run dispatched with "Run right after setup" holds a trigger row
+              // while resolving to no card, so with the entry above now composed
+              // from the trigger row the two blocks could push the key
+              // "schedule" twice for one run — a rail with two Schedule rows,
+              // both answering the same selection. The question is asked of the
+              // trigger row, which is what the paragraph above always meant.
+              if (!scheduleRailRef && !runCarriesScheduleStep && parkedScheduleStep) {
                 const parkedScheduleRailStep: RunSurfaceRailStep = {
                   key: "schedule",
                   reached: true,
