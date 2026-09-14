@@ -1,59 +1,31 @@
 "use client";
 
 import { useState } from "react";
-import type { FieldRendererProps } from "./field-renderer-registry";
 import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import {
+  choiceBody,
+  choiceReference,
+  choiceTitle,
+  offerableChoices,
+  statedReason,
+  type FieldRendererProps,
+  type OfferedChoice,
+} from "./field-renderer-registry";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-// Host-bundled renderer for blog-pipeline's `idea_selection_gate`
-// (cinatra#1796). It is keyed in RENDERER_KIND_TABLE under the neutral
-// kind "blog-idea-selection" and activated by the DEDICATED binding id
-// `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition — see
-// register-default-renderers.ts).
+// Host-bundled renderer for the idea-selection gate (cinatra#1796). It is keyed
+// in RENDERER_KIND_TABLE under the neutral kind "blog-idea-selection" and
+// activated by the DEDICATED binding id the declaring pack names (strict-id
+// condition — see register-default-renderers.ts).
 //
 // PAYLOAD CONTRACT (cinatra#3035, epic #3023 W11; plan (C) §5.1, §8.4 "the gate
 // renderer"). The gate is an InputMessageNode whose one string output
 // (`selectedIdeaJson`) becomes the WayFlow resume text (`userResponse`), and the
-// chosen idea is committed as JSON into BOTH keys. TWO THINGS CHANGED IN W11:
-//
-//   NOTHING IS PICKED FOR ANYONE. The renderer used to commit `ideas[0]` on
-//   mount, so a person who only pressed Continue drafted whichever idea happened
-//   to be first and never knew they had chosen. The list now starts with no
-//   selection and commits only what a person actually picks; the gate's own
-//   validation refuses an empty pick with a stated reason, which is the answer a
-//   silent default was hiding.
-//
-//   WHAT IS COMMITTED IS A REFERENCE, NEVER A TITLE. The pick is
-//   `{artifactId, representationRevisionId}` — the idea artifact and the exact
-//   revision the list offered — because that is what the reservation row is
-//   written from and what "this draft came from this idea" means. A title is not
-//   an identity: two ideas may share one, and rewriting an idea changes it.
-
-type OfferedIdea = {
-  artifactId?: unknown;
-  representationRevisionId?: unknown;
-  title?: unknown;
-  text?: unknown;
-  [extraKey: string]: unknown;
-};
-
-type IdeaReference = { artifactId: string; representationRevisionId: string };
-
-/** The reference an offered entry names, or null when it names none — an entry
- *  that cannot be committed is not offered, since picking it could only fail at
- *  the gate. */
-function referenceOf(idea: OfferedIdea): IdeaReference | null {
-  const artifactId = idea.artifactId;
-  const representationRevisionId = idea.representationRevisionId;
-  if (typeof artifactId !== "string" || artifactId.length === 0) return null;
-  if (
-    typeof representationRevisionId !== "string" ||
-    representationRevisionId.length === 0
-  ) {
-    return null;
-  }
-  return { artifactId, representationRevisionId };
-}
+// pick is committed as JSON into BOTH keys. NOTHING IS PICKED FOR ANYONE: the
+// list starts with no selection and commits only what a person actually chooses,
+// and what it commits is the REFERENCE the offer named, never a title. Both the
+// reference shape and the title/body split are the generic offered-choice road
+// on `field-renderer-registry.ts`, which knows no pack.
 
 /**
  * The idea-selection field renderer. Reads the offered ideas from
@@ -72,13 +44,8 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
     reason?: unknown;
     [extraKey: string]: unknown;
   };
-  const offered = Array.isArray(value.ideas)
-    ? (value.ideas as OfferedIdea[]).filter((idea) => referenceOf(idea) !== null)
-    : [];
-  const reason =
-    typeof value.reason === "string" && value.reason.trim().length > 0
-      ? value.reason.trim()
-      : null;
+  const offered = offerableChoices(value.ideas);
+  const reason = statedReason(value.reason);
   if (offered.length === 0) {
     if (reason) {
       return (
@@ -118,28 +85,17 @@ function IdeaChooser({
   onChange,
   disabled,
 }: {
-  ideas: OfferedIdea[];
+  ideas: OfferedChoice[];
   onChange: (next: unknown) => void;
   disabled?: boolean;
 }) {
   // No index: nothing is chosen until someone chooses.
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const commit = (idx: number) => {
-    const reference = referenceOf(ideas[idx]);
+    const reference = choiceReference(ideas[idx]);
     if (!reference) return;
     const json = JSON.stringify(reference);
     void onChange({ selectedIdeaJson: json, userResponse: json });
-  };
-  const ideaLabel = (idea: OfferedIdea, idx: number) =>
-    typeof idea.title === "string" && idea.title.trim().length > 0
-      ? idea.title
-      : `Idea ${idx + 1}`;
-  // The idea's own words, below its title. An idea is one piece of plain text
-  // whose first line is the title, so what is shown here is the rest of it.
-  const ideaBody = (idea: OfferedIdea) => {
-    const text = typeof idea.text === "string" ? idea.text : "";
-    const body = text.split(/\r?\n/).slice(1).join("\n").trim();
-    return body.length > 0 ? body : "";
   };
   return (
     <div className="flex flex-col gap-2">
@@ -159,7 +115,7 @@ function IdeaChooser({
       >
         {ideas.map((idea, idx) => {
           const selected = idx === selectedIndex;
-          const sub = ideaBody(idea);
+          const sub = choiceBody(idea);
           return (
             <label
               key={idx}
@@ -169,7 +125,7 @@ function IdeaChooser({
             >
               <RadioGroupItem value={String(idx)} className="mt-1" />
               <span className="flex flex-col gap-0.5">
-                <span className="font-medium">{ideaLabel(idea, idx)}</span>
+                <span className="font-medium">{choiceTitle(idea, idx, "Idea")}</span>
                 {sub ? (
                   <span className="text-muted-foreground whitespace-pre-line">{sub}</span>
                 ) : null}

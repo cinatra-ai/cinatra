@@ -55,6 +55,37 @@ const FILES = walk(LIB);
 const hits = (needle: string) =>
   FILES.filter((f) => readFileSync(f, "utf8").includes(needle)).map((f) => path.relative(LIB, f));
 
+/**
+ * The PHYSICAL table name and the pack-named tool are identifiers only this
+ * pack can own, so a single occurrence anywhere under `src/lib` is a crossing
+ * and the walks above stay whole-tree.
+ *
+ * The LOGICAL name is different: it is a GENERIC two-word noun, and the
+ * issue's words are a table name "belonging to ONE PACK". The host's own test
+ * tree may legitimately declare a table of that generic name for SOME OTHER
+ * package — a fixture package's `idea_drafts`, whose physical name is that
+ * fixture's own — and such an occurrence names no pack's table. So inside a
+ * `__tests__` tree an occurrence counts only when the file also names THIS
+ * pack; everywhere else under `src/lib` (the shipped library itself) any
+ * occurrence at all still counts, exactly as before.
+ */
+const PACK_NAMES = [
+  ["blog", "pipeline", "agent"].join("-"),
+  ["blog", "pipeline", "agent"].join("_"),
+];
+
+export function isPackBoundOccurrence(relPath: string, text: string, needle: string): boolean {
+  if (!text.includes(needle)) return false;
+  const inTestTree = relPath.split(path.sep).includes("__tests__");
+  if (!inTestTree) return true;
+  return PACK_NAMES.some((name) => text.includes(name));
+}
+
+const packHits = (needle: string) =>
+  FILES.filter((f) => isPackBoundOccurrence(path.relative(LIB, f), readFileSync(f, "utf8"), needle)).map((f) =>
+    path.relative(LIB, f),
+  );
+
 describe("cinatra#3249 — no pack name is left inside the host library", () => {
   it("walks a library that is actually there", () => {
     expect(FILES.length).toBeGreaterThan(100);
@@ -65,7 +96,22 @@ describe("cinatra#3249 — no pack name is left inside the host library", () => 
   });
 
   it("spells no pack's LOGICAL table name anywhere under src/lib", () => {
-    expect(hits(PACK_LOGICAL_TABLE)).toEqual([]);
+    expect(packHits(PACK_LOGICAL_TABLE)).toEqual([]);
+  });
+
+  it("still counts a pack-BOUND logical-table occurrence inside a test tree", () => {
+    const packBound = `declaredTable("${["blog", "pipeline", "agent"].join("-")}", "${PACK_LOGICAL_TABLE}")`;
+    expect(isPackBoundOccurrence(path.join("__tests__", "x.test.ts"), packBound, PACK_LOGICAL_TABLE)).toBe(true);
+  });
+
+  it("does not count another package's generic logical table in a test tree", () => {
+    const otherPack = `declaredTable("x3462-seam-fixture", "${PACK_LOGICAL_TABLE}")`;
+    expect(isPackBoundOccurrence(path.join("__tests__", "x.test.ts"), otherPack, PACK_LOGICAL_TABLE)).toBe(false);
+  });
+
+  it("counts ANY logical-table occurrence in the shipped library itself", () => {
+    const shipped = `const t = "${PACK_LOGICAL_TABLE}";`;
+    expect(isPackBoundOccurrence(path.join("blog", "some-module.ts"), shipped, PACK_LOGICAL_TABLE)).toBe(true);
   });
 
   it("admits no passthrough tool under one pack's own name anywhere under src/lib", () => {
