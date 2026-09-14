@@ -374,7 +374,7 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(prepare).toMatch(/readOnlyArtifactEdit\("read-only-surface"\)/);
   });
 
-  it("the representation slot mounts through the host ReviewTargetMount", () => {
+  it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
     expect(TARGET_PANEL).toMatch(/ReviewTargetMount/);
     // NO ORGANIZATION SCOPE CROSSES INTO THE MOUNT any more. The scope existed
     // for one arm only — the host's own text rendering, which read artifact

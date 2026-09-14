@@ -544,6 +544,47 @@ async function runInstallPipelineCore(
     }
   }
 
+  // PARENT-SATISFIED CONTEXT-SLOT GATE (cinatra#3032, plan (C) item 0.29) — the
+  // composite agent's declaration against the agents it embeds. Runs in the same
+  // seam as the host-compat gate above and under the same inertness contract:
+  // BEFORE the update probe / journal / grant / provenance, so a refused install
+  // OR update is fully inert, and the just-materialized dir is GC'd unless it IS
+  // the live install's dir. A package with no composed document, or one that
+  // declares no lines, passes untouched — the gate only ever fires on a
+  // declaration that promises an embedded agent something the parent's own slot
+  // cannot deliver.
+  if (deps.readComposedAgentOas) {
+    const composedOas = await deps.readComposedAgentOas(mat.storeDir);
+    if (composedOas !== null && composedOas !== undefined) {
+      const { readContextSlotComposition, checkParentSatisfiedContextSlots, formatContextSlotCompatRefusal } =
+        await import("@/lib/extension-host-compat");
+      const verdict = checkParentSatisfiedContextSlots(
+        readContextSlotComposition(composedOas),
+      );
+      if (!verdict.compatible) {
+        // `materializedDirIsLive()` — NOT the inline digest equality — because a
+        // finalized journal row whose digest was never recorded (`null`) fails
+        // that equality and the GC would then delete the dir the LIVE install is
+        // running from. The module defines this guard for exactly that case.
+        if (deps.gcStoreDir && !materializedDirIsLive()) {
+          try {
+            await deps.gcStoreDir(mat.storeDir);
+          } catch {
+            /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+          }
+        }
+        throw new Error(
+          formatContextSlotCompatRefusal({
+            op: priorOp?.phase === "finalized" ? "update" : "install",
+            packageName: input.packageName,
+            version: resolvedVersion,
+            conflicts: verdict.conflicts,
+          }),
+        );
+      }
+    }
+  }
+
   // DEPENDENCY-EDGE READ (#180) — the dual-read helper over the materialized
   // (SRI-verified) manifest. Runs EARLY, with the host-compat gate above and
   // the same inertness contract: a malformed `cinatra.dependencies` entry or a

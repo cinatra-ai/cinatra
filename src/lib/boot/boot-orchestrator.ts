@@ -44,6 +44,7 @@ import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projec
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
 import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-root-guard";
+import { runDataRootGuardPhases } from "@/lib/boot/phases/run-data-root-guard";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
 import { providerConnectionBootstrapPhases } from "@/lib/boot/phases/provider-connection-bootstrap";
 import { executionPlaneHealthPhases } from "@/lib/boot/phases/execution-plane-health";
@@ -164,6 +165,10 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   // no orgs/ dir (a mis-pointed root, not data loss). Read-only + retryable —
   // never gates the deploy.
   await run(artifactDataRootGuardPhases());
+  // The THIRD data root (cinatra#3030, item 0.21): the run folder, guarded the
+  // same way — an unwritable root makes every staged file invisible to the
+  // pickup, which reads as an agent that wrote nothing.
+  await run(runDataRootGuardPhases());
 
   await run(requiredExtensionMaterializePhases());
 

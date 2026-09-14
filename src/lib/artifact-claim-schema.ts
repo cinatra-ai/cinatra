@@ -545,6 +545,14 @@ export function artifactMaterializationLedgerSchemaQueries(
   detection_reason            text,
   detection_confidence        double precision,
   detection_model             text,
+  -- cinatra#3032 (plan (C) item 0.28): what produced a picture. The bytes of an
+  -- image carry no record of what was asked for, and a regeneration asks
+  -- something else of the same artifact, so the prompt, the provider and the
+  -- model belong on the row of the write that made THAT revision. Null on every
+  -- write that made no picture.
+  image_prompt                text,
+  image_provider              text,
+  image_model                 text,
   created_at                  timestamptz NOT NULL DEFAULT now()
 )` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${q}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },

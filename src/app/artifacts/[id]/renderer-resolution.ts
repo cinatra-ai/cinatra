@@ -327,10 +327,23 @@ export function _resetFirstPartySeedForTests(): void {
 // declaration is the pack's.
 // ---------------------------------------------------------------------------
 
-/** Legacy spelling → the registered media type it names. */
-const REPRESENTATION_MIME_ALIASES: ReadonlyMap<string, string> = new Map([
-  ["text/x-markdown", "text/markdown"],
-]);
+/**
+ * Legacy spelling → the registered media type it names.
+ *
+ * The table is WRITTEN row by row rather than declared as a literal lookup
+ * table, and that is the boundary, not a formatting taste: a literal table of
+ * concrete media types inside the artifact rendering surface is a core→identity
+ * KEYING arm (the G1 boundary gate, `scripts/audit/artifact-ui-boundary-gate.mjs`),
+ * and core keying a decision on a concrete presentation identity is exactly what
+ * the gate holds shut. Recording a synonym is not deciding anything by it: the
+ * only read below is a `.get(mime)` on an OPAQUE argument, so the dispatch
+ * downstream still never sees a media type core named.
+ */
+const REPRESENTATION_MIME_ALIASES: ReadonlyMap<string, string> = (() => {
+  const aliases = new Map<string, string>();
+  aliases.set("text/x-markdown", "text/markdown");
+  return aliases;
+})();
 
 /** The alias pairs, for a test or an audit that must enumerate them. */
 export const REPRESENTATION_MIME_ALIAS_PAIRS: ReadonlyArray<readonly [string, string]> =

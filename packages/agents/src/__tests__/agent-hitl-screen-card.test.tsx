@@ -776,7 +776,28 @@ describe("the broker submit", () => {
       ).not.toBeNull();
       cleanup();
     }
-  });
+    // THE BUDGET, NOT THE ASSERTIONS (cinatra#3267). This arm mounts the WHOLE
+    // shipped renderer table once per recorded host, so it is the slowest test
+    // in this package by an order of magnitude and the only one that ever came
+    // near the package's 30s default (packages/agents/vitest.config.ts, whose
+    // own comment already records runner contention as the reason that default
+    // is 30s and not vitest's 5s).
+    // Measured, from this same arm's own lines in the job logs: 11.0s, 14.3s,
+    // 14.3s, 14.5s, 14.7s and 15.5s on the GitHub-hosted class, against 21.2s
+    // and 23.1s on the shared self-hosted pool, where several runners divide one
+    // machine. On one pool run the arm did not finish at all: it was cut off at
+    // the 30s default, so its real duration there is unknown and known only to
+    // be past 30s, and the run went red on the clock alone — nothing about the
+    // card changed.
+    // The package default is therefore too tight for this one arm on that
+    // class, so the arm carries a budget of its own: one clean minute. That is
+    // 2.6x the slowest reading that did finish on the pool and 2x the cut-off it
+    // hit, and still a fifteenth of the job's own 15-minute timeout-minutes, of
+    // which the failing run used 6m20s.
+    // A budget is not a gate. Nothing here is skipped or relaxed: every
+    // expectation above still has to pass, and an arm that genuinely hangs still
+    // fails — one minute later instead of thirty seconds later.
+  }, 60_000);
 
   it("a frame whose credential the provider REFUSED draws no card and answers nothing", async () => {
     // The binding is what makes the answer this person's answer. A widget

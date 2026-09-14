@@ -35,6 +35,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { randomUUID } from "node:crypto";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub without the named
@@ -63,7 +64,13 @@ const ADMIN = "u-admin-1381";
 const TEAM = "team-growth-1381";
 
 let uniq = 0;
-const nextId = (p: string) => `${p}-${Date.now()}-${uniq++}`;
+// The id must NOT be derived from the wall clock: two processes (or two runs
+// of this file against the same database) that start inside the same
+// millisecond mint the same id and collide on a UNIQUE constraint no case is
+// waiting on. A per-process random tag plus the counter is unique without
+// reading the clock at all.
+const RUN_TAG = randomUUID().slice(0, 8);
+const nextId = (p: string) => `${p}-${RUN_TAG}-${uniq++}`;
 
 let runPostgresQueriesSync: typeof import("@/lib/postgres-sync").runPostgresQueriesSync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
@@ -173,6 +180,46 @@ beforeAll(async () => {
       if (!msg.includes("does not exist")) throw err;
     }
   }
+  // SEED ORDER IS FORCED BY REAL FOREIGN KEYS. In CI the lifecycle DB job
+  // provisions `public` from the committed Better Auth seed
+  // (scripts/apply-public-schema.mjs), so these tables ALREADY EXIST carrying
+  // their constraints and every `CREATE TABLE IF NOT EXISTS` below is a no-op
+  // that never gets to relax anything: public."team"."organizationId"
+  // references organization(id), and public."teamMember"."userId" and
+  // public."member"."userId" both reference public."user"(id). Seeding a team
+  // before its organization aborts the whole beforeAll on
+  // `team_organizationId_fkey`, so the order here is
+  // organization -> user -> team -> teamMember -> member and must stay that way.
+  //
+  // The org-write kernel's guarded batch also reads the organization's archive
+  // state before it lets any statement run.
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."organization" (
+       id text PRIMARY KEY, name text, slug text,
+       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
+       "createdAt" timestamptz)`,
+  );
+  await client.query(
+    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
+     VALUES ($1, 'Memory promotion 1381', 'mem-1381', NULL, 0, now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ORG],
+  );
+  // The principals as Better Auth users — the teamMember and member rows below
+  // both reference public."user"(id).
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."user" (
+       id text PRIMARY KEY, name text NOT NULL, email text NOT NULL,
+       "emailVerified" boolean NOT NULL DEFAULT false,
+       "createdAt" timestamptz DEFAULT now(), "updatedAt" timestamptz DEFAULT now())`,
+  );
+  await client.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt") VALUES
+       ($1, 'Admin 1381', 'admin-1381@memory-promotion.test', true, now(), now()),
+       ($2, 'Member 1381', 'member-1381@memory-promotion.test', true, now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ADMIN, REQUESTER],
+  );
   // Better Auth team tables (public schema) for the team-target asserts.
   await client.query(
     `CREATE TABLE IF NOT EXISTS public."team" (
@@ -195,20 +242,6 @@ beforeAll(async () => {
   await client.query(
     `INSERT INTO public."teamMember" (id, "teamId", "userId") VALUES ('tm-1381-1', $1, $2)`,
     [TEAM, REQUESTER],
-  );
-  // The org-write kernel's guarded batch reads the organization's archive state
-  // before it lets any statement run.
-  await client.query(
-    `CREATE TABLE IF NOT EXISTS public."organization" (
-       id text PRIMARY KEY, name text, slug text,
-       "archivedAt" timestamptz, "archiveEpoch" integer DEFAULT 0,
-       "createdAt" timestamptz)`,
-  );
-  await client.query(
-    `INSERT INTO public."organization" (id, name, slug, "archivedAt", "archiveEpoch", "createdAt")
-     VALUES ($1, 'Memory promotion 1381', 'mem-1381', NULL, 0, now())
-     ON CONFLICT (id) DO NOTHING`,
-    [ORG],
   );
   // Better Auth membership: `verifySessionAuthority` reads it to mint the
   // MEMBERSHIP-grounded org-write authority the apply runs under. Without a
@@ -615,16 +648,44 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1381 the atomic apply, against a real dat
       await a.query("BEGIN");
       await b.query("BEGIN");
       await insert(a, nextId("req-a"));
-      // B blocks on the unique constraint until A resolves.
-      const bInsert = insert(b, nextId("req-b"));
+      // B blocks on the unique constraint until A resolves. Its rejection is
+      // this case's EXPECTED outcome, but it fires while the COMMIT below is
+      // awaited -- before any later expect(...).rejects could bind. A bare
+      // promise carried across that await is therefore reported as an
+      // UNHANDLED rejection (all nine cases pass, the process still fails).
+      // Settle it into a value HERE, synchronously at creation, so the
+      // rejection always has a handler and the assertion below reads the
+      // recorded outcome instead of racing for it.
+      const bOutcome = insert(b, nextId("req-b")).then(
+        () => ({ rejected: false as const, error: undefined as unknown }),
+        (error: unknown) => ({ rejected: true as const, error }),
+      );
       await a.query("COMMIT");
-      await expect(bInsert).rejects.toMatchObject({ code: "23505", constraint: "mpr_one_pending" });
+      const outcome = await bOutcome;
+      expect(outcome.rejected).toBe(true);
+      expect(outcome.error).toMatchObject({ code: "23505", constraint: "mpr_one_pending" });
       await b.query("ROLLBACK");
 
       expect(countRows("memory_promotion_request", "object_id = $1 AND status = 'pending'", [objectId])).toBe(1);
     } finally {
       await a.end().catch(() => {});
       await b.end().catch(() => {});
+    }
+  });
+});
+
+// cinatra#3360: the ids this file mints must NOT be derived from the wall
+// clock. Two runs of this file that start inside the same millisecond mint
+// the same pending-object id and collide on the mpr_one_pending UNIQUE
+// constraint, and that rejection belongs to no case. This case pins the
+// property directly, without a database, so a regression is caught even on a
+// host whose race window never opens.
+describe("cinatra#3360 the minted ids do not read the wall clock", () => {
+  it("mints unique ids that carry no millisecond-timestamp segment", () => {
+    const ids = [nextId("mem-onepending"), nextId("mem-onepending"), nextId("req-b")];
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(id).not.toMatch(/-1\d{12}(?:-|$)/);
     }
   });
 });

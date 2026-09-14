@@ -1,0 +1,746 @@
+{
+  "version": 1,
+  "selfContext": "merge-readiness / merge-readiness",
+  "deadlineMinutes": 90,
+  "regeneration": {
+    "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
+    "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+    "generator": "scripts/ci/merge-readiness-inventory.mjs"
+  },
+  "excluded": [
+    {
+      "context": "${{ matrix.name }}",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "reason": "dynamic-name: the job name is a ${{ }} expression (a matrix leg), so the check-run name is not knowable statically"
+    },
+    {
+      "context": "merge-readiness / merge-readiness",
+      "workflow": ".github/workflows/merge-readiness.yml",
+      "reason": "self: the merge-readiness context itself — the job never waits on itself"
+    }
+  ],
+  "expected": [
+    {
+      "context": "/agents Playwright smoke",
+      "app": "github-actions",
+      "workflow": ".github/workflows/dashboard-live-verify.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "/design-fixtures pixel-diff + axe",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 70
+    },
+    {
+      "context": "A2A protocol unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 23
+    },
+    {
+      "context": "Actions SHA-pin gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "actions-pinned-gate / actions-pinned-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/actions-pinned-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "Agents integration — gated set (+ full-tier report)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 20
+    },
+    {
+      "context": "Agents-run static invariants (tunnel-wiring)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 15
+    },
+    {
+      "context": "Archive acceptance coverage-completeness gate (#1943)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Better Auth schema parity",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 24
+    },
+    {
+      "context": "build",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Canonical extension invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 23
+    },
+    {
+      "context": "Chat-HITL held-turn dev-runtime e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 50
+    },
+    {
+      "context": "context-resolve route response shape",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 23
+    },
+    {
+      "context": "Core-store schema migration gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Create GitHub Release",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "CRM migration gates",
+      "app": "github-actions",
+      "workflow": ".github/workflows/crm-migration-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "design suite selection",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "design suite verdict",
+      "app": "github-actions",
+      "workflow": ".github/workflows/design-visual-verify.yml",
+      "paths": [
+        "src/components/ui/**",
+        "src/components/extension-card.tsx",
+        "src/components/brand-mark.tsx",
+        "src/components/status-pill.tsx",
+        "src/components/page-header.tsx",
+        "src/components/page-content.tsx",
+        "src/components/layout/**",
+        "src/lib/cinatra-toast.ts",
+        "src/lib/extension-accent.ts",
+        "src/lib/status-adapter.ts",
+        "src/app/globals.css",
+        "src/app/design-fixtures/**",
+        "packages/extensions/src/screens/**",
+        "packages/extensions/package.json",
+        "packages/registries/src/version-compare.ts",
+        "src/lib/extension-compat-badge.ts",
+        "src/lib/auth-route-guard.ts",
+        "src/lib/test-support/conformance-seed-fence.ts",
+        "src/lib/test-support/seed-capability.ts",
+        "src/components/extension-card-icon-image.tsx",
+        "src/components/extension-kind-emblem.tsx",
+        "src/components/extensions/installed-extension-card.tsx",
+        "src/components/extensions/extensions-tab-select.tsx",
+        "packages/connectors/src/**",
+        "packages/connectors/package.json",
+        "src/components/extensions/schema-config-connector-form.tsx",
+        "src/components/extensions/connector-status-probe-card.tsx",
+        "packages/sdk-ui/src/connector-setup-columns.tsx",
+        "packages/sdk-ui/src/connections-list.tsx",
+        "packages/sdk-ui/src/connection-status-card.tsx",
+        "packages/sdk-ui/src/connection-status-badge.tsx",
+        "scripts/design/**",
+        "tests/e2e/config/design.config.ts",
+        "tests/e2e/config/base.ts",
+        "tests/e2e/design/**",
+        "scripts/ci/design-select.mjs",
+        "scripts/ci/__tests__/design-select.test.mjs",
+        "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
+        ".github/workflows/design-visual-verify.yml"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "design-pin-drift",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "design-pin-freshness",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "detect",
+      "app": "github-actions",
+      "workflow": ".github/workflows/dashboard-live-verify.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect skip — docs-only or draft (build-image)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect skip — docs-only or draft (e2e-app-suites)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect upgrade-relevant changes",
+      "app": "github-actions",
+      "workflow": ".github/workflows/works-after-proof.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "devperf invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 24
+    },
+    {
+      "context": "Discover batteries",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Execution-plane battery tier",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Execution-plane unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 23
+    },
+    {
+      "context": "Extension-anchor lifecycle DB tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "gates",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 15
+    },
+    {
+      "context": "gates-pnpm",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 15
+    },
+    {
+      "context": "gitignore-gate / gitignore-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gitignore-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "Hosted-MCP wire gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 23
+    },
+    {
+      "context": "image",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "Notifications browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "Perpetual core invariants (loops, ratchets, unit tiers)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 37
+    },
+    {
+      "context": "Perpetual extension suites (discovery gate shard)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 24
+    },
+    {
+      "context": "Perpetual system loops invariants",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Presence-degraded build (required-only universe)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 31
+    },
+    {
+      "context": "proof",
+      "app": "github-actions",
+      "workflow": ".github/workflows/works-after-proof.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "Publish image (non-release)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 30
+    },
+    {
+      "context": "Publish image (release)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 30
+    },
+    {
+      "context": "Queue path selection",
+      "app": "github-actions",
+      "workflow": ".github/workflows/execution-plane-e2e.yml",
+      "paths": [
+        "packages/execution-plane/**",
+        "packages/llm/src/execution-plane/**",
+        "docker/sandbox/**",
+        "docker/exec-worker/**",
+        "docker-compose.exec.yml",
+        "scripts/build-exec-service-bundle.mjs",
+        "scripts/ci/execution-plane-e2e-matrix.mjs",
+        "scripts/ci/vitest-tier-coverage.mjs",
+        ".github/workflows/execution-plane-e2e.yml"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "RBAC authz unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 24
+    },
+    {
+      "context": "RBAC browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "Render-smoke browser e2e",
+      "app": "github-actions",
+      "workflow": ".github/workflows/e2e-app-suites.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 45
+    },
+    {
+      "context": "secret-scan-gate / secret-scan-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/secret-scan-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "secrets-required-gate / secrets-required-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/secrets-required-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "Skills unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 24
+    },
+    {
+      "context": "skills-drift-gate / skills-drift-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/skills-drift-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "source-leak-gate / source-leak-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/source-leak-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "toast-banner-gate / toast-banner-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/toast-banner-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "Trigger prod deploy in ops",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "truthful-attribution-gate / truthful-attribution-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/truthful-attribution-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "Typecheck and unit tests",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 30
+    },
+    {
+      "context": "ui-design-system-gate / ui-design-system-gate",
+      "app": "github-actions",
+      "workflow": ".github/workflows/ui-design-system-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": null
+    },
+    {
+      "context": "Upgrade proof (previous releases to candidate)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 30
+    },
+    {
+      "context": "Workspace package unit suites",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 25
+    }
+  ]
+}

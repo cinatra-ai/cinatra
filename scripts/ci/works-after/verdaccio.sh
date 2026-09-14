@@ -22,7 +22,12 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 VERDACCIO_TAG="${VERDACCIO_TAG:-6}"
-RUN_ID="wa-verdaccio-$$"
+# ONE derivation for every disposable container name (cinatra#3332):
+# job-scoped on Actions — two works-after jobs on one self-hosted box never
+# collide on a name — and the same throwaway random id off CI that the
+# original `wa-verdaccio-$$` gave. The helper is the single carrier of that
+# rule; this arm reads it rather than keeping a second copy.
+RUN_ID="$("${WORKS_AFTER_LIB_DIR}/../job-scoped-name.sh" wa-verdaccio)"
 NET="${RUN_ID}-net"
 VC="${RUN_ID}-verdaccio"
 VOL="${RUN_ID}-storage"

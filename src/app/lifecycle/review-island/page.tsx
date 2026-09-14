@@ -80,6 +80,16 @@ import "server-only";
 // The parameter is a closed two-word enum and authorizes nothing; a request that
 // names no palette renders exactly what it rendered before it existed.
 //
+// ONE DOCUMENT, ITS OWN HEIGHT (cinatra#3091 W3, the twelfth proof round's
+// counted defect, 2026-09-10). The frame that holds this document used to be a
+// constant tall — one fixed height per pinned target — so a gate whose work was
+// shorter drew empty panel beneath the last body and a gate whose work was
+// taller had its last body clipped mid-sentence. Neither is the representation
+// slot the drawing gives a target. This document now MEASURES ITS OWN WORK and
+// names the number to the frame (`island-height-report.ts`), and the card sizes
+// the frame from it. One number crosses, in one direction; the island stays
+// display-only and hands the host nothing to call.
+//
 // EVERY DENIAL DRAWS NOTHING. No access, no such gate, a ref that does not
 // decode, a gate too damaged to read — all render an empty document. The island
 // never says why, because the card above it must be indistinguishable between
@@ -124,6 +134,7 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { IslandHeightReporter } from "./island-height-reporter";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
@@ -333,6 +344,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           />
         </Suspense>
       ))}
+
+      {/* THE HEIGHT THIS DOCUMENT ACTUALLY DREW, named to the frame that holds
+          it. Last, and drawing nothing: `hidden` keeps it out of the flex flow,
+          so the work it measures is not moved by its being there. */}
+      <IslandHeightReporter />
     </div>
   );
 }

@@ -127,8 +127,34 @@ export const artifactOutputBindingSchema = z
           "objectTypeId must be a namespaced object type id (@scope/package:local-id)",
       })
       .optional(),
-    /** EndNode output name that carries the artifact CONTENT. */
-    contentFrom: z.string().min(1),
+    /** EndNode output name that carries the artifact CONTENT. One of the three
+     *  content sources — XOR `fileFrom` / `filePattern` (cinatra#3030). */
+    contentFrom: z.string().min(1).optional(),
+    /**
+     * THE FILE CONTENT SOURCE (cinatra#3030, plan item 0.22): the path, relative
+     * to the run's `outputs` folder, of ONE file the run emitted. XOR
+     * `contentFrom` / `filePattern`.
+     *
+     * A file source names bytes the agent WROTE rather than a value it
+     * returned, so it titles itself (the file's own name, or its first line
+     * behind `titleFromFirstLine`) and never carries `titleFrom`.
+     */
+    fileFrom: z.string().min(1).optional(),
+    /**
+     * THE FILE FAN-OUT (cinatra#3030, plan item 0.27): one artifact per file of
+     * the run's `outputs` folder matching this pattern. `*` matches any run of
+     * characters inside one path segment, `**` crosses segments, `?` matches
+     * one character. XOR `contentFrom` / `fileFrom`.
+     */
+    filePattern: z.string().min(1).optional(),
+    /**
+     * A file-sourced binding's title comes from the file's FIRST LINE rather
+     * than its name (item 0.27: "a title comes from a declared member field,
+     * the first line of a text member, or the file name"). Only legal on a file
+     * source; a file whose first line is empty falls back to the file's name,
+     * which is always something the agent itself chose.
+     */
+    titleFromFirstLine: z.boolean().optional(),
     /** Static MIME. XOR `mimeFrom`. Must be text-authorable (v1). */
     declaredMime: z.string().min(1).optional(),
     /** EndNode output name that carries the MIME at run time. XOR `declaredMime`. */
@@ -147,23 +173,89 @@ export const artifactOutputBindingSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    // ---- EXACTLY ONE CONTENT SOURCE (cinatra#3030, item 0.22) -------------
+    // An output value, one named file, or a file pattern. Two sources would
+    // make "what are these bytes" unanswerable, and none binds nothing.
+    const contentSources = (
+      [
+        ["contentFrom", value.contentFrom],
+        ["fileFrom", value.fileFrom],
+        ["filePattern", value.filePattern],
+      ] as ReadonlyArray<readonly [string, string | undefined]>
+    ).filter(([, v]) => v !== undefined);
+    if (contentSources.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          contentSources.length === 0
+            ? "exactly one content source is required: contentFrom, fileFrom or filePattern"
+            : `exactly one content source is allowed; this binding declares ${contentSources
+                .map(([k]) => k)
+                .join(" and ")}`,
+      });
+    }
+    const isFileSource = value.fileFrom !== undefined || value.filePattern !== undefined;
+
     const hasDeclared = value.declaredMime !== undefined;
     const hasFrom = value.mimeFrom !== undefined;
-    if (hasDeclared === hasFrom) {
+    if (isFileSource) {
+      // A FILE MAY LEAVE ITS FORM TO THE LADDER. `mimeFrom` names an EndNode
+      // output, which a file source does not read, so it is refused outright
+      // rather than silently ignored.
+      if (hasFrom) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mimeFrom"],
+          message:
+            "a file-sourced binding may not carry mimeFrom — declare declaredMime, or leave the form to the detection ladder",
+        });
+      }
+    } else if (hasDeclared === hasFrom) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "exactly one of declaredMime / mimeFrom is required",
       });
     }
+
     const hasTitleFrom = value.titleFrom !== undefined;
     const hasFanOut = value.fanOut !== undefined;
-    if (hasTitleFrom === hasFanOut) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: hasFanOut
-          ? "a fan-out binding must not carry titleFrom — each member's title comes from its own first line"
-          : "titleFrom is required (or declare fanOut, whose members title themselves)",
-      });
+    if (isFileSource) {
+      // A FILE TITLES ITSELF (item 0.27). `titleFrom` names an output the file
+      // source never reads, and `fanOut` fans a LIST out — a file pattern is
+      // already the file fan-out.
+      if (hasTitleFrom) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["titleFrom"],
+          message:
+            "a file-sourced binding must not carry titleFrom — the file's own name, or its first line behind titleFromFirstLine, is the title",
+        });
+      }
+      if (hasFanOut) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["fanOut"],
+          message:
+            "a file-sourced binding must not carry fanOut — filePattern IS the file fan-out",
+        });
+      }
+    } else {
+      if (value.titleFromFirstLine !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["titleFromFirstLine"],
+          message:
+            "titleFromFirstLine is only meaningful on a file source (fileFrom / filePattern)",
+        });
+      }
+      if (hasTitleFrom === hasFanOut) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: hasFanOut
+            ? "a fan-out binding must not carry titleFrom — each member's title comes from its own first line"
+            : "titleFrom is required (or declare fanOut, whose members title themselves)",
+        });
+      }
     }
     if (
       value.declaredMime !== undefined &&
@@ -321,7 +413,12 @@ export function collectArtifactBindingsFromOasDocument(
 
       let referenceError = false;
       for (const [field, ref] of [
-        ["contentFrom", binding.contentFrom],
+        // A FILE-SOURCED binding reads no output, so it names none to check
+        // (cinatra#3030): its content source is a path in the run's outputs
+        // folder, which only exists at run time.
+        ...(binding.contentFrom !== undefined
+          ? ([["contentFrom", binding.contentFrom]] as const)
+          : []),
         ...(binding.titleFrom !== undefined
           ? ([["titleFrom", binding.titleFrom]] as const)
           : []),
@@ -735,7 +832,28 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       );
     }
 
-    for (const field of ["content", "title"] as const) {
+    // THE SAME-ARTIFACT REVISION'S CALL GRAMMAR (cinatra#3030, item 0.30). A
+    // call that names an existing artifact AND the revision it read APPENDS the
+    // next revision instead of creating a second artifact. The pair is together
+    // or not at all — an append that does not name what it read cannot be
+    // checked, and a base without an artifact names nothing — and an append
+    // carries no title: the artifact already has the one its creator gave it.
+    // Without this the runtime accepts an append the compiler refuses, which
+    // makes the road unreachable from a published package.
+    const hasArtifactId = input.artifactId !== undefined;
+    const hasBase = input.baseRepresentationRevisionId !== undefined;
+    if (hasArtifactId !== hasBase) {
+      fieldError(
+        hasArtifactId ? "baseRepresentationRevisionId" : "artifactId",
+        "an append names the artifact it revises AND the revision it read — " +
+          "declare both (artifactId + baseRepresentationRevisionId) or neither",
+      );
+    }
+    const isAppend = hasArtifactId && hasBase;
+    const requiredStrings = isAppend
+      ? (["content", "artifactId", "baseRepresentationRevisionId"] as const)
+      : (["content", "title"] as const);
+    for (const field of requiredStrings) {
       const value = input[field];
       if (typeof value !== "string" || value.length === 0) {
         fieldError(
@@ -893,4 +1011,71 @@ export function parseArtifactBindingDeclaration(
   const parsed = persistedArtifactBindingDeclarationSchema.safeParse(json);
   if (!parsed.success) return null;
   return { bindings: parsed.data.bindings, producesRefs: parsed.data.producesRefs };
+}
+
+// ---------------------------------------------------------------------------
+// THE FILE CONTENT SOURCE'S OWN HELPERS (cinatra#3030, epic #3023 W6; plan
+// items 0.22 and 0.27). Pure, dependency-free, and shared by the host's pickup
+// so the grammar and the road that reads it can never drift apart.
+// ---------------------------------------------------------------------------
+
+/** Every character a regular expression treats as syntax. */
+const REGEX_META = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * Does one run-folder path match a binding's `filePattern`?
+ *
+ * The grammar is deliberately small: `**` crosses path segments, `*` matches a
+ * run of characters WITHIN one segment, `?` matches exactly one such character,
+ * and every other character is literal. The pattern is translated to an anchored
+ * regular expression with every literal escaped first, so a pattern can never
+ * smuggle regular-expression syntax of its own into the match.
+ */
+export function fileMatchesBindingPattern(pattern: string, relPath: string): boolean {
+  if (typeof pattern !== "string" || pattern.length === 0) return false;
+  if (typeof relPath !== "string" || relPath.length === 0) return false;
+  let out = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        out += ".*";
+        i += 2;
+        continue;
+      }
+      out += "[^/]*";
+      i += 1;
+      continue;
+    }
+    if (ch === "?") {
+      out += "[^/]";
+      i += 1;
+      continue;
+    }
+    out += ch.replace(REGEX_META, "\\$&");
+    i += 1;
+  }
+  return new RegExp(`^${out}$`).test(relPath);
+}
+
+/**
+ * A file's own name as its title — "a title comes from [...] the file name"
+ * (item 0.27). The extension is kept: it is part of what the agent named the
+ * file, and dropping it would make two files of the same stem one title.
+ */
+export function fileNameTitle(relPath: string): string {
+  const segments = String(relPath).split("/");
+  const name = segments[segments.length - 1] ?? "";
+  return name.trim().length > 0 ? name.trim() : String(relPath);
+}
+
+/**
+ * A text file's FIRST LINE as its title (item 0.27). Never invented: an empty
+ * or whitespace-only first line returns the empty string and the caller falls
+ * back to the file's name.
+ */
+export function firstLineTitle(text: string): string {
+  const first = String(text).split("\n", 1)[0] ?? "";
+  return first.replace(/^\uFEFF/, "").trim();
 }

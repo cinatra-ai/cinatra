@@ -478,6 +478,27 @@ export async function resolveDefaultAdapter(): Promise<LlmProviderAdapter | null
  * the first available adapter that implements generateImage.
  */
 export async function resolveDefaultImageAdapter(): Promise<LlmProviderAdapter | null> {
+  return (await resolveDefaultImageProvider())?.adapter ?? null;
+}
+
+/**
+ * The deployment's configured image provider, NAMED.
+ *
+ * `resolveDefaultImageAdapter` above answers only "can something make a
+ * picture" — a caller that must RECORD which provider made one had nothing to
+ * record, and a caller that must state WHY it cannot make one could not tell an
+ * unconfigured deployment from a configured provider whose adapter cannot
+ * generate an image. Both answers come from the same walk, so the walk lives
+ * here and the adapter-only entry point delegates to it.
+ *
+ * The order is unchanged: the administrator's unscoped default first, then the
+ * remaining providers, and the first adapter that implements `generateImage`
+ * wins.
+ */
+export async function resolveDefaultImageProvider(): Promise<{
+  provider: LlmProvider;
+  adapter: LlmProviderAdapter;
+} | null> {
   const preferred = readDefaultImageProviderFromDatabase() as LlmProvider | null;
   const allProviders: LlmProvider[] = ["openai", "anthropic", "gemini"];
   const ordered: LlmProvider[] = preferred
@@ -486,7 +507,7 @@ export async function resolveDefaultImageAdapter(): Promise<LlmProviderAdapter |
 
   for (const provider of ordered) {
     const adapter = await resolveProviderAdapter(provider);
-    if (adapter?.generateImage) return adapter;
+    if (adapter?.generateImage) return { provider, adapter };
   }
   return null;
 }
