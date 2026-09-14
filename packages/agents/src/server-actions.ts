@@ -20,12 +20,15 @@ import {
   readSkillsCatalog,
   resolveEffectiveSkillAccessPolicy,
 } from "@cinatra-ai/skills";
-import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
+import {
+  buildActorContextFromPrimitive,
+  type ActorRoleHints,
+} from "@/lib/authz/build-actor-context";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
 // re-homed into core off the now-retired recommender agent binding.
-import { getRunRecommendations } from "./recommendation-interception";
+import { getRunRecommendationsForReader } from "./recommendation-interception";
 import { writeRunSkillSelectionForActor } from "./run-recommendation-core";
 import type {
   RankedRecommendation,
@@ -263,14 +266,43 @@ export async function getRunRecommendedSkillsAction(input: {
   if (!session?.user?.id) return [];
   try {
     if (!input.agentPackageName) return [];
-    const recs = await getRunRecommendations({
+    // THE POOL IS SERVER-DERIVED (cinatra#2815 S3 part 4). `restrictToSkillIds`
+    // stays in the input for call-site compatibility and is deliberately
+    // IGNORED — exactly as `confirmRunSkillSelectionAction` below already
+    // ignores it. A client cannot widen the pool (it never could: an
+    // unassigned id is not deliverable), and it can no longer NARROW it either,
+    // which is what made the ranks a function of the caller's request rather
+    // than of the reader's own scope.
+    const kernel = await requireActorContext().catch(() => null);
+    if (!kernel) return [];
+    const viewer = buildActorContextFromPrimitive(
+      { actorType: "human", source: "ui", userId: session.user.id } as Parameters<
+        typeof buildActorContextFromPrimitive
+      >[0],
+      null,
+      {
+        ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
+        ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
+        ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
+        ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
+        ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
+        actorOrganizationId: kernel.organizationId ?? null,
+      },
+    );
+    const assignedSkillIds = await getAssignedSkillIdsForAgent(input.agentPackageName, {
+      principalId: viewer.principalId,
+      teamIds: viewer.teamIds ?? [],
+      projectIds: viewer.projectIds ?? [],
+      ...(viewer.organizationId ? { organizationId: viewer.organizationId } : {}),
+    }).catch(() => [] as string[]);
+    const { recommendations: recs } = await getRunRecommendationsForReader({
       agentId: input.agentPackageName,
       intent: {
         promptText: input.promptText,
         declaredProducedTypes: input.declaredProducedTypes,
         targetArtifactKind: input.targetArtifactKind,
       },
-      restrictToSkillIds: input.restrictToSkillIds,
+      assignedSkillIds,
     });
     return recs.map((r) => ({
       skillId: r.skillId,

@@ -45,12 +45,210 @@ import { ARTIFACT_UI_SLOTS } from "./artifact-contract";
 export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 
 /**
+ * The HOST-SHARED DESIGN-PRIMITIVES module (cinatra#3471 slice 2, epic #2926 —
+ * decision 407 of 2026-09-13: "the host shares its primitives with extension
+ * bundles at run time like React does"). A self-rendering connector/artifact
+ * bundle leaves THIS bare specifier EXTERNAL and the host module-registry shim
+ * resolves it to the host's ONE instance at run time — the exact road React and
+ * the design-token module already take, so a package stops carrying byte copies
+ * of `src/components/ui/*`.
+ *
+ * The id is HOST-NEUTRAL and follows the design registry's OWN package naming
+ * (`registry.json` namespaces every item as `@cinatra-ai/<item>`, the same
+ * scope the host design-token module already uses) — never a product-internal
+ * path such as
+ * `@/components/ui`, which is exactly the coupling decision 407 removes.
+ */
+export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
+
+/**
+ * The VERSIONED contract the shared primitives module serves. Semver: a MAJOR
+ * bump is a breaking change to {@link HOST_DESIGN_PRIMITIVES_EXPORTS} (an export
+ * removed or renamed, or a prop contract broken); a MINOR adds exports. A bundle
+ * records the contract version it was BUILT against and the host refuses, at
+ * load, a bundle whose MAJOR it does not serve (see
+ * {@link checkDesignPrimitivesContract}).
+ */
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
+
+/** The MAJOR of {@link HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION} — the single
+ * number the load-time fail-closed check compares on. */
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
+
+/**
+ * The FROZEN export list of the shared primitives module at contract major
+ * {@link HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR} — exactly the exports of the
+ * sixteen product components under `src/components/ui/` that the
+ * self-rendering-extensions border floor
+ * (`scripts/extensions/self-rendering-extensions-border.baseline.json`) records
+ * as byte copies inside connector/artifact packages: alert, badge, button, card,
+ * checkbox, dialog, field, input-group, input, label, paginated-table,
+ * pagination, select, separator, table, textarea.
+ *
+ * The baseline ALSO lists `external-link.tsx`, `link.tsx` and `text-link.tsx`.
+ * Those are NOT product primitives — they are the extensions' OWN components
+ * (`vendor-extension-primitives.mjs`: "dialog.tsx / link.tsx are the
+ * connector's OWN components, not registry items, so they are outside this
+ * channel") and no such file exists under `src/components/ui/`, so the host
+ * cannot and does not serve them.
+ *
+ * Adding a name here is a MINOR bump; removing or renaming one is a MAJOR.
+ */
+export const HOST_DESIGN_PRIMITIVES_EXPORTS = Object.freeze([
+  // alert
+  "Alert",
+  "AlertDescription",
+  "AlertTitle",
+  // badge
+  "Badge",
+  "badgeVariants",
+  // button
+  "Button",
+  "buttonVariants",
+  // card
+  "Card",
+  "CardAction",
+  "CardContent",
+  "CardDescription",
+  "CardFooter",
+  "CardHeader",
+  "CardTitle",
+  // checkbox
+  "Checkbox",
+  // dialog
+  "Dialog",
+  "DialogClose",
+  "DialogContent",
+  "DialogDescription",
+  "DialogFooter",
+  "DialogHeader",
+  "DialogOverlay",
+  "DialogPortal",
+  "DialogTitle",
+  "DialogTrigger",
+  // field
+  "Field",
+  "FieldContent",
+  "FieldDescription",
+  "FieldError",
+  "FieldGroup",
+  "FieldLabel",
+  "FieldLegend",
+  "FieldSeparator",
+  "FieldSet",
+  "FieldTitle",
+  // input
+  "Input",
+  // input-group
+  "InputGroup",
+  "InputGroupAddon",
+  "InputGroupButton",
+  "InputGroupInput",
+  "InputGroupText",
+  "InputGroupTextarea",
+  // label
+  "Label",
+  // paginated-table
+  "PaginatedTable",
+  // pagination
+  "Pagination",
+  "PaginationCaption",
+  "PaginationContent",
+  "PaginationEllipsis",
+  "PaginationItem",
+  "PaginationLink",
+  "PaginationNext",
+  "PaginationPrevious",
+  // select
+  "Select",
+  "SelectContent",
+  "SelectGroup",
+  "SelectItem",
+  "SelectLabel",
+  "SelectScrollDownButton",
+  "SelectScrollUpButton",
+  "SelectSeparator",
+  "SelectTrigger",
+  "SelectValue",
+  // separator
+  "Separator",
+  // table
+  "Table",
+  "TableBody",
+  "TableCaption",
+  "TableCell",
+  "TableFooter",
+  "TableHead",
+  "TableHeader",
+  "TableRow",
+  // textarea
+  "Textarea",
+] as const);
+
+/** One export name of the shared primitives module at the current contract
+ * major — the literal union the typed contract export is built from. */
+export type HostDesignPrimitiveExportName = (typeof HOST_DESIGN_PRIMITIVES_EXPORTS)[number];
+
+/**
+ * The NAMED error the host fails closed with when a bundle was built against a
+ * primitives-contract MAJOR the host does not serve. Bound as the thrown
+ * `Error.name` so a caller matches on the name, not on prose.
+ */
+export const DESIGN_PRIMITIVES_CONTRACT_MISMATCH = "DesignPrimitivesContractMajorMismatch";
+
+/** The MAJOR of a `X.Y.Z` contract version, or null when the string is not one
+ * (fail-closed: a malformed version is never treated as compatible). */
+export function designPrimitivesContractMajorOf(version: string): number | null {
+  if (typeof version !== "string") return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (match === null) return null;
+  return Number(match[1]);
+}
+
+/**
+ * The LOAD-TIME contract check: does the host still serve the primitives
+ * contract MAJOR a bundle was built against? Returns null when it does, else a
+ * fail-loud refusal reason. Pure over its inputs so the host shim, the
+ * publish-time builder mirror and a unit test share ONE rule. Fail-closed: a
+ * malformed or absent `builtAgainst` refuses.
+ */
+export function checkDesignPrimitivesContract(input: {
+  builtAgainst: string;
+  hostServes?: string;
+}): string | null {
+  const hostServes = input.hostServes ?? HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION;
+  const built = designPrimitivesContractMajorOf(input.builtAgainst);
+  const served = designPrimitivesContractMajorOf(hostServes);
+  if (built === null) {
+    return (
+      `bundle declares an unreadable "${HOST_DESIGN_PRIMITIVES_MODULE}" contract version ` +
+      `"${String(input.builtAgainst)}" — it must be an exact MAJOR.MINOR.PATCH version`
+    );
+  }
+  if (served === null) {
+    return (
+      `the host declares an unreadable "${HOST_DESIGN_PRIMITIVES_MODULE}" contract version ` +
+      `"${String(hostServes)}" — it must be an exact MAJOR.MINOR.PATCH version`
+    );
+  }
+  if (built !== served) {
+    return (
+      `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract major ${built} ` +
+      `(${input.builtAgainst}) but this host serves major ${served} (${hostServes}) — ` +
+      `rebuild the bundle against the host's contract`
+    );
+  }
+  return null;
+}
+
+/**
  * The COMPLETE, closed allowlist of bare specifiers a dynamically-loaded
  * renderer client bundle may leave EXTERNAL. In the shared (main) realm a
  * second React copy is a correctness hazard ("Invalid hook call", broken
  * context/hooks — plan §2.2), so React / ReactDOM / the JSX runtimes / the
- * design-token module stay external and resolve to the host's SINGLE shared
- * instances through the host module-registry shim. ANY other external in the
+ * design-token module / the shared design-PRIMITIVES module stay external and
+ * resolve to the host's SINGLE shared instances through the host
+ * module-registry shim. ANY other external in the
  * publish-time esbuild metafile is REJECTED by the externals-allowlist gate
  * (`assertClientBundleExternalsAllowed`): a bundle may leave external ONLY
  * these host peers; everything else must be bundled.
@@ -62,6 +260,7 @@ export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST: readonly string[] = Object.freeze
   "react-dom",
   "react-dom/client",
   HOST_DESIGN_TOKEN_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
 ]);
 
 /**
