@@ -19,9 +19,9 @@
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
  *
- * THREE PINS ARE HELD at their previous sha, and each held part is recorded
+ * TWO PINS ARE HELD at their previous sha, and each held part is recorded
  * below as a pinned absence carrying its reason. The wave's own change in
- * those three repositories also carries a defect the host refuses, and the
+ * those two repositories also carries a defect the host refuses, and the
  * border keeps the remedy in the package's own repository rather than in a
  * host special case:
  *
@@ -33,14 +33,16 @@
  *     `hitlScreens`, and that id is a live renderer binding this host resolves
  *     for the send screen, so the agent card would stop advertising a surface
  *     the host still serves.
- *   - list-curator-agent: its head fails the L1 EndNode invariant — an
- *     EndNode that specifies both inputs and outputs must have them equal —
- *     so the runtime refuses to mount the flow at that head. The remedy is
- *     asked for in that repository as cinatra-ai/list-curator-agent#51.
  *
  * company-discovery-agent's pin is no longer held: its corrected head names
  * the two fields a person supplies in `required`, which is how the host makes
  * a field visible, and this file follows that declaration below.
+ *
+ * list-curator-agent's pin is no longer held either: the EndNode invariant it
+ * failed — an EndNode that specifies both inputs and outputs must have them
+ * equal — was fixed in that repository, and its advanced head also turns the
+ * two declared review screens into real pauses in the flow, so this file
+ * follows that declaration below instead of pinning the gap.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -451,14 +453,13 @@ describe("acceptance 2 — the curator's two declared pauses", () => {
     ]);
   });
 
-  // Named, not hidden: the two declared screens are not yet approval nodes in
-  // the curator's flow. The wave's sentence is to MAKE them real pauses, which
-  // is a later wave's item in that repository, not a deletion of the
-  // declaration here.
-  it("the curator's declared screens are not yet pauses in its flow — the gap is pinned", () => {
+  // At the advanced pin the two declared screens ARE pauses in the flow, and
+  // the manifest's gate claim is true beside them — the pair the host reads
+  // together, so a later pin that loses either one reddens here.
+  it("the curator's declared screens are real pauses in its flow, and its gate claim is true", () => {
     const a = agent("list-curator-agent");
-    expect(a.approvalNodes).toBe(0);
-    expect(a.gateClaim).toBe(false);
+    expect(a.approvalNodes).toBe(2);
+    expect(a.gateClaim).toBe(true);
   });
 });
 
