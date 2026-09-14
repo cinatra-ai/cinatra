@@ -420,18 +420,18 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
           expect(row.sha256, row.file).not.toBe(pin.manifestSha256);
           expect(row.contentHash, row.file).not.toBe(pin.specContentHash);
         }
+        // A row re-fetched on a later day carries its OWN fetchedAt; a row that
+        // does not is covered by the top-level one. Either way every frozen body
+        // has exactly one governing date, it is a plain calendar date, and it is
+        // never EARLIER than the snapshot the directory is named for - otherwise
+        // the receipt would be dating bytes it cannot have served.
+        const governingFetchedAt = row.fetchedAt ?? receipt.fetchedAt;
+        expect(governingFetchedAt, row.file).toMatch(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/);
+        expect(
+          governingFetchedAt >= receipt.fetchedAt,
+          `${row.file} is dated before the snapshot`,
+        ).toBe(true);
       }
-      // A row re-fetched on a later day carries its OWN fetchedAt; a row that
-      // does not is covered by the top-level one. Either way every frozen body
-      // has exactly one governing date, it is a plain calendar date, and it is
-      // never EARLIER than the snapshot the directory is named for - otherwise
-      // the receipt would be dating bytes it cannot have served.
-      const governingFetchedAt = row.fetchedAt ?? receipt.fetchedAt;
-      expect(governingFetchedAt, row.file).toMatch(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/);
-      expect(
-        governingFetchedAt >= receipt.fetchedAt,
-        `${row.file} is dated before the snapshot`,
-      ).toBe(true);
     }
     // Both reconciliation captures still cover all five pins, so nothing was
     // dropped out of the record when a later adoption froze forward.
