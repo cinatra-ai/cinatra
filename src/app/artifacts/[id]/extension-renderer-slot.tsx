@@ -4,7 +4,10 @@ import type { ReactNode } from "react";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 import { loadArtifactRenderer } from "@/lib/artifacts/artifact-renderer-loader";
-import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  artifactRendererPropsAtVersion,
+  type ArtifactRendererProps,
+} from "@/lib/artifacts/artifact-renderer-props";
 
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
 
@@ -55,17 +58,23 @@ export async function ExtensionRendererSlot({
   // `PLAN: Agents Lifecycle (C)`, cinatra#3027): "resolve the display, read its
   // declared props version, then build the snapshot at that version."
   //
-  // This seam receives a snapshot ALREADY BUILT by its caller, so when the
-  // negotiated version is not the version that snapshot carries it cannot honour
-  // the second half of the sentence — and handing an older display a newer shape
-  // is exactly what the enabler forbids ("a v1 display admitted under a v2 host
-  // must be handed a v1 snapshot, not a v2 one it cannot read"). It therefore
-  // degrades under the SAME `abi-incompatible` class the strict equality used to
-  // produce, rather than mounting a shape the display never agreed to. Building
-  // a per-version snapshot at this seam is the sibling plan's wiring; until it
-  // lands, this is the fail-closed half of the ratchet, and it is a no-op while
-  // the host window holds a single version.
-  if (result.negotiatedPropsApiVersion !== props.propsApiVersion) {
+  // This seam receives a snapshot ALREADY BUILT by its caller at the host's
+  // ceiling. Since the ceiling moved to v2 (wave 3, cinatra#3091) that is no
+  // longer the version most of the fleet negotiates: every build-map display
+  // declares v1 today, so a bare inequality here would degrade EVERY ONE of
+  // them the day the ceiling moved — the flag day the window exists to prevent,
+  // arriving through the seam instead of through the loader.
+  //
+  // So the snapshot is NARROWED to the negotiated version instead. That is the
+  // second half of the enabler's sentence ("then build the snapshot at that
+  // version") in the only form a seam holding a finished snapshot can honour:
+  // drop what the older shape has no place for, invent nothing.
+  //
+  // A negotiation ABOVE the snapshot's own version is still a degrade, and must
+  // be: narrowing is safe, widening would be a guess at a field the host never
+  // built. The loader cannot produce that case today (it negotiates against
+  // this very version as its ceiling) and this stays the fail-closed half.
+  if (result.negotiatedPropsApiVersion > props.propsApiVersion) {
     return (
       <>
         <RendererDegradedNotice
@@ -78,6 +87,11 @@ export async function ExtensionRendererSlot({
     );
   }
 
+  const negotiatedProps = artifactRendererPropsAtVersion(
+    props,
+    result.negotiatedPropsApiVersion,
+  );
+
   const { Component } = result;
-  return <Component {...props} />;
+  return <Component {...negotiatedProps} />;
 }
