@@ -170,8 +170,30 @@ export function buildMarketplaceCardNodes({
         // when the registry is connected; otherwise a disabled button so
         // we never present an Install that cannot actually install.
         cta.disabled ? (
-          <Button size="sm" disabled title="Connect the package registry to install">
-            Install now
+          // cinatra#3494 — an install control that cannot install STATES why
+          // on the card. This branch is reached only when the registry is not
+          // connected (resolveMarketplaceCardCta returns
+          // `disabled: !registryConnected` for the install state). It used to
+          // render the label of a LIVE action ("Install now") on a disabled
+          // button whose only explanation sat in a `title` the shared Button
+          // base makes unreachable — the base sets
+          // `disabled:pointer-events-none`, so no hover event reaches a
+          // disabled button and the browser never shows that tooltip — leaving
+          // a control that does nothing and says nothing. The reason now
+          // travels on the LABEL, where this file already carries the
+          // workspace-reach clause (cinatra#2698), so the card gains no new
+          // control and no new layout; the actionable instruction stays in the
+          // title and the title is made reachable, exactly as the incompatible
+          // branch above keeps it. The page-level alert in
+          // extensions-marketplace-screen.tsx carries the recovery link under
+          // this same condition.
+          <Button
+            size="sm"
+            disabled
+            className="cursor-not-allowed disabled:pointer-events-auto"
+            title="Connect the package registry to install"
+          >
+            Registry not connected
           </Button>
         ) : usesInstallPanel ? (
           // connector / artifact / workflow: the pre-install access selector
