@@ -144,6 +144,10 @@ export {
   resolveImplicitGlobalProviderOrder,
   BoundDefaultProviderUnavailableError,
   resolveDefaultImageAdapter,
+  // cinatra#3032 (plan (C) item 0.28): the same walk, NAMING the provider it
+  // settled on, so a caller can record what made a picture and can state why
+  // it could not make one.
+  resolveDefaultImageProvider,
   hasConfiguredLlmRuntime,
   // cinatra#2094 F10: the provider-NAMING counterpart of the boolean above, for
   // guards that must reject before a stream exists (and therefore before

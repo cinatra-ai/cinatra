@@ -235,7 +235,7 @@ describe("the shipped blog-idea-generator declaration", () => {
     };
     const binding = collected.bindings[0]!.binding;
     // Every output the binding names is present and usable in that answer.
-    const members = answer[binding.contentFrom];
+    const members = answer[binding.contentFrom!];
     expect(Array.isArray(members)).toBe(true);
     expect((members as unknown[]).every((m) => typeof m === "string")).toBe(true);
     for (const member of members as string[]) {

@@ -21,7 +21,6 @@ import path from "node:path";
 import { registerArtifactExtensions } from "@cinatra-ai/objects/register-artifact-extensions";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
-import { buildArtifactObjectEnvelope } from "../artifact-object-envelope";
 import {
   buildFeaturedImageFields,
   readFeaturedImageFieldContract,
@@ -42,6 +41,15 @@ const fileEnvelope = {
   viewerHint: "mime",
   title: "The featured image",
 };
+
+// The write path composes the row's `objects.data` as the caller's typed data
+// UNDER the host's envelope, and validates THAT against the type's declared
+// schema. This composes it the same way, so what the schema sees here is what
+// the write path writes.
+const objectDataFor = (typedData: Record<string, unknown>) => ({
+  ...typedData,
+  ...fileEnvelope,
+});
 
 beforeAll(() => {
   objectTypeRegistry._clearForTests();
@@ -80,20 +88,14 @@ describe("the two field names and the placement value are READ, not held", () =>
   it("writes the pair under the names the type itself declares", () => {
     const contract = contractFromRegistry();
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
-    const envelope = buildArtifactObjectEnvelope(
-      fileEnvelope,
-      buildFeaturedImageFields(contract, { post: POST_ID }),
-    );
-    expect(def!.schema.safeParse(envelope).success).toBe(true);
+    const data = objectDataFor(buildFeaturedImageFields(contract, { post: POST_ID }));
+    expect(def!.schema.safeParse(data).success).toBe(true);
   });
 
   it("reads the pair back off a row through the same contract", () => {
     const contract = contractFromRegistry();
-    const envelope = buildArtifactObjectEnvelope(
-      fileEnvelope,
-      buildFeaturedImageFields(contract, { post: POST_ID }),
-    );
-    expect(readFeaturedImageFields(contract, envelope)).toEqual({
+    const data = objectDataFor(buildFeaturedImageFields(contract, { post: POST_ID }));
+    expect(readFeaturedImageFields(contract, data)).toEqual({
       ok: true,
       post: POST_ID,
       placement: "featured",

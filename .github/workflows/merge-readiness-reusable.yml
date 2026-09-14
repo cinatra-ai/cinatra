@@ -1,0 +1,53 @@
+name: merge-readiness-reusable
+
+# The called half of the `merge-readiness / merge-readiness` context pair
+# (engineering#658 item 3). Called only by .github/workflows/merge-readiness.yml.
+
+on:
+  workflow_call:
+    inputs:
+      candidate_sha:
+        description: The candidate commit under evaluation (the tree the summary records).
+        required: true
+        type: string
+      head_sha:
+        description: >-
+          The commit whose check runs are read. On a pull request that is the
+          head sha, which carries the runs; empty on the queue event, where the
+          candidate is its own lookup.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+jobs:
+  merge-readiness:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    # Shorter than the queue's check_response_timeout_minutes (120): this job
+    # must report a readable failure before the queue times the entry out.
+    # The script's own DEADLINE_MINUTES budget (90) sits inside this ceiling.
+    timeout-minutes: 100
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Verify the readiness inventory matches the workflows
+        run: node scripts/ci/merge-readiness-inventory.mjs --check
+
+      - name: Evaluate merge readiness on the candidate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MERGE_READINESS_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          MERGE_READINESS_HEAD_SHA: ${{ inputs.head_sha }}
+        run: node scripts/ci/merge-readiness.mjs

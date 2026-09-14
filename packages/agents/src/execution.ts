@@ -2244,14 +2244,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // every rung refuses land under the binary base. Nothing is dropped, so the
   // advisory retires with the road that needed it.
   //
-  // Emitted FILES are the other half of the pickup (plan item 0.22) and are W6.
+  // Emitted FILES are the other half of the pickup (plan item 0.22, cinatra#3030):
+  // the runner lists the run's own outputs folder where that folder lives, so a
+  // run that declared NO end-node output can still have emitted files. That is
+  // why the road runs on every clean terminal success and not only when the
+  // sentinel carried structured outputs.
   //
   // NOT part of the #2486 materialization-honesty gate: a DECLARED binding that
   // fails is a broken promise and fails the run (above); an UNDECLARED output the
   // default road could not file is a visible per-output outcome on the run's own
   // record. The pickup never throws.
   let defaultRoadPickups: Array<Record<string, unknown>> = [];
-  if (endNodeOutputs !== null && materializationFailures.length === 0) {
+  if (materializationFailures.length === 0) {
     try {
       // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
       // the ladder, the artifact writer and the pooled-db graph, and this module
@@ -2277,7 +2281,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         templateId: run.templateId,
         packageVersion: run.packageVersion,
         createdBy: run.runBy,
-        endNodeOutputs: endNodeOutputs as Record<string, unknown>,
+        // A run with no declared end-node outputs still reaches the road for
+        // its emitted files (cinatra#3030); the outputs half simply has nothing
+        // to look at.
+        endNodeOutputs: (endNodeOutputs ?? {}) as Record<string, unknown>,
         // The binding rung already named these; the default road never runs twice
         // over the same output.
         boundOutputIds: artifactMaterializations

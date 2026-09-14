@@ -61,6 +61,22 @@ const WRITER_ALLOWLIST = new Set([
   "src/lib/artifacts/artifact-creation.ts",
   "src/lib/artifacts/artifact-retention.ts",
   "src/lib/artifacts/semantic-assertion-store.ts",
+  // The append side of artifact-creation.ts above, and the SAME class: ONE
+  // atomic append transaction whose compare-and-set is the representation
+  // table's own unique index on (org_id, artifact_id, revision), carrying its
+  // own artifact_audit writer witness and its conditional
+  // artifact_produced_outbox row. Its only objects-table DML moves
+  // the three cached projection fields that artifact-creation.ts writes when it
+  // creates the row — latestRepresentationRevisionId, latestDigest, mime. The
+  // pointer and the mime are the two an unpinned reader takes (the getArtifact
+  // summary and the artifact_content_read fallback in
+  // extension-artifact-reads.ts), so moving them is what keeps those readers
+  // naming the revision the artifact actually has; latestDigest has no reader
+  // today and moves with them so the cached triple never disagrees with itself.
+  // It emits NO canonical object-history event and NO objects.version bump;
+  // like the artifact stores above, its migration to the canonical writer is a
+  // follow-up.
+  "src/lib/artifacts/artifact-revision-append.ts",
   // cinatra#2043 (epic #2037 S5) CMS content-snapshot capture writer — same
   // class as the artifact stores above: a CTE-atomic writer that inserts the
   // snapshot artifact's own objects identity row alongside resource /

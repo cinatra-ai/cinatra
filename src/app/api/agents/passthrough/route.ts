@@ -16,6 +16,10 @@ import {
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
 import {
+  shapeArtifactImageInput,
+  type ShapedArtifactImageInput,
+} from "./artifact-image-shaper";
+import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
@@ -32,6 +36,7 @@ import {
   enforceAnsweredGateProvenance,
 } from "./answered-gate-provenance";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
+import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -75,6 +80,12 @@ const ALLOWED_TOOLS = new Set([
   // per-node OAS metadata mechanism (riskClass/sideEffects) — nothing
   // route-side.
   "artifact_materialize",
+  // THE IMAGE TOOL (cinatra#3032, plan (C) item 0.28) — a prompt in, a picture
+  // filed. Dispatched to `@/lib/artifact-image-tool#generateArtifactImage` under
+  // the bound run's own authority, through the deployment's configured image
+  // provider, sharing the #923 idempotency ledger (`path:'materialize_tool'`)
+  // and, for a regeneration, the mid-run revision's one compare-and-set.
+  "artifact_image_generate",
   // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
   // seam. An extension workflow's prep ApiNode calls these to assemble / shape
   // its own HITL payload before the interrupt; the primitive derives the run +
@@ -105,6 +116,12 @@ const ALLOWED_TOOLS = new Set([
   // Admitted by name and by scope, never by wildcard, and audited with the
   // calling extension (plan §8.7).
   ...EXTENSION_SCOPED_TOOLS,
+  // THE RUN FOLDER'S HOST FILE TOOLS (cinatra#3030, epic #3023 W6; item 0.21).
+  // Allowlisted BY NAME, and dispatched under the organisation and run the
+  // request itself PROVED (bindBridgeRunId below) — never a run the body names,
+  // and never a wildcard. The folder is host-side and is never mounted into a
+  // sandbox, so these three are the only way an agent reaches it directly.
+  ...RUN_FOLDER_TOOLS,
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -274,6 +291,12 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
 TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
   shapeArtifactMaterializeInput(raw);
 
+// The image tool's seam shaper (cinatra#3032) — pure module in
+// ./artifact-image-shaper, same generic posture: flow variables wire straight to
+// {extension, prompt, title, node_id} plus the picture's own data (native or as
+// a JSON string, which is all a wayflowcore json_body template can carry).
+TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
+
 // blog-pipeline-agent deterministic seam dispatch.
 // The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
 // Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
@@ -432,7 +455,108 @@ export async function POST(req: Request): Promise<Response> {
         "@/lib/artifacts/run-artifact-materializer"
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
-      const outcome = await materializeToolArtifact({
+
+      // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
+      // an existing artifact AND the revision it read appends the next revision
+      // instead of creating a second artifact. A base another write has already
+      // built on is answered 409 — the caller re-reads and appends again; every
+      // other refusal keeps the 400 the create path uses.
+      if (
+        typeof shaped.artifactId === "string" &&
+        typeof shaped.baseRepresentationRevisionId === "string"
+      ) {
+        // THE SAME WRITE AUTHORIZATION THE CREATE PATH TAKES (convergence
+        // round). An append reaches the store directly, so the produces check,
+        // the text-authorable form, the content cap and the declared target
+        // type are asked HERE — and the resolved type is handed down, so an
+        // append may not revise an artifact of another type. The write
+        // authorizer is imported HERE, in the append branch that is its only
+        // DIRECT caller in this route — the create path takes the same
+        // authorization inside materializeToolArtifact and need not reach for
+        // this export at all.
+        const { authorizeToolMaterializeWrite } = await import(
+          "@/lib/artifacts/run-artifact-materializer"
+        );
+        const authorized = await authorizeToolMaterializeWrite({
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          extension: shaped.extension,
+          objectTypeId: shaped.objectTypeId,
+          mime: shaped.declaredMime,
+          content: shaped.content,
+        });
+        if (!authorized.ok) {
+          return NextResponse.json({ error: authorized.error }, { status: 400 });
+        }
+        const { appendArtifactRevision } = await import(
+          "@/lib/artifacts/artifact-revision-append"
+        );
+        const appended = await appendArtifactRevision({
+          orgId: run.orgId,
+          runId: run.id,
+          nodeId: shaped.nodeId,
+          artifactId: shaped.artifactId,
+          baseRepresentationRevisionId: shaped.baseRepresentationRevisionId,
+          content: shaped.content,
+          mime: shaped.declaredMime,
+          createdBy: run.runBy,
+          extension: shaped.extension,
+          expectedObjectTypeId: authorized.target.objectTypeId,
+        });
+        if (!appended.ok) {
+          return NextResponse.json(
+            { error: appended.error, reason: appended.reason },
+            { status: appended.reason === "stale_base" ? 409 : 400 },
+          );
+        }
+        // The SAME response shape a create answers with — the fields at the top
+        // level, through the route's one response path — so a node reading
+        // `.artifactId` reads it after an append too.
+        result = {
+          artifactId: appended.artifactId,
+          representationRevisionId: appended.representationRevisionId,
+          revision: appended.revision,
+          deduped: appended.deduped,
+        };
+      } else {
+        const outcome = await materializeToolArtifact({
+          runId: run.id,
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          createdBy: run.runBy,
+          nodeId: shaped.nodeId,
+          extension: shaped.extension,
+          objectTypeId: shaped.objectTypeId,
+          title: shaped.title,
+          mime: shaped.declaredMime,
+          content: shaped.content,
+        });
+        if (!outcome.ok) {
+          // Fail the calling node visibly (validation OR infra) — the flow
+          // author decides whether the node failure gates the run.
+          return NextResponse.json({ error: outcome.error }, { status: 400 });
+        }
+        result = {
+          artifactId: outcome.artifactId,
+          representationRevisionId: outcome.representationRevisionId,
+          deduped: outcome.deduped,
+        };
+      }
+    } else if (tool === "artifact_image_generate") {
+      // THE IMAGE TOOL (cinatra#3032, item 0.28). The picture is made through
+      // the deployment's configured image provider and filed under the caller's
+      // declared extension with its typed data, in one write with a ledger row
+      // carrying the prompt, the provider and the model. A call that names an
+      // existing picture AND the revision it read appends the next revision of
+      // that picture instead of filing a second one; a base another write has
+      // already built on is answered 409, exactly as the materialize road
+      // answers it. Dynamic import keeps the provider + artifact stack out of
+      // this route's static module graph (same posture as artifact_materialize).
+      const { generateArtifactImage } = await import("@/lib/artifact-image-tool");
+      const shaped = input as unknown as ShapedArtifactImageInput;
+      const outcome = await generateArtifactImage({
         runId: run.id,
         orgId: run.orgId,
         templateId: run.templateId,
@@ -440,21 +564,50 @@ export async function POST(req: Request): Promise<Response> {
         createdBy: run.runBy,
         nodeId: shaped.nodeId,
         extension: shaped.extension,
-        objectTypeId: shaped.objectTypeId,
         title: shaped.title,
-        mime: shaped.declaredMime,
-        content: shaped.content,
+        prompt: shaped.prompt,
+        ...(shaped.model ? { model: shaped.model } : {}),
+        ...(shaped.objectTypeId ? { objectTypeId: shaped.objectTypeId } : {}),
+        ...(shaped.data ? { data: shaped.data } : {}),
+        ...(shaped.artifactId ? { artifactId: shaped.artifactId } : {}),
+        ...(shaped.baseRepresentationRevisionId
+          ? { baseRepresentationRevisionId: shaped.baseRepresentationRevisionId }
+          : {}),
       });
       if (!outcome.ok) {
-        // Fail the calling node visibly (validation OR infra) — the flow
-        // author decides whether the node failure gates the run.
-        return NextResponse.json({ error: outcome.error }, { status: 400 });
+        return NextResponse.json(
+          { error: outcome.error, reason: outcome.reason },
+          { status: outcome.reason === "stale_base" ? 409 : 400 },
+        );
       }
       result = {
         artifactId: outcome.artifactId,
         representationRevisionId: outcome.representationRevisionId,
+        revision: outcome.revision,
+        provider: outcome.provider,
+        model: outcome.model,
+        mime: outcome.mime,
         deduped: outcome.deduped,
       };
+    } else if (RUN_FOLDER_TOOLS.has(tool)) {
+      // The run folder's file tools (cinatra#3030, item 0.21). The scope is the
+      // run PROVEN above — a bridge-token holder can only ever reach ITS OWN
+      // run's folder. Dynamic import keeps the folder stack out of this route's
+      // static module graph (same posture as artifact_materialize).
+      const { dispatchRunFolderTool } = await import("@/lib/run-folder-tools");
+      const outcome = await dispatchRunFolderTool({
+        tool,
+        orgId: run.orgId,
+        runId: run.id,
+        raw: input as Record<string, unknown>,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json(
+          { error: outcome.error, reason: outcome.reason },
+          { status: 400 },
+        );
+      }
+      result = outcome.result;
     } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
       // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
       // bindBridgeRunId above — its template package and the version the run is

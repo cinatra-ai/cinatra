@@ -348,6 +348,23 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      // THE RUN FOLDER'S RETENTION TIER (cinatra#3030, item 0.21): "deleted
+      // after pickup plus a grace period". The sweep is pure and takes no
+      // lock, so it runs where the pickup runs — once at boot, and again after
+      // every pickup (see default-road-pickup-run.ts). Without a caller the
+      // grace period would be a rule nothing applies.
+      name: "run-folder-retention-sweep",
+      policy: "retryable",
+      run: async () => {
+        const { sweepRunFolders } = await import("@/lib/artifacts/run-folder-retention");
+        const summary = await sweepRunFolders();
+        console.log(
+          `[run-folder-retention] boot sweep: ${summary.deleted} of ${summary.scanned} ` +
+            "run folder(s) deleted",
+        );
+      },
+    },
+    {
       name: "seed-unbound-output-derive-sweep",
       policy: "retryable",
       run: async () => {

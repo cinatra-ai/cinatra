@@ -173,16 +173,18 @@ export async function materializeBlogImageArtifact(
     stream: asImageStream(bytes),
     createdByRunId: input.createdByRunId ?? null,
     skipFallbackClassification: true,
-    // The picture type's own declared fields (W9), written under the names the
-    // TYPE declares (cinatra#3251) — read from the resolved type's own declared
-    // schema, never from a host constant.
+    // The picture type's own declared fields (W9), carried on the write
+    // path's typed-data road (the road the base branch merged for a type's
+    // own data), written under the names the TYPE declares (cinatra#3251) —
+    // read from the resolved type's own declared schema, never from a host
+    // constant.
     //
-    // Omitted when the caller names no post, AND omitted when the resolved type
-    // declares no readable field contract: in both cases the declared-schema
-    // check then refuses the write with the type's own message, which is the
-    // honest outcome — the host does not invent a post reference, or a field
-    // name, to get past a schema.
-    declaredObjectFields: declaredFields,
+    // Omitted when the caller names no post, AND omitted when the resolved
+    // type declares no readable field contract: in both cases the
+    // declared-schema check then refuses the write with the type's own
+    // message, which is the honest outcome — the host does not invent a post
+    // reference, or a field name, to get past a schema.
+    typedData: declaredFields,
   });
 
   assertSemanticType({

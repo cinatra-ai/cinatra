@@ -36,6 +36,40 @@ import { createServer } from "node:http";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SHADCN_VERSION = "4.8.2";
+
+// Build scripts the `pnpm dlx` install of the shadcn CLI is allowed to run.
+//
+// `pnpm dlx` installs shadcn ITSELF into a throwaway store before the CLI ever
+// runs, and shadcn@4.8.2 depends on msw, which carries an install script. The
+// consumer directory this smoke creates lives outside the repository, so it
+// carries no `packageManager` field: the pnpm corepack resolves there is the
+// machine default, not the repository pin, and that default differs from
+// runner to runner. Measured on 2026-09-10 in a throwaway consumer directory:
+// pnpm 12.3.4 fails the install hard with `ERR_PNPM_IGNORED_BUILDS: Ignored
+// build scripts: msw@2.15.0` (exit 1), while pnpm 11.24.0 skips the script and
+// carries on (exit 0) - exactly the split seen between the self-hosted host
+// and a hosted runner.
+//
+// Naming the allowed package makes the install behave the same on both lines
+// (measured green on 11.24.0 and on 12.3.4). Keep this the SMALLEST set the
+// install needs: msw is the only package either version reports for the
+// shadcn@4.8.2 closure. Never `--ignore-scripts` and never a blanket
+// approval; either would hide a genuine build failure.
+const DLX_ALLOWED_BUILDS = ["msw"];
+
+// The `corepack pnpm dlx` argv the smoke runs the shadcn CLI through. The
+// `--allow-build` flags are `dlx` options, so they precede the package spec.
+export function dlxArgs(shadcnArgs) {
+  return [
+    "pnpm", "dlx",
+    ...DLX_ALLOWED_BUILDS.map((pkg) => `--allow-build=${pkg}`),
+    `shadcn@${SHADCN_VERSION}`,
+    ...shadcnArgs,
+  ];
+}
+
+export { SHADCN_VERSION, DLX_ALLOWED_BUILDS };
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PUBLIC_DIR = join(REPO_ROOT, "public");
 
@@ -131,7 +165,7 @@ async function main() {
   };
   const depsOf = (d) => JSON.parse(readFileSync(join(d, "package.json"), "utf8")).dependencies || {};
   const addItems = (d, items) =>
-    run("corepack", ["pnpm", "dlx", `shadcn@${SHADCN_VERSION}`, "add", ...items.map((i) => `@cinatra-ai/${i}`), "--yes"], d);
+    run("corepack", dlxArgs(["add", ...items.map((i) => `@cinatra-ai/${i}`), "--yes"]), d);
 
   try {
     // --- POSITIVE: explicit add of EVERY primitive (the supported flow) ---

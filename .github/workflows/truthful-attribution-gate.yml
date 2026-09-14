@@ -33,15 +33,17 @@ on:
   # merge-queue candidates so a queue entry never hangs on "Expected — Waiting"
   # (same forward-safe rationale as build-image.yml). Inert until a merge queue
   # is enabled (engineering#485) — no merge_group event fires without one.
-  # HONEST LIMIT, re-verified at the current pin (ci@fdc2681): the reusable
-  # engine workflow still has only `pull_request` and `push` arms, so on a
-  # merge_group event both
-  # gate steps skip and the context concludes green WITHOUT re-verifying the
-  # synthetic candidate. The fail-closed post-merge push arm still validates
-  # every landed squash record, and the engine's content/diff staleness binding
-  # (ci#60) already recognizes merge_group synthetic commits — but BEFORE a
-  # Path-A queue enablement the ci engine needs a real merge_group pre-merge
-  # arm and this pin must advance to it.
+  # RE-VERIFIED at the current pin (ci@416a757): the reusable engine now carries
+  # a merge_group ARM, so this context no longer concludes green on a queue
+  # candidate without judging it. On a merge_group event the engine resolves the
+  # group's pull request from the candidate's parents and the queue's
+  # pull-request list, then validates that pull request's approved head at
+  # enqueue, the approval's standing, the verification-boundary record for that
+  # head, and that the candidate's tree is the enqueued head merged onto the
+  # group's base; missing or ambiguous membership fails CLOSED, no pull request
+  # is guessed. The fail-closed post-merge push arm still validates every landed
+  # squash record, and the engine's content/diff staleness binding (ci#60)
+  # recognizes merge_group synthetic commits.
   merge_group:
   push:
     branches: [main]
@@ -69,7 +71,7 @@ jobs:
     # run's referenced_workflows[] entry against the suite's pinned SHA
     # EXACTLY, so the caller `uses:@`, the `ref:` below and
     # gate-suite.json requiredContexts[].pinned must move in one commit.
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@fdc26811b97f435bbf8a754247631db39267a197 # v0.3.0-next.fdc2681
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@416a75707fdcfeb768b41c3a54f944078d1ab8fc # v0.3.0-next.416a757
     with:
       mode: enforce
-      ref: fdc26811b97f435bbf8a754247631db39267a197 # same SHA as the workflow @ref
+      ref: 416a75707fdcfeb768b41c3a54f944078d1ab8fc # same SHA as the workflow @ref

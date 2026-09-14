@@ -148,6 +148,23 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
       return readDeclaredHostCompatFromStore(storeDir);
     },
+    // PARENT-SATISFIED CONTEXT-SLOT GATE basis (cinatra#3032, item 0.29): the
+    // composed agent document from the materialized (verified) bytes — same
+    // basis as the reads above. A package that carries no document reads null
+    // and the gate is a no-op for it.
+    readComposedAgentOas: async (storeDir) => {
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      try {
+        const text = await readFile(join(storeDir, "cinatra", "oas.json"), "utf8");
+        return JSON.parse(text) as unknown;
+      } catch {
+        // Absent (every non-agent extension) or unreadable — the gate has
+        // nothing to check, and a malformed document is the loader's own
+        // fail-loud at mount, not a second verdict here.
+        return null;
+      }
+    },
     // DEPENDENCY EDGES (#180): dual-read over the materialized manifest
     // (canonical `cinatra.dependencies` wins; legacy `cinatra.agentDependencies`
     // projected; conflict/malformed = fail-loud throw).

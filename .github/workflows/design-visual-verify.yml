@@ -545,18 +545,52 @@ jobs:
           printf 'CINATRA_CONFORMANCE_SEED_TOKEN=%s\n' "$minted" >> "$GITHUB_ENV"
           echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
 
+      - name: Free the design port on the runner
+        # cinatra#3383: this job binds ONE fixed port (E2E_DESIGN_PORT). On a
+        # self-hosted runner an earlier job that ended without stopping its
+        # server (cancelled, timed out, or crashed after the listen) leaves the
+        # process holding that port, and every later job dies at start with
+        # EADDRINUSE. Free the port here, and only the port — nothing about the
+        # machine is touched. lsof and fuser are not both present on every
+        # runner image, so whichever the image carries is used; neither being
+        # present is not a failure (a hosted runner starts with the port free).
+        run: |
+          set -uo pipefail
+          if command -v lsof >/dev/null 2>&1; then
+            holders="$(lsof -ti "tcp:${E2E_DESIGN_PORT}" || true)"
+            if [ -n "$holders" ]; then
+              echo "port ${E2E_DESIGN_PORT} held by: ${holders}"
+              echo "$holders" | xargs -r kill || true
+              sleep 2
+              echo "$holders" | xargs -r kill -9 || true
+            else
+              echo "port ${E2E_DESIGN_PORT} is free"
+            fi
+          elif command -v fuser >/dev/null 2>&1; then
+            fuser -k "${E2E_DESIGN_PORT}/tcp" || true
+          else
+            echo "::warning::neither lsof nor fuser on this runner — port ${E2E_DESIGN_PORT} not checked"
+          fi
+
       - name: Start standalone server
         # Run server.js directly (instant boot from the prebuilt bundle).
         # migrations/ is copied next to the server exactly like the Dockerfile
         # COPYs it to /app (cinatra#986): the boot's core-migrations phase then
         # bootstraps the versioned app schema on the fresh service Postgres,
         # the same way a production image boot would.
+        #
+        # The pid is written to $GITHUB_ENV (cinatra#3383) so the always()
+        # cleanup at the end of this job stops EXACTLY this process — the node
+        # process itself, not a shell wrapping it, and never a pattern kill.
         run: |
           cp -r .next/static .next/standalone/.next/static
           [ -d public ] && cp -r public .next/standalone/public || true
           [ -d migrations ] && cp -r migrations .next/standalone/migrations || true
-          (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1) &
-          echo "standalone server launched as PID $!"
+          cd .next/standalone
+          PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1 &
+          server_pid=$!
+          echo "standalone server launched as PID ${server_pid} on port ${E2E_DESIGN_PORT}"
+          printf 'DESIGN_SERVER_PID=%s\n' "$server_pid" >> "$GITHUB_ENV"
 
       - name: Wait for /design-fixtures readiness
         run: |
@@ -632,3 +666,27 @@ jobs:
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Stop the standalone server
+        # cinatra#3383: the job stops the server it started, on every outcome
+        # (success, failure, cancellation) — otherwise the process survives the
+        # job on a self-hosted runner and the NEXT run of this job cannot bind
+        # the port. By the recorded pid only; a pattern kill on this shared
+        # machine could hit another job's node process.
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${DESIGN_SERVER_PID:-}" ]; then
+            kill "$DESIGN_SERVER_PID" 2>/dev/null || true
+            for _ in $(seq 1 10); do
+              kill -0 "$DESIGN_SERVER_PID" 2>/dev/null || break
+              sleep 1
+            done
+            kill -9 "$DESIGN_SERVER_PID" 2>/dev/null || true
+            echo "stopped standalone server PID ${DESIGN_SERVER_PID}"
+          else
+            echo "no standalone server pid recorded — nothing to stop"
+          fi
+          if command -v lsof >/dev/null 2>&1; then
+            echo "port ${E2E_DESIGN_PORT} holders after cleanup: $(lsof -ti "tcp:${E2E_DESIGN_PORT}" | tr '\n' ' ' || true)"
+          fi

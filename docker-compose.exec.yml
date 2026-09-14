@@ -150,7 +150,13 @@ services:
     ports:
       # Loopback only. mTLS — not network reachability — is the authorization
       # boundary; publishing wider would add exposure without adding authority.
-      - "127.0.0.1:4100:4100"
+      #
+      # The HOST side is OVERRIDABLE and unset it is 4100, the port this has
+      # always published. A published port is a host-wide object like a network
+      # name: two stacks on one machine cannot both hold 127.0.0.1:4100, so the
+      # E2E batteries give it their own port the way they give the networks
+      # their own names (cinatra#3327). The container port never moves.
+      - "127.0.0.1:${CINATRA_EXEC_BROKER_HOST_PORT:-4100}:4100"
     depends_on:
       - cinatra-exec-worker
       - cinatra-exec-gateway
@@ -228,8 +234,15 @@ networks:
     name: ${CINATRA_EXEC_SANDBOX_NETWORK:-cinatra-exec-internal}
     internal: true
   # The gateway's internet leg. Nothing else is ever attached to it.
+  #
+  # OVERRIDABLE, and unset it is the name it has always been — the same rule the
+  # sandbox network above carries. The E2E batteries set
+  # CINATRA_EXEC_EGRESS_NETWORK to a name carrying their own job identity: two
+  # battery jobs on ONE machine would otherwise share this network, and the first
+  # one to finish removed it out from under the second, whose gateway then had no
+  # network to attach to at all (cinatra#3327).
   cinatra-exec-egress:
-    name: cinatra-exec-egress
+    name: ${CINATRA_EXEC_EGRESS_NETWORK:-cinatra-exec-egress}
   # The broker's app-facing leg. Deliberately NOT internal — that is the entire
   # point: a container on an internal network cannot have a published port, so
   # without this the loopback publish above is silently a no-op. Only the broker
@@ -252,8 +265,16 @@ networks:
   # rides the app IMAGE but is launched straight at the broker bundle with no app
   # env_file), plus mTLS and an independently-scoped service token on the one port
   # it serves.
+  #
+  # OVERRIDABLE, and unset it is the name it has always been — the same rule the
+  # two networks above carry. The E2E batteries set CINATRA_EXEC_APP_NETWORK to a
+  # name carrying their own job identity: this network was the LAST fixed name on
+  # a shared runner pool, and a fixed name here is refused rather than shared —
+  # the first job's project owns the network and every later project is turned
+  # away at `up` with "a network with name cinatra-exec-app exists but was not
+  # created for project ..." (cinatra#3327).
   cinatra-exec-app:
-    name: cinatra-exec-app
+    name: ${CINATRA_EXEC_APP_NETWORK:-cinatra-exec-app}
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_ip_masquerade: "false"
