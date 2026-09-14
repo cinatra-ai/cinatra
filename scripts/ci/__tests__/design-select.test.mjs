@@ -831,3 +831,65 @@ describe("10. THE REAL-REPO WALK ITSELF", () => {
     expect(source.split(walkCall).length - 1).toBe(1);
   });
 });
+
+describe("11. THE MERGE-QUEUE CANDIDATE (engineering#658 item 1)", () => {
+  // GitHub applies no `paths:` filter to a `merge_group` event, so the queue
+  // fires this suite on every candidate. Widening to ALL there would pay the
+  // whole suite on a docs-only group; the group carries its own base and head,
+  // which is an honest diff and is therefore used as one.
+  const queueEnv = (base) => ({
+    CI: "true",
+    GITHUB_REF_NAME: "gh-readonly-queue/main/pr-3343-1066982",
+    GITHUB_EVENT_NAME: "merge_group",
+    ...(base === null ? {} : { DESIGN_SELECT_DIFF_BASE: base }),
+  });
+
+  const queueGit = (changed) => (args) => {
+    if (args[0] === "rev-parse") return "base000\n";
+    if (args[0] === "merge-base") return "base000\n";
+    if (args[0] === "diff") return `${changed.join("\n")}\n`;
+    return "";
+  };
+
+  it("diffs the group's own recorded base rather than widening to ALL", () => {
+    const calls = [];
+    const diff = resolveChangedFiles({
+      env: queueEnv("base000"),
+      git: (args) => {
+        calls.push(args.join(" "));
+        return queueGit(["src/app/design-fixtures/agents-card/page.tsx"])(args);
+      },
+    });
+    expect(diff.mode).toBe("diff");
+    expect(diff.files).toEqual(["src/app/design-fixtures/agents-card/page.tsx"]);
+    expect(calls).toContain("merge-base base000 HEAD");
+  });
+
+  it("widens to ALL when the group carries no recorded base (fail open, never a false skip)", () => {
+    const diff = resolveChangedFiles({ env: queueEnv(null), git: queueGit(["docs/a.md"]) });
+    expect(diff.mode).toBe("all");
+    expect(diff.reason).toMatch(/merge_group/);
+  });
+
+  it("a group touching a design path selects the suite", () => {
+    const diff = resolveChangedFiles({
+      env: queueEnv("base000"),
+      git: queueGit(["src/lib/widget.tsx"]),
+    });
+    expect(diff.mode).toBe("diff");
+    const result = select(diff.files);
+    expect(result.mode).toBe("subset");
+    expect(result.specs).toEqual(["tests/e2e/design/alpha.spec.ts", "tests/e2e/design/beta.spec.ts"]);
+  });
+
+  it("a group touching only docs produces the green stub", () => {
+    const diff = resolveChangedFiles({
+      env: queueEnv("base000"),
+      git: queueGit(["docs/queue.md", "README.md"]),
+    });
+    expect(diff.mode).toBe("diff");
+    const result = select(diff.files);
+    expect(result.mode).toBe("none");
+    expect(result.specs).toEqual([]);
+  });
+});

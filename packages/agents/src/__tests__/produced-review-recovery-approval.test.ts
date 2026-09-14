@@ -170,6 +170,35 @@ function completedTask() {
   };
 }
 
+type TransitionCall = [
+  string,
+  string,
+  string,
+  Record<string, unknown> | undefined,
+  unknown,
+];
+
+function transitionCalls(): TransitionCall[] {
+  return storeMock.transitionRunStatus.mock.calls as unknown as TransitionCall[];
+}
+
+/**
+ * The run's verdict: the writes this road must still be withholding. The gate
+ * claim main takes on the approval path (`pending_approval -> running`,
+ * cinatra#3423 — one caller wins the open gate before anything is recorded or
+ * dispatched) is NOT one of them: it is the non-terminal edge that carries the
+ * answer onto the road this hold then parks.
+ */
+const TERMINAL_STATUSES = new Set(["completed", "failed", "waiting_trigger", "cancelled"]);
+
+function terminalTransitions(): TransitionCall[] {
+  return transitionCalls().filter((c) => TERMINAL_STATUSES.has(c[2]));
+}
+
+function gateClaims(): TransitionCall[] {
+  return transitionCalls().filter((c) => c[1] === "pending_approval" && c[2] === "running");
+}
+
 function deliveredRecovery() {
   return enqueueSpy.mock.calls.find(
     (c) => (c as unknown[])[0] === "agent-builder-execution",
@@ -216,7 +245,12 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // The ONLY status write this road may make is the gate claim that carried
+    // the answer here; the verdict itself is withheld and travels on the
+    // delivery above.
+    expect(gateClaims()).toHaveLength(1);
+    expect(terminalTransitions()).toEqual([]);
+    expect(transitionCalls()).toHaveLength(1);
   });
 
   it("the delivered payload lets a later convergence pass land the withheld verdict", async () => {
@@ -232,9 +266,7 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
       park: data.producedReviewHoldPark as number,
     });
 
-    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
-      [string, string, string, Record<string, unknown> | undefined, unknown]
-    >;
+    const calls = terminalTransitions();
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
@@ -266,6 +298,9 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
     // cap counts this chain rather than beginning again at one.
     expect(next.producedReviewHoldChain).toBe(chain);
     expect(options.jobId).toBe(producedReviewRecoveryJobId("run-1", chain, 2));
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // The recovery leg writes nothing: the approve leg's gate claim is the only
+    // status write of the whole road, and no verdict has landed.
+    expect(terminalTransitions()).toEqual([]);
+    expect(transitionCalls()).toHaveLength(1);
   });
 });
