@@ -107,6 +107,7 @@ on:
       - "scripts/ci/design-select.mjs"
       - "scripts/ci/__tests__/design-select.test.mjs"
       - "scripts/ci/__tests__/design-select-workflow.test.mjs"
+      - "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs"
       - ".github/workflows/design-visual-verify.yml"
   # THE QUEUE EVENT CARRIES NO `paths:` FILTER (engineering#658 item 1).
   # GitHub fires every merge_group-triggered workflow on every candidate,
@@ -372,7 +373,12 @@ jobs:
           --health-retries 10
 
     env:
-      E2E_DESIGN_PORT: "3101"
+      # E2E_DESIGN_PORT — and every base URL that follows it — is NOT pinned
+      # here: it is DERIVED PER RUNNER in this job's first step and exported
+      # through $GITHUB_ENV (cinatra#3416). A job-level `env:` entry would win
+      # over that export, which is why it is absent rather than defaulted; and
+      # one literal port shared by every run is exactly what let concurrent jobs
+      # on a single self-hosted box hand the design server's port around.
       # /design-fixtures renders through AppShell, which redirects any non-setup
       # route to /setup when connectionReady=false. The CI env has no
       # encryption key / identity / Nango / OpenAI setup, so the documented
@@ -400,10 +406,12 @@ jobs:
       # without an encryption key; the /design-fixtures route never touches
       # secret storage. Same 64-zero placeholder dashboard-live-verify uses.
       CINATRA_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
-      NEXT_PUBLIC_APP_URL: http://localhost:3101
-      NEXT_PUBLIC_SITE_URL: http://localhost:3101
+      # BETTER_AUTH_URL / NEXT_PUBLIC_BETTER_AUTH_URL / NEXT_PUBLIC_APP_URL /
+      # NEXT_PUBLIC_SITE_URL are exported with the derived port in this job's
+      # first step (cinatra#3416). NEXT_PUBLIC_* are baked into the CLIENT
+      # bundle at build time, so they must already name the port this job will
+      # actually bind — a URL frozen at a literal port would keep the browser
+      # addressing whatever process holds that port instead.
       # next.config.ts asserts OPENAI_API_KEY at server boot
       # (REQUIRED_ENV list). The /design-fixtures route never invokes
       # OpenAI; the env is read only by the startup guard. Placeholder
@@ -436,6 +444,52 @@ jobs:
       CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: "true"
 
     steps:
+      # THIS RUNNER'S OWN DESIGN PORT (cinatra#3416), and every base URL that
+      # follows it.
+      #
+      # This job boots a standalone production server and then drives it for
+      # half an hour — the browser navigates it, and the conformance suite
+      # provisions its run-namespaced fixture rows through that server's own
+      # seed route under the capability minted below. Both halves address the
+      # server by PORT and by nothing else.
+      #
+      # While the port was one literal shared by every run, a self-hosted BOX
+      # carrying several runners handed it around between concurrent jobs: the
+      # port-freeing step below killed whatever held it — by design a stale
+      # server of an earlier job on the same runner, in practice the LIVE server
+      # of a job running beside it — and bound its own. The robbed job kept
+      # testing against a stranger's server: a different ephemeral Postgres, so
+      # its seeded rows read as ZERO, and a different minted capability, so its
+      # next seed POST was refused by the fence, which answers a bare 404 to
+      # every refusal. Measured on 2026-09-13 on one box: a job launched its
+      # server as pid 1061078 at 19:50:57 and at 20:01:12 a sibling runner's job
+      # printed "3101/tcp: 1061078" as it freed the port.
+      #
+      # A runner runs ONE job at a time, so a port derived from the runner's own
+      # name cannot be held by a job running beside this one. Written to
+      # $GITHUB_ENV before the build, because NEXT_PUBLIC_* are baked into the
+      # client bundle there. Pure bash: this runs before the checkout and before
+      # any toolchain step, so it may assume no node and no repository.
+      - name: Derive this runner's design port
+        run: |
+          set -euo pipefail
+          digits="$(printf '%s' "${RUNNER_NAME:-}" | tr -dc '0-9' | tail -c 6)"
+          if [ -z "${digits}" ]; then
+            # cksum prints "<sum> <bytes>" plus a newline; take the sum, then
+            # its last six digits — the same truncation the direct path uses.
+            sum="$(printf '%s' "${RUNNER_NAME:-unnamed}" | cksum | cut -d' ' -f1)"
+            digits="$(printf '%s' "${sum}" | tail -c 6)"
+          fi
+          port="$(( 3101 + (10#${digits} % 899) ))"
+          {
+            echo "E2E_DESIGN_PORT=${port}"
+            echo "BETTER_AUTH_URL=http://localhost:${port}"
+            echo "NEXT_PUBLIC_BETTER_AUTH_URL=http://localhost:${port}"
+            echo "NEXT_PUBLIC_APP_URL=http://localhost:${port}"
+            echo "NEXT_PUBLIC_SITE_URL=http://localhost:${port}"
+          } >> "$GITHUB_ENV"
+          echo "design port for runner ${RUNNER_NAME:-unnamed}: ${port}"
+
       # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
       # the runner mapped: `job.services.*` is unreadable from a job-level
       # `env:`, so they are exported here, before the first step that reads
@@ -559,31 +613,79 @@ jobs:
           echo "minted CINATRA_CONFORMANCE_SEED_TOKEN (${#minted} chars)"
 
       - name: Free the design port on the runner
-        # cinatra#3383: this job binds ONE fixed port (E2E_DESIGN_PORT). On a
-        # self-hosted runner an earlier job that ended without stopping its
-        # server (cancelled, timed out, or crashed after the listen) leaves the
-        # process holding that port, and every later job dies at start with
-        # EADDRINUSE. Free the port here, and only the port — nothing about the
-        # machine is touched. lsof and fuser are not both present on every
-        # runner image, so whichever the image carries is used; neither being
-        # present is not a failure (a hosted runner starts with the port free).
+        # cinatra#3383: on a self-hosted runner an earlier job that ended
+        # without stopping its server (cancelled, timed out, or crashed after
+        # the listen) leaves the process holding this port, and every later job
+        # dies at start with EADDRINUSE. Free the port here, and only the port —
+        # nothing about the machine is touched.
+        #
+        # cinatra#3416: the port is DERIVED FROM THIS RUNNER above, so a job
+        # running beside this one on the same box holds a DIFFERENT port and is
+        # never touched; before the derivation this same kill took a live
+        # sibling's server away mid-run.
+        #
+        # A derived port does not, by itself, make whatever listens on it THIS
+        # JOB'S: a self-hosted box can also carry development processes, and two
+        # runner names can reduce to the same number. So the holder is IDENTIFIED
+        # before anything is killed — a listening socket, a `node ... server.js`
+        # command line, and (when the runner exposes its workspace) a working
+        # directory under this runner's own work root. A holder that fails any
+        # of those is FOREIGN: the step fails loudly naming it and kills
+        # nothing, because a job that quietly takes a port it does not own is
+        # the very defect this derivation was written to end.
+        #
+        # lsof and fuser are not both present on every runner image, so
+        # whichever the image carries is used; neither being present is not a
+        # failure (a fresh runner starts with the port free).
         run: |
           set -uo pipefail
           if command -v lsof >/dev/null 2>&1; then
-            holders="$(lsof -ti "tcp:${E2E_DESIGN_PORT}" || true)"
-            if [ -n "$holders" ]; then
-              echo "port ${E2E_DESIGN_PORT} held by: ${holders}"
-              echo "$holders" | xargs -r kill || true
-              sleep 2
-              echo "$holders" | xargs -r kill -9 || true
-            else
-              echo "port ${E2E_DESIGN_PORT} is free"
-            fi
+            holders="$(lsof -ti "tcp:${E2E_DESIGN_PORT}" -sTCP:LISTEN || true)"
           elif command -v fuser >/dev/null 2>&1; then
-            fuser -k "${E2E_DESIGN_PORT}/tcp" || true
+            holders="$(fuser "${E2E_DESIGN_PORT}/tcp" 2>/dev/null | tr -s ' ' '\n' || true)"
           else
             echo "::warning::neither lsof nor fuser on this runner — port ${E2E_DESIGN_PORT} not checked"
+            exit 0
           fi
+          holders="$(printf '%s\n' "${holders}" | tr -d ' ' | grep -E '^[0-9]+$' || true)"
+          if [ -z "${holders}" ]; then
+            echo "port ${E2E_DESIGN_PORT} is free"
+            exit 0
+          fi
+          work_root="${RUNNER_WORKSPACE:-}"
+          work_root="${work_root%/*}"
+          mine=""
+          foreign=""
+          for pid in ${holders}; do
+            # NUL and newline both to spaces: the annotation below is ONE line.
+            cmd="$(tr '\0\n' '  ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+            cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+            case "${cmd}" in
+              *node*server.js*) ;;
+              *)
+                foreign="${foreign} ${pid} [${cmd:-command unreadable}]"
+                continue
+                ;;
+            esac
+            if [ -n "${work_root}" ] && [ -n "${cwd}" ]; then
+              case "${cwd}" in
+                "${work_root}"/*) ;;
+                *)
+                  foreign="${foreign} ${pid} [cwd ${cwd}]"
+                  continue
+                  ;;
+              esac
+            fi
+            mine="${mine} ${pid}"
+          done
+          if [ -n "${foreign}" ]; then
+            echo "::error::port ${E2E_DESIGN_PORT} is held by a process this job does not own:${foreign} — refusing to kill it. This runner's derived port collides with another workload on this machine; give the box a runner name that derives a free port, or free the port by hand."
+            exit 1
+          fi
+          echo "stale design server(s) of this runner on port ${E2E_DESIGN_PORT}:${mine}"
+          for pid in ${mine}; do kill "${pid}" || true; done
+          sleep 2
+          for pid in ${mine}; do kill -9 "${pid}" || true; done
 
       - name: Start standalone server
         # Run server.js directly (instant boot from the prebuilt bundle).

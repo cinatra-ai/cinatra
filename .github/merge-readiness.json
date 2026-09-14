@@ -74,6 +74,7 @@
         "scripts/ci/design-select.mjs",
         "scripts/ci/__tests__/design-select.test.mjs",
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
       "skippable": true,
@@ -262,6 +263,7 @@
         "scripts/ci/design-select.mjs",
         "scripts/ci/__tests__/design-select.test.mjs",
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
       "skippable": false,
@@ -310,6 +312,7 @@
         "scripts/ci/design-select.mjs",
         "scripts/ci/__tests__/design-select.test.mjs",
         "scripts/ci/__tests__/design-select-workflow.test.mjs",
+        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
         ".github/workflows/design-visual-verify.yml"
       ],
       "skippable": false,
