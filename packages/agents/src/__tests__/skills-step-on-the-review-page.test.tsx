@@ -108,9 +108,21 @@ describe("the seam", () => {
     expect(chipRowDrawsSkillChecklist("page_gate_region")).toBe(true);
   });
 
-  it("and no other host — the conversation and the widget keep today's reading", () => {
-    expect(chipRowDrawsSkillChecklist("chat_thread")).toBe(false);
-    expect(chipRowDrawsSkillChecklist("site_widget")).toBe(false);
+  it("and the two conversation hosts as well — no declared host is left out", () => {
+    // THE DEVIATION THIS ARM NAMED IS CLOSED. It read "and no other host — the
+    // conversation and the widget keep today's reading", which was true of
+    // cinatra#3047's leg alone. cinatra#3062 moves `/chat` and the site widget
+    // onto the same reading, so §IX's "every card appears on every host, and it
+    // is the same card wherever it appears" is owed nowhere. The arm keeps its
+    // job — it is still the one place the seam's whole answer is read — and
+    // states the answer the two legs together produce.
+    expect(chipRowDrawsSkillChecklist("chat_thread")).toBe(true);
+    expect(chipRowDrawsSkillChecklist("site_widget")).toBe(true);
+  });
+
+  it("but a surface that never declared itself still draws no card", () => {
+    // The seam stays a predicate rather than collapsing to `true` precisely
+    // for this: an undeclared mount is not a host, and it draws nothing.
     expect(chipRowDrawsSkillChecklist(null)).toBe(false);
   });
 });
@@ -167,13 +179,22 @@ describe("the settled Skills step on the review page", () => {
   });
 });
 
-describe("the conversation is untouched (the change request's point E)", () => {
-  it("still draws the per-chip settled faces and no checkbox", async () => {
+describe("the conversation reads the same step (cinatra#3062)", () => {
+  it("draws the checkbox pills there too, and no per-chip settled face", async () => {
+    // POINT E'S SEPARATE ISSUE LANDED. This arm pinned the change request's
+    // point E — "the conversation and the embedded widget keep the chip-row
+    // they draw today, byte for byte, until that issue lands" — and that issue
+    // is cinatra#3062, which moves them. The arm keeps measuring the same
+    // thing, the conversation's reading beside the review page's, and states
+    // the reading it now draws: §V's checklist, the same one this file reads in
+    // full on the review page.
     const { container } = mount("chat_thread");
     await waitFor(() => expect(row(container)).not.toBeNull());
 
-    expect(row(container)!.getAttribute("data-run-recommendation-reading")).toBeNull();
-    expect(boxes(container)).toHaveLength(0);
-    expect(container.querySelectorAll("[data-chip-mark]").length).toBeGreaterThan(0);
+    expect(row(container)!.getAttribute("data-run-recommendation-reading")).toBe(
+      "skills-checklist",
+    );
+    expect(boxes(container).length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("[data-chip-mark]")).toHaveLength(0);
   });
 });

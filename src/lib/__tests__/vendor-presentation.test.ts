@@ -110,6 +110,22 @@ describe("resolveVendorPresentation — structured, deduplicated diagnostic", ()
       ref: "@scope/no-silent-path",
     });
   });
+
+  it("states the DATA defect and never asserts what the surface drew", () => {
+    // The resolver returns a STATE; it does not render. A message that names a
+    // rendering is a claim the resolver cannot make, and it became false the
+    // moment a surface drew the missing state some other way — the run, chat and
+    // widget Skills pill, which the ratified drawing gives "the skill's name and
+    // then by its vendor" and no stand-in for an absent one, draws the name
+    // alone. The diagnostic reports the missing display name; each surface owns
+    // its own reading of it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveVendorPresentation({ name: null }, { surface: "unit-test-surface", ref: "@scope/no-claim" });
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toContain("missing vendor display name");
+    expect(message).not.toContain("rendered");
+    expect(message).not.toContain(VENDOR_MISSING_LABEL);
+  });
 });
 
 describe("centralized byline copy", () => {

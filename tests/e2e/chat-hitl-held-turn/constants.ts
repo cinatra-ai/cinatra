@@ -118,10 +118,28 @@ export const CARD_DECIDED = '[data-lifecycle-card-state="decided"]';
 export const CHIP_ROW = '[data-conformance-id="run-chip-row"]';
 /** One chip per skill. */
 export const CHIP = "[data-recommendation-chip]";
-/** The three per-chip controls §V rules. */
+/**
+ * The three per-chip controls, kept as ABSENCES on this host (cinatra#3062).
+ *
+ * §V at the ratified pin gives the conversation the same checklist the run page
+ * draws — "a pill carries nothing to press — no Confirm, no Adjust, no Skip" —
+ * so these three are what the chat flow proves are GONE, exactly as it already
+ * proves the row-level pair below is gone. They are still drawn by the review
+ * page's gate region, which this flow does not visit.
+ */
 export const CHIP_CONFIRM = '[data-skill-action="confirm"]';
 export const CHIP_ADJUST = '[data-skill-action="adjust"]';
 export const CHIP_SKIP = '[data-skill-action="skip"]';
+/**
+ * §V's checklist controls, as the conversation draws them (cinatra#3062): a
+ * checkbox in front of each pill's label, and ONE Continue beneath the list.
+ * "The reader sets the boxes and presses Continue beneath the list … and the
+ * whole row is answered at once, every box together."
+ */
+export const SKILLS_BOX = "[data-skills-step-checkbox]";
+export const SKILLS_CONTINUE = "[data-skills-step-continue]";
+/** What a pill states about its own skill: applied to the run, or not. */
+export const SKILL_APPLIED_ATTR = "data-skill-applied";
 /**
  * The settled row's recorded outcome, as an ATTRIBUTE NAME rather than a selector.
  *

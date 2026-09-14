@@ -1,6 +1,9 @@
 import "server-only";
 
-import { recommendationRunHasStarted } from "./run-status";
+import {
+  recommendationRunHasStarted,
+  recommendationRunHasStartedForRow,
+} from "./run-status";
 import {
   SKIP_RECOMMENDATION_SOURCE,
   clearRunSelectedSkillRevisionsBeforeStart,
@@ -204,13 +207,16 @@ export type RunRecommendationHoldState =
  *                hold that is now RELEASED is still this run's hold, which is
  *                exactly the idempotent-retry case it already admits, and only a
  *                ref naming a hold the run has moved past is refused.
- *   runStarted — HAS THE RUN'S EXECUTION BEGUN? The boundary is the platform's
- *                own `PRE_EXECUTION_RUN_STATUSES` — `pending_input`,
- *                `pending_trigger`, `armed`, the statuses a run holds before it
- *                has ever run. Anything else is started, and the first status
- *                outside that set is `queued`: the dispatch CAS. One set, read
- *                by the screen, by the store's own guarded DELETE and by the
- *                suite that pins the boundary.
+ *   runStarted — HAS THE RUN'S EXECUTION BEGUN? Answered from the RUN ROW by
+ *                `recommendationRunHasStartedForRow` (cinatra#3062): the run's
+ *                own `started_at`, stamped once inside the `queued->running`
+ *                dispatch CAS, with the platform's `PRE_EXECUTION_RUN_STATUSES`
+ *                still deciding every status the stamp cannot answer alone. It
+ *                is NOT a status test on its own, because `pending_approval` is
+ *                reached both BEFORE execution (the setup interrupt this very
+ *                hold parks on) and DURING it, and it is not a local flag a
+ *                screen kept: every read, and therefore every reload, asks the
+ *                row again.
  *   canDecide  — the same presentation-only reading of this reader's standing
  *                the held branch publishes, resolved by the same function. A
  *                reader who may not shape the run is not handed a live box.
@@ -224,8 +230,9 @@ export type RunRecommendationSettledSelection = {
 // The boundary itself lives on the pure run-status leaf beside
 // `PRE_EXECUTION_RUN_STATUSES` — see `recommendationRunHasStarted` there. It is
 // read here, and by the screen, and by the suite that pins it, so there is one
-// definition rather than three.
-export { recommendationRunHasStarted };
+// definition rather than three. `recommendationRunHasStartedForRow` is that same
+// boundary asked of the run ROW, which is what this resolver holds.
+export { recommendationRunHasStarted, recommendationRunHasStartedForRow };
 
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
@@ -509,7 +516,7 @@ export async function resolveRecommendationHoldStateForActor(input: {
     // three answers and why the resolver is the one that answers it.
     const settledSelection: RunRecommendationSettledSelection = {
       holdRef: encodeRecommendationHoldRef({ runId, holdId: park.id }) ?? "",
-      runStarted: recommendationRunHasStarted(run.status),
+      runStarted: recommendationRunHasStartedForRow(run),
       canDecide: await readerMayDecide(run, who),
     };
     if (selected.length > 0) {
