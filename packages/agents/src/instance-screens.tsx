@@ -710,7 +710,21 @@ const RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION: ReadonlySet<string> = new Set([
  */
 export function upcomingSkillsEntryHeadsTheRail(
   drawn: readonly { key: string; reached?: boolean }[],
+  /**
+   * A LATER GATE THE RUN REACHED THAT THE RAIL DRAWS NO ROW FOR (cinatra#3149
+   * item 3, fix leg 10).
+   *
+   * The rule reads the DRAWN rows, and the drawn rows used to be the whole
+   * evidence: a run stopped at a mid-run gate always carried a row for it here.
+   * It no longer does where the live column carries that entry instead — and
+   * evidence the rail stopped drawing is not evidence the run stopped having.
+   * Without this the unreached Skills forecast came back above the very gate the
+   * run is standing at, which is neither passed work above nor work still to
+   * come below.
+   */
+  runReachedALaterGate = false,
 ): boolean {
+  if (runReachedALaterGate) return false;
   return !drawn.some(
     (step) =>
       RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION.has(step.key) && step.reached !== false,
@@ -943,6 +957,19 @@ export function runDetailInitialStep(params: {
    * entry the rail DRAWS are one answer.
    */
   parkedGateStep?: boolean;
+  /**
+   * IS THAT GATE'S ENTRY THE LIVE COLUMN'S? (cinatra#3149 item 3, fix leg 10.)
+   *
+   * The rung below is where a run stopped at a mid-run gate STOPS -- the run is
+   * standing at one place, and every rung under it describes some other place.
+   * Where the column carries that gate's entry the frame has no row to open, so
+   * the detail opens on the run detail itself, which is where the gate's card
+   * already stands: the same reading the "gate" step produced, whose own surface
+   * is null and falls back to exactly that. It must NOT fall through: a run with
+   * a schedule row and no execution yet would then open its SCHEDULE form over
+   * the live gate the reader is answering.
+   */
+  parkedGateDrawnByTheLiveColumn?: boolean;
 }): RunStepSelection {
   // THE RUN'S FIRST GATE OPENS FIRST (cinatra#3047 fix leg 8). The rail lists
   // the Skills entry above the run's own input forms because the drawing puts
@@ -962,7 +989,9 @@ export function runDetailInitialStep(params: {
   // rank above each other: a run is stopped at one place, and where two gates
   // could both read as open the one the rail draws first is the one the reader
   // is standing on.
-  if (params.parkedGateStep) return "gate";
+  if (params.parkedGateStep) {
+    return params.parkedGateDrawnByTheLiveColumn ? "detail" : "gate";
+  }
   if (
     runDetailOpensOnSchedule({
       hasScheduleStep: params.hasScheduleStep,
@@ -1026,6 +1055,73 @@ export function runParkedAtTrailingGate(params: {
   if (params.recommendationHeld) return false;
   if (params.openInputStepKey) return false;
   return true;
+}
+
+/**
+ * DOES THE PARKED GATE ALREADY HAVE ITS OWN ENTRY ON THE LIVE COLUMN?
+ * (cinatra#3149 item 3, fix leg 10.)
+ *
+ * WHAT THE NINTH LEG'S LIVE READING MEASURED. A blog-pipeline run parked at its
+ * pick step drew that one pause TWICE: "1 Select blog idea" among the run's own
+ * ordered steps in the live column, and a generic "1 Context" row the frame
+ * pushed for the same gate -- with the document's one `aria-current="step"` on
+ * the generic row. The ratified drawing's rail is ONE rail -- "the ordinary work
+ * steps, and -- inline at the point the run reached it -- a gate entry (a Skills
+ * step to answer, a list to pick one thing from, a review to decide)" -- and the
+ * entry it names for this pause is the run's own step, under the run's own name
+ * for it. So where the column carries that entry the frame draws no second row
+ * and elects nothing, and the one election is the column's.
+ *
+ * THE EVIDENCE IS THE GATE'S OWN STEP, NOT THE COLUMN'S MERE PRESENCE. A column
+ * that draws the run's steps does not thereby carry an entry for THIS gate: a
+ * runtime gate that names no step number is elected by nothing on the spine, and
+ * `electRunRailActiveStep` falls back to the FIRST row for it -- so suppressing
+ * the frame's row on presence alone would move the marker onto unrelated work
+ * while the gate's card stood open. The gate is the column's only when its own
+ * step number is one of the column's, which is the same fact the column's
+ * election reads (`onSpine`).
+ *
+ * The values are the ones the row's own label is read from, so the row that is
+ * drawn and the row that is suppressed are decided from one reading.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function parkedGateDrawnByTheLiveColumn(params: {
+  parkedGateStep: boolean;
+  panel: RunDetailPanelKind;
+  /** The `stepNumber` of every step the live column draws, in its own order. */
+  spineStepNumbers: readonly number[];
+  /** The parked gate's own step, read by `gateStepNumberInValues`. */
+  gateStepNumber: number | null;
+}): boolean {
+  if (!params.parkedGateStep) return false;
+  if (
+    screenHostsStepRail({
+      panel: params.panel,
+      stepperStepCount: params.spineStepNumbers.length,
+    })
+  ) {
+    return false;
+  }
+  if (params.gateStepNumber === null) return false;
+  return params.spineStepNumbers.includes(params.gateStepNumber);
+}
+
+/**
+ * THE STEP A GATE'S OWN VALUES NAME (cinatra#3149 item 3, fix leg 10).
+ *
+ * The one reader of `stepNumber` on this road: the screen asks it to decide
+ * whose entry the pause already has, and hands the SAME answer to the live
+ * column so the row that column marks on its first paint is the row the screen
+ * suppressed a second one for. Spelled once, so the two cannot disagree; the
+ * shape is the panel's own (`typeof values.stepNumber === "number"`).
+ */
+export function gateStepNumberInValues(
+  values?: Record<string, unknown> | null,
+): number | null {
+  const stepNumber = (values as { stepNumber?: unknown } | null | undefined)?.stepNumber;
+  return typeof stepNumber === "number" ? stepNumber : null;
 }
 
 /**
@@ -1875,6 +1971,22 @@ export async function SetupScreen({
     recommendationHeld,
     openInputStepKey,
   });
+  // AND WHERE THAT GATE'S OWN ENTRY IS ALREADY ON THE LIVE COLUMN (cinatra#3149
+  // item 3, fix leg 10). READ ONCE, ASKED THREE TIMES like the fact above: the
+  // frame the panels are told about, the step the rail ELECTS and the row the
+  // rail DRAWS.
+  const parkedGateStepNumber = gateStepNumberInValues(
+    initialHitlContext?.currentValues ?? null,
+  );
+  const parkedGateOnTheLiveColumn = parkedGateDrawnByTheLiveColumn({
+    parkedGateStep,
+    panel: runDetailPanel,
+    spineStepNumbers: stepperSteps.map((step) => step.stepNumber),
+    gateStepNumber: parkedGateStepNumber,
+  });
+  // The frame draws its generic row only for a parked gate the column does not
+  // already carry -- the rail's own entry for the pause, drawn once.
+  const parkedGateRowOnTheFrame = parkedGateStep && !parkedGateOnTheLiveColumn;
   const parkedGateStepLabel = parkedGateStep
     ? parkedGateRailStepLabel({
         values: initialHitlContext?.currentValues ?? null,
@@ -1896,7 +2008,10 @@ export async function SetupScreen({
     hasRecommendationStep ||
     scheduleRailRef !== null ||
     parkedScheduleStep ||
-    parkedGateStep;
+    // THE ROW THE FRAME DRAWS, NOT THE PAUSE ITSELF (cinatra#3149 item 3, fix
+    // leg 10): a parked gate the live column already carries puts no row on the
+    // frame, so it frames nothing on that account either.
+    parkedGateRowOnTheFrame;
   // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
   // skill picker inside itself for a run whose skills were decided on the card
   // ("The agentic run progress card appears once the skills are decided; no
@@ -2011,7 +2126,25 @@ export async function SetupScreen({
     hasScheduleStep: scheduleRailRef !== null || parkedScheduleStep,
     hasExecution: runHasExecution,
     parkedGateStep,
+    parkedGateDrawnByTheLiveColumn: parkedGateOnTheLiveColumn,
   });
+
+  // DOES THE FRAME ELECT ONE OF ITS OWN ROWS FOR THIS RUN? (cinatra#3149 item
+  // 3, fix leg 10.)
+  //
+  // "One entry is highlighted at a time" is a fact about the WHOLE rail, so
+  // exactly one of the two columns that draw it stands the reader somewhere and
+  // the other stands down. Leg 9 stood the live column down whenever the frame
+  // was DRAWN at all -- but a frame is drawn for a settled Skills entry too, and
+  // a run paused at a work step under one then had no marker anywhere: the frame
+  // elects nothing on "detail", and the column had been told not to.
+  //
+  // The fact is the frame's own election, which is `initialStep`: every value but
+  // "detail" names a row the frame pushes, and "detail" is the ladder saying it
+  // found no gate of its own for the run to be standing at. Read once, here,
+  // beside the step it is read from, and handed to the panel rather than
+  // re-derived there.
+  const frameElectsTheCurrentEntry = railFramesTheRunDetail && initialStep !== "detail";
 
   // The scheduling step's duration banner, computed ONLY on the branch that
   // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
@@ -2243,6 +2376,20 @@ export async function SetupScreen({
                     reviewHrefBase={reviewHrefBase}
                     inputStepInRail={inputStepIsOpen}
                     railDrawsTheFrame={railFramesTheRunDetail}
+                    frameElectsTheCurrentEntry={frameElectsTheCurrentEntry}
+                    // AND THE STEP THE SUPPRESSED ROW WOULD HAVE STOOD FOR
+                    // (cinatra#3149 item 3, fix leg 10). This column's stream
+                    // opens with no interrupt, so its election falls back to the
+                    // FIRST row until a frame arrives -- and on a spine whose
+                    // policy numbers start above 1 that first row is not the
+                    // step the run is parked at. Where the frame has stood its
+                    // own row down for this pause, the server hands over the
+                    // step it read, so the one marker is on the right entry from
+                    // the first paint. Null everywhere else: no other run's
+                    // reading moves.
+                    initialGateStepNumber={
+                      parkedGateOnTheLiveColumn ? parkedGateStepNumber : null
+                    }
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -2462,7 +2609,7 @@ export async function SetupScreen({
               // step a surface would be a second mount of the one renderer. A
               // nullish surface falls back to that detail, which is the right
               // thing and not an empty column.
-              if (parkedGateStep && parkedGateStepLabel) {
+              if (parkedGateRowOnTheFrame && parkedGateStepLabel) {
                 const parkedGateRailStep: RunSurfaceRailStep = {
                   key: "gate",
                   reached: true,
@@ -2547,7 +2694,13 @@ export async function SetupScreen({
               // reached — its schedule, or the gate it is stopped at — the
               // question is behind the reader and the forecast row is not drawn
               // at all. See `upcomingSkillsEntryHeadsTheRail`.
-              if (upcomingHeadKeys.length > 0 && upcomingSkillsEntryHeadsTheRail(railSteps)) {
+              if (
+                upcomingHeadKeys.length > 0 &&
+                // AND THE PARKED GATE COUNTS WHETHER OR NOT THE FRAME DREW ITS
+                // ROW (cinatra#3149 item 3, fix leg 10) -- the run reached it
+                // either way.
+                upcomingSkillsEntryHeadsTheRail(railSteps, parkedGateStep)
+              ) {
                 railSteps.unshift(
                   ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
                 );

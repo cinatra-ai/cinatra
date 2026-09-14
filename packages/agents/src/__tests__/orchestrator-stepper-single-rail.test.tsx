@@ -266,12 +266,17 @@ describe("the flow-agent run detail renders ONE step rail, never two (cinatra#27
 });
 
 describe("the surviving rail carries the UNION of both rails' behaviours", () => {
-  it("keeps the ⓘ gate tooltip trigger the page-level rail never had", async () => {
+  it("draws NO ⓘ affordance on an ordered entry — the drawing gives the entry one label", async () => {
+    // WAS: the union this suite locked included the ⓘ gate tooltip the
+    // page-level rail never had (cinatra#2739). The seventh proof round of
+    // cinatra#3149 graded that affordance as a departure — the rail rule
+    // draws an entry's name and its state and nothing else — so the union
+    // loses it. The rest of what this suite locks is untouched; the shape of
+    // the entry is pinned in run-rail-ordered-entry-is-one-label.test.tsx.
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     const rail = rails()[0];
-    // One per step that carries a description — three in the email-outreach shape.
-    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(3);
+    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(0);
   });
 
   it("keeps the completed-step REPLAY click", async () => {
@@ -317,9 +322,23 @@ describe("the surviving rail carries the UNION of both rails' behaviours", () =>
       rail.querySelector('[data-rail-verification-link="task-resolved"]')?.getAttribute("href"),
     ).toBe(`${REVIEW_HREF_BASE}/task-resolved?view=verification`);
 
-    // And the lifecycle decision keeps its reason — a deliberately-skipped
-    // review must stay distinguishable from no machinery running.
-    expect(rail.querySelector('[data-rail-lifecycle-reason]')?.textContent).toContain(
+    // And the lifecycle decision keeps its own entry — named by the settlement
+    // the projection folds into its label, with the lattice's words carried as
+    // passive data beside it.
+    //
+    // IT DRAWS NO REASON ANY MORE (cinatra#3149, fix leg 4). The rail entry the
+    // ratified drawing gives is a glyph and ONE name, and a proof round read
+    // this row's second line — a reason sentence under a badge repeating the
+    // lattice's word — as text the rail does not draw. What kept a
+    // deliberately-skipped review distinguishable from no machinery running is
+    // the LABEL, which says so in the drawing's own register.
+    const lifecycleRow = rail.querySelector<HTMLElement>(
+      '[data-rail-kind="lifecycleDecision"]',
+    );
+    expect(lifecycleRow).not.toBeNull();
+    expect(lifecycleRow!.textContent?.trim()).toBe("Review skipped");
+    expect(rail.querySelector('[data-rail-lifecycle-reason]')).toBeNull();
+    expect(rail.textContent ?? "").not.toContain(
       "The org policy skips review for outreach drafts.",
     );
     expect(rail.querySelector('[data-rail-lifecycle-decided-by="org-bound"]')).not.toBeNull();

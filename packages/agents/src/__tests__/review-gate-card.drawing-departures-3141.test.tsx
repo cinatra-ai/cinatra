@@ -71,6 +71,7 @@ vi.mock("../run-window-actions", () => ({
   sendRunWindowTurn: vi.fn(async () => ({ kind: "ok", entries: [] })),
 }));
 
+import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ReviewGateCard } from "../review-gate-card";
 
@@ -282,13 +283,81 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
   });
 
-  it("a SETTLED gate carries no window — there is nothing left to request changes on", async () => {
+  it("a SETTLED gate KEEPS the window — the exchange is with the run, and the run outlives the decision", async () => {
+    // REVERSED BY cinatra#3149, FIX LEG 6, DEFECT C. This pin read the window as
+    // a change-request channel and nothing else, so a decided gate had "nothing
+    // left to request changes on" and the card drew none. A proof round then
+    // measured the decided gate's reading on the run detail and found the
+    // window's mount there at zero height, and graded it a defect of structure:
+    // the drawing withdraws the window nowhere. Section VI puts it beneath the
+    // decision bar, section X draws it under the decision bar on the run detail,
+    // and section IX keeps the exchange with the RUN — which is still there, and
+    // still answers, after its gate is settled.
     mockResolve({ state: "settled", outcome: "approved" });
     const { container } = renderOn("run_card");
     await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-gate-card"]')).not.toBeNull(),
+      expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).not.toBeNull(),
     );
-    expect(promptWindows(container)).toHaveLength(0);
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+  });
+
+  it("and on a SETTLED gate it takes the RUN's road only — never the closed gate's comment road", async () => {
+    // THE CONVERGENCE ROUND'S FINDING on defect C. Keeping the window is the
+    // drawing's reading; still routing what is typed into it through the GATE's
+    // comment path is not. The decision core refuses a comment on a resolved
+    // gate ("no longer pending"), so the reader's own words would be spent on a
+    // refusal notice printed under the control the drawing just gave back to
+    // them — a control that fails on press, which is the exact thing the
+    // window's permission rule exists to prevent. Section IX names the road
+    // that is still open: the exchange is with the RUN, and the run outlives
+    // the decision.
+    vi.mocked(sendRunWindowTurn).mockClear();
+    mockResolve({ state: "settled", outcome: "approved" });
+    const submitAction = vi.fn(async () => ({ kind: "annotated" }) as const);
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
+    });
+
+    expect(
+      submitAction,
+      "a decided gate takes no decision, no comment and no disposition from this window",
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(sendRunWindowTurn).mock.calls.length, "the run's exchange carried it").toBe(1);
+    expect(vi.mocked(sendRunWindowTurn).mock.calls[0]![0]).toMatchObject({
+      runId: "run-3141",
+      surface: "review",
+      prompt: TYPED_REQUEST,
+    });
+    // And the window is still there afterwards — the exchange stays on screen.
+    expect(promptWindows(container)).toHaveLength(1);
+  });
+
+  it("a PENDING gate still takes the gate's comment road — the settled reading narrows nothing else", async () => {
+    // The narrowing above is the SETTLED reading alone. On an open gate the
+    // typed request is still how changes are requested (§VI: "there is no
+    // dedicated 'request changes' button"), so this pin holds the pending road
+    // open beside it.
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const submitAction = vi.fn(
+      async () => ({ kind: "changes-requested", status: "requested", idempotent: false }) as const,
+    );
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
+    });
+    expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: TYPED_REQUEST });
   });
 });
 

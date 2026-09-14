@@ -338,6 +338,62 @@ export function runCardOwnsLifecycleCopy(
 // register, the report is a no-op, and nothing about those surfaces changes.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// THE RUN DETAIL'S OWN SLOT FOR THE PROMPT WINDOW (cinatra#3149, fix leg 4).
+//
+// The ratified drawing draws the foot of the run detail in one sentence
+// (`specs/app-artifact-review.html` section I.3):
+//
+//   "Only the frame around it changes: a thread ends in its composer, and the
+//    run detail ends in the prompt window (Section VI)."
+//
+// and its own reading of that detail draws the card's parts each in their own
+// bordered box - the target, then the note over the decision bar - with the
+// prompt window BENEATH them, on the detail's own ground, in no box at all.
+//
+// The review card composes header, target, decision bar and window as one body,
+// and that is right: the window IS part of the gate, which is what makes the
+// sentence true on every surface the gate opens on. What was wrong is where the
+// run page's own frame ended - that host wraps the whole card body in a visible
+// rounded panel, so the panel closed UNDER the window and a proof round read the
+// window as a part of the card.
+//
+// So the HOST declares where its run detail ends and the gate's window lands
+// there. FAIL-CLOSED, like every other declaration in this module: a surface
+// that declares no slot - the chat thread, the review page's gate region, the
+// widget - reads `null`, and the window is drawn exactly where it always was.
+// ---------------------------------------------------------------------------
+
+const RunDetailPromptWindowSlotContext = createContext<HTMLElement | null>(null);
+
+/**
+ * Declares the element that ENDS this run detail: the gate's prompt window is
+ * drawn into it, after the frame that holds the card's own body.
+ *
+ * The ELEMENT, not a boolean: the window is relocated by a portal, so the host
+ * hands over the exact node it wants the window in - the same mount the run's
+ * other window reading already renders as a sibling of its frame.
+ */
+export function RunDetailPromptWindowSlot({
+  target,
+  children,
+}: {
+  target: HTMLElement | null;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <RunDetailPromptWindowSlotContext.Provider value={target}>
+      {children}
+    </RunDetailPromptWindowSlotContext.Provider>
+  );
+}
+
+/** The slot this card's host declared, or `null` where none did. */
+export function useRunDetailPromptWindowSlot(): HTMLElement | null {
+  return useContext(RunDetailPromptWindowSlotContext);
+}
+
+
 /** Told by a card: this card, in this container, is (or is no longer) settled. */
 export type SettledScheduleRegister = (cardId: string, settled: boolean) => void;
 

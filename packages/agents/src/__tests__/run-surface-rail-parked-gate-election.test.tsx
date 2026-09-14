@@ -474,7 +474,17 @@ describe("the run screen reads the parked gate ONCE and hands it to both halves"
     expect(SCREEN_SRC).toContain("parkedGateRailStepLabel({");
     // ONE fact, handed to the ladder and to the row.
     expect(SCREEN_SRC).toMatch(/runDetailInitialStep\(\{[\s\S]*?parkedGateStep,/);
-    expect(SCREEN_SRC).toContain("if (parkedGateStep && parkedGateStepLabel) {");
+    // AND THE ROW IS THE FRAME'S TO DRAW ONLY WHERE THE LIVE COLUMN CARRIES NO
+    // ENTRY FOR THAT SAME PAUSE (cinatra#3149 item 3, fix leg 10) -- one pause,
+    // one entry on the rail. Both halves read the one answer.
+    expect(SCREEN_SRC).toContain("parkedGateDrawnByTheLiveColumn({");
+    expect(SCREEN_SRC).toContain(
+      "const parkedGateRowOnTheFrame = parkedGateStep && !parkedGateOnTheLiveColumn;",
+    );
+    expect(SCREEN_SRC).toContain("if (parkedGateRowOnTheFrame && parkedGateStepLabel) {");
+    expect(SCREEN_SRC).toMatch(
+      /runDetailInitialStep\(\{[\s\S]*?parkedGateDrawnByTheLiveColumn: parkedGateOnTheLiveColumn,/,
+    );
     // AND IT PASSES THE RENDERER'S PRESENCE, not the context's (convergence
     // round, fix leg 2).
     expect(SCREEN_SRC).toMatch(
@@ -492,13 +502,27 @@ describe("the run screen reads the parked gate ONCE and hands it to both halves"
     // AND THE SCHEDULING PARK IS COUNTED IN THE SAME ANSWER (cinatra#3221, fix
     // leg 8): a run stopped at its schedule mounts the rail on its own too, and
     // the frame the panels are handed is one answer, not one per gate class.
+    // AND IT IS THE ROW THE FRAME ACTUALLY DRAWS THAT COUNTS (cinatra#3149 item
+    // 3, fix leg 10): a parked gate the live column already carries puts no row
+    // on the frame, so it frames nothing on that account either.
     expect(SCREEN_SRC).toMatch(
-      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedScheduleStep \|\|\s*\n\s*parkedGateStep;/,
+      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedScheduleStep \|\|\s*\n(?:\s*\/\/[^\n]*\n)*\s*parkedGateRowOnTheFrame;/,
     );
     const factAt = SCREEN_SRC.indexOf("const parkedGateStep = runParkedAtTrailingGate({");
     const frameAt = SCREEN_SRC.indexOf("const railFramesTheRunDetail =");
     expect(factAt).toBeGreaterThan(-1);
     expect(frameAt).toBeGreaterThan(factAt);
+  });
+
+  it("keeps the unreached Skills forecast off the head where the run reached a gate the rail draws no row for", async () => {
+    // cinatra#3149 item 3, fix leg 10. The rule read the DRAWN rows, and a run
+    // stopped at a mid-run gate always carried a row for it there. It no longer
+    // does where the live column carries that entry instead — and evidence the
+    // rail stopped drawing is not evidence the run stopped having.
+    const { upcomingSkillsEntryHeadsTheRail } = await import("../instance-screens");
+    const railWithNoGateRow = [{ key: "input:1", reached: true }];
+    expect(upcomingSkillsEntryHeadsTheRail(railWithNoGateRow)).toBe(true);
+    expect(upcomingSkillsEntryHeadsTheRail(railWithNoGateRow, true)).toBe(false);
   });
 
   it("pushes the gate's row into the rail it elects from", () => {
@@ -508,7 +532,7 @@ describe("the run screen reads the parked gate ONCE and hands it to both halves"
   });
 
   it("draws it after the steps the run has passed and before the ones still to come", () => {
-    const gateAt = SCREEN_SRC.indexOf("if (parkedGateStep && parkedGateStepLabel) {");
+    const gateAt = SCREEN_SRC.indexOf("if (parkedGateRowOnTheFrame && parkedGateStepLabel) {");
     const inputsAt = SCREEN_SRC.indexOf("railSteps.push(...buildRunInputRailSteps(");
     const upcomingAt = SCREEN_SRC.indexOf("const upcomingRailStepKeys = upcomingRunRailStepKeys({");
     expect(inputsAt).toBeGreaterThan(-1);

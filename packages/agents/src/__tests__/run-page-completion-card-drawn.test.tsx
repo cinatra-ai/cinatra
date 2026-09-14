@@ -30,13 +30,13 @@
  *      completed reading is the header pill plus ONE card; a raw "Agent output"
  *      dump above a card that says the output is in the transcript below is the
  *      "undrawn second panel" the third round recorded.
- *   7. the row the sentence points at — the run's `final` message, labelled
- *      "Final response" — drawn as the run's ANSWER: the row form §I.2 draws
- *      (`border: 1px solid var(--line); border-radius: 8px; background:
- *      var(--surface-strong)`) with a sans label and the answer in body type.
- *      The design system puts mono on metadata, tokens, labels and code
- *      (app-components.html) — never on a run's prose answer, which the third
- *      round measured at 2773 characters.
+ *   7. the row the sentence points at — the run's `final` message — drawn as
+ *      the run's ANSWER, in body type. The design system puts mono on
+ *      metadata, tokens, labels and code (app-components.html) — never on a
+ *      run's prose answer. Redrawn by the THIRD proof round (cinatra#3149, fix
+ *      leg 5): the row is no longer a titled box of its own, because the
+ *      drawing draws ONE card for the finished run and a second panel titled
+ *      "Final response" beneath the completion reading is not in it.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -325,19 +325,24 @@ describe("the completion card's drawn items on the run's own page", () => {
     expect(await screen.findByText("Agent output")).toBeTruthy();
   });
 
-  it("draws the 'Final response' row as the run's answer, not as a raw mono dump", async () => {
+  it("draws the run's answer as prose, and not as a panel of its own", async () => {
+    // REDRAWN BY THE THIRD PROOF ROUND (cinatra#3149, fix leg 5). This case used
+    // to pin the row's own card chrome and its "Final response" title, on the
+    // reading that the card's sentence sent the reader to a titled box. The
+    // round graded that against the drawing and read it as STRUCTURE: "a SECOND
+    // panel titled 'Final response' is stacked beneath the one completion card
+    // in the same detail — the drawing draws ONE card for the finished run".
+    // What the row keeps is its TYPE — the answer is prose, in body type — and
+    // what it gives up is the chrome and the title that made it a second card.
     await renderRunPage();
 
     const row = document.querySelector('[data-run-transcript-row="final"]');
     expect(row).not.toBeNull();
-    // The row form §I.2 draws: 1px line border, 8px radius, surface-strong ground.
-    expect(row?.className).toContain("bg-surface-strong");
-    expect(row?.className).toContain("border-line");
-    // Sans label in the row-title form — the drawing's rows title themselves in
-    // sans; mono is the design system's metadata/code type.
-    const label = row?.querySelector('[data-run-transcript-label=""]');
-    expect(label?.textContent).toBe("Final response");
-    expect(label?.className ?? "").not.toContain("font-mono");
+    // No box of its own, and no title of its own.
+    expect(row?.className ?? "").not.toContain("bg-surface-strong");
+    expect(row?.className ?? "").not.toContain("border-line");
+    expect(row?.querySelector('[data-run-transcript-label=""]')).toBeNull();
+    expect(screen.queryByText("Final response")).toBeNull();
     // The answer itself is prose, so it is set in body type and wraps on words —
     // never `font-mono` and never `break-all`, which breaks a word mid-character.
     const answer = row?.querySelector('[data-run-transcript-body=""]');
@@ -363,16 +368,21 @@ describe("the completion card's drawn items on the run's own page", () => {
 });
 
 describe("the convergence round's three findings, pinned on the run's own page", () => {
-  it("keeps the status pill where the rail frames the detail — the heading retires, the status does not", async () => {
+  it("draws the plate title and the status pill together where the rail frames the detail", async () => {
     // The run page frames the run detail for every run with a recommendation
     // step, an input step or a schedule step (`railFramesTheRunDetail`,
     // instance-screens.tsx) — which is the ratified drawing's own completed
-    // reading, the schedule-step example. cinatra#3068 retires the plate's
-    // HEADING on that reading; it does not retire the run's status, and no
-    // other mount on the page draws one.
+    // reading, the schedule-step example.
+    //
+    // REDRAWN BY THE THIRD PROOF ROUND (cinatra#3149, fix leg 5). This case used
+    // to pin cinatra#3068's retirement of the plate's HEADING on that reading.
+    // The round graded the reading against the drawing it was built to and read
+    // the retirement as STRUCTURE: the drawing's `.runcard` opens with a header
+    // flex row carrying the plate title "Agentic Run Progress" and, beside it,
+    // the state pill. Both are drawn, in that one row.
     await renderRunPage({ railDrawsTheFrame: true });
 
-    expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+    expect(screen.queryByText(/Agentic Run Progress/i)).not.toBeNull();
 
     const pill = document.querySelector('[data-slot="status-pill"]');
     expect(pill).not.toBeNull();
