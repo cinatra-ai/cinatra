@@ -1,7 +1,9 @@
 // Coverage-ratchet BASE RESOLUTION (cinatra#2430).
 //
-// design-visual-verify.yml triggers on `pull_request` only, so its HEAD is the
-// merge commit GitHub froze into the run's event, while the old ratchet step
+// design-visual-verify.yml triggers on `pull_request` and, since
+// engineering#658 item 1, on `merge_group`; on either event its HEAD is the
+// candidate commit GitHub froze into the run's event and BASE_SHA is that
+// event's own recorded base, while the old ratchet step
 // resolved the base branch's LIVE TIP at step-execution time:
 //
 //   git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:…"
@@ -253,7 +255,7 @@ describe("conformance coverage ratchet — fail-closed (cinatra#2430)", () => {
     const { ws } = buildRatchetWorkspace({ baseShrinks: false });
     const res = runNewStep(ws, "");
     expect(res.code).toBe(1);
-    expect(`${res.stdout}${res.stderr}`).toMatch(/carries no pull_request\.base\.sha/);
+    expect(`${res.stdout}${res.stderr}`).toMatch(/carries no base commit/);
     expect(res.stdout).not.toMatch(/conformance ratchet OK/);
   });
 });
@@ -275,7 +277,11 @@ describe("design-visual-verify.yml — the ratchet base stays pinned to the run'
   });
 
   it("passes the run's own recorded base commit to the ratchet script", () => {
-    expect(yml()).toMatch(/BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+    // The event's OWN recorded base: the workflow also runs on a merge-queue
+    // candidate, which carries no pull_request payload (engineering#658 item 1).
+    expect(yml()).toMatch(
+      /BASE_SHA: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| github\.event\.pull_request\.base\.sha \}\}/,
+    );
     const body = extractStepRunBody(yml(), STEP_NAME);
     expect(body).toMatch(/node scripts\/design\/check-conformance-ratchet\.mjs "\$\{BASE_SHA\}"/);
     // The immutable SHA is logged.
