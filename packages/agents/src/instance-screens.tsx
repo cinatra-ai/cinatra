@@ -2013,9 +2013,15 @@ export async function SetupScreen({
   // WHAT THIS RUN MADE (cinatra#3029, acceptance item 5). Read HERE, in the
   // screen's async body, because the rail below is composed synchronously and
   // the step's rows are a database read. A run that is not over yet has not
-  // finished making anything, so the step is drawn only on a TERMINAL run — and
-  // it is drawn even when the run made nothing, because the drawing gives the
+  // finished making anything, so the ROWS are read only on a TERMINAL run — and
+  // they are read even when the run made nothing, because the drawing gives the
   // empty case its own reading rather than an empty panel.
+  //
+  // THE ROWS AND THE RAIL ROW ARE TWO QUESTIONS (cinatra#3478, third leg). The
+  // rail also carries the record as a step STILL TO COME while a gate holds the
+  // run in front of it, and that row is unreached, so it opens nothing: this
+  // read stays where it is rather than paying for a list the reader cannot
+  // reach.
   const runMadeRows: RunMadeArtifactRow[] =
     run && isTerminalRunStatus(run.status)
       ? await (async () => {
@@ -2605,7 +2611,53 @@ export async function SetupScreen({
               // that carries nothing else would otherwise answer "no frame
               // column" here, stand the panel's column down all the same, and
               // draw its work steps in neither.
-              const railCarriesMadeStep = run != null && isTerminalRunStatus(run.status);
+              //
+              // AND A RUN HELD AT ITS REVIEW GATE CARRIES IT AS A STEP STILL TO
+              // COME (cinatra#3478, third leg). The third proof round measured
+              // this row drawn as a step already PASSED — the completed circle,
+              // reached and settled — on a run that was waiting at its review
+              // gate to be told whether to file the work at all. The ratified
+              // drawing's step rail: "The step the run is paused on is
+              // highlighted; steps already passed sit above it, steps still to
+              // come below." So the two questions are separated here:
+              //
+              //   • WHETHER the rail carries the row — it does from the moment
+              //     the run has work to record, which includes the run held in
+              //     front of the gate that decides that work's fate, so the
+              //     reader can see what is still to come beneath the pause;
+              //   • and whether the run has REACHED it — it has not while a
+              //     gate is still holding it, whatever the run's own status
+              //     reads at that instant, because the record row is the step
+              //     AFTER the gate.
+              //
+              // An unreached row is closed by `isRunSurfaceStepSelectable`
+              // (`reached: false`), which is what first paint and every press
+              // ask, so the empty rows read for a run that is not over yet are
+              // not opened onto: while the run is not terminal the row is
+              // unreached at every paint of the page, so no press can have
+              // opened it. The row states its place in the series and nothing
+              // else, which is what an upcoming row is.
+              //
+              // AND WHAT "HELD AT ITS REVIEW GATE" IS READ FROM (the third
+              // leg's convergence round, finding 1). `initialReviewGate.awaiting`
+              // is NOT that question: `readRunReviewSlot` answers it from a
+              // still-`pending` `artifact_produced_outbox` row — the seconds
+              // between the run producing something and the sweeper opening a
+              // gate on it — and it goes back to `false` the moment the gate
+              // ROW EXISTS, answered or not. The run the third proof round
+              // measured is exactly the run that reads `false` there: its gate
+              // was open and undecided. So the OPEN GATE ITSELF is read, from
+              // the rail's own gate list (`railGates`, `pending` until a
+              // decision is committed to it), and the outbox window is kept
+              // beside it for the moment in which the gate row does not exist
+              // yet.
+              const runHasAnUndecidedReviewGate = railGates.some((g) => g.status === "pending");
+              const runParkedAtReviewGate =
+                runHasAnUndecidedReviewGate || initialReviewGate?.awaiting === true;
+              const runReachedItsRecord =
+                run != null && isTerminalRunStatus(run.status) && !runParkedAtReviewGate;
+              const railCarriesMadeStep =
+                run != null && (isTerminalRunStatus(run.status) || runParkedAtReviewGate);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
@@ -2650,14 +2702,15 @@ export async function SetupScreen({
               // one — which is why `railCarriesMadeStep` is decided above the
               // answer and only pushed here. `screenDrawsPageRail`
               // reads `gateStepCount` to keep a pre-dispatch run's rail
-              // suppressed (`pending_input`), and a run at a TERMINAL status —
-              // the only run that carries this step at all — is never at that
+              // suppressed (`pending_input`), and neither run that carries this
+              // step — the one at a TERMINAL status, and the one held at its
+              // review gate over work it has already produced — is ever at that
               // status.
               if (run && railCarriesMadeStep) {
                 const madeRailStep: RunSurfaceRailStep = {
                   key: "made",
-                  reached: true,
-                  settled: true,
+                  reached: runReachedItsRecord,
+                  settled: runReachedItsRecord,
                   tail: true,
                   surface: (
                     <RunMadeStepSurface rows={runMadeRows} reading={runMadeReading(runMadeRows)} />
@@ -2675,8 +2728,8 @@ export async function SetupScreen({
                         (railDraws ? rail.entries.length : 0) +
                         1
                       }
-                      reached
-                      settled
+                      reached={runReachedItsRecord}
+                      settled={runReachedItsRecord}
                       selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
                       conformanceId="run-surface-rail-step"
                       indicatorConformanceId="run-surface-rail-indicator"

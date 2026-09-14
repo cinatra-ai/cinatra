@@ -87,6 +87,44 @@ const row = vi.hoisted(() => ({
   required: ["idea", "audience"] as string[],
 }));
 
+/**
+ * THE RUN'S REVIEW SLOT, AS THE READER ANSWERS IT — mutated per reading for the
+ * same reason the row above is: a run WAITING at its review gate and a run whose
+ * gate is settled are the same run at two moments, and the rail draws the run's
+ * own record differently at each (cinatra#3478, third leg).
+ */
+const reviewSlot = vi.hoisted(() => ({
+  awaiting: false,
+  reviewTaskId: null as string | null,
+}));
+
+/**
+ * THE RUN'S REVIEW GATES, AS THE RAIL'S OWN READER LISTS THEM — the gate ROW,
+ * which is the thing that outlives the outbox window: `readRunReviewSlot`
+ * answers `awaiting: false` the moment this row exists, decided or not, so a
+ * run standing in front of an UNDECIDED gate is only visible here.
+ */
+const reviewGates = vi.hoisted(() => ({
+  rows: [] as Array<{
+    id: string;
+    reviewTaskId: string;
+    status: "pending" | "resolved";
+    disposition: string | null;
+    createdAt: Date;
+  }>,
+}));
+
+/** One gate row of the shape `listReviewGatesForRun` returns. */
+function gateRow(status: "pending" | "resolved") {
+  return {
+    id: "gate-1",
+    reviewTaskId: "task-review-1",
+    status,
+    disposition: status === "resolved" ? "approved" : null,
+    createdAt: new Date("2026-09-13T12:00:00Z"),
+  };
+}
+
 /** The gate the run is stopped at, as the screen derives it from the row. */
 const STORED_IDEAS_GATE = {
   xRenderer: "cinatra/hitl-approval",
@@ -211,9 +249,12 @@ vi.mock("../auth-policy", () => ({
 }));
 
 vi.mock("../artifact-review-gate-store", () => ({
-  listReviewGatesForRun: vi.fn(async () => []),
+  listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
   readReviewGate: vi.fn(async () => null),
-  readRunReviewSlot: vi.fn(async () => null),
+  readRunReviewSlot: vi.fn(async () => ({
+    reviewTaskId: reviewSlot.reviewTaskId,
+    awaiting: reviewSlot.awaiting,
+  })),
   readVerificationRecordsForGates: vi.fn(async () => []),
 }));
 
@@ -297,6 +338,9 @@ beforeEach(() => {
   row.lifecycleCardRef = "wayflow-task-1";
   row.hitlContext = STORED_IDEAS_GATE;
   row.required = ["idea", "audience"];
+  reviewSlot.awaiting = false;
+  reviewSlot.reviewTaskId = null;
+  reviewGates.rows = [];
 });
 
 afterEach(() => {
@@ -417,6 +461,131 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
     expect(columns.length).toBe(1);
     const entries = railEntries(columns[0]);
     expect(entries).toEqual(["1Draft the post", "2Pick the image", "What this run made"]);
+  });
+
+  it("draws the run's own record as a step still to come while its review gate waits", async () => {
+    // THE THIRD PROOF ROUND'S FIRST FINDING (cinatra#3478). The run had made its
+    // artifact and parked at the review gate, and the rail drew "What this run
+    // made" as a step already passed — the completed circle, reached and settled
+    // — for a record the run has not reached: the reader was told the run's work
+    // was filed while the run was still waiting to be told whether to file it.
+    //
+    // The ratified drawing, the step rail: "The step the run is paused on is
+    // highlighted; steps already passed sit above it, steps still to come
+    // below." So the record stands on the rail, LAST, and is drawn as a step
+    // still to come for as long as a gate is holding the run in front of it.
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = ["idea"];
+    reviewSlot.awaiting = true;
+    reviewSlot.reviewTaskId = "task-review-1";
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const [column] = columns;
+    const rows = Array.from(
+      column.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    );
+    const made = rows.find(
+      (el) => el.getAttribute("data-run-surface-rail-step-key") === "made",
+    );
+    // It is on the rail, and it is BELOW the step the run is paused on: the last
+    // row of the one column. The live reading before this fix: no such row at
+    // all on this branch of the composition, and the completed circle on the
+    // branch that did draw it.
+    expect(made).toBeDefined();
+    expect(rows[rows.length - 1]).toBe(made);
+    // And it is not drawn as passed.
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("false");
+  });
+
+  it("draws the run's own record as a step still to come while its gate is undecided", async () => {
+    // THE SAME FINDING AT THE STATE THAT WAS ACTUALLY MEASURED (cinatra#3478,
+    // third leg, convergence round). The gate ROW already exists and nobody has
+    // answered it yet — so the outbox row the sweeper consumed is gone and the
+    // run's review slot reads `awaiting: false`. This is the run whose page was
+    // photographed with the record drawn as a step already passed, and the only
+    // reading that discriminates it is the gate's own `pending` status.
+    row.status = "completed";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("pending")];
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const rows = Array.from(
+      columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    );
+    const made = rows.find(
+      (el) => el.getAttribute("data-run-surface-rail-step-key") === "made",
+    );
+    expect(made).toBeDefined();
+    expect(rows[rows.length - 1]).toBe(made);
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("false");
+  });
+
+  it("draws the run's own record as reached once that gate is decided", async () => {
+    // THE OTHER HALF OF THE GATE READING: the decision is committed, the gate
+    // row stays on the rail as read-only history, and the run HAS reached its
+    // record — the completed circle belongs there.
+    row.status = "completed";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("resolved")];
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const made = Array.from(
+      columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+  });
+
+  it("draws the run's own record as reached once the run is over and no gate waits", async () => {
+    // THE OTHER HALF OF THE SAME RULE. The row's reading follows the run's own
+    // status: a run that is over, with nothing holding it, HAS reached its
+    // record, and the rail keeps the completed circle there.
+    row.status = "completed";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const [column] = columns;
+    const made = Array.from(
+      column.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
   });
 });
 
