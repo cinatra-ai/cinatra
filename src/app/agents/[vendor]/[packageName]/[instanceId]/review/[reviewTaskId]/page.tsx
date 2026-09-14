@@ -57,6 +57,10 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+// THE RUN PAGE'S CHROME (cinatra#3487): the review route mounts no prompt
+// window of its own — the chrome owns the one window and draws it below the
+// screen, and the review screen registers what it is and what it lends.
+import { RunPageChrome } from "@cinatra-ai/agents/run-page-chrome";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
@@ -337,6 +341,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
 
   return (
     <ReviewShell>
+      <RunPageChrome>
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -417,6 +422,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
           );
         })()}
       </div>
+      </RunPageChrome>
 
       {/* §VI's conversational prompt window IS THE GATE'S, and the gate is the
           card (cinatra#3141 item 1). It used to be mounted here, at page level

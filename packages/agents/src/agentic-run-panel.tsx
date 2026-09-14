@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { StartNewRunButton, RunCompletionCard } from "./run-completion-affordances";
 import { resetAgentRun } from "./run-actions";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 // THE ONE renderer of `agent_hitl_screen` (cinatra#2930, lifecycle-b W3).
 // This panel's pause screen is the drawing; the card is its identity root,
@@ -563,7 +563,6 @@ export function AgenticRunPanel({
   // aiSuggestions is the stable suggestion payload threaded into renderers — it
   // changes only when the user submits a prompt, NOT on every poll tick (unlike
   // `value` which is rebuilt as an inline literal on each render).
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
   const [promptPending, setPromptPending] = useState(false);
   // Conversation history for the AI-assist portal — user prompts + assistant replies.
@@ -1655,61 +1654,38 @@ export function AgenticRunPanel({
     status === "completed" && transcriptCarriesTheRunsOutput
   );
 
-  // The sticky field-assist panel is the SAME mount on every reading of this
-  // card, so it is built once here and rendered by whichever return runs. Its
-  // own `visible` rule is untouched: it is off in a conversation, off for a
-  // marked review gate, and off unless a gate with fields is open — which is
-  // why the two readings above render it without ever showing it.
-  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
-  // `document.querySelector("main")` — the page frame — which put the window at
-  // the end of the page and docked it across the whole frame. The ratified
-  // drawing puts it under the step's own work, in the same column, so the target
-  // is a node rendered exactly there: the composition
-  // `schedule-prompt-window.tsx` already uses. A ref callback rather than an
-  // effect, so the mount is known in the commit that draws it.
-  const hitlConversationPanelNode: ReactNode = (
-    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
-    {/* The AI-assist conversation panel, drawn into the mount above — under the
-        step's own work, in the same column. resetSignal={currentXRenderer}
-        preserves the renderer-change reset. */}
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-      // `app-artifact-review.html` §X): the mount names its surface and the
-      // window reads the drawing's own sentence for it.
-      surface="run-page"
-      // cinatra#2566 (epic #2564 S2): a MARKED review gate is excluded. The
-      // field-assist panel exists to help a human fill a gate's FIELDS; a review
-      // gate has none — it has a target to read and one decision to take, and the
-      // card owns both. Leaving it visible also fed the gate's interrupt values,
-      // including its opaque card ref, into an LLM prompt (the assist route
-      // serializes `currentValue`), which is exactly the "a ref never reaches an
-      // LLM-visible payload" rule the wire slice established.
-      visible={
-        surface !== "chat" &&
-        // cinatra#2933 — the run's access decides, not the platform tier: "no
-        // window shown to a person whose message it would refuse."
-        canRespondInWindow !== false &&
-        isPendingApproval &&
-        !!effectiveHitlContext?.xRenderer &&
-        effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
-        !!templateId &&
-        !!portalTarget
-      }
-      conversation={runWindow.entries}
-      promptPending={promptPending || runWindow.pending}
-      storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
-      onSubmit={handlePromptSubmit}
-      resetSignal={currentXRenderer}
-      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
-      // drawing's §X names the window's parts — the panel, the field, the send
-      // control, the placement, the access rule — and a leading control is not
-      // among them: "Nothing else about the window changes from one reading to
-      // the next." This mount used to opt the field into the paperclip on the
-      // gate reading alone; no reading does now.
-    />
-    </div>
-  );
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "the run page's frame mounts exactly ONE prompt
+  // window in its chrome; every step screen, the review route and every
+  // lifecycle card stop mounting one; the current screen registers with the page
+  // through a React context which surface it is, the run/step/gate identity, how
+  // a result is applied, and whether it has anything to manipulate — the page
+  // shows the window only when that flag is set". This panel used to build a
+  // mount of its own and render it from whichever reading ran; it publishes
+  // instead, and the page's chrome draws the one window below this screen.
+  //
+  // THE RULE FOR WHEN THERE IS A WINDOW IS UNTOUCHED, only moved: off in a
+  // conversation, off for a marked review gate, off unless a gate with fields is
+  // open, and off for a person the run would refuse (cinatra#2566, cinatra#2933).
+  // All of it is exactly what "has this screen anything to manipulate" means.
+  useRunWindowScreen({
+    surface: "run-page",
+    runId: runId ?? null,
+    stepId: currentXRenderer ?? null,
+    canManipulate:
+      surface !== "chat" &&
+      canRespondInWindow !== false &&
+      isPendingApproval &&
+      !!effectiveHitlContext?.xRenderer &&
+      effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
+      !!templateId,
+    storageKey: `cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`,
+    conversation: runWindow.entries,
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+    resetSignal: currentXRenderer,
+  });
 
   // -------------------------------------------------------------------------
   // THE SLOT (cinatra#2997) — the maintainer's reading of this card, verbatim:
@@ -1863,7 +1839,6 @@ export function AgenticRunPanel({
         >
           {reviewScreenNode ?? <ReviewGatePlaceholder />}
         </section>
-        {hitlConversationPanelNode}
       </>
     );
   }
@@ -2463,7 +2438,6 @@ export function AgenticRunPanel({
         null
       )}
     </section>
-    {hitlConversationPanelNode}
     </>
   );
 }

@@ -66,7 +66,7 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -617,7 +617,6 @@ function HitlApprovalCard({
   // drawing puts it under the step's own work, in the same column, so the target
   // is a node rendered exactly there: the composition
   // `schedule-prompt-window.tsx` already uses.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // Stable suggestion payload threaded into the renderer so it can sync local
   // state via useEffect([aiSuggestions]). Only changes when the user submits
   // the bottom prompt — not on every poll tick.
@@ -896,6 +895,33 @@ function HitlApprovalCard({
   // redundant alternate.
   const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
 
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "every step screen, the review route and every
+  // lifecycle card stop mounting one". The step-by-step screen used to render a
+  // mount of its own below its card; it publishes instead, and the page's chrome
+  // draws the one window below this screen.
+  //
+  // REGISTERED ABOVE THE BLOCKED READING'S RETURN, which is what keeps this an
+  // unconditional hook — and the blocked reading is exactly a screen with
+  // nothing to manipulate, so it publishes `false` and the page draws no window.
+  useRunWindowScreen({
+    surface: "step-by-step",
+    runId: runId ?? null,
+    stepId: interruptContext.xRenderer ?? null,
+    gateRef: interruptContext.reviewTaskId ?? null,
+    canManipulate:
+      !gateBlocked &&
+      !isGenericObjectSchema &&
+      // cinatra#2933 — the run's access decides who sees the box.
+      canRespondInWindow !== false &&
+      !!templateId,
+    storageKey: `cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`,
+    conversation: runWindow.entries,
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+  });
+
   const cardBody = (
     <>
         {RendererComponent && !isGenericObjectSchema ? (
@@ -1079,36 +1105,9 @@ function HitlApprovalCard({
     <Card data-hitl-output={isOutputHitl ? "true" : undefined}>
       <CardContent className="flex flex-col gap-4 p-6">{cardBody}</CardContent>
     </Card>
-    {/* The AI-assist conversation panel, drawn into its own mount below the
-        step's work rather than across the foot of the frame. Delegates to the
-        shared HitlConversationPanel. resetSignal is intentionally omitted —
-        orchestrator-stepper-panel never had a renderer-change reset (no
-        equivalent of agentic-run-panel.tsx:329). */}
-    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-      // `app-artifact-review.html` §X): the mount names its surface and the
-      // window reads the drawing's own sentence for it.
-      surface="step-by-step"
-      visible={
-        !isGenericObjectSchema &&
-        // cinatra#2933 — the run's access decides who sees the box.
-        canRespondInWindow !== false &&
-        !!templateId &&
-        !!portalTarget
-      }
-      conversation={runWindow.entries}
-      promptPending={promptPending || runWindow.pending}
-      storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
-      onSubmit={handlePromptSubmit}
-      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
-      // drawing's §X names the window's parts — the panel, the field, the send
-      // control, the placement, the access rule — and a leading control is not
-      // among them: "Nothing else about the window changes from one reading to
-      // the next." This mount used to opt the field into one; no reading does.
-    />
-    </div>
+    {/* NO WINDOW HERE (cinatra#3487): the page's chrome draws the one window
+        below this screen; this screen registered what it is and what it lends
+        above. */}
     </>
   );
 }

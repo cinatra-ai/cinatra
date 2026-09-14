@@ -3231,11 +3231,28 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
   // Section I.3 — "the same gate header, target, decision bar and prompt window
   // the gate draws anywhere else", and "Both readings end in the same floor —
   // Comment, Regenerate, Continue, over the one Note field".
+  //
+  // E5 OF cinatra#3487, READ ON THE REAL PAGE. The maintainer's ruling of
+  // 2026-09-14: "the window's anchor (`data-conformance-id="run-window"`) is a
+  // descendant of the page chrome and never of `[data-lifecycle-card-host]`; a
+  // page with a second window fails". So the window is still read here — it is
+  // simply read on the PAGE rather than inside the step's own panel, and the
+  // step's panel is read for its absence.
   review: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     await expect(panel.locator('[data-conformance-id="review-target"]')).toBeVisible();
     await expect(panel.locator('[data-conformance-id="review-decision-bar"]')).toBeVisible();
-    await expect(panel.locator('[data-conformance-id="review-prompt-window"]')).toBeVisible();
+    // ONE window on the page, and it is the page chrome's.
+    const windows = root.locator('[data-conformance-id="run-window"]');
+    await expect(windows).toHaveCount(1);
+    await expect(
+      root.locator('[data-run-window-host="page-chrome"] [data-conformance-id="run-window"]'),
+    ).toHaveCount(1);
+    // And never inside a lifecycle card, nor inside the step's own screen.
+    await expect(
+      root.locator('[data-lifecycle-card-host] [data-conformance-id="run-window"]'),
+    ).toHaveCount(0);
+    await expect(panel.locator('[data-conformance-id="run-window"]')).toHaveCount(0);
   },
 };
 
@@ -5567,13 +5584,24 @@ const REVIEW_DECISION_FLOOR_EXTRAS: Record<
 
   // §VI — "there is no dedicated request changes button": the window IS the
   // request, so the only thing that carries the action is the window itself.
-  "review-prompt-window": (base) => ({
+  //
+  // RENAMED BY cinatra#3487: the window is the run page chrome's, and its anchor
+  // is `run-window`. The reading is otherwise unchanged, plus the two the ruling
+  // adds — it is a descendant of the page chrome, and never of a lifecycle card.
+  "run-window": (base) => ({
     ...base,
     present: async (page, root) => {
       await base.present(page, root);
-      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-prompt-window"]);
+      const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["run-window"]);
       await expect(panel).toBeVisible();
       await expect(panel.getByRole("button", { name: /request changes/i })).toHaveCount(0);
+      await expect(root.locator('[data-conformance-id="run-window"]')).toHaveCount(1);
+      await expect(
+        root.locator('[data-run-window-host="page-chrome"] [data-conformance-id="run-window"]'),
+      ).toHaveCount(1);
+      await expect(
+        root.locator('[data-lifecycle-card-host] [data-conformance-id="run-window"]'),
+      ).toHaveCount(0);
     },
   }),
 

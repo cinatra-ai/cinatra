@@ -74,14 +74,21 @@ afterEach(() => {
 
 async function mount(canComment: boolean) {
   const { ReviewGatePromptWindow } = await import("@cinatra-ai/agents/review-gate-card");
+  const { RunPageChrome } = await import("@cinatra-ai/agents/run-page-chrome");
+  // THE PAGE OWNS THE WINDOW (cinatra#3487). The review screen registers what it
+  // is and what it lends; the run page's chrome draws the one window beneath it.
+  // What this suite reads — the window is there for a reader who may comment,
+  // absent for one who may not, and carries §X's own sentence — is unchanged.
   return render(
-    <ReviewGatePromptWindow
-      submitAction={vi.fn(async () => ({ ok: true }) as never)}
-      storageKey="cinatra_review_window_run-2933"
-      canComment={canComment}
-      runId="run-2933"
-      boundCardRef="gate-ref-2933"
-    />,
+    <RunPageChrome>
+      <ReviewGatePromptWindow
+        submitAction={vi.fn(async () => ({ ok: true }) as never)}
+        storageKey="cinatra_review_window_run-2933"
+        canComment={canComment}
+        runId="run-2933"
+        boundCardRef="gate-ref-2933"
+      />
+    </RunPageChrome>,
   );
 }
 

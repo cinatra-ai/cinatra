@@ -47,6 +47,14 @@ const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts"
 // THE WINDOW IS PART OF THE GATE NOW (cinatra#3141 item 1) — the drawing draws
 // it inside the gate's frame, so it is drawn by the one card every surface
 // mounts rather than by this route. The anchor and its action travelled with it.
+// THE WINDOW'S OWN MODULE SINCE cinatra#3487. The ruling of 2026-09-14 takes
+// the window out of the card and gives it to the run page's chrome: "one window
+// owned by the page … never part of that screen's component or markup", with the
+// anchor named in the same breath — `data-conformance-id="run-window"`. So the
+// anchor's render site is the panel the chrome mounts, and the card that used to
+// carry it is read for the road instead.
+const RUN_WINDOW_PANEL = readRepo("packages/agents/src/hitl-conversation-panel.tsx");
+const RUN_WINDOW_CHROME = readRepo("packages/agents/src/run-page-chrome.tsx");
 const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
@@ -129,11 +137,12 @@ const HOST_STANDARD_IDS = new Set([
   // painted at all — the loading skeleton and the preview-recovery panel — and
   // an anchor is what makes "exactly one header per pinned target" checkable.
   "review-target-header",
-  // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
-  // it is the SAME `review-prompt-window` the run-embedded closed set below
-  // already carries, and it appears in this list only because the window moved
-  // out of this route and into the card, which this scan reads as chrome.
-  "review-prompt-window",
+  // cinatra#3141 item 1, RENAMED BY cinatra#3487 — §VI's conversational prompt
+  // window. It moved once more, out of the card and into the run page's own
+  // chrome, and the ruling names its anchor: "the window's anchor
+  // (`data-conformance-id="run-window"`) is a descendant of the page chrome and
+  // never of `[data-lifecycle-card-host]`".
+  "run-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
   // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are
@@ -539,7 +548,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     "run-surface": RUN_SURFACE,
     "run-step-rail": RUN_STEP_RAIL,
     "run-chip-row": RUN_CHIP_ROW,
-    "review-prompt-window": REVIEW_PROMPT_WINDOW,
+    "run-window": RUN_WINDOW_PANEL,
   };
 
   for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
@@ -556,8 +565,13 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     expect(RUN_CHIP_ROW).toMatch(/data-action="confirm-skill -> confirmed"/);
   });
 
-  it('spec→render: the prompt window carries "request-changes -> changes-requested" — the typed request IS how changes are requested (spec §VI)', () => {
-    expect(REVIEW_PROMPT_WINDOW).toMatch(/data-action="request-changes -> changes-requested"/);
+  it('spec→render: the typed request IS how changes are requested (spec §VI) — and it is the card\'s own comment road', () => {
+    // AMENDED BY cinatra#3487: the window is no longer the card's markup, so the
+    // action cannot ride an attribute on it. What the annotation stated is
+    // asserted where it actually lives — the screen lends the page exactly the
+    // comment road the drawing designates, and nothing else.
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/submitAction\(\{ disposition: "comment", comment: prompt \}\)/);
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/useRunWindowScreen\(\{[\s\S]*?surface: "review"/);
     // And it adds NO fourth decision affordance — the request rides the Comment path.
     expect(stripComments(REVIEW_PROMPT_WINDOW)).not.toMatch(/request changes<|>Request changes/i);
   });
@@ -574,9 +588,11 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
   it("render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)", () => {
     // The full closed set the spec annotates at design@5e5c53aff (review-route
     // anchors + the five run-embedded anchors + the documented host-standard panel).
-    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
+    // `run-window` since cinatra#3487 — the window moved out of the card and
+    // into the run page's chrome, and the ruling names its anchor there.
+    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "run-window"];
     const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
-    for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, REVIEW_PROMPT_WINDOW]) {
+    for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, RUN_WINDOW_PANEL, RUN_WINDOW_CHROME]) {
       for (const foundId of conformanceIdsIn(src)) {
         expect(closed.has(foundId)).toBe(true);
       }

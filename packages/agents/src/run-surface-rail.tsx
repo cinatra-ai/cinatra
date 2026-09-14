@@ -69,6 +69,7 @@ import {
   type RunSurfaceRailStep,
   type RunSurfaceRailStepKey,
 } from "./run-surface-rail-step";
+import { RunPageChrome } from "./run-page-chrome";
 
 // Re-exported as TYPES ONLY. The subpath consumers already import
 // `RunStepSelection` from is this module (`schedule-rail-step.ts` re-exports it
@@ -536,7 +537,18 @@ export function RunSurfaceRail({
             as the step's own surface and suppresses the fallback — an openable
             row over an empty column, which is the one thing this rail must not
             produce. */}
-        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
+        {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW, AND IT STANDS IN
+            THIS COLUMN (cinatra#3487). The ratified drawing puts the window
+            "below the scheduler, in the same column"
+            (`app-artifact-review.html` §I), and the ruling of 2026-09-14 takes
+            it out of every screen and every card: "one window owned by the page,
+            shown only while the current step's screen holds input or output the
+            person can manipulate, never part of that screen's component or
+            markup". So the frame draws it here, after the selected step's own
+            surface, and the step registers what it is and what it lends. */}
+        <RunPageChrome>
+          {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
+        </RunPageChrome>
       </div>
     </RunStepSelectionContext.Provider>
   );
