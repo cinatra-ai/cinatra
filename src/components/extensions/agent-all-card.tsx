@@ -24,9 +24,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Play } from "lucide-react";
+import { Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import {
+  InstalledExtensionCard,
+  InstalledStatusIndicator,
+} from "@/components/extensions/installed-extension-card";
 import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
@@ -43,8 +46,30 @@ export type AgentAllCardRow = {
   runHref: string;
   /** Scoped npm package name of the agent's listing; null for A2A/unscoped. */
   packageName: string | null;
-  /** Full-page marketplace-detail route; null for A2A/unscoped (in lockstep). */
+  /**
+   * Full-page marketplace-detail route; null for A2A/unscoped, and null on a
+   * per-scope tab (cinatra#2808), whose reader may be a plain member: that
+   * route is admin-only, so no link is offered and "More details" opens the
+   * ratified detail modal in place instead. `packageName` alone now decides
+   * whether the card carries a detail affordance at all.
+   */
   detailHref: string | null;
+  /**
+   * The per-entry SETTINGS control (cinatra#2808, per-scope surfaces S2): the
+   * assignment page for this package AT this scope, addressed by #2809's href
+   * contract. EXTENDED BY NAME — the /agents "All Agents" tab passes none, so
+   * the ratified §IV card ("The right panel drops to a single primary action,
+   * Run, plus More details") renders there exactly as before.
+   */
+  settingsHref?: string | null;
+  /**
+   * The installed VERSION, already formatted (cinatra#2808). Absent on the
+   * /agents card, which the drawing renders "without the version and the
+   * Active / Archived indicator".
+   */
+  version?: string | null;
+  /** The install's lifecycle status (cinatra#2808). Absent on /agents, as above. */
+  status?: "active" | "locked" | null;
   /**
    * Set when this agent CANNOT run (cinatra#2605) — not installed, or a required
    * dependency is not installed. The primary action slot then carries this
@@ -81,10 +106,12 @@ export function AgentAllCard({
   // resolves to the explicit missing-vendor state, never the raw slug. This
   // surface never renders `row.host` as a vendor label.
   const vendor = resolveAgentCardVendor({ host: row.host, ref: row.packageName ?? row.key });
-  // A scoped listing carries both packageName and detailHref (in lockstep) → the
-  // accent panel and "More details" both open the §V modal. External A2A /
-  // unscoped agents carry neither → Run only, inert accent.
-  const hasDetail = row.detailHref != null && row.packageName != null;
+  // A scoped listing carries a packageName → the accent panel and "More
+  // details" both open the ratified detail modal. External A2A / unscoped
+  // agents carry none → Run only, inert accent. The full-page `detailHref` is
+  // now only the no-JS fallback where the reader may actually follow it (the
+  // admin arm); a member-facing scope tab passes null and still gets the modal.
+  const hasDetail = row.packageName != null;
 
   return (
     <InstalledExtensionCard
@@ -97,12 +124,21 @@ export function AgentAllCard({
       description={row.description || undefined}
       // §IV (cinatra#3227): "The description is capped at three lines."
       descriptionLineClamp={3}
-      // No `version` / `status` — the Agent card is the Installed-extensions
-      // card minus the version + Active/Archived indicator (cinatra#1007).
-      accentDetailHref={hasDetail ? row.detailHref! : undefined}
-      onAccentActivate={hasDetail ? () => setOpen(true) : undefined}
-      accentLabel={hasDetail ? `View details for ${row.name}` : undefined}
-      accentInert={!hasDetail}
+      // `version` / `status` are absent on the /agents "All Agents" card — the
+      // ratified §IV card is the Installed-extensions card minus the version and
+      // the Active/Archived indicator (cinatra#1007). A per-scope Agents tab
+      // (cinatra#2808) passes both, and only that surface renders them.
+      version={row.version ?? undefined}
+      status={row.status ? <InstalledStatusIndicator status={row.status} /> : undefined}
+      accentDetailHref={hasDetail && row.detailHref ? row.detailHref : undefined}
+      // The accent panel is a SECOND hit-area for the same modal, and it is one
+      // only where it can also be a real anchor — the no-JS fallback the ruling
+      // gave it. A member-facing scope card carries no such href, so the panel
+      // stays the presentational panel it has always been and "More details"
+      // is the affordance.
+      onAccentActivate={hasDetail && row.detailHref ? () => setOpen(true) : undefined}
+      accentLabel={hasDetail && row.detailHref ? `View details for ${row.name}` : undefined}
+      accentInert={row.detailHref == null}
       actions={
         <>
           {row.unavailable && !row.unavailable.ctaHref ? (
@@ -146,6 +182,17 @@ export function AgentAllCard({
               </Link>
             </Button>
           )}
+          {/* The per-entry Settings control (cinatra#2808): the assignment page
+              for this package at this scope. Rendered only where the caller
+              supplied the href, so the /agents card is unchanged. */}
+          {row.settingsHref && (
+            <Button asChild size="sm" variant="outline">
+              <Link href={row.settingsHref} data-slot="agent-card-settings">
+                <Settings data-icon="inline-start" aria-hidden="true" />
+                Settings
+              </Link>
+            </Button>
+          )}
           {/* "More details" opens the §V detail modal IN PLACE (owner ruling,
               2026-07-06) — the SAME <MarketplaceDetailModal> the Installed-
               extensions card uses, details-only (no footer/install CTA). Its
@@ -157,7 +204,7 @@ export function AgentAllCard({
               name={row.name}
               description={row.description}
               packageName={row.packageName!}
-              detailHref={row.detailHref!}
+              detailHref={row.detailHref}
               open={open}
               onOpenChange={setOpen}
               loadDetail={loadDetail}
