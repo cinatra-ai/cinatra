@@ -10,17 +10,19 @@
 // The suite is organised by the six acceptance criteria of cinatra#3057 and
 // pins each of them against REAL inputs wherever a real input exists:
 //
-//   1. OUTCOMES. The five FROZEN published manifests (fetched 2026-09-12,
-//      committed verbatim under __fixtures__) are run against the REAL
-//      conformance-pins.json. The 2026-09-12 reconciliation ADOPTED four of
-//      those bodies — app, app-components and app-extensions re-pinned
-//      hashes-only, app-notifications never moved — so they are the zero-drift
-//      set together with the committed manifest copies they are byte-identical
-//      to, and that identity IS the adoption record. The fifth,
-//      app-connectors, is asserted as a `drift`: its published body redeclares
-//      the manifest, so it is adopted with its drivers where those live, and
-//      until then the pin names the artifact before it. The drift path keeps
-//      real inputs of its own: the SUPERSEDED bodies (the artifacts the pins
+//   1. OUTCOMES. The FROZEN published manifests (fetched 2026-09-13,
+//      2026-09-12, 2026-09-10 and 2026-08-28, committed verbatim under
+//      __fixtures__) are run against the REAL conformance-pins.json, each pin
+//      served the body of the NEWEST capture that carries its file. The
+//      2026-09-12 reconciliation re-pinned app, app-components and
+//      app-extensions hashes-only and left app-notifications where it was; the
+//      2026-09-13 reconciliation re-pinned app-extensions hashes-only a second
+//      time, after the design source republished it under a byte-identical
+//      drawing; the 2026-09-10 adoption took app-connectors with its drivers.
+//      So all five are the zero-drift set together with the committed manifest
+//      copies they are byte-identical to, and that identity IS the adoption
+//      record. The drift path keeps real inputs of its own: the SUPERSEDED
+//      bodies (the artifacts the pins
 //      named before a reconciliation, frozen beside the published ones) must
 //      still report `drift`s, in both hashes. A gate whose drift path has no
 //      input is a gate whose drift path is untested.
@@ -37,7 +39,7 @@
 //      criterion 5 a suite CAN hold: every mapped path really exists.
 
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,20 +47,27 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHECKER_PATH,
+  DRIVER_FILE_PATH,
   GLOBAL_PATHS,
   MAP_PATH,
   MOVE_RULE,
   PIN_ENTRY_KEYS,
   PINS_PATH,
   WORKFLOW_PATH,
+  changedMapPinIdsBetween,
   changedPinIdsBetween,
   checkPinsStructure,
   classifyPin,
   decide,
+  driverBlocks,
+  driverFilePinIds,
   formatRedMessage,
   formatTable,
   loadMap,
+  loadPinSurfaceIds,
   loadPins,
+  parseChangedLineRanges,
+  parseRemovedLineRanges,
   publishedUrlFor,
   resolveEvent,
   resolveTouchedPinIds,
@@ -77,7 +86,15 @@ const FIXTURES = path.join(
   "__fixtures__",
   "design-pin-drift",
 );
-const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-12");
+const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-13");
+/**
+ * The published set frozen by the 2026-09-12 hashes-only reconciliation. It is
+ * still the record of THAT adoption — the test that compares what the bodies
+ * superseded on 2026-09-12 declared against the bodies adopted in their place
+ * reads it — and nothing about the 2026-09-13 re-pin of app-extensions retires
+ * it.
+ */
+const FROZEN_PUBLISHED_2026_09_12 = path.join(FIXTURES, "published-2026-09-12");
 /**
  * The published set frozen by the cinatra#3057 reconciliation. It is still the
  * record of THAT adoption — the two tests that compare what a published body
@@ -85,6 +102,34 @@ const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-12");
  * 2026-09-12 hashes-only re-pin retires it.
  */
 const FROZEN_PUBLISHED_2026_08_28 = path.join(FIXTURES, "published-2026-08-28");
+/**
+ * Every capture directory, NEWEST FIRST. Each reconciliation and each adoption
+ * freezes the body it adopted in a capture of its own beside its own receipt,
+ * so the ADOPTED body of a pin is the one in the newest capture that carries
+ * its file: `published-2026-09-13` holds the app-extensions body the second
+ * hashes-only re-pin adopted (and, byte-identical, the four bodies that round
+ * left where they were), `published-2026-09-12` holds the app, app-components
+ * and app-extensions bodies the first hashes-only re-pin adopted,
+ * `published-2026-09-10` holds the app-connectors body cinatra#3374 adopted,
+ * `published-2026-08-28` holds the cinatra#3057 set. A pin whose body never moved between two fetches
+ * appears, byte-identical, in both of their captures — app-connectors in the
+ * 2026-09-10 and 2026-09-12 ones, app-notifications in the 2026-08-28 and
+ * 2026-09-12 ones — so what makes a frozen row the adopted body is its BYTES,
+ * never which directory it sits in. Freezing forward instead of overwriting is
+ * what keeps each receipt re-derivable: a row records a fetch that happened,
+ * and a later fetch never rewrites it.
+ */
+const CAPTURES = [
+  FROZEN_PUBLISHED,
+  FROZEN_PUBLISHED_2026_09_12,
+  path.join(FIXTURES, "published-2026-09-10"),
+  FROZEN_PUBLISHED_2026_08_28,
+];
+/** The capture whose body a pin's file is adopted from today. */
+const adoptedCaptureFor = (file) =>
+  CAPTURES.find((dir) => existsSync(path.join(dir, file)));
+/** The bytes of the body a pin's file is adopted from today. */
+const adoptedBodyFor = (file) => readFileSync(path.join(adoptedCaptureFor(file), file));
 /**
  * The artifacts the pins named BEFORE the cinatra#3057 reconciliation. They
  * are the suite's EVERY-pin drift input: each of the five still differs from
@@ -99,6 +144,15 @@ const SUPERSEDED = path.join(FIXTURES, "superseded-pins-2026-08-28");
  * app-notifications kept the pins they had.
  */
 const SUPERSEDED_2026_09_12 = path.join(FIXTURES, "superseded-pins-2026-09-12");
+/**
+ * The one artifact the pin named before the 2026-09-13 hashes-only
+ * reconciliation. ONE, not three: that round moved app-extensions alone — the
+ * design source republished its spec under a byte-identical drawing, so only
+ * the embedded contentHash moved. app, app-components and app-notifications
+ * still name the bodies the 2026-09-12 round pinned, and app-connectors keeps
+ * the pin it had.
+ */
+const SUPERSEDED_2026_09_13 = path.join(FIXTURES, "superseded-pins-2026-09-13");
 const MALFORMED = path.join(FIXTURES, "malformed");
 
 const pins = loadPins(REPO_ROOT);
@@ -146,48 +200,74 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     }
   });
 
-  it("the frozen 2026-09-12 published manifests are the ADOPTED bytes and every reconciled pin matches", async () => {
-    // The reconciliation's own record, held as an assertion rather than as
-    // prose: the pins name the bytes docs.cinatra.ai served, and the
-    // committed copies under manifests/ are those same bytes verbatim.
+  it("the frozen published captures are the ADOPTED bytes and every pin matches", async () => {
+    // Each adoption's own record, held as an assertion rather than as prose:
+    // the pins name the bytes docs.cinatra.ai served, and the committed copies
+    // under manifests/ are those same bytes verbatim. A pin's adopted body is
+    // the newest capture that carries its file, so an adoption that lands
+    // after 2026-08-28 — the 2026-09-13 hashes-only re-pin of app-extensions
+    // included — is held to exactly the same bar as the five that
+    // reconciliation adopted.
     //
-    // FOUR of the five, not all five. `app-connectors` is the one pin this
-    // reconciliation does not adopt: its published body redeclares the
-    // manifest (three sharing surfaces gained), so it moves together with the
-    // drivers and harness mounts that answer those surfaces, in the PR where
-    // those live. Until that lands the pin names the artifact before it.
-    // Asserting that pin as `drift` — rather than dropping it from the list —
-    // is what keeps the exception visible in the suite instead of silent.
-    const RECONCILED = ["app", "app-components", "app-extensions", "app-notifications"];
+    // The 2026-09-12 reconciliation asserted `app-connectors` here as the one
+    // `drift` of the five, because its published body redeclares the manifest
+    // (three sharing surfaces gained) and those surfaces had no drivers yet.
+    // That assertion described the state BEFORE this adoption landed:
+    // cinatra#3374 adopts that body together with its drivers and harness
+    // mounts, so the pin reads `match` and the push-to-main arm is green on
+    // all five again.
     const results = await runCheck({
       pins,
-      fetchManifest: fixtureFetcher(FROZEN_PUBLISHED),
+      fetchManifest: fixtureFetcher((file) => ({ body: adoptedBodyFor(file) })),
     });
     expect(results).toHaveLength(5);
-    expect(outcomesOf(results)).toEqual(["match", "match", "match", "drift", "match"]);
-    expect(byId(results, "app-connectors").outcome).toBe("drift");
-    // The push-to-main arm is red on ANY non-match outcome, and it says so:
-    // that single drift is the state of main until the adoption lands.
-    const verdict = decide({ event: "push-main", results, touchedPinIds: [] });
-    expect(verdict.red).toBe(true);
-    expect(verdict.failing.map((r) => r.id)).toEqual(["app-connectors"]);
+    expect(outcomesOf(results)).toEqual(["match", "match", "match", "match", "match"]);
+    expect(byId(results, "app-connectors").outcome).toBe("match");
+    expect(decide({ event: "push-main", results, touchedPinIds: [] }).red).toBe(false);
     for (const pin of pins.manifests) {
-      const published = readFileSync(path.join(FROZEN_PUBLISHED, pin.file));
-      const committed = readFileSync(
-        path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file),
+      expect(
+        adoptedCaptureFor(pin.file),
+        `${pin.id}: no capture carries the adopted body`,
+      ).toBeDefined();
+      expect(
+        adoptedBodyFor(pin.file),
+        `${pin.id}: the committed copy is not the published artifact verbatim`,
+      ).toEqual(
+        readFileSync(path.join(REPO_ROOT, "tests/e2e/design/conformance/manifests", pin.file)),
       );
-      if (RECONCILED.includes(pin.id)) {
-        expect(
-          published,
-          `${pin.id}: the committed copy is not the published artifact verbatim`,
-        ).toEqual(committed);
-      } else {
-        expect(
-          published,
-          `${pin.id}: the committed copy adopted the published body without its drivers`,
-        ).not.toEqual(committed);
-      }
     }
+  });
+
+  it("the 2026-09-10 adoption gained exactly the three connector sharing surfaces", async () => {
+    // cinatra#3374's adoption, asserted against the artifacts themselves: the
+    // published app-connectors manifest declares three surfaces the pinned one
+    // did not, redraws none of the eight it already declared, and retires
+    // none. A later re-pin that quietly drops one of the three, or that redraws
+    // a surface this record calls untouched, cannot leave the record standing.
+    const surfacesOf = (dir) =>
+      new Map(
+        JSON.parse(
+          readFileSync(path.join(dir, "app-connectors.json"), "utf8"),
+        ).surfaces.map((surface) => [surface.id, JSON.stringify(surface)]),
+      );
+    const before = surfacesOf(FROZEN_PUBLISHED_2026_08_28);
+    const after = surfacesOf(path.join(FIXTURES, "published-2026-09-10"));
+    expect([...after.keys()].filter((id) => !before.has(id))).toEqual([
+      "connector-sharing",
+      "connector-sharing-rollup",
+      "connector-sharing-locked",
+    ]);
+    expect([...before.keys()].filter((id) => !after.has(id))).toEqual([]);
+    for (const [id, declaration] of before) {
+      expect(after.get(id), `${id}: an already-pinned surface was redrawn`).toBe(declaration);
+    }
+    // The spec source moved under those declarations too, which is why both
+    // hashes are compared and why this is an adoption rather than a re-pin.
+    const embedded = (dir) =>
+      JSON.parse(readFileSync(path.join(dir, "app-connectors.json"), "utf8")).contentHash;
+    expect(embedded(path.join(FIXTURES, "published-2026-09-10"))).not.toBe(
+      embedded(FROZEN_PUBLISHED_2026_08_28),
+    );
   });
 
   it("the committed manifest copies are the zero-drift set and every pin matches", async () => {
@@ -297,36 +377,96 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
     expect(result.detail).not.toContain("specContentHash");
   });
 
-  it("the frozen fixtures carry a capture receipt every row of which describes their real bytes", () => {
-    // A fixture nobody can re-derive is a fixture nobody can trust. The receipt
-    // records the exact URL, date, status, byte length and hash of each frozen
-    // body, so `curl -sS <url> | shasum -a 256` re-checks any row by hand.
-    const receipt = JSON.parse(readFileSync(path.join(FROZEN_PUBLISHED, "capture.json"), "utf8"));
-    expect(receipt.fetchedAt).toBe("2026-09-12");
-    expect(receipt.publishedBaseUrl).toBe(pins.publishedBaseUrl);
-    expect(receipt.manifests.map((m) => m.file)).toEqual(pins.manifests.map((p) => p.file));
-    for (const row of receipt.manifests) {
-      const bytes = readFileSync(path.join(FROZEN_PUBLISHED, row.file));
-      expect(row.url, row.file).toBe(`${pins.publishedBaseUrl}${row.file}`);
-      expect(row.httpStatus, row.file).toBe(200);
-      expect(bytes.length, row.file).toBe(row.byteLength);
-      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
-      const parsed = JSON.parse(bytes.toString("utf8"));
-      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
-      expect(parsed.contentHash, row.file).toBe(row.contentHash);
-      // Every recorded hash IS the pin: this receipt is the provenance of the
-      // adoption — the pins name bytes whose fetch is recorded, not bytes
-      // someone typed.
-      const pin = pins.manifests.find((p) => p.file === row.file);
-      if (pin.id === "app-connectors") {
-        // The one row this reconciliation did not adopt (see above): the
-        // receipt records the body that was served, the pin still names the
-        // artifact before it, and the difference is the drift on main.
-        expect(row.sha256, row.file).not.toBe(pin.manifestSha256);
-        expect(row.contentHash, row.file).not.toBe(pin.specContentHash);
-      } else {
-        expect(row.sha256, row.file).toBe(pin.manifestSha256);
-        expect(row.contentHash, row.file).toBe(pin.specContentHash);
+  it("every capture carries a receipt every row of which describes its real bytes", () => {
+    // A fixture nobody can re-derive is a fixture nobody can trust. Each
+    // receipt records the exact URL, date, status, byte length and hash of the
+    // bodies frozen beside it, so `curl -sS THE-URL | shasum -a 256` re-checks
+    // any row by hand. The loop covers EVERY capture directory, the
+    // 2026-09-13 reconciliation's included, so a receipt a later round froze
+    // is held to the same bar without a test of its own.
+    for (const capture of CAPTURES) {
+      const receipt = JSON.parse(readFileSync(path.join(capture, "capture.json"), "utf8"));
+      expect(receipt.fetchedAt, capture).toBe(path.basename(capture).replace("published-", ""));
+      expect(receipt.publishedBaseUrl, capture).toBe(pins.publishedBaseUrl);
+      // A receipt covers exactly the bodies frozen beside it, and every one of
+      // them is a pinned manifest.
+      expect(receipt.manifests.map((m) => m.file).slice().sort(), capture).toEqual(
+        readdirSync(capture)
+          .filter((file) => file !== "capture.json")
+          .sort(),
+      );
+      for (const row of receipt.manifests) {
+        const pin = pins.manifests.find((p) => p.file === row.file);
+        expect(pin, `${capture}: ${row.file} is not a pinned manifest`).toBeDefined();
+        const bytes = readFileSync(path.join(capture, row.file));
+        expect(row.url, row.file).toBe(`${pins.publishedBaseUrl}${row.file}`);
+        expect(row.httpStatus, row.file).toBe(200);
+        expect(bytes.length, row.file).toBe(row.byteLength);
+        expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+        const parsed = JSON.parse(bytes.toString("utf8"));
+        expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+        expect(parsed.contentHash, row.file).toBe(row.contentHash);
+        if (bytes.equals(adoptedBodyFor(row.file))) {
+          // The adopted row IS the pin: this receipt is the provenance of the
+          // adoption — the pins name bytes whose fetch is recorded, not bytes
+          // someone typed. The row is judged by its BYTES, not by which
+          // directory it sits in, because a body that did not move between two
+          // fetches is the adopted body in both of their captures.
+          expect(row.sha256, row.file).toBe(pin.manifestSha256);
+          expect(row.contentHash, row.file).toBe(pin.specContentHash);
+        } else {
+          // A row a later capture superseded stays exactly as it was fetched,
+          // and is a drift input now rather than the pin.
+          expect(row.sha256, row.file).not.toBe(pin.manifestSha256);
+          expect(row.contentHash, row.file).not.toBe(pin.specContentHash);
+        }
+      }
+    }
+    // Both reconciliation captures still cover all five pins, so nothing was
+    // dropped out of the record when a later adoption froze forward.
+    for (const capture of [FROZEN_PUBLISHED_2026_08_28, FROZEN_PUBLISHED]) {
+      const receipt = JSON.parse(readFileSync(path.join(capture, "capture.json"), "utf8"));
+      expect(receipt.manifests.map((m) => m.file), capture).toEqual(
+        pins.manifests.map((p) => p.file),
+      );
+    }
+  });
+
+  it("EVERY dated published capture receipt still describes its own frozen bytes", () => {
+    // The receipt of the newest round is checked above against the pins; the
+    // receipts of the earlier rounds are checked here against THEMSELVES. A
+    // reconciliation retargets the suite's zero-drift input to its own frozen
+    // set, and without this the previous rounds' receipts would stop being
+    // read at all — a historical body could be edited, or its receipt deleted,
+    // and nothing would say so. Historical rows are deliberately NOT compared
+    // with the current pins: naming bytes the pins have since moved past is
+    // exactly what an archived round is for.
+    const rounds = readdirSync(FIXTURES, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("published-"))
+      .map((entry) => entry.name)
+      .sort();
+    // Three rounds today (2026-08-28, 2026-09-12, 2026-09-13); the assertion
+    // is that there is more than one and that each of them is self-describing.
+    expect(rounds.length).toBeGreaterThan(1);
+    for (const round of rounds) {
+      const dir = path.join(FIXTURES, round);
+      const receipt = JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf8"));
+      expect(receipt.fetchedAt, round).toBe(round.slice("published-".length));
+      expect(receipt.publishedBaseUrl, round).toBe(pins.publishedBaseUrl);
+      const bodies = readdirSync(dir)
+        .filter((file) => file.endsWith(".json") && file !== "capture.json")
+        .sort();
+      expect(receipt.manifests.map((m) => m.file).slice().sort(), round).toEqual(bodies);
+      for (const row of receipt.manifests) {
+        const label = `${round}/${row.file}`;
+        const bytes = readFileSync(path.join(dir, row.file));
+        expect(row.url, label).toBe(`${receipt.publishedBaseUrl}${row.file}`);
+        expect(row.httpStatus, label).toBe(200);
+        expect(bytes.length, label).toBe(row.byteLength);
+        expect(createHash("sha256").update(bytes).digest("hex"), label).toBe(row.sha256);
+        const parsed = JSON.parse(bytes.toString("utf8"));
+        expect(parsed.schemaVersion, label).toBe(row.schemaVersion);
+        expect(parsed.contentHash, label).toBe(row.contentHash);
       }
     }
   });
@@ -399,8 +539,59 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         return JSON.stringify(object);
       };
       expect(declarations(bytes), row.file).toBe(
+        declarations(readFileSync(path.join(FROZEN_PUBLISHED_2026_09_12, row.file))),
+      );
+    }
+  });
+
+  it("the 2026-09-13 superseded artifact drifts against the one pin that reconciliation moved", () => {
+    // The drift input of the SECOND hashes-only reconciliation: the body
+    // app-extensions named before it — which is the body the 2026-09-12 round
+    // had just adopted. A published manifest can republish twice under one
+    // drawing, and a superseded artifact that still matched its pin would mean
+    // nothing was re-pinned at all.
+    const receipt = JSON.parse(
+      readFileSync(path.join(SUPERSEDED_2026_09_13, "provenance.json"), "utf8"),
+    );
+    expect(receipt.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+    // ONE row: this reconciliation moved app-extensions and nothing else, and
+    // the receipt is where that claim is checkable rather than asserted.
+    expect(receipt.manifests.map((m) => m.file)).toEqual(["app-extensions.json"]);
+    for (const row of receipt.manifests) {
+      const bytes = readFileSync(path.join(SUPERSEDED_2026_09_13, row.file));
+      expect(row.repoPath, row.file).toBe(
+        `tests/e2e/design/conformance/manifests/${row.file}`,
+      );
+      expect(bytes.length, row.file).toBe(row.byteLength);
+      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+      expect(parsed.contentHash, row.file).toBe(row.contentHash);
+
+      const pin = pins.manifests.find((p) => p.file === row.file);
+      const result = classifyPin({
+        pin,
+        url: publishedUrlFor(pins, pin),
+        fetched: { ok: true, status: 200, body: bytes },
+      });
+      expect(result.outcome, row.file).toBe("drift");
+      expect(result.detail, row.file).toContain("manifestSha256");
+      expect(result.detail, row.file).toContain("specContentHash");
+
+      // And this round's whole finding, as an assertion: the body adopted in
+      // its place declares byte-identical surfaces — a republication of the
+      // same drawing. Only the two hashes moved, so only this gate saw it.
+      const declarations = (buffer) => {
+        const object = JSON.parse(buffer.toString("utf8"));
+        delete object.contentHash;
+        return JSON.stringify(object);
+      };
+      expect(declarations(bytes), row.file).toBe(
         declarations(readFileSync(path.join(FROZEN_PUBLISHED, row.file))),
       );
+      // The superseded body is the one the PREVIOUS round adopted: this is the
+      // second republication of app-extensions, not a re-run of the first.
+      expect(bytes).toEqual(readFileSync(path.join(FROZEN_PUBLISHED_2026_09_12, row.file)));
     }
   });
 
@@ -498,8 +689,8 @@ describe("criterion 2 — the trigger rule", () => {
     expect(verdict.warning).toHaveLength(5);
   });
 
-  it("a diff touching the checker, the map or the workflow is red for EVERY drifted pin", () => {
-    for (const global of [CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]) {
+  it("a diff touching the checker or the workflow is red for EVERY drifted pin", () => {
+    for (const global of [CHECKER_PATH, WORKFLOW_PATH]) {
       const touchedPinIds = resolveTouchedPinIds({ touchedPaths: [global], map });
       expect(touchedPinIds, global).toEqual(ALL_IDS);
       const verdict = decide({ event: "pull_request", results: driftedAll, touchedPinIds });
@@ -548,9 +739,14 @@ describe("criterion 2 — the trigger rule", () => {
     // own path from globalPaths would be a map that can edit away the rule
     // that makes editing it matter.
     const tampered = { ...map, globalPaths: [] };
-    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map: tampered })).toEqual(ALL_IDS);
     expect(resolveTouchedPinIds({ touchedPaths: [CHECKER_PATH], map: tampered })).toEqual(ALL_IDS);
-    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]);
+    expect(resolveTouchedPinIds({ touchedPaths: [WORKFLOW_PATH], map: tampered })).toEqual(ALL_IDS);
+    // The map left that set in cinatra#3421, but nothing it can say about
+    // itself narrows the rule: with no readable base entry list it is still
+    // every id, and `loadMap` refuses a declared set the checker disagrees
+    // with before any of this is reached.
+    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map: tampered })).toEqual(ALL_IDS);
+    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
   });
 
   it("changedPinIdsBetween names the entries that moved, and a moved base URL moves every pin", () => {
@@ -602,7 +798,7 @@ describe("criterion 2 — the trigger rule", () => {
     for (const p of map.globalPaths) {
       expect(() => readFileSync(path.join(REPO_ROOT, p)), p).not.toThrow();
     }
-    expect(map.globalPaths).toEqual([CHECKER_PATH, MAP_PATH, WORKFLOW_PATH]);
+    expect(map.globalPaths).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
   });
 
   it("every pin's committed manifest copy is one of its mapped paths", () => {
@@ -667,34 +863,50 @@ describe("criterion 2 — the trigger rule", () => {
 // Criterion 2 — the CLI wiring itself (the parts a pure-function test misses)
 // ---------------------------------------------------------------------------
 
-describe("criterion 2 — the CLI turns that rule into a diff, an annotation and an exit code", () => {
-  /** Runs the real CLI body with the fetch, git and streams injected. */
-  async function cli({ argv = [], env = {}, fetchManifest, gitOut = {} } = {}) {
-    const out = [];
-    const err = [];
-    const gitCalls = [];
-    const runGit = (args) => {
-      gitCalls.push(args);
-      const key = args[0];
-      if (key === "rev-parse") {
-        if (gitOut.unresolvable) throw new Error("bad revision");
-        return "";
-      }
-      if (key === "diff") return (gitOut.touched ?? []).join("\n");
-      if (key === "show") return gitOut.basePinFile ?? readFileSync(path.join(REPO_ROOT, PINS_PATH), "utf8");
+/** Runs the real CLI body with the fetch, git and streams injected. */
+async function cli({ argv = [], env = {}, fetchManifest, gitOut = {} } = {}) {
+  const out = [];
+  const err = [];
+  const gitCalls = [];
+  const runGit = (args) => {
+    gitCalls.push(args);
+    const key = args[0];
+    if (key === "merge-base") return gitOut.mergeBase ?? "";
+    if (key === "rev-parse") {
+      if (gitOut.unresolvable) throw new Error("bad revision");
       return "";
-    };
-    const exitCode = await runCli({
-      argv,
-      env,
-      fetchManifest: fetchManifest ?? fixtureFetcher(SUPERSEDED),
-      runGit,
-      log: (line) => out.push(String(line)),
-      logError: (line) => err.push(String(line)),
-    });
-    return { exitCode, out: out.join("\n"), err: err.join("\n"), gitCalls };
-  }
+    }
+    if (key === "diff") {
+      // The per-file, zero-context diff the driver-file attribution reads.
+      if (args.includes("--unified=0")) return gitOut.driverDiff ?? "";
+      return (gitOut.touched ?? []).join("\n");
+    }
+    if (key === "show") {
+      const target = String(args[1] ?? "");
+      if (target.endsWith(MAP_PATH)) {
+        return gitOut.baseMapFile ?? readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8");
+      }
+      if (target.endsWith(DRIVER_FILE_PATH)) {
+        return (
+          gitOut.baseDriverFile ?? readFileSync(path.join(REPO_ROOT, DRIVER_FILE_PATH), "utf8")
+        );
+      }
+      return gitOut.basePinFile ?? readFileSync(path.join(REPO_ROOT, PINS_PATH), "utf8");
+    }
+    return "";
+  };
+  const exitCode = await runCli({
+    argv,
+    env,
+    fetchManifest: fetchManifest ?? fixtureFetcher(SUPERSEDED),
+    runGit,
+    log: (line) => out.push(String(line)),
+    logError: (line) => err.push(String(line)),
+  });
+  return { exitCode, out: out.join("\n"), err: err.join("\n"), gitCalls };
+}
 
+describe("criterion 2 — the CLI turns that rule into a diff, an annotation and an exit code", () => {
   it("diffs the branch against its merge base with the resolved base (three dots)", async () => {
     const run = await cli({
       env: { GITHUB_EVENT_NAME: "pull_request", DESIGN_PIN_DRIFT_DIFF_BASE: "origin/main" },
@@ -771,6 +983,314 @@ describe("criterion 2 — the CLI turns that rule into a diff, an annotation and
     expect(run.out).not.toContain("::error");
     expect(run.out).not.toContain("::warning");
     expect(run.out).toContain("ok: all 5 published conformance manifests match their pins.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3421 — a file EVERY pin shares is attributed per pin
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3421 — a shared-file touch is attributed per pin, not to every pin", () => {
+  const DRIVER_FILE = "tests/e2e/design/conformance/contract.ts";
+  const driverLines = readFileSync(path.join(REPO_ROOT, DRIVER_FILE), "utf8").split("\n");
+  const PR = { GITHUB_EVENT_NAME: "pull_request", DESIGN_PIN_DRIFT_DIFF_BASE: "origin/main" };
+
+  /** The 1-based line a named top-level declaration of the driver file opens on. */
+  const declarationLine = (declaration) => {
+    const index = driverLines.findIndex((line) => line.startsWith(declaration));
+    expect(index, `${declaration} is not a top-level declaration of ${DRIVER_FILE}`).toBeGreaterThan(-1);
+    return index + 1;
+  };
+  /** One changed line, in the shape `git diff --unified=0` reports it. */
+  const hunkAt = (line) => `diff --git a/${DRIVER_FILE} b/${DRIVER_FILE}\n@@ -${line},1 +${line},1 @@\n-was\n+is\n`;
+  const otherThan = (id) => ALL_IDS.filter((other) => other !== id);
+
+  it("a diff touching only the app-connectors entry of the pin MAP is red on app-connectors alone", async () => {
+    // The map is shared by all five pins, and it used to be a global path: a
+    // one-entry map edit read as every pin, so the PR adopting app-connectors
+    // went red on the four drifts it did not touch.
+    const head = JSON.parse(readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8"));
+    const base = {
+      ...head,
+      pins: { ...head.pins, "app-connectors": head.pins["app-connectors"].slice(0, -1) },
+    };
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: { touched: [MAP_PATH], baseMapFile: JSON.stringify(base, null, 2) },
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.err).toContain('DRIFT — pin "app-connectors"');
+    for (const id of otherThan("app-connectors")) {
+      expect(run.err, id).not.toContain(`pin "${id}"`);
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("a diff touching a DRIVER BLOCK mapped to one pin is red on that pin alone", async () => {
+    // CONNECTOR_SETUP_DRIVER is what the surface-to-driver table binds
+    // "connector-setup" to, and app-connectors is the only pin whose manifest
+    // declares that surface.
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: {
+        touched: [DRIVER_FILE],
+        driverDiff: hunkAt(declarationLine("const CONNECTOR_SETUP_DRIVER") + 2),
+      },
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.err).toContain('DRIFT — pin "app-connectors"');
+    for (const id of otherThan("app-connectors")) {
+      expect(run.err, id).not.toContain(`pin "${id}"`);
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("a diff touching a SHARED HELPER outside every driver block is red on no pin", async () => {
+    // The seed helper drives no surface: it is the case that red every
+    // drifting pin at once and blocked the adoptions from ever going green.
+    const run = await cli({
+      argv: ["--github-annotations"],
+      env: PR,
+      gitOut: {
+        touched: [DRIVER_FILE],
+        driverDiff: hunkAt(declarationLine("export function ensureSeeded") + 1),
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.err).toBe("");
+    expect(run.out).toContain("ok (warnings only)");
+    for (const id of ALL_IDS) {
+      expect(run.out, id).toContain(`::warning title=design-pin-drift: ${id} (drift)::`);
+    }
+  });
+
+  it("the CHECKER and the workflow still touch every pin, and an unreadable shared file still does", () => {
+    expect(GLOBAL_PATHS).toEqual([CHECKER_PATH, WORKFLOW_PATH]);
+    for (const global of [CHECKER_PATH, WORKFLOW_PATH]) {
+      expect(resolveTouchedPinIds({ touchedPaths: [global], map }), global).toEqual(ALL_IDS);
+    }
+    // Fail-closed, unchanged: a shared file whose changed part cannot be
+    // determined is every id, exactly as the pin file already answered.
+    expect(resolveTouchedPinIds({ touchedPaths: [MAP_PATH], map })).toEqual(ALL_IDS);
+    expect(resolveTouchedPinIds({ touchedPaths: [DRIVER_FILE], map })).toEqual(ALL_IDS);
+    expect(
+      resolveTouchedPinIds({ touchedPaths: [DRIVER_FILE], map, driverPinIds: [] }),
+    ).toEqual([]);
+  });
+
+  it("the driver-file constant names the file every pin maps as its driver", () => {
+    expect(DRIVER_FILE_PATH).toBe(DRIVER_FILE);
+    for (const id of ALL_IDS) expect(map.pins[id], id).toContain(DRIVER_FILE_PATH);
+    // The manifests are the ground truth for which surfaces a pin owns.
+    const surfaces = loadPinSurfaceIds(map, REPO_ROOT);
+    expect(surfaces["app-connectors"]).toContain("connector-setup");
+    expect(surfaces["app-notifications"]).not.toContain("connector-setup");
+  });
+
+  it("changedMapPinIdsBetween names the entries that moved, and a moved rule moves every pin", () => {
+    const head = JSON.parse(readFileSync(path.join(REPO_ROOT, MAP_PATH), "utf8"));
+    const text = (o) => JSON.stringify(o);
+    const mapIds = Object.keys(head.pins);
+
+    expect(changedMapPinIdsBetween(text(head), text(head))).toEqual([]);
+    expect(changedMapPinIdsBetween(text(head), text({ ...head, $comment: "reworded" }))).toEqual([]);
+
+    const oneEntry = {
+      ...head,
+      pins: { ...head.pins, "app-connectors": [...head.pins["app-connectors"], "src/app/x.tsx"] },
+    };
+    expect(changedMapPinIdsBetween(text(head), text(oneEntry))).toEqual(["app-connectors"]);
+
+    // globalPaths and the pin list decide what the gate READS, not what one
+    // pin adopts: both answer with every id, so no map edit narrows the rule.
+    const moved = { ...head, globalPaths: [CHECKER_PATH] };
+    expect(changedMapPinIdsBetween(text(head), text(moved))).toEqual(mapIds);
+    const dropped = { ...head, pins: Object.fromEntries(Object.entries(head.pins).slice(1)) };
+    expect(changedMapPinIdsBetween(text(head), text(dropped))).toEqual(mapIds);
+  });
+
+  it("parseChangedLineRanges reads every hunk shape git writes at zero context", () => {
+    expect(parseChangedLineRanges("@@ -10,3 +12,4 @@ context\n")).toEqual([{ start: 12, end: 15 }]);
+    expect(parseChangedLineRanges("@@ -10 +12 @@\n")).toEqual([{ start: 12, end: 12 }]);
+    // A pure deletion names the position the removed lines sat BETWEEN, so
+    // both sides of the cut answer for it.
+    expect(parseChangedLineRanges("@@ -10,2 +9,0 @@\n")).toEqual([{ start: 9, end: 10 }]);
+    expect(parseChangedLineRanges("no hunk here")).toEqual([]);
+  });
+
+  it("driverBlocks cuts the REAL driver file into ordered, non-overlapping blocks", () => {
+    const blocks = driverBlocks(readFileSync(path.join(REPO_ROOT, DRIVER_FILE), "utf8"));
+    expect(blocks.length).toBeGreaterThan(50);
+    for (let i = 1; i < blocks.length; i += 1) {
+      expect(blocks[i].start, blocks[i].name).toBeGreaterThan(blocks[i - 1].start);
+      expect(blocks[i].start, blocks[i].name).toBeGreaterThan(blocks[i - 1].end - 1);
+    }
+    const named = (name) => blocks.find((block) => block.name === name);
+    const setup = named("CONNECTOR_SETUP_DRIVER");
+    const seed = named("ensureSeeded");
+    expect(setup, "the connector-setup driver is a block of its own").toBeDefined();
+    expect(seed, "the seed helper is a block of its own").toBeDefined();
+    const setupDeclaration = declarationLine("const CONNECTOR_SETUP_DRIVER");
+    expect(setup.start).toBeLessThanOrEqual(setupDeclaration);
+    expect(setup.end).toBeGreaterThan(setupDeclaration);
+    expect(seed.end).toBeLessThan(setup.start);
+  });
+
+  it("driverFilePinIds gives the three answers the rule names, and nothing else", () => {
+    // A driver file in miniature, with the same structure the real one has.
+    const synthetic = [
+      'import { expect } from "@playwright/test";', // 1
+      "", // 2
+      "/** A helper every family uses. */", // 3
+      "export function ensureSeeded(): Promise<void> {", // 4
+      "  return Promise.resolve();", // 5
+      "}", // 6
+      "", // 7
+      "const ALPHA_DRIVER: SurfaceDriver = {", // 8
+      '  mount: "alpha",', // 9
+      "};", // 10
+      "", // 11
+      "function familyDriver(row) {", // 12
+      "  return { mount: row.mount };", // 13
+      "}", // 14
+      "", // 15
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {", // 16
+      '  "alpha-surface": ALPHA_DRIVER,', // 17
+      "  ...Object.fromEntries(ROWS.map((row) => [row.id, familyDriver(row)])),", // 18
+      "};", // 19
+    ].join("\n");
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"], "pin-two": ["beta-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    const answer = (line) =>
+      driverFilePinIds({
+        contractText: synthetic,
+        baseContractText: synthetic,
+        diffText: `@@ -${line},1 +${line},1 @@\n-was\n+is\n`,
+        pinSurfaceIds,
+        allIds,
+      });
+
+    // 1. a block the table binds to a pinned surface -> that pin;
+    expect(answer(9)).toEqual(["pin-one"]);
+    expect(answer(17)).toEqual(["pin-one"]);
+    // 2. a shared helper the table never names -> no pin;
+    expect(answer(5)).toEqual([]);
+    // 3. a family factory the table reaches only through a computed entry,
+    //    and the table's own lines -> every pin, fail-closed.
+    expect(answer(13)).toEqual(allIds);
+    expect(answer(18)).toEqual(allIds);
+    expect(answer(19)).toEqual(allIds);
+    // An empty diff adopts nothing; an unreadable file adopts everything.
+    expect(
+      driverFilePinIds({
+        contractText: synthetic,
+        baseContractText: synthetic,
+        diffText: "",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual([]);
+    expect(
+      driverFilePinIds({
+        contractText: "const NOTHING = 1;\n",
+        diffText: "@@ -1,1 +1,1 @@\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+  });
+
+  // Convergence round (cinatra#3421): three ways a head-only reader loses the
+  // pin that owns a change, each fail-OPEN — the pin is never asked.
+  it("attributes a DELETED line by the base file, not by the lines that closed over it", () => {
+    const base = [
+      'const ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };', // 1
+      'const BETA_DRIVER: SurfaceDriver = { mount: "beta" };', // 2
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {", // 3
+      '  "alpha-surface": ALPHA_DRIVER,', // 4
+      '  "beta-surface": BETA_DRIVER,', // 5
+      "};", // 6
+    ].join("\n");
+    // The alpha driver is DELETED: on the head side nothing sits in its block
+    // any more, and the head line the hunk names is the beta driver that
+    // closed over the gap. Only the base file can say the cut was pin-one's.
+    const head = base.split("\n").slice(1).join("\n");
+    const diffText = '@@ -1,1 +0,0 @@\n-const ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };\n';
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"], "pin-two": ["beta-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    const answer = driverFilePinIds({
+      contractText: head,
+      baseContractText: base,
+      diffText,
+      pinSurfaceIds,
+      allIds,
+    });
+    // A head-only reader answers "pin-two" alone here: the pin that OWNED the
+    // deleted block is never asked (fail-open).
+    expect(answer).toContain("pin-one");
+    // Without the base side the removal cannot be placed at all: every id.
+    expect(
+      driverFilePinIds({ contractText: head, diffText, pinSurfaceIds, allIds }),
+    ).toEqual(allIds);
+  });
+
+  it("answers every pin when the driver file's structure or the diff cannot be read", () => {
+    const pinSurfaceIds = { "pin-one": ["alpha-surface"] };
+    const allIds = ["pin-one", "pin-two"];
+    // A declaration keyword alone on its line is a block boundary this reader
+    // cannot see; its body would otherwise fall into the block above it.
+    const dangling = [
+      "const",
+      '  ALPHA_DRIVER: SurfaceDriver = { mount: "alpha" };',
+      "export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {",
+      '  "alpha-surface": ALPHA_DRIVER,',
+      "};",
+    ].join("\n");
+    expect(
+      driverFilePinIds({
+        contractText: dangling,
+        baseContractText: dangling,
+        diffText: "@@ -2,1 +2,1 @@\n-was\n+is\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+    // Diff output that carries no hunk at all still reports a CHANGED file.
+    expect(
+      driverFilePinIds({
+        contractText: dangling,
+        baseContractText: dangling,
+        diffText: "diff --git a/contract.ts b/contract.ts\nBinary files a/x and b/x differ\n",
+        pinSurfaceIds,
+        allIds,
+      }),
+    ).toEqual(allIds);
+  });
+
+  it("parseRemovedLineRanges reads the BASE side of every hunk shape", () => {
+    expect(parseRemovedLineRanges("@@ -10,3 +12,4 @@ context\n")).toEqual([{ start: 10, end: 12 }]);
+    expect(parseRemovedLineRanges("@@ -10 +12 @@\n")).toEqual([{ start: 10, end: 10 }]);
+    // A pure addition removes nothing and owns no base-side line.
+    expect(parseRemovedLineRanges("@@ -10,0 +11,2 @@\n")).toEqual([]);
+    expect(parseRemovedLineRanges("no hunk here")).toEqual([]);
+  });
+
+  it("reads every base-side file at the MERGE BASE the path diff already uses", async () => {
+    const run = await cli({
+      env: PR,
+      gitOut: { touched: [MAP_PATH], mergeBase: "abc1234" },
+    });
+    const show = run.gitCalls.find((args) => args[0] === "show");
+    // `git show origin/main:<map>` would read the TARGET TIP: an entry the
+    // target moved after the branch cut would read as this branch's adoption.
+    expect(show).toEqual(["show", `abc1234:${MAP_PATH}`]);
+    expect(run.gitCalls.find((args) => args[0] === "merge-base")).toEqual([
+      "merge-base",
+      "origin/main",
+      "HEAD",
+    ]);
   });
 });
 
@@ -1029,6 +1549,11 @@ describe("criteria 5 and 6 — the constants the docs page and the follow-up dep
       // each adoption changed, named per pin, in the same place the drift was
       // recorded before it.
       "## Reconciliation record",
+      // Every later reconciliation adds its own dated section rather than
+      // rewriting the one before it, so the page reads as the whole history of
+      // what this repository pinned and why.
+      "## Reconciliation record — 2026-09-12",
+      "## Reconciliation record — 2026-09-13",
     ]) {
       expect(doc, heading).toContain(heading);
     }
