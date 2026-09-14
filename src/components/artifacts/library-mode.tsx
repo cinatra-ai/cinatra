@@ -53,6 +53,12 @@ import { LibraryToolbar } from "./library-toolbar";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
 import { DashboardLibraryRow } from "./dashboard-library-row";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { artifactRowMetaLine } from "@/lib/artifacts/artifact-owner-label";
+import {
+  artifactOwnerNameFor,
+  resolveArtifactOwnerNames,
+  type ArtifactOwnerNames,
+} from "@/lib/artifacts/artifact-owner-names";
 import {
   LibraryUploadButton,
   LibraryUploadDropZone,
@@ -76,9 +82,13 @@ const DEFAULT_ARTIFACT_FACET = "__default__";
 // split stays host-side in that seam. The former host-side per-extension-family
 // icon map is deleted.
 
-function ownerLabel(level: ArtifactSummary["ownerLevel"]): string {
-  return level.charAt(0).toUpperCase() + level.slice(1);
-}
+// The meta line's OWNER and VISIBILITY words are drawn by the one pure composer
+// (`@/lib/artifacts/artifact-owner-label`). The former local `ownerLabel` — which
+// capitalized the stored owner level and left the visibility to print itself raw
+// beside it ("Organization · organization", cinatra#3475) — is deleted: the
+// drawing writes that line with the owner NAMED ("Team: Growth", "Organization:
+// Acme Corp"), and one composer means the library row and the dashboard row
+// cannot word the same row two ways.
 
 /** Claim resolution for the facet + chip: an extension identity resolves to
  * its package; the floor / plain object resolves to the default-artifact
@@ -230,6 +240,20 @@ export async function LibraryMode({
     visible.push({ kind: "artifact", summary: a });
   }
 
+  // THE OWNER'S NAME (cinatra#3475). The drawing writes the row's meta line with
+  // the owner NAMED, so the owning organization / team names are resolved ONCE
+  // for the rows actually drawn: organizations from the set already read above
+  // for the scope picker (no new query), teams in ONE bounded batch.
+  const organizationNames = new Map<string, string>(
+    orgs.map((org) => [org.id, org.name]),
+  );
+  const projectNames = new Map<string, string>(projects.map((p) => [p.id, p.name]));
+  const ownerNames: ArtifactOwnerNames = await resolveArtifactOwnerNames({
+    orgId,
+    rows: visible.map((item) => item.summary),
+    organizationNames,
+  });
+
   return (
     <LibraryToolbarShell
       query={query}
@@ -251,12 +275,18 @@ export async function LibraryMode({
               <DashboardLibraryRow
                 key={item.summary.artifactId}
                 pointer={item.pointer}
+                ownerName={
+                  item.pointer.ownerLevel === "project"
+                    ? (projectNames.get(item.summary.projectId ?? "") ?? null)
+                    : artifactOwnerNameFor(item.summary, ownerNames)
+                }
                 isLast={i === visible.length - 1}
               />
             ) : (
               <LibraryRow
                 key={item.summary.artifactId}
                 summary={item.summary}
+                ownerName={artifactOwnerNameFor(item.summary, ownerNames)}
                 isLast={i === visible.length - 1}
               />
             ),
@@ -290,11 +320,23 @@ function buildFacetOptions(
 // Row
 // ---------------------------------------------------------------------------
 
-function LibraryRow({
+/**
+ * One artifact row. ASYNC because the row's leading glyph is resolved through
+ * the renderer-dispatch spine (§III) — the row awaits its own glyph so the whole
+ * row, meta line included, is one rendered unit a test can read.
+ *
+ * `ownerName` is the owning team's / organization's display name resolved by
+ * the page (null where the locus names no entity, or where the name did not
+ * resolve — the meta line then draws the level word alone, never a stored
+ * value).
+ */
+export async function LibraryRow({
   summary,
+  ownerName,
   isLast,
 }: {
   summary: ArtifactSummary;
+  ownerName: string | null;
   isLast: boolean;
 }) {
   const id = summary.presentationIdentity;
@@ -303,6 +345,7 @@ function LibraryRow({
   const rel = summary.updatedAt
     ? formatDistanceToNow(new Date(summary.updatedAt), { addSuffix: true })
     : "recently";
+  const glyph = await LibraryRowGlyph({ summary });
 
   return (
     <li
@@ -313,7 +356,7 @@ function LibraryRow({
         (isLast ? "" : " border-b border-line")
       }
     >
-      <LibraryRowGlyph summary={summary} />
+      {glyph}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-foreground">
@@ -327,7 +370,12 @@ function LibraryRow({
           ) : null}
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {ownerLabel(summary.ownerLevel)} · {summary.visibility} · updated {rel}
+          {artifactRowMetaLine({
+            ownerLevel: summary.ownerLevel,
+            ownerName,
+            visibility: summary.visibility,
+            relativeUpdated: rel,
+          })}
         </p>
       </div>
       {preparing ? (
