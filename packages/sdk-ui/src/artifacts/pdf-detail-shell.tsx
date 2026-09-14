@@ -28,6 +28,11 @@
  * second viewer - the plan took the inline fallback off this road, and the
  * package's own contract test refuses one back onto it.
  *
+ * ON THE BYTE ROAD, AND SAYING SO. Every reading the shell draws carries the
+ * road its addresses came in on (wave 3, cinatra#3091), so the island reading
+ * and the first-party reading are told apart on the surface itself rather than
+ * in the source that built them.
+ *
  * A LEAF. React and nothing else. An artifact display outside this repository
  * may depend on it without pulling a host package in behind it, and it reads
  * only the host-supplied authorized addresses it is handed - never a host port,
@@ -47,6 +52,18 @@ import { DownloadLink } from "../ui/download-link";
 
 /** The renderer slots a shared shell is drawn in. */
 export type PdfShellSlot = "detail" | "preview";
+
+/**
+ * WHICH ROAD THE ADDRESSES CAME IN ON (wave 3, cinatra#3091).
+ *
+ * A display on an island is handed sealed, short-lived addresses; on a
+ * first-party surface it is handed the host's session routes. The shell paints
+ * whichever it was given and builds none of its own - but it SAYS which, on
+ * every reading it draws, because a surface that cannot be asked which road it
+ * is on is a surface whose blank plate cannot be told from its empty document.
+ * `none` is the honest answer where a reading was handed no address at all.
+ */
+export type PdfShellByteRoad = "island" | "session" | "none";
 
 /** Why a floor was drawn - closed and named, so a surface can say which. */
 export type PdfShellFloorReason = "no-representation" | "preview-failed";
@@ -153,11 +170,20 @@ export function PdfDetailShell({
   previewHref,
   downloadHref,
   slot,
+  road,
   compact = slot === "preview",
 }: {
   readonly previewHref: string | null;
   readonly downloadHref: string | null;
   readonly slot: PdfShellSlot;
+  /**
+   * THE ROAD, NAMED BY THE CALLER — and never guessed. A shell handed no road
+   * knows none: it is handed addresses, not the road that built them. Where a
+   * caller names none the shell stamps none, and that caller's own wrapper
+   * stays the single place the road is asserted; a default here would put a
+   * `session` stamp inside an `island` wrapper on one and the same reading.
+   */
+  readonly road?: PdfShellByteRoad;
   readonly compact?: boolean;
 }): ReactElement {
   // A best-effort signal for engines that DO fire `<embed>` onError on a
@@ -181,6 +207,7 @@ export function PdfDetailShell({
         className="soft-panel rounded-card flex flex-col items-center gap-3 p-6 text-center"
         data-artifact-renderer="pdf-shell"
         data-slot={slot}
+        {...(road ? { "data-byte-road": road } : {})}
         data-floor={view.reason}
         {...(compact ? { "data-compact": "true" } : {})}
       >
@@ -197,6 +224,7 @@ export function PdfDetailShell({
       className="soft-panel rounded-card overflow-hidden p-0"
       data-artifact-renderer="pdf-shell"
       data-slot={slot}
+      {...(road ? { "data-byte-road": road } : {})}
       {...(compact ? { "data-compact": "true" } : {})}
     >
       <embed

@@ -1470,6 +1470,11 @@ describe("the generated display map imports through package exports, never a hos
     // those renderers, so the generated map emits them only once the rolling
     // dev-lock bump advances that pin — the roster names them either way, and
     // the emitted alias-backed set stays EXACTLY the roster’s emitted part.
+    //
+    // This wave advances the screenshot and slide-deck display packs on that
+    // same guarded-optional road, so they stand in the roster by name too: the
+    // remainder is the pre-existing guarded packs plus those two, and nothing
+    // else — a re-introduced alias for any other package still fails here.
     const buildConfig = buildConfigAliases();
     const emitted = emittedRendererSpecifiers();
     const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
@@ -1480,6 +1485,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
+      "@cinatra-ai/screenshot-artifact/src/renderers/detail",
+      "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
     ];
     expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)));
     // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.

@@ -24,10 +24,12 @@
  * the panel only ever renders the mapped category copy plus the opaque
  * diagnostic reference.
  *
- * Geometry: the panel's flex chain is `min-h-0` throughout and ONLY the middle
- * region scrolls, so the header band and the action row are fixed. The face's
- * own block size is the card's shared spec constant — see
- * `MarketplaceListingCardInstallFace`.
+ * Geometry: the body is the drawing's single centred column — the mono
+ * `Install for` eyebrow, the 36px scope-picker trigger directly beneath it,
+ * then the actions, all 10px apart. The flex chain is `min-h-0` throughout and
+ * ONLY the middle region shrinks and scrolls, so neither the eyebrow nor the
+ * action row can be pushed out of the fixed face. The face's own block size is
+ * the card's shared spec constant — see `MarketplaceListingCardInstallFace`.
  */
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -305,7 +307,7 @@ export function ExtensionInstallScopePanel({
       data-availability={availability.state}
       role="group"
       aria-labelledby={labelId}
-      className="flex min-h-0 flex-1 flex-col gap-2.5"
+      className="flex min-h-0 flex-1 flex-col justify-center gap-2.5"
     >
       {/* Fixed panel heading (spec §I.1: the mono "Install for" eyebrow). */}
       <div
@@ -323,10 +325,16 @@ export function ExtensionInstallScopePanel({
         )}
       </div>
 
-      {/* ONLY the middle region scrolls; the heading above and the action row
-          below stay fixed, so the face never grows past the card's box. The
-          picker's popover is PORTALLED, so it is never clipped by this. */}
-      <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
+      {/* The drawing stacks the body as ONE centred column — eyebrow, then the
+          36px trigger, then the actions, 10px apart — so this region is sized
+          by its content and the eyebrow above it stays adjacent to the control
+          it labels. It used to carry `flex-1 justify-center`, which grew it to
+          the whole free height and floated the lone picker to the middle of
+          that height, stranding the eyebrow above a void (cinatra#2737). It
+          still SHRINKS and scrolls — and it is the only region that does — so a
+          taller availability state never grows the fixed face. The picker's
+          popover is PORTALLED, so it is never clipped by this. */}
+      <div className="flex min-h-0 flex-col overflow-y-auto">
         {availability.state === "no-active-organization" ? (
           // Names the ACTUAL problem — a session without an active
           // organization has no audience to install for, whatever the
