@@ -46,7 +46,12 @@ export interface MarketplaceCardData {
   freshnessAt: string | null;
   /** Rating mirrored from the storefront entry; null when it has none. */
   rating: { average: number; count: number } | null;
-  /** /configuration/marketplace/<scope>/<name> (unchanged detail route). */
+  /**
+   * /configuration/marketplace/<scope>/<name> — the legacy in-app detail URL.
+   * The route behind it is RETIRED (cinatra#2736): it redirects to the plain
+   * marketplace grid. This stays as the no-JS fallback href of the card's
+   * "More details" opener, whose real affordance is the §II modal.
+   */
   detailHref: string;
   /**
    * Total install count, or null when the marketplace does not (yet) track it.
@@ -352,7 +357,11 @@ function normalizeKind(slug: string | null | undefined): MarketplaceCardKind {
   return slug && KNOWN_KINDS.has(slug) ? (slug as MarketplaceCardKind) : "unknown";
 }
 
-/** Detail route — drops the leading "@"; the route re-adds it. */
+/**
+ * The legacy in-app detail URL — drops the leading "@". The route behind it is
+ * RETIRED (cinatra#2736) and reads no params at all: it redirects to the plain
+ * marketplace grid, so this is a no-JS fallback, not a detail destination.
+ */
 export function marketplaceDetailHref(packageName: string): string {
   return `/configuration/marketplace/${packageName.replace(/^@/, "")}`;
 }
