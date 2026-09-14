@@ -207,6 +207,7 @@
     { "alias": "@cinatra-ai/sdk-extensions/mcp-contract", "target": "./packages/sdk-extensions/src/mcp-connector-contract.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/artifact-contract", "target": "./packages/sdk-extensions/src/artifact-contract.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/artifact-client-bundle", "target": "./packages/sdk-extensions/src/artifact-client-bundle.ts" },
+    { "alias": "@cinatra-ai/sdk-extensions/design-primitives-contract", "target": "./packages/sdk-extensions/src/design-primitives-contract.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/artifact-renderer-props", "target": "./packages/sdk-extensions/src/artifact-renderer-props.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/artifact-content-channel", "target": "./packages/sdk-extensions/src/artifact-content-channel.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/markdown-sanitizer", "target": "./packages/sdk-extensions/src/markdown-sanitizer.ts" },
