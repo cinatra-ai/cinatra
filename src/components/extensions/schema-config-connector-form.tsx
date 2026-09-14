@@ -16,6 +16,7 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CheckIcon, CopyIcon, ListIcon, PlusIcon, Trash2Icon, Unplug } from "lucide-react";
 // The Connect action's glyph is the first-party joined plug (cinatra#2356) —
 // the SAME mark the status badge and the §I card grid draw for Connected.
@@ -304,6 +305,15 @@ export function SchemaConfigConnectorForm({
   // failures (record-list / dynamic-select fetches) stay inline — they are a
   // persistent "couldn't load" state, not a one-shot action result.
   const [listEpoch, setListEpoch] = useState(0);
+  // The Sharing tab (design §II) is a SERVER-rendered node the page hands in:
+  // it is composed from the live connection identity rows at request time. A
+  // successful action on THIS form can create or drop a connection (a
+  // connector's own save road registers the identity row, cinatra#3460), so
+  // without re-rendering the server half the Sharing tab keeps answering with
+  // the PRE-save state — "no connection saved here yet" — until the person
+  // reloads the page by hand (converge round 2, finding 1). `listEpoch` only
+  // re-fetches the client-side record lists, so it cannot carry this.
+  const router = useRouter();
   // Live connected state driving the canonical Connect / Disconnect pair.
   // Seeded from the host readiness signal; a successful role action mutates it.
   const [connected, setConnected] = useState<boolean>(initialConnected);
@@ -364,8 +374,11 @@ export function SchemaConfigConnectorForm({
       }
       // Any successful write may have changed the underlying rows — refresh lists.
       setListEpoch((e) => e + 1);
+      // ...and the SERVER half with them, so the Sharing tab reflects a
+      // connection this form just saved without a manual reload.
+      router.refresh();
     },
-    [bannerVariants],
+    [bannerVariants, router],
   );
 
   // One field group — shared by the flat form and by each tab panel. Field

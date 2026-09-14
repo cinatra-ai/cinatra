@@ -376,22 +376,31 @@ const SAVE_CONNECTION_RECORD = "saveNangoConnectionRecord";
 
 /**
  * The scope the gateway ACTUALLY persisted the pointer under, read the way the
- * surface contract normalizes it: the call's `options.scope` wins, then the
- * record's own `scope`, and an omitted scope is `"app"` (a connector that saves
- * without a scope — every schema-config Setup form today — saves an APP-scope
- * connection).
+ * gateway itself normalizes it (converge round 2, finding 2). The pinned writer
+ * builds its stored record as
+ *   `{ scope: options?.scope ?? record.scope ?? "app", ...record }`
+ * — the record is spread LAST, so a `scope` carried on the RECORD overrides the
+ * one passed in the options, and the options' scope only decides the case where
+ * the record carries none. An omitted scope on both is `"app"` (a connector that
+ * saves without a scope — every schema-config Setup form today — saves an
+ * APP-scope connection).
+ *
+ * This mirror must follow the writer and not the other way round: the seed this
+ * scope chooses is insert-if-absent, so reading a pointer as APP-scope that the
+ * gateway stored as USER-scope would seed a workspace grant on a connection the
+ * person saved for themselves — an over-share that no later save could correct.
  */
 function effectiveSavedScope(record: unknown, options: unknown): "app" | "user" {
-  const fromOptions =
-    typeof options === "object" && options !== null
-      ? (options as { scope?: unknown }).scope
-      : undefined;
-  if (fromOptions === "user" || fromOptions === "app") return fromOptions;
   const fromRecord =
     typeof record === "object" && record !== null
       ? (record as { scope?: unknown }).scope
       : undefined;
   if (fromRecord === "user" || fromRecord === "app") return fromRecord;
+  const fromOptions =
+    typeof options === "object" && options !== null
+      ? (options as { scope?: unknown }).scope
+      : undefined;
+  if (fromOptions === "user" || fromOptions === "app") return fromOptions;
   return "app";
 }
 

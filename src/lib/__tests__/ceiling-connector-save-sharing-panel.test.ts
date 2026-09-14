@@ -269,6 +269,28 @@ async function saveThroughTheConnectorsOwnRoad(): Promise<void> {
   );
 }
 
+/** The same road with a scope carried on the RECORD itself — the shape the
+ * gateway's own normalization lets WIN over the options' scope (its stored
+ * record spreads the record last). */
+async function saveThroughTheConnectorsOwnRoadWithRecordScope(
+  recordScope: "app" | "user",
+  options: { scope?: "app" | "user"; userId?: string; multiple?: boolean },
+): Promise<void> {
+  const ctx = createExtensionHostContext(CONNECTOR_PACKAGE, ["capabilities"]);
+  const surface = ctx.capabilities.resolveProviders(NANGO_SYSTEM_CAPABILITY)[0]?.impl as {
+    saveNangoConnectionRecord: (
+      connectorKey: string,
+      record: { connectionId: string; providerConfigKey: string; scope?: "app" | "user" },
+      options?: { scope?: "app" | "user"; userId?: string; multiple?: boolean },
+    ) => Promise<unknown>;
+  };
+  await surface.saveNangoConnectionRecord(
+    CONNECTOR_KEY,
+    { connectionId: CONNECTION_ID, providerConfigKey: "anthropic", scope: recordScope },
+    options,
+  );
+}
+
 /** The same road with an explicit scope/options shape (the surface contract's
  * third argument), for the scope-dependent grant seed. */
 async function saveThroughTheConnectorsOwnRoadWithOptions(options: {
@@ -431,6 +453,33 @@ describe("a ceiling connector's own save road registers the connection identity 
     expect(policy).toBeDefined();
     expect(policy?.runListVisibility).not.toContain("workspace");
     expect(policy?.runDataVisibility).not.toContain("workspace");
+  });
+
+  // --- converge round 2, finding 2: the seed follows the scope the gateway
+  // actually PERSISTS, not the one the options asked for ------------------
+
+  it("a record-carried USER scope wins over an APP scope in the options — the seed stays owner-only", async () => {
+    // The gateway stores `{ scope: options.scope ?? record.scope ?? "app", ...record }`,
+    // so a scope on the RECORD is what lands in the pointer. Reading the options
+    // first would seed a WORKSPACE grant on a connection stored as the person's
+    // own — and the seed is insert-if-absent, so nothing could take it back.
+    await saveThroughTheConnectorsOwnRoadWithRecordScope("user", {
+      scope: "app",
+      userId: OWNER_USER_ID,
+    });
+    expect(identityRows).toHaveLength(1);
+    const policy = seededPolicyForTheSavedConnection();
+    expect(policy).toBeDefined();
+    expect(policy?.runListVisibility).not.toContain("workspace");
+    expect(policy?.runDataVisibility).not.toContain("workspace");
+    expect(policy?.runExecuteVisibility).not.toContain("workspace");
+  });
+
+  it("a record-carried APP scope still seeds the workspace grant", async () => {
+    await saveThroughTheConnectorsOwnRoadWithRecordScope("app", {});
+    expect(identityRows).toHaveLength(1);
+    const policy = seededPolicyForTheSavedConnection();
+    expect(policy?.runListVisibility).toEqual(["workspace"]);
   });
 
   // --- converge round 1, finding 2: a failed registration never fails the

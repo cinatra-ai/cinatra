@@ -17,6 +17,22 @@ import { toast } from "@/lib/cinatra-toast";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: () => {},
+    push: () => {},
+    replace: () => {},
+    prefetch: () => {},
+    back: () => {},
+    forward: () => {},
+  }),
+}));
+
+
 // Action outcomes (the form-level banner variant + per-row Done/error) toast
 // via the canonical wrapper (cinatra#1109) rather than rendering an in-form
 // Alert; mock it so the tests can assert the toasted static message.
