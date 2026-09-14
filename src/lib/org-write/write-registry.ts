@@ -360,6 +360,16 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // `setRunTriggerForActor` rather than transitioning itself.
       "packages/agents/src/trigger-schedule-proposal-service.ts",
       "packages/agents/src/trigger-service.ts",
+      // cinatra#3423 — the WayFlow review gate is DECIDED ONCE. The approve
+      // road claims the gate with the ONE conditional statement this writer
+      // already carries (pending_approval -> running, the resume edge), so two
+      // people answering the same pending gate cannot both resume the paused
+      // conversation; the loser is refused with the typed no-longer-pending
+      // outcome. It threads the SAME member-session authority its sibling
+      // setup- branch already hands `resumeRunFromSetupApproval`
+      // (`sessionAuthorityFromResolvedRole(run.orgId, resumeRole)`), resolves no
+      // identity of its own and adds no client-reachable surface.
+      "packages/agents/src/review-task-actions.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
       "src/app/plugins-registry.tsx",

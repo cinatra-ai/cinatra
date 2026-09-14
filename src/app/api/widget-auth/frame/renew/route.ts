@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import { renewUserWidgetToken } from "@/lib/widget-user-auth";
-import { deriveFrameBinding, isSameOriginFrameRequest } from "@/lib/widget-frame-auth";
+import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { mintWidgetStreamToken } from "@/lib/widget-token-broker";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
@@ -75,7 +75,13 @@ export async function POST(request: Request): Promise<Response> {
   const ip = clientIp(request);
   const ua = request.headers.get("user-agent");
 
-  if (!isSameOriginFrameRequest(request)) {
+  // THE SAME GATE THE MINT'S TWO ROUTES WALK, and it answers with the member of
+  // the canonical-origin allowlist it matched (cinatra#3330): the frame's own
+  // `Origin` and nothing derived from `request.url`, `Host` or a forwarded
+  // header. The renewal is the mint's road walked a second time, so the origin
+  // it issues against is read the same way there as here.
+  const frameOrigin = resolveFrameRequestOrigin(request);
+  if (!frameOrigin.ok) {
     emitWidgetAuthAudit("renew_failure", { ip, ua, reason: "not_same_origin" });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -148,7 +154,7 @@ export async function POST(request: Request): Promise<Response> {
   // half that can fail cheaply first means the only thing that can fail after
   // the spend is the answer's journey home, and nothing this route does can
   // make that shorter.
-  const issuerBaseUrl = new URL(request.url).origin;
+  const issuerBaseUrl = frameOrigin.canonicalOrigin;
   const transport = mintWidgetStreamToken({
     agentSlug,
     auth: entry.auth,

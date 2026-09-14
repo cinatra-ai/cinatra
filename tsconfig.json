@@ -219,6 +219,7 @@
       "@cinatra-ai/sdk-extensions/mcp-contract": ["./packages/sdk-extensions/src/mcp-connector-contract.ts"],
       "@cinatra-ai/sdk-extensions/artifact-contract": ["./packages/sdk-extensions/src/artifact-contract.ts"],
       "@cinatra-ai/sdk-extensions/artifact-client-bundle": ["./packages/sdk-extensions/src/artifact-client-bundle.ts"],
+      "@cinatra-ai/sdk-extensions/design-primitives-contract": ["./packages/sdk-extensions/src/design-primitives-contract.ts"],
       "@cinatra-ai/sdk-extensions/artifact-renderer-props": ["./packages/sdk-extensions/src/artifact-renderer-props.ts"],
       "@cinatra-ai/sdk-extensions/artifact-content-channel": ["./packages/sdk-extensions/src/artifact-content-channel.ts"],
       "@cinatra-ai/sdk-extensions/markdown-sanitizer": ["./packages/sdk-extensions/src/markdown-sanitizer.ts"],
@@ -361,9 +362,6 @@
       "@cinatra-ai/extensions/purge": ["./packages/extensions/src/purge.ts"],
       "@cinatra-ai/extensions/purge-deps": ["./packages/extensions/src/purge-deps.ts"],
       "@cinatra-ai/extensions/permissions-actions": ["./packages/extensions/src/permissions-actions.ts"],
-      "@cinatra-ai/extensions/assignable-skills-actions": ["./packages/extensions/src/assignable-skills-actions.ts"],
-      "@cinatra-ai/extensions/assigned-skills-display": ["./packages/extensions/src/assigned-skills-display.ts"],
-      "@cinatra-ai/extensions/assignable-skills-search-model": ["./packages/extensions/src/assignable-skills-search-model.ts"],
       "@cinatra-ai/extensions/connection-identity-store": ["./packages/extensions/src/connection-identity-store.ts"],
       "@cinatra-ai/extensions/permissions-store": ["./packages/extensions/src/permissions-store.ts"],
       "@cinatra-ai/extensions/permissions-kind-hooks": ["./packages/extensions/src/permissions-kind-hooks.ts"],
@@ -427,7 +425,6 @@
       "@cinatra-ai/asset-transcript/plugin": ["./packages/asset-transcript/src/plugin/definition.ts"],
       "@cinatra-ai/skills": ["./packages/skills/src/index.ts"],
       "@cinatra-ai/skills/actions": ["./packages/skills/src/actions.ts"],
-      "@cinatra-ai/skills/agent-assigned-skills-actions": ["./packages/skills/src/agent-assigned-skills-actions.ts"],
       "@cinatra-ai/skills/agent-package-resolver": ["./packages/skills/src/agent-package-resolver.ts"],
       "@cinatra-ai/skills/agent-skill-assignability": ["./packages/skills/src/agent-skill-assignability.ts"],
       "@cinatra-ai/skills/assignable-skill-search": ["./packages/skills/src/assignable-skill-search.ts"],
@@ -518,6 +515,8 @@
       "@cinatra-ai/email-artifacts/src/renderers/test-delivery-input": ["./extensions/cinatra-ai/email-artifacts/src/renderers/test-delivery-input.tsx"],
       "@cinatra-ai/podcast-artifacts/src/renderers/detail": ["./extensions/cinatra-ai/podcast-artifacts/src/renderers/detail.tsx"],
       "@cinatra-ai/podcast-artifacts/src/renderers/preview": ["./extensions/cinatra-ai/podcast-artifacts/src/renderers/preview.tsx"],
+      "@cinatra-ai/screenshot-artifact/src/renderers/detail": ["./extensions/cinatra-ai/screenshot-artifact/src/renderers/detail.tsx"],
+      "@cinatra-ai/slide-deck-artifact/src/renderers/detail": ["./extensions/cinatra-ai/slide-deck-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
       "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],
@@ -559,5 +558,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "**/__tests__/fixtures/**"]
+  "exclude": ["node_modules", "**/__tests__/fixtures/**", "extensions/**/tests/**"]
 }

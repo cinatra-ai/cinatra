@@ -488,7 +488,10 @@ async function prepareOneTarget(
   // server"). The synchronous signature this replaces is what kept every
   // consumer of this core on the named-absent content projection, and a display
   // handed an absent projection draws its own "nothing pinned" floor over work
-  // that is really there.
+  // that is really there. Wave 3 of `PLAN: Agents Lifecycle (D) — Review`
+  // (cinatra#3091) needed that same allowance before the three browser fetchers
+  // could move onto this port. A synchronous binder is unaffected: `await` on a
+  // plain value is the value.
   const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,
