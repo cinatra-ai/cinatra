@@ -28,6 +28,14 @@ interface PageHeaderProps {
   /** Small contextual label rendered above the h1. */
   label?: string;
   description?: string;
+  /**
+   * A MONO META LINE beneath the title — the ratified drawing's own header
+   * shape for a surface that names a record rather than a section: the type,
+   * the revision, and the row facts the host authorized. Rendered as one line
+   * of mono, cells divided by the drawing's middle dot. A page with no record
+   * to name passes none, and its header is exactly what it was.
+   */
+  meta?: ReactNode;
   /** Right-side action buttons / controls. */
   actions?: ReactNode;
   /**
@@ -100,6 +108,7 @@ export function PageHeader({
   titleContent,
   label,
   description,
+  meta,
   actions,
   size = "lg",
   tone = "ink",
@@ -138,6 +147,11 @@ export function PageHeader({
           >
             {titleContent ?? title}
           </h1>
+          {meta && (
+            <p className="mt-1.5 font-mono text-xs leading-[1.6] text-muted-foreground">
+              {meta}
+            </p>
+          )}
           {description && (
             /* The components drawing gives the header "an optional one-line
                description below it", so the shared component holds it to one
