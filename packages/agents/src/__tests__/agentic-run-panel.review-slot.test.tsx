@@ -247,26 +247,22 @@ describe("while the agent works, the card is the placeholder", () => {
         if (!el) throw new Error("no placeholder");
         return el;
       });
-      // The spinning icon: the design system's own spinner, by its animation
-      // class, inside the placeholder.
+      // The spinning icon: the design system's own arc, by its animation class,
+      // inside the placeholder.
       expect(placeholder.querySelector("svg.animate-spin")).not.toBeNull();
-      // THE EMPTY REVIEW SCREEN IS EMPTY (cinatra#3044). The ratified drawing's
-      // section II enumerates what the placeholder is: "the card frame, and a
-      // spinning icon, the indigo arc of Components section Skeleton / Spinner.
-      // It names no status, reports no result and draws nothing to press." Its
-      // own placeholder example draws the card box with one arc in it and
-      // nothing else, so the frame stands empty behind the arc rather than
-      // carrying the gate's bar motif. A graded set measured those bars beside
-      // the arc; this is where they were pinned in.
+      // The card names itself, as the ratified drawing draws it (cinatra#3051 —
+      // the eighth proof round). The five-bar loading skeleton this slot used to
+      // nest under the spinner is NOT the drawing's reading of a working run: it
+      // is §IV's separate loading state, drawn while the host prepares a target
+      // that already exists. The whole anatomy is pinned in
+      // `review-gate-placeholder-as-drawn.test.tsx`.
+      expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
       expect(placeholder.querySelector('[data-conformance-id="review-gate-loading"]')).toBeNull();
       // A card, and it is the WORKING reading of the one slot.
       expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
         "working",
       );
-      // The card's own name is at its head — the drawn placeholder's first
-      // child, fixed on every run.
-      expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
-      // And nothing the words do not allow.
+      // And nothing the drawing does not draw.
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/Waiting to start/i)).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();
@@ -334,8 +330,9 @@ describe("the placeholder is replaced, in place, by the review screen", () => {
       expect(card.getAttribute("data-lifecycle-card")).toBe("artifact_review_gate");
       expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
       expect(screen.queryByText(/Review requested/i)).not.toBeNull();
-      // And the progress card it replaced is not beside it.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      // And the progress card it replaced is not beside it — the placeholder
+      // carries the title now, so its absence is read through the title too.
+      expect(screen.queryByText("Agentic Run Progress")).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();
     },
     15_000,

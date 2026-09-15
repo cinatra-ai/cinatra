@@ -45,6 +45,12 @@ import { reviewIslandFramingHeaders } from "@/lib/auth-route-guard";
 
 const REGISTERED = "https://site.example";
 
+/** The one document every island refusal on this arm renders (cinatra#3051) —
+ *  the island page's own empty anchor, and nothing else. */
+const EMPTY_ISLAND_BODY =
+  '<!doctype html><html><head><meta charset="utf-8"></head>' +
+  '<body><div data-conformance-id="review-target-island-empty"></div></body></html>';
+
 /** A NextRequest double carrying only what the wall reads. */
 function islandRequest(query: Record<string, string> = {}) {
   const url = new URL("https://app.example/lifecycle/review-island");
@@ -197,7 +203,12 @@ describe("a widget frame with no session is answered EMPTY, never sent to sign-i
     const res = await guardAppRoute(request);
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
-    expect(await res.text()).toBe("");
+    // The body is the ANCHORED empty island (cinatra#3051). It was a zero-byte
+    // document until the review card had to be able to tell a frame that PAINTED
+    // from one that merely LOADED: an empty document fires `load` like a full
+    // one, and a body with no anchor read as a target that had arrived. It still
+    // says nothing — the anchor the island page already renders, and no reason.
+    expect(await res.text()).toBe(EMPTY_ISLAND_BODY);
     expect(res.headers.get("content-security-policy")).toBe(
       `frame-ancestors 'self' ${REGISTERED}`,
     );
@@ -290,7 +301,7 @@ describe("an island request carrying its own credential is answered by the page"
       const res = await guardAppRoute(
         islandRequest({ ref: "a-ref", assistant: "wordpress", instanceId: "inst-1", ic }),
       );
-      expect(await res.text()).toBe("");
+      expect(await res.text()).toBe(EMPTY_ISLAND_BODY);
       expect(res.headers.get("x-middleware-next")).toBeNull();
     }
   });

@@ -52,7 +52,7 @@ export type {
 } from "./notification-context";
 
 // Widget / background-process / hitl primitives.
-export { LoadingSpinner } from "./loading-spinner";
+export { LoadingSpinner, SpinnerArc } from "./loading-spinner";
 export { InlinePageTitle } from "./inline-page-title";
 export type { InlinePageTitleProps, InlinePageTitleHandle } from "./inline-page-title";
 export { PromptField } from "./prompt-field";
