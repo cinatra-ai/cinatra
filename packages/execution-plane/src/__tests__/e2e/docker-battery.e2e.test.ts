@@ -6,7 +6,7 @@
  * always means the real thing ran).
  *
  * Run with: pnpm test:e2e   (package: @cinatra-ai/execution-plane)
- * First run builds docker/sandbox/Dockerfile as cinatra-sandbox-l0:dev.
+ * First run builds docker/sandbox/Dockerfile under a tag derived for this job.
  * The gateway scenarios exercise real internet egress (pypi.org).
  */
 import { execFileSync } from "node:child_process";
@@ -30,6 +30,7 @@ import { runDocker } from "../../docker-cli";
 import { workspaceVolumeName } from "../../workspace";
 import { SANDBOX_CONTAINER_JOB_LABEL } from "../../l0-profile";
 import { skillsVolumeName } from "../../staging";
+import { jobScopedImageFor } from "./support/exec-stack";
 import {
   type BrokerQuotas,
   type EgressGatewayEndpoint,
@@ -46,7 +47,23 @@ import {
 } from "../support/voucher-fixture";
 
 const SECRET = "e2e-battery-broker-secret";
-const IMAGE = "cinatra-sandbox-l0:dev";
+/**
+ * THE L0 IMAGE THIS BATTERY BUILDS, TAGGED FOR THIS JOB.
+ *
+ * It was the bare `cinatra-sandbox-l0:dev`, and that tag is not this file's
+ * alone: `environment-promotion-rebuild.e2e.test.ts` builds the very same tag
+ * from the very same context, and the two files are separate battery JOBS that
+ * run at the same time on one shared daemon. `docker build -t` MOVES a tag, so
+ * the two builds were writing one host-wide mutable reference while both jobs
+ * were resolving it — the same defect the harness's three images had, in a
+ * battery the harness does not reach (cinatra#3327). Derived from the job's own
+ * identity, exactly as the harness derives its own three.
+ *
+ * The repository half is unchanged, so `docker images` still reads the same,
+ * and nothing outside this file resolves this ref: it is passed explicitly to
+ * the worker and the gateway below.
+ */
+const IMAGE = jobScopedImageFor("cinatra-sandbox-l0");
 const ADMIN_PORT = 13129;
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -89,6 +106,12 @@ function makeLiveBroker(opts: {
   let liveness: "alive" | "archived" | "gone" = "alive";
   const broker = new ExecutionBroker({
     worker: new LocalDevSandboxWorker({ imageRef: IMAGE }),
+    // THE SAME TAG THE WORKER RUNS OVER, for the skill-staging helper
+    // container the broker creates itself. Without it the broker resolves the
+    // bare default L0 tag, which this job never builds since the build above
+    // became job-derived — so every S2 open failed closed on an image that is
+    // not here (cinatra#3327).
+    imageRef: IMAGE,
     auditSink: (record) => {
       audits.push(record);
     },
@@ -100,6 +123,18 @@ function makeLiveBroker(opts: {
     limits: opts.limits,
     ...(opts.quotas ? { quotas: opts.quotas } : {}),
   });
+  // EVERY job this battery opens, recorded as it is opened — the jobs the
+  // executor and the llm tool mint on their own included, whose ids no call
+  // site ever sees. Without them the teardown below could only name its own
+  // skills volumes for the jobs the tests opened by hand, and had to fall back
+  // on removing every skills volume ON THE DAEMON — a concurrent battery's live
+  // volumes with them (cinatra#3327).
+  const openJobDirect = broker.openJob.bind(broker);
+  broker.openJob = (async (...args: Parameters<ExecutionBroker["openJob"]>) => {
+    const opened = await openJobDirect(...args);
+    if (opened.ok) createdJobIds.push(opened.jobId);
+    return opened;
+  }) as ExecutionBroker["openJob"];
   // The tier under test now rides the signed voucher (see the fixture).
   rememberBrokerPolicy(broker, opts.policy);
   return {
@@ -137,8 +172,12 @@ afterAll(async () => {
   for (const jobId of createdJobIds) {
     await runDocker(["volume", "rm", "-f", skillsVolumeName(jobId)]);
   }
-  // Executor-opened jobs mint their own jobIds — sweep remaining S2 skills
-  // volumes by their retention label tier.
+  // Executor-opened jobs mint their own jobIds; `makeLiveBroker` records every
+  // one of them, so this sweep can name THIS battery's remaining S2 skills
+  // volumes. It used to remove every volume on the daemon carrying the
+  // retention tier label, which on a shared runner box destroyed a concurrently
+  // running battery's live volumes (cinatra#3327).
+  const ours = new Set(createdJobIds.map((jobId) => skillsVolumeName(jobId)));
   const strays = await runDocker([
     "volume",
     "ls",
@@ -147,8 +186,15 @@ afterAll(async () => {
     "label=ai.cinatra.execution-plane=skills",
   ]);
   for (const name of strays.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    if (!ours.has(name)) continue;
     await runDocker(["volume", "rm", "-f", name]);
   }
+  // This job's own image tag. It is unique to this run, so nothing later could
+  // ever name it again and a self-hosted box would keep one more reference per
+  // battery job for good. `image rm` on a tag only UNTAGS while another
+  // reference to the same image remains, so a sibling job's identical build
+  // keeps its own tag; a failure here is not a teardown error.
+  await runDocker(["image", "rm", IMAGE]);
 });
 
 describe("AC1 — command / script / persistence, all in the plane", () => {
@@ -305,7 +351,20 @@ describe("resource ceilings — timeout and output caps", () => {
     if (!result.ok) return;
     expect(result.result.termination).toBe("timeout");
     // Fresh-container-per-command: nothing keeps running afterwards.
-    const ps = await runDocker(["ps", "--filter", "name=cinatra-exec-", "--format", "{{.Names}}"]);
+    //
+    // Filtered on THIS job's own ownership label. The bare container-name
+    // substring this arm used to pass docker matches far more than this job's
+    // containers: a concurrently running battery's compose containers are named
+    // `<project>-cinatra-exec-broker-1`, which CONTAINS that substring, so on a
+    // shared runner box the listing came back holding another job's broker and
+    // the arm failed for a container it never created (cinatra#3327).
+    const ps = await runDocker([
+      "ps",
+      "--filter",
+      `label=${SANDBOX_CONTAINER_JOB_LABEL}=${jobId}`,
+      "--format",
+      "{{.Names}}",
+    ]);
     expect(ps.stdout.trim()).toBe("");
   }, 60_000);
 

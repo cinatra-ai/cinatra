@@ -43,7 +43,7 @@
  *
  * RUNNER (real DB required — the suite self-skips without one):
  *   SUPABASE_DB_URL=postgres://…@127.0.0.1:5634/postgres SUPABASE_SCHEMA=lane_2578x \
- *     pnpm exec vitest run --config vitest.integration-2578.config.ts
+ *     pnpm exec vitest run --config vitest/integration/2578.config.ts
  * The schema is CREATED in beforeAll and DROPPED in afterAll.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,12 +80,12 @@ const SHARED_SCHEMAS = new Set([
 ]);
 const HAS_REAL_DB =
   DB_URL !== "" &&
-  !DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
 /**
- * Set by `vitest.integration-2578.config.ts` and by nothing else.
+ * Set by `vitest/integration/2578.config.ts` and by nothing else.
  *
  * A suite whose only failure mode is "skipped" is not a gate — it reports
  * success by doing nothing, which is the same shape of silence this whole issue
@@ -229,6 +229,7 @@ import {
   setKnowledgeGraphIndexingProbe,
 } from "../../../packages/objects/src/graphiti-client";
 import { POST as keyValidationPOST } from "@/app/configuration/mcp/llm-access/test/route";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -439,7 +440,7 @@ describe.skipIf(!HAS_REAL_DB)(
         throw new Error(
           "the usage bus does not reach this schema — the emitter is stubbed or " +
             "SUPABASE_SCHEMA is not the schema this suite created. Run it with " +
-            "`--config vitest.integration-2578.config.ts`.",
+            "`--config vitest/integration/2578.config.ts`.",
         );
       }
       await admin.query(`TRUNCATE "${SCHEMA}"."usage_events"`);

@@ -78,6 +78,22 @@ describe("connector descriptors (CLI-safe surface)", () => {
     expect(b[0].mcpPrimitivePrefixes).not.toContain("hacked_");
   });
 
+  it("a connector that holds no connection of its own declares the one it consumes", () => {
+    // cinatra#3108. The declaration is DATA the connector ships, and the host
+    // reads it generically — no connector is special-cased by name in the host,
+    // so the only thing to assert here is that the data is well formed.
+    const consuming = CONNECTOR_DESCRIPTORS.filter(
+      (d) => d.consumesConnectionFrom !== undefined,
+    );
+    expect(consuming.length, "the catalog declares at least one such connector").toBeGreaterThan(0);
+    const slugs = new Set(CONNECTOR_DESCRIPTORS.map((d) => d.slug));
+    for (const d of consuming) {
+      expect(typeof d.consumesConnectionFrom, `consumesConnectionFrom for ${d.slug}`).toBe("string");
+      expect(slugs.has(d.consumesConnectionFrom), `${d.slug} names a catalog connector`).toBe(true);
+      expect(d.consumesConnectionFrom, `${d.slug} may not name itself`).not.toBe(d.slug);
+    }
+  });
+
   it("lookups by packageId and slug round-trip", () => {
     for (const d of CONNECTOR_DESCRIPTORS) {
       expect(getConnectorDescriptorByPackageId(d.packageId)).toEqual(d);

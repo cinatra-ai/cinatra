@@ -10,6 +10,9 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
 import { parseClaimDispositions } from "@cinatra-ai/objects/claims";
 
+import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
+
 import { canonicalJSONStringify, deriveSubstanceKey } from "./resource-store";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
@@ -444,6 +447,27 @@ export async function captureObjectContentSnapshot(input: {
   createdBy?: string | null;
   createdByRunId?: string | null;
   maxAttempts?: number;
+  /**
+   * EMIT THE PRODUCED EVENT AT THE MINT (enabler 0.13 of `PLAN: Agents Lifecycle
+   * (C)`, cinatra#3028 — "the produced event emitted at the mint, never at the
+   * raw row write").
+   *
+   * OFF BY DEFAULT, and the default is the contract, not a convenience. This
+   * capture has one caller today — context pinning (cinatra#1430) — and pinning
+   * a row as CONTEXT is not asking anyone to decide about it. An event there
+   * would open a review for every pinned candidate. The object-backed review
+   * road turns it on; nothing else does.
+   *
+   * SPLICED INTO THE CAPTURE'S OWN TRANSACTION, guarded on the representation
+   * row this statement mints, so the event commits with the mint and is absent
+   * on the reuse arm (which is not a mint). The reuse arm's event is the review
+   * road's own idempotent insert.
+   */
+  emitProducedEventAtMint?: {
+    originKind: ArtifactOriginKind;
+    producerRunId?: string | null;
+    producerAgentId?: string | null;
+  };
 }): Promise<CaptureObjectContentSnapshotResult | null> {
   ensurePostgresSchema();
   const schema = q();
@@ -499,10 +523,33 @@ export async function captureObjectContentSnapshot(input: {
 
     const substanceKey = deriveSubstanceKey({ kind: "blob", sha256: newBlob.sha256 });
 
+    // The mint's produced event, when the caller asked for one. Guarded on the
+    // representation row the capture statement mints, using only the emit
+    // builder's own bound parameters — so it can never fire for a reuse and can
+    // never name a revision this transaction did not write.
+    const mintEventOp = input.emitProducedEventAtMint
+      ? maybeBuildProducedEventInsertOp(
+          schema,
+          {
+            orgId: input.orgId,
+            artifactId: input.objectId,
+            representationRevisionId,
+            emitter: "object_snapshot_mint",
+            originKind: input.emitProducedEventAtMint.originKind,
+            producerRunId: input.emitProducedEventAtMint.producerRunId ?? input.createdByRunId ?? null,
+            producerAgentId: input.emitProducedEventAtMint.producerAgentId ?? null,
+          },
+          {
+            whereExistsSql: `EXISTS (SELECT 1 FROM "${schema}"."representation" WHERE id = $4::text AND org_id = $2::text AND artifact_id = $3::text)`,
+          },
+        )
+      : null;
+
     // ONE advisory-locked transaction: re-read under the lock (the `cur`/`valid`
     // CTEs) and write resource+blob+representation+snapshot ONLY when the
     // candidate still matches AND no snapshot already exists for the key.
-    // results: [0]=lock, [1]=dead-key delete, [2]=capture CTE.
+    // results: [0]=lock, [1]=dead-key delete, [2]=capture CTE, [3]=the mint's
+    // produced event when one was asked for.
     const [, , capRes] = runPostgresQueriesSync({
       connectionString: conn(),
       transaction: true,
@@ -631,6 +678,11 @@ SELECT
             snapshotId, // $19
           ],
         },
+        // THE PRODUCED EVENT, AT THE MINT — same transaction as the snapshot it
+        // announces, guarded on the representation row the statement above
+        // mints. On the REUSE arm no representation is written under this id, so
+        // the guard is false and nothing is emitted: a reuse is not a mint.
+        ...(mintEventOp ? [mintEventOp] : []),
       ],
     });
 

@@ -81,9 +81,23 @@ describe("memoryConceptEnvelopeSchema — acceptance", () => {
     expect(memoryConceptEnvelopeSchema.safeParse(makeEnvelope()).success).toBe(true);
   });
 
-  it("tolerates unknown TOP-LEVEL keys (system-injected cinatraAgentRunId)", () => {
-    const env = makeEnvelope({ cinatraAgentRunId: "run-1" });
-    expect(memoryConceptEnvelopeSchema.safeParse(env).success).toBe(true);
+  it("REFUSES an unknown top-level key (cinatra#1378 review item 2/3)", () => {
+    // The schema used to tolerate unknown top-level keys so that the
+    // system-injected `cinatraAgentRunId` would survive the parse. That
+    // tolerance was load-bearing in the wrong direction: an unknown CLIENT key
+    // rode through the gate unscanned and uncapped and landed in the persisted
+    // row. The schema is strict now, and the handler splits the server-injected
+    // keys off before parsing and merges them back afterwards
+    // (`MEMORY_SERVER_INJECTED_KEYS`) — so strictness falls only on what the
+    // client sent. The handler-level proof is in
+    // `handlers-memory-sync-ingest.test.ts`.
+    const parsed = memoryConceptEnvelopeSchema.safeParse(
+      makeEnvelope({ smuggled: "anything at all" }),
+    );
+    expect(parsed.success).toBe(false);
+    expect(memoryConceptEnvelopeSchema.safeParse(makeEnvelope({ cinatraAgentRunId: "run-1" })).success).toBe(
+      false,
+    );
   });
 
   it("preserves/tolerates unknown frontmatter keys (tolerant OKF consumption)", () => {

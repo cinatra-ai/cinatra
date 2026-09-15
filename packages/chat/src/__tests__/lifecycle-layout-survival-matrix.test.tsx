@@ -115,6 +115,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: (...args: unknown[]) => confirmMock(...(args as [])),
   skipRunRecommendationAction: (...args: unknown[]) => skipMock(...(args as [])),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 
 // `server-actions` is a server-only graph, so it is stubbed rather than loaded.
 // It must carry EVERY symbol the lazy chat chunk reaches — the inline run panel
@@ -527,9 +540,15 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         // The note field the composer binding mirrors is part of the offer.
         expect(card.querySelector('[data-testid="review-rationale"]')).not.toBeNull();
       } else {
-        // The slot the recommendation card mounts at. Its OWN mount is owed
-        // (S9h) — what must survive here is the anchored container.
-        const slots = root.querySelectorAll(`[data-inline-run-card="${RUN_ID}"]`);
+        // The slot the recommendation card mounts at — the `agent_run` part's
+        // own container, named by its run.
+        //
+        // RE-ANCHORED (cinatra#2790, epic #2784 S9f). This used to look for the
+        // inline run panel, which was the only thing that container held. Since
+        // the run progress card waits for the skills decision, a held turn draws
+        // no panel — so the anchor moved to the container itself, which is the
+        // thing this class is actually about and cannot be emptied by a state.
+        const slots = root.querySelectorAll(`[data-agent-run-slot="${RUN_ID}"]`);
         expect(
           slots,
           `${cellName(cell)}: the agent_run slot is not in the transcript`,
@@ -537,9 +556,18 @@ describe("a lifecycle item survives every layout, every turn outcome, live and r
         if (!heldTurnMountIsOwed("recommendation_hold")) {
           // The obligation was struck: the owner root itself is now required in
           // the same cell, with no edit to this file.
-          expect(
-            root.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
-          ).toHaveLength(1);
+          //
+          // AWAITED, like the review_card branch above (cinatra#3208 fix leg 1).
+          // The hold card resolves its state in an effect and commits the owner
+          // root only once the answer lands, so the root is never present on the
+          // first render — reading it synchronously races that commit and reds
+          // under load. The assertion is unchanged; only the wait around it is
+          // new.
+          await waitFor(() =>
+            expect(
+              root.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
+            ).toHaveLength(1),
+          );
         }
       }
 
@@ -682,9 +710,9 @@ describe("the slot that survives is one the real held card can be operated in", 
         });
         installResolveStub();
         const root = await mountTranscript(driven, layout);
-        const stand = root.querySelector<HTMLElement>(`[data-inline-run-card="${RUN_ID}"]`);
-        expect(stand).not.toBeNull();
-        const slot = stand!.parentElement!;
+        const slot = root.querySelector<HTMLElement>(`[data-agent-run-slot="${RUN_ID}"]`);
+        expect(slot, "the agent_run producing container is not in the transcript").not.toBeNull();
+        if (!slot) throw new Error("unreachable — the expectation above throws first");
 
         render(
           <LifecycleCardSurfaceProvider host="chat_thread">

@@ -30,7 +30,13 @@ function readSource(relative: string): string {
 
 describe("the recommendation hold stays outside the DATA_PART resolve envelope", () => {
   it("is carried as an INTERRUPT, so it is not a resolve-envelope kind", () => {
-    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
+    // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two
+    // axes now. `represent` is the one this boundary has always been about —
+    // an INTERRUPT kind has no resolve envelope — and it is unchanged. The
+    // second axis says where the card's truth lives, and for this kind it is
+    // the run's own row, which is what the injected delivery mounts from.
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent).toBe("interrupt");
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical).toBe("run_state");
     // cinatra#2928 added a second interrupt kind (`agent_hitl_screen`). What
     // this case is about is that an INTERRUPT kind is outside the data-part
     // resolve envelope, so it asserts membership rather than the set size.

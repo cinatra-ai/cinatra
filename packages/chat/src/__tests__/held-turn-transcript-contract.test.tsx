@@ -136,6 +136,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: () => confirmMock(),
   skipRunRecommendationAction: () => skipMock(),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 
 // `server-actions` is a server-only graph, so it is stubbed rather than loaded.
 // It must carry EVERY symbol the lazy chat chunk reaches — the inline run panel
@@ -638,13 +651,19 @@ describe("the REAL card, once it is in the REAL triggering container", () => {
       result: DURABLE_RESULT,
     });
     // A run-card render, in the transcript, is still a run_card render. The
-    // subtree is the one the shipped run panel declares, found in the rendered
-    // turn rather than invented here.
-    const foreign = first.triggerContainer.querySelector<HTMLElement>(
-      '[data-lifecycle-card-host="run_card"]',
-    );
-    expect(foreign, "the turn renders the inline run card's own host subtree").not.toBeNull();
-    mountRealCardInto(foreign!);
+    // subtree carries the declaration the shipped run panel makes — which is
+    // also exactly what this file's stand-in for that panel renders.
+    //
+    // PLANTED RATHER THAN BORROWED since cinatra#2790 (epic #2784 S9f): a HELD
+    // turn draws no run panel, because the run progress card waits for the
+    // skills decision, so the held turn this arm needs has no panel subtree in
+    // it to reach for. What is measured is unchanged — the evaluator's rule that
+    // anchors inside a foreign host's subtree are not this host's mount.
+    const foreign = document.createElement("div");
+    foreign.setAttribute("data-lifecycle-card-host", "run_card");
+    foreign.setAttribute("data-inline-run-card", "");
+    first.triggerContainer.appendChild(foreign);
+    mountRealCardInto(foreign);
     await waitFor(() =>
       expect(root.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull(),
     );
@@ -968,6 +987,56 @@ const AGENTS_SRC = join(__dirname, "..", "..", "..", "agents", "src");
 const OWED_OWNER_MODULES = ["run-recommendation-chip-row", "run-recommendation-card"];
 const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"];
 
+/**
+ * WHY THIS ALLOWLIST EXISTS AT ALL (cinatra#2790, epic #2784 S9f).
+ *
+ * The scans below used to say: while the hold's chat mount is owed, NO file in
+ * this package may name the card. That was exactly right while the card was
+ * owed on BOTH conversation hosts — the package draws for both, so an import
+ * could only mean the mount had landed.
+ *
+ * S9f landed the `site_widget` cell and struck its ratchet row, and the two
+ * hosts share one column. So "the package imports the card" no longer implies
+ * "the cookie mount landed", and a scan that still said so would forbid the
+ * shipped widget mount rather than the owed chat one — it would measure the
+ * package where the obligation is about a HOST.
+ *
+ * The ban therefore moved rather than loosened. A file may name the card only if
+ * it is on this list AND it really withholds the card on a cookie surface, which
+ * is asserted below against the file's own source. Everything else is unchanged
+ * and stays exactly as strict: any other file is an offender, the agents barrels
+ * still may not re-export the card, the reachability route is still closed to
+ * every file that is not on this list, and the PRODUCTION `/chat` DOM arm above
+ * still measures a transcript that draws no card — with the resolver answering
+ * HELD, so the carriage is the only thing between it and a rendered card.
+ *
+ * AND THEN S9b LANDED THE COOKIE MOUNT TOO (cinatra#2794), which retires the
+ * allowlist's whole premise rather than extending it. With `recommendation_hold`
+ * struck from `HELD_TURN_MOUNT_OBLIGATIONS` the card is owed on NO host, so the
+ * one column mounts it unconditionally and the withholding this list certified
+ * is exactly what must no longer be there. Every arm below is therefore keyed on
+ * `HOLD_MOUNT_OWED`: while a row stands the allowlist is enforced verbatim, and
+ * once it is struck the positive arms take over — chat production code MUST
+ * import the card, and the production `/chat` transcript MUST draw it.
+ */
+const CREDENTIAL_GATED_IMPORTERS = ["chat-messages-view.tsx"];
+
+/**
+ * The cookie discriminator, and the withholding it must perform.
+ *
+ * `useCookieSessionSurface()` is TRUE only inside a well-formed cookie-host
+ * declaration — no provider, a refused declaration and any credential-bearing
+ * host all read FALSE — so a file that reads it and returns nothing when it is
+ * true cannot draw this card on `chat_thread`, which is what is still owed.
+ */
+const COOKIE_GATE_TOKENS = ["useCookieSessionSurface", "if (cookieSurface) return null;"];
+
+/** Is this chat file allowed to name the card, and does it really gate it? */
+function credentialGatedImporter(relPath: string, source: string): boolean {
+  if (!CREDENTIAL_GATED_IMPORTERS.includes(relPath)) return false;
+  return COOKIE_GATE_TOKENS.every((token) => source.includes(token));
+}
+
 function chatSourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "__tests__" || entry.name === "node_modules") continue;
@@ -1010,23 +1079,32 @@ describe("the production mount points, read from the import graph", () => {
     // turns red and forces the obligation row to be revisited. It cannot be
     // aliased away and it does not care where the JSX lives.
     const offenders: string[] = [];
+    const gated: string[] = [];
     for (const file of chatSourceFiles(CHAT_SRC)) {
       const source = readFileSync(file, "utf8");
+      const rel = file.slice(CHAT_SRC.length + 1);
       for (const mod of OWED_OWNER_MODULES) {
-        if (new RegExp(`from\\s+["'][^"']*${mod}["']`).test(source)) {
-          offenders.push(`${file.slice(CHAT_SRC.length + 1)} → ${mod}`);
-        }
+        if (!new RegExp(`from\\s+["'][^"']*${mod}["']`).test(source)) continue;
+        if (credentialGatedImporter(rel, source)) gated.push(`${rel} → ${mod}`);
+        else offenders.push(`${rel} → ${mod}`);
       }
     }
     if (HOLD_MOUNT_OWED) {
       expect(
         offenders,
-        "a lifecycle card's drawing module is now imported by chat production code — " +
-          "if that is the chat mount landing, strike the obligation row",
+        "a lifecycle card's drawing module is imported by chat production code that does " +
+          "NOT withhold it on a cookie surface — if that is the chat mount landing, strike " +
+          "the obligation row; if it is not, gate it",
       ).toEqual([]);
+      // …and the one allowed importer must really be there: an allowlist whose
+      // entry nothing matches would quietly turn this arm into a no-op.
+      expect(
+        gated.length,
+        "the credential-gated widget mount is gone — the allowlist is measuring nothing",
+      ).toBeGreaterThan(0);
     } else {
       expect(
-        offenders.length,
+        offenders.length + gated.length,
         "the obligation row is struck, so chat production code must import the card " +
           "it now mounts — nothing does",
       ).toBeGreaterThan(0);
@@ -1058,22 +1136,56 @@ describe("the production mount points, read from the import graph", () => {
     // The alias case is covered by construction: `import { RecommendationHoldCard
     // as RHC }` still writes the original name at the import site.
     const offenders: string[] = [];
+    const gated: string[] = [];
     for (const file of chatSourceFiles(CHAT_SRC)) {
       const source = readFileSync(file, "utf8");
+      const rel = file.slice(CHAT_SRC.length + 1);
       for (const symbol of OWED_OWNER_SYMBOLS) {
-        if (source.includes(symbol)) offenders.push(`${file.slice(CHAT_SRC.length + 1)} → ${symbol}`);
+        if (!source.includes(symbol)) continue;
+        if (credentialGatedImporter(rel, source)) gated.push(`${rel} → ${symbol}`);
+        else offenders.push(`${rel} → ${symbol}`);
       }
     }
-    if (HOLD_MOUNT_OWED) expect(offenders).toEqual([]);
-    else expect(offenders.length).toBeGreaterThan(0);
+    if (HOLD_MOUNT_OWED) {
+      expect(offenders).toEqual([]);
+      expect(gated.length).toBeGreaterThan(0);
+    } else expect(offenders.length + gated.length).toBeGreaterThan(0);
   });
 
-  it("the transcript's agent_run branch still names the inline run card", () => {
+  it.runIf(HOLD_MOUNT_OWED)("the one allowed importer really withholds the card on a cookie surface", () => {
+    // The allowlist is only as good as what it certifies. This reads the file it
+    // names and requires BOTH halves of the gate — the cookie discriminator and
+    // the withholding return — so an entry cannot be kept by editing the list
+    // once the gate is gone. The DOM arm above is the other end of the same
+    // claim: with the resolver answering HELD, the production `/chat` transcript
+    // still draws no card.
+    //
+    // RUNS ONLY WHILE A ROW STANDS. Once `recommendation_hold` is struck from
+    // the obligation list the cookie mount has landed, and requiring the
+    // withholding here would forbid the very mount the struck row asserts. The
+    // `!HOLD_MOUNT_OWED` arms carry the claim from there.
+    for (const rel of CREDENTIAL_GATED_IMPORTERS) {
+      const source = readFileSync(join(CHAT_SRC, rel), "utf8");
+      for (const token of COOKIE_GATE_TOKENS) {
+        expect(source, `${rel} lost its cookie-surface gate: ${token}`).toContain(token);
+      }
+    }
+  });
+
+  it("the transcript's run-start branch still names the inline run card", () => {
     // The positive half: the container this gate measures is the one the run
     // card renders into. If that stops being true the projection is measuring
     // something else, and this says so.
+    //
+    // AMENDED for cinatra#2935 (lifecycle-b W5d): the branch used to compare
+    // against the single literal `agent_run`. The widget's own narrowly scoped
+    // start produces the same run through the same primitive under a different
+    // tool name, so the comparison moved to the shared closed set — which is
+    // what this assertion now names. A branch that went back to one literal
+    // would draw nothing for a widget start, which is the failure this case
+    // exists to catch.
     const view = readFileSync(join(CHAT_SRC, "chat-messages-view.tsx"), "utf8");
-    expect(view).toContain('part.name === "agent_run"');
+    expect(view).toContain("isRunStartToolName(part.name)");
     expect(view).toContain("<InlineAgentRunCard");
     expect(view).toContain("<UndoActionChip");
   });
@@ -1158,7 +1270,25 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
 
   it("no chat production module can reach an owed card export, under ANY name", () => {
     const owed = owedExportsByModule(realGraph, owedSeeds());
-    const offenders = owedReachesFrom(realGraph, chatSourceFiles(CHAT_SRC), owed, (f) =>
+    // The credential-gated widget mount (cinatra#2790) reached the card on
+    // purpose WHILE the cookie mount was still owed, and was excluded HERE — at
+    // the one place the exclusion is stated — rather than by loosening the
+    // reachability analysis. Once the row is struck (cinatra#2794 landed the
+    // cookie mount) the exclusion lapses with the obligation that justified it:
+    // the whole package is scanned, and the reacher is now what the arm below
+    // REQUIRES rather than what it forbids.
+    const scanned = HOLD_MOUNT_OWED
+      ? chatSourceFiles(CHAT_SRC).filter(
+          (f) => !CREDENTIAL_GATED_IMPORTERS.includes(f.slice(CHAT_SRC.length + 1)),
+        )
+      : chatSourceFiles(CHAT_SRC);
+    expect(
+      scanned.length,
+      "the reachability scan excluded everything — it would answer green about nothing",
+    ).toBeGreaterThan(
+      chatSourceFiles(CHAT_SRC).length - (HOLD_MOUNT_OWED ? CREDENTIAL_GATED_IMPORTERS.length : 0) - 1,
+    );
+    const offenders = owedReachesFrom(realGraph, scanned, owed, (f) =>
       f.slice(CHAT_SRC.length + 1),
     );
     if (HOLD_MOUNT_OWED) {

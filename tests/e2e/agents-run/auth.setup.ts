@@ -21,6 +21,8 @@
 import { expect, test as setup } from "@playwright/test";
 import { Client } from "pg";
 
+import { openRegistrationForFixtures } from "../open-registration";
+
 const EMAIL = process.env.E2E_AGENTS_RUN_USER_EMAIL ?? "agents-run-uat@local.test";
 const PASSWORD = process.env.E2E_AGENTS_RUN_USER_PASSWORD ?? "AgentsRunUAT2026!";
 const BASE_URL = process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000";
@@ -130,6 +132,11 @@ async function cloneGmailOAuthFromAnyAdmin(testUserEmail: string): Promise<void>
 }
 
 setup("create test user + save session", async ({ request }) => {
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures({ databaseUrl: DATABASE_URL });
+
   // 1. Idempotent sign-up. Returns 200 for new users, 422 for existing.
   const signUp = await request.post("/api/auth/sign-up/email", {
     data: { email: EMAIL, password: PASSWORD, name: "Agents Run UAT" },

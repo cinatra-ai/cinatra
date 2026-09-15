@@ -668,8 +668,6 @@ const GUEST_INVITE_ERROR_COPY: Record<string, string> = {
     "This email belongs to an organization member — grant access in Project access above.",
   "already-has-access":
     "This person already has access to this project (see Project access above).",
-  "registration-closed":
-    "Registration is closed on this instance — only a platform admin can invite a new guest email.",
   forbidden: "Project admin required.",
   unknown: "Could not invite the guest. Please try again.",
 };

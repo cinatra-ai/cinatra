@@ -17,7 +17,12 @@ import {
 } from "./bundle.ts";
 import { checkMemoryTree } from "./check.ts";
 import { recallMemoryConcepts } from "./recall.ts";
-import { MemoryError } from "./types.ts";
+import { runMemorySync } from "./sync.ts";
+import {
+  assertMemorySyncEndpointUrl,
+  createHttpMemorySyncTransport,
+} from "./sync-transport.ts";
+import { MemoryError, MemorySyncError, type MemorySyncResult } from "./types.ts";
 import { addMemoryConcept } from "./write.ts";
 
 /** Minimal stream surface the CLI writes to (injectable for tests). */
@@ -37,9 +42,19 @@ Commands:
   recall  <query...> [--limit <n>] [--json] [--dir <dir>]
                                                      Local text search over the bundle
   check   [--json] [--dir <dir>]                     Conformance check + diagnostics
+  sync    [--dry-run] [--json] [--url <mcp-url>] [--dir <dir>]
+                                                     One-way sync into Cinatra objects
 
 The bundle is located via --dir, else the nearest ./.memory/bundle.yaml
-walking up from the current directory.`;
+walking up from the current directory.
+
+memory sync is ONE-WAY: it writes local concepts into shared memory and
+never edits a concept file or bundle.yaml, never deletes a remote row, and
+never narrows one. It leaves one file behind after a write: sync-ledger.json
+at the bundle root, a per-checkout cache that memory init already gitignores.
+The MCP endpoint comes from --url or CINATRA_MCP_URL and must be https unless
+it is a loopback host; the bearer credential comes from CINATRA_MCP_TOKEN and
+is never written anywhere (a URL that reaches a message is redacted first).`;
 
 function resolveBundleDir(dirFlag: string | undefined, io: MemoryCliIo): string | undefined {
   if (dirFlag !== undefined) return path.resolve(dirFlag);
@@ -291,6 +306,124 @@ export function runMemoryCli(
     }
     // Filesystem errors (ENOENT/EACCES/...) surface as clean one-line
     // failures, never a raw stack trace. Anything else is a real bug: rethrow.
+    if (
+      error instanceof Error &&
+      typeof (error as NodeJS.ErrnoException).code === "string" &&
+      typeof (error as NodeJS.ErrnoException).syscall === "string"
+    ) {
+      io.err(`memory: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// `memory sync` (cinatra#1378) — the one command that talks to a server.
+// ---------------------------------------------------------------------------
+//
+// Kept behind an ASYNC entry point so `runMemoryCli` stays synchronous for the
+// filesystem-only commands (and for every caller and test that depends on that
+// shape). `runMemoryCliAsync` is what `bin/memory.mjs` invokes; it dispatches
+// `sync` here and delegates everything else unchanged.
+
+function renderSyncPlan(result: MemorySyncResult, dryRun: boolean, io: MemoryCliIo): void {
+  const { plan } = result;
+  for (const item of plan.items) {
+    io.out(`${item.action}\t${item.path}\t${item.reason}`);
+  }
+  for (const orphan of plan.orphans) {
+    io.out(`orphan\t${orphan.path}\tlocal file gone; remote row retained`);
+  }
+  for (const diagnostic of [...plan.diagnostics, ...result.diagnostics]) {
+    io.err(`${diagnostic.severity}\t${diagnostic.code}\t${diagnostic.path}\t${diagnostic.message}`);
+  }
+  const counts = dryRun
+    ? `${plan.items.filter((i) => i.action === "create").length} create, ` +
+      `${plan.items.filter((i) => i.action === "update").length} update, ` +
+      `${result.skipped} skip, ${result.blocked} blocked`
+    : `${result.created} created, ${result.updated} updated, ${result.skipped} skipped, ` +
+      `${result.blocked} blocked, ${result.failed} failed`;
+  io.out(
+    `${dryRun ? "dry-run: " : ""}${counts}; ${plan.orphans.length} orphan(s) retained`,
+  );
+}
+
+async function runSync(args: string[], io: MemoryCliIo): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      dir: { type: "string" },
+      "dry-run": { type: "boolean" },
+      json: { type: "boolean" },
+      url: { type: "string" },
+    },
+  });
+  const dir = resolveBundleDir(values.dir, io);
+  if (dir === undefined) return 1;
+  const dryRun = values["dry-run"] === true;
+
+  // ENV-first, memory-only. The endpoint may come from a flag (it is not a
+  // secret); the credential comes from the environment ONLY, so it never
+  // reaches a shell history, a process listing, or a diagnostic line.
+  const url = values.url ?? process.env.CINATRA_MCP_URL;
+  if (url === undefined || url.trim() === "") {
+    throw new MemorySyncError(
+      "no MCP endpoint configured; pass --url or set CINATRA_MCP_URL",
+    );
+  }
+  // Validate the endpoint BEFORE the credential is read, let alone attached
+  // (cinatra#1378 review item 9). This is the transport's own guard, called
+  // here so the refusal reaches the author as a CLI message; it replaces the
+  // `assertMemorySyncTransport` helper that nothing called and whose doc
+  // comment claimed it was the CLI's check (review item 14).
+  assertMemorySyncEndpointUrl(url.trim());
+  const token = process.env.CINATRA_MCP_TOKEN;
+  const transport = createHttpMemorySyncTransport({
+    url: url.trim(),
+    ...(token === undefined || token === "" ? {} : { token }),
+  });
+
+  const result = await runMemorySync({ root: dir, transport, dryRun });
+  if (values.json) {
+    io.out(JSON.stringify(result, null, 2));
+  } else {
+    renderSyncPlan(result, dryRun, io);
+  }
+  // A blocked concept (secret scan) or a server refusal is an operational
+  // failure: the run did not put everything it was asked to put into memory,
+  // and a green exit code would hide that from a script.
+  return result.blocked > 0 || result.failed > 0 ? 1 : 0;
+}
+
+/**
+ * Async CLI entry. Handles `sync`; delegates every other command to the
+ * synchronous {@link runMemoryCli} unchanged.
+ */
+export async function runMemoryCliAsync(
+  argv: string[],
+  io: MemoryCliIo = {
+    out: (line) => process.stdout.write(`${line}\n`),
+    err: (line) => process.stderr.write(`${line}\n`),
+  },
+): Promise<number> {
+  if (argv[0] !== "sync") return runMemoryCli(argv, io);
+  try {
+    return await runSync(argv.slice(1), io);
+  } catch (error) {
+    if (error instanceof MemoryError) {
+      io.err(`memory: ${error.message}`);
+      return 1;
+    }
+    if (
+      error instanceof TypeError &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      error.code.startsWith("ERR_PARSE_ARGS")
+    ) {
+      io.err(`memory: ${error.message}`);
+      return 2;
+    }
     if (
       error instanceof Error &&
       typeof (error as NodeJS.ErrnoException).code === "string" &&

@@ -169,7 +169,7 @@ function poolNameFor(connectionString: string): string {
 // This value is a SETTLE guarantee: past an hour the promise has not settled
 // in any sense a caller or an operator cares about, and 2^31-1 ms is 24.8 days
 // — representable, and meaningless. Every value this repo actually sets is far
-// under it (30s default, 4s in `vitest.integration-2882.config.ts`, and 90s
+// under it (30s default, 4s in `vitest/integration/2882.config.ts`, and 90s
 // for the sibling sync ceiling under a Turbopack-starved dev server), so the
 // clamp only ever engages on a value that was a mistake. Clamped rather than
 // rejected back to the default because the intent of an over-large value is

@@ -45,6 +45,7 @@ import {
   buildInsertReconcileOutboxQuery,
 } from "@/lib/skill-lifecycle-store";
 import { skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // Same DB gate as the S5 outbox suite (cinatra#2092): a placeholder connection
 // string is NOT a live database, and `_fixture` is deliberately NOT imported —
@@ -54,7 +55,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(dbUrl) &&
   !dbUrl.includes("build:build@127.0.0.1:5432/build");
 const d = describe.skipIf(!hasDb);
 

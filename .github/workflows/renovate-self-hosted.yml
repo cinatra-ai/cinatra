@@ -94,7 +94,7 @@ jobs:
     # Upstream only: a fork must never run the org bot's credentials, and the
     # secrets do not exist there anyway.
     if: github.repository == 'cinatra-ai/cinatra'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Extraction + lookups across this monorepo (npm workspaces, docker-compose,
     # Dockerfiles, the upgrade-matrix custom manager) plus lockfile artifact
     # updates is minutes, not seconds; the cap only stops a hung run.

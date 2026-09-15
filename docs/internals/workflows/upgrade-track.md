@@ -1445,7 +1445,7 @@ never a stub or a fixture route). The driver builds a genuine `DataTransfer`
 in page context and dispatches `dragenter`/`dragover`/`drop` on the zone, so the
 library's own `onDrop` → `getFilesFromEvent` → `fileAccepted` path runs — it is
 not the `<input>` shortcut. Drivers, fixtures, logs and screenshots are under
-`evidence/2164-react-dropzone-19/`.
+`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2164-react-dropzone-19/`.
 
 | Works-after obligation | on 15.0.0 | on 19.1.1 |
 |---|---|---|

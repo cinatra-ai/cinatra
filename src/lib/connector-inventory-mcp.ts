@@ -62,6 +62,13 @@ export const CONNECTOR_INVENTORY_TOOL_DESCRIPTION =
   "connected/live?'. IMPORTANT: `hasAuthorizedConnection: false` means 'no " +
   "connection YOU are authorized to use' — it does NOT mean nobody has " +
   "connected that connector, so never report it as 'nothing is connected'. " +
+  "A connector may hold NO connection of its own and work off another " +
+  "connector's: when `consumesConnectionFrom` names a connector, this row's " +
+  "`hasAuthorizedConnection` is read from THAT connector's connection, so true " +
+  "means its tools work for you and false means the named connector is what " +
+  "needs connecting. Such a connector has no connect road of its own — never " +
+  "tell the user to connect it; name the connector it consumes instead. " +
+  "`consumesConnectionFrom: null` means the connector holds its own connection. " +
   "Returns no credentials, tokens, secret refs, or raw connection identifiers.";
 
 function registerConnectorInventoryPrimitive(server: McpRuntimeToolServer) {

@@ -19,8 +19,33 @@ vi.mock("@/lib/mcp-server", () => ({
     // typed delegated-chat declaration travels WITH the handler so a
     // delegated-restricted self-invocation can apply the same narrow-only rule
     // the live transport applies at registration. Undeclared here — neutral.
-    return new Map<string, { handler: (...args: unknown[]) => unknown }>([
-      ["echo_primitive", { handler: (input: unknown) => ({ structuredContent: input }) }],
+    return new Map<string, { handler: (...args: unknown[]) => unknown; planned: unknown }>([
+      [
+        "echo_primitive",
+        {
+          handler: (input: unknown) => ({ structuredContent: input }),
+          // cinatra#2817 slice 1 — the capture carries the PLANNED identity, so
+          // this stub carries one too: the self-invoker reads the class off the
+          // planned entry rather than off a bare declaration field.
+          planned: {
+            name: "echo_primitive",
+            registeredName: "echo_primitive",
+            order: 0,
+            declaredClass: undefined,
+            ownerPackage: "@cinatra-ai/host",
+            resolvedVersion: "2817.1.0",
+            capabilityKey: null,
+            dispatchTarget: {
+              kind: "host",
+              packageName: "@cinatra-ai/host",
+              version: "2817.1.0",
+              name: "echo_primitive",
+            },
+            identityFailure: null,
+            reserved: false,
+          },
+        },
+      ],
     ]);
   },
 }));
@@ -30,7 +55,6 @@ vi.mock("@cinatra-ai/mcp-server", () => ({
     getStore: () => undefined,
     run: (_ctx: unknown, fn: () => unknown) => fn(),
   },
-  isDelegatedChatMcpToolAllowed: () => true,
 }));
 
 // Boundary always allows for this test (we're testing cache keying, not authz).

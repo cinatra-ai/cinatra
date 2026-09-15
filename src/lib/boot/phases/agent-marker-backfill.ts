@@ -39,8 +39,18 @@ export function agentMarkerBackfillPhases(): BootPhase[] {
       name: "agent-marker-backfill",
       policy: "degraded",
       run: async () => {
-        const { backfillPublishedMarkers, triggerWayflowReload } = await import(
-          "@cinatra-ai/agents"
+        // NARROW subpath imports, not the package barrel (cinatra#3029). This
+        // boot-only phase needs exactly two functions; reaching them through
+        // "@cinatra-ai/agents" dragged the WHOLE agents barrel -- every screen,
+        // store and execution module -- into the boot graph, and into the graph
+        // of every test that drives this phase, where it cost about ten seconds
+        // of module transform per file. The sibling mount resolver below was
+        // always imported this way; these two now match it.
+        const { backfillPublishedMarkers } = await import(
+          "@cinatra-ai/agents/materialize-agent-package"
+        );
+        const { triggerWayflowReload } = await import(
+          "@cinatra-ai/agents/wayflow-reload-client"
         );
         const { resolveAgentRuntimeMountDir, resolveDevExtensionSourceRoot } =
           await import("@cinatra-ai/agents/agent-runtime-mount");

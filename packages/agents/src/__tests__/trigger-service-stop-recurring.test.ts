@@ -72,6 +72,24 @@ const pm = vi.hoisted(() => ({
   deleteRunTriggerPmTask: vi.fn(async () => undefined),
 }));
 
+// cinatra#2981 — the trigger claim reaches Postgres for its advisory lock, and
+// this tier has no database. The pass-through preserves the CONTRACT the claim
+// gives its callers — the body decides on the row as read at claim time — while
+// the row itself keeps coming from this file's own mocked store.
+vi.mock("../trigger-claim", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../trigger-claim")>();
+  const { readRunTriggerByRunId } = await import("../trigger-store");
+  return {
+    ...actual,
+    withTriggerClaim: async (
+      runId: string,
+      body: (
+        live: Awaited<ReturnType<typeof readRunTriggerByRunId>>,
+      ) => Promise<unknown>,
+    ) => body(await readRunTriggerByRunId(runId)),
+  };
+});
+
 vi.mock("../store", () => store);
 vi.mock("../trigger-store", () => triggerStore);
 vi.mock("../trigger-schedule", () => schedule);

@@ -117,3 +117,168 @@ export function isTombstonedObjectTypeId(id: string): boolean {
  * fallback the write path already rejected).
  */
 export const GENERIC_OBJECT_TYPE_ID = "@cinatra-ai/objects:object" as const;
+
+// ---------------------------------------------------------------------------
+// The UNOWNED-TYPE REFUSAL, named (enabler 0.16 of `PLAN: Agents Lifecycle (C)`,
+// cinatra#3028 / epic #3023, closing half of cinatra#2960).
+//
+// THE ENABLER, IN THE PLAN'S OWN WORDS: "The unowned-type refusal, at both ends:
+// the save boundary refuses a type that no installed extension and not the host
+// owns, with a named reason; and the compiler flags an agent whose steps save to
+// a type it neither declares nor depends on — the dynamic-type namespace
+// resolves nowhere by design."
+//
+// WHAT IT FIXES, IN THE PLAN'S OWN WORDS: "a run fails one frame after its gate
+// with an opaque error because a host shaper saves an intermediate value under a
+// type nothing defines."
+//
+// WHY HERE, AND WHY PURE. Two write boundaries refuse this class today and each
+// composed its own prose: the artifact write path
+// (`src/lib/artifacts/artifact-creation.ts`) and the `objects_save` primitive
+// (`packages/objects/src/mcp/handlers.ts`). Two prose refusals are how a caller
+// ends up parsing English to find out what happened — which is exactly the
+// "opaque error" the defect names. One PURE classifier, in the leaf both
+// boundaries already import, gives both the same CLOSED reason token, so a
+// surface can branch on the reason instead of the sentence.
+//
+// PORT-INJECTED, so the classifier stays free of the registry graph: the caller
+// passes the two registry questions it can already answer. Total — an
+// adversarial id answers with a reason, never a throw.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a type is not owned. A CLOSED token set: a surface may branch on it, and
+ * a new member is a documented contract change, exactly like the write-boundary
+ * error codes beside it.
+ */
+export type UnownedArtifactTypeReason =
+  /** The reserved dynamic mint namespace. It resolves nowhere BY DESIGN, so this
+   *  is the one reason that is a statement about the id itself rather than about
+   *  what happens to be installed. */
+  | "dynamic-namespace"
+  /** A retired host generic type id. Registered for READ back-compat, never a
+   *  forward write target. */
+  | "retired-generic"
+  /** Not namespaced under a defining extension (`@scope/pkg:local`), so no
+   *  extension could own it and the host does not. */
+  | "not-namespaced"
+  /** Namespaced, but no installed extension defines it. */
+  | "no-installed-definer"
+  /** Defined, but the definition is not an artifact write target (a plain data
+   *  type: neither self-registered as an artifact nor carrying the
+   *  `artifact-safe` projection disposition). */
+  | "not-artifact-writable";
+
+export const UNOWNED_ARTIFACT_TYPE_REASONS: readonly UnownedArtifactTypeReason[] = [
+  "dynamic-namespace",
+  "retired-generic",
+  "not-namespaced",
+  "no-installed-definer",
+  "not-artifact-writable",
+] as const;
+
+/** The two registry questions the classifier needs, injected so this leaf
+ *  imports no registry. */
+export interface ArtifactTypeOwnershipPorts {
+  /** Is the type registered AND an artifact write target? `null` when the type
+   *  resolves to nothing at all; `false` when it resolves to a plain data type. */
+  isArtifactWritable(typeId: string): boolean | null;
+  /** Has the named package registered ANY type in this process? Drives the
+   *  "install this extension" hint — a package that has registered types is
+   *  installed, so suggesting its install would be a lie. */
+  packageHasRegisteredTypes(pkg: string): boolean;
+}
+
+export type ArtifactTypeOwnership =
+  | { owned: true; definer: string }
+  | {
+      owned: false;
+      reason: UnownedArtifactTypeReason;
+      /** The package the id NAMES as its definer, when the id is namespaced.
+       *  Null when nothing can be named — never invented. */
+      definer: string | null;
+      /** The definer to suggest installing, present ONLY when a concrete,
+       *  currently-uninstalled definer is known. */
+      suggestedExtension: string | null;
+    };
+
+/** The defining extension package of a namespaced object-type id
+ *  (`@scope/pkg:local` → `@scope/pkg`). Null for a non-namespaced id. */
+export function definerPackageOfObjectTypeId(typeId: string): string | null {
+  if (typeof typeId !== "string" || !typeId.startsWith("@")) return null;
+  const colon = typeId.lastIndexOf(":");
+  return colon > 0 ? typeId.slice(0, colon) : null;
+}
+
+/**
+ * Classify a type at a write boundary: owned by an installed artifact extension
+ * (or by the host), or unowned WITH A NAMED REASON.
+ *
+ * ORDER IS LOAD-BEARING, because more than one reason can be true at once and
+ * the FIRST is the honest one. The reserved dynamic namespace and the retired
+ * generic are statements about the id — they hold whatever is installed — so
+ * they are answered before anything is asked of the registry; a caller told
+ * "no installed extension defines it" about `@dynamic/types:x` would go looking
+ * for an extension to install that can never exist.
+ */
+export function classifyArtifactTypeOwnership(
+  typeId: string,
+  ports: ArtifactTypeOwnershipPorts,
+): ArtifactTypeOwnership {
+  const unowned = (
+    reason: UnownedArtifactTypeReason,
+    definer: string | null,
+    suggestedExtension: string | null = null,
+  ): ArtifactTypeOwnership => ({ owned: false, reason, definer, suggestedExtension });
+
+  if (typeof typeId !== "string" || typeId.length === 0) {
+    return unowned("not-namespaced", null);
+  }
+  if (isTombstonedObjectTypeId(typeId)) {
+    return unowned("dynamic-namespace", null);
+  }
+  if (typeId === GENERIC_OBJECT_TYPE_ID || typeId === "@cinatra-ai/artifact:object") {
+    return unowned("retired-generic", null);
+  }
+  const definer = definerPackageOfObjectTypeId(typeId);
+  if (!definer || !isNamespacedObjectTypeId(typeId)) {
+    return unowned("not-namespaced", definer);
+  }
+  const writable = ports.isArtifactWritable(typeId);
+  if (writable === null) {
+    return unowned(
+      "no-installed-definer",
+      definer,
+      ports.packageHasRegisteredTypes(definer) ? null : definer,
+    );
+  }
+  if (writable === false) return unowned("not-artifact-writable", definer);
+  return { owned: true, definer };
+}
+
+/**
+ * The refusal SENTENCE for a named reason. The message is derived FROM the
+ * reason, never composed beside it, so the two can never disagree — the failure
+ * mode cinatra#2960 recorded, where the sentence said "no installed artifact
+ * extension defines it" about an id that by design resolves nowhere.
+ */
+export function unownedArtifactTypeMessage(
+  typeId: string,
+  ownership: Extract<ArtifactTypeOwnership, { owned: false }>,
+): string {
+  const named = typeId ? `"${typeId}"` : "this content";
+  switch (ownership.reason) {
+    case "dynamic-namespace":
+      return `${named} is in the reserved dynamic-type namespace, which resolves to no extension by design — a save must name a type an installed artifact extension declares`;
+    case "retired-generic":
+      return `the generic host object type ${named} is retired — a save must name an installed artifact extension's declared type`;
+    case "not-namespaced":
+      return `object type ${named} is not namespaced under a defining extension`;
+    case "no-installed-definer":
+      return ownership.suggestedExtension
+        ? `no installed artifact extension defines ${named}; install ${ownership.suggestedExtension}`
+        : `no installed artifact extension defines ${named}`;
+    case "not-artifact-writable":
+      return `${named} is a data type, not an artifact write target — its extension declares no artifact for it`;
+  }
+}

@@ -22,6 +22,22 @@ import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
 import { toast } from "@/lib/cinatra-toast";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here — with
+// a spy, because one test below asserts the refresh actually happens.
+const routerStub = vi.hoisted(() => ({
+  refresh: vi.fn(),
+  push: vi.fn(),
+  replace: vi.fn(),
+  prefetch: vi.fn(),
+  back: vi.fn(),
+  forward: vi.fn(),
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => routerStub }));
+
+
 vi.mock("@/lib/cinatra-toast", () => {
   const base = vi.fn();
   const t = Object.assign(base, {
@@ -191,6 +207,38 @@ describe("schema-config action results — the error-banner verdict (#2752)", ()
 
     expect(toast.success).toHaveBeenCalledWith("Saved!");
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  // --- converge round 2, finding 1: the SERVER half is refreshed on success --
+  //
+  // The Sharing tab (design §II) is rendered on the SERVER from the live
+  // connection identity rows and handed to this client shell as a ready node.
+  // A successful action here can create the very connection that tab lists (a
+  // connector's own save road registers the identity row, cinatra#3460), so a
+  // shell that refreshes only its own client-side record lists leaves the
+  // Sharing tab answering "no connection saved here yet" until the person
+  // reloads the page by hand.
+  it("a SUCCESSFUL action refreshes the page's server half, so the Sharing tab sees the new connection", async () => {
+    routerStub.refresh.mockClear();
+    stubAction({ result: { banner: "saved" } });
+    await renderForm(surfaceOf(DECLARED_BANNER_SURFACE));
+    await clickAction("Save");
+
+    expect(toast.success).toHaveBeenCalledWith("Saved!");
+    expect(routerStub.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a TRANSPORT failure claims no server refresh — the action never reached the handler", async () => {
+    // The action never landed, so there is no new server answer to fetch. (An
+    // `ok` result carrying a declared error banner is a different case: the
+    // handler RAN and may have changed rows, so that path keeps refreshing.)
+    routerStub.refresh.mockClear();
+    stubAction({ error: "Upstream is unavailable." }, 500);
+    await renderForm(surfaceOf(DECLARED_BANNER_SURFACE));
+    await clickAction("Save");
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(routerStub.refresh).not.toHaveBeenCalled();
   });
 
   it("a result carrying NO banner name is still the plain confirmation", async () => {

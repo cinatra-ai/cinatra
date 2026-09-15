@@ -41,6 +41,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
+// The step is ADMINISTRATOR-ONLY. Every mutating action on this step
+// already calls `requireAdminSession()`; the page carries the same gate so
+// provider-readiness state is never derived for, or rendered to, a member.
+import { requireAdminSession } from "@/lib/auth-session";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import {
   getLlmProviderSurface,
@@ -111,6 +115,13 @@ function providerBrandIcon(provider: string): ReactNode | null {
 }
 
 export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
+  // THE GATE COMES FIRST — before any readiness is derived. Provider
+  // readiness (which provider is committed, whether a stored credential is
+  // fresh, which connector is installed) is administrative state, and every
+  // mutating action on this step already refuses a non-admin. A member is
+  // redirected to /not-authorized and derives nothing.
+  await requireAdminSession();
+
   const resolvedSearchParams = await (searchParams ??
     Promise.resolve({} as Record<string, string | string[] | undefined>));
   const stay = pickSearchParam(resolvedSearchParams.stay) === "1";

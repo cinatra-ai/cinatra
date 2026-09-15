@@ -1,6 +1,11 @@
 import "server-only";
 
 import { z } from "zod";
+
+// cinatra#2932 (lifecycle-b W5a) — the wire bound for a lifecycle card ref.
+// The SAME constant the card producers mint against, so a claim this schema
+// accepts is exactly a ref the resolver could have produced.
+import { LIFECYCLE_VIEW_REF_MAX_LENGTH } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { getAuthSession, requireActorContext, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
 import { describeLlmRuntimeUnavailability, runChatTurn, type ChatRequestMessage } from "@/app/api/chat/runner";
 import {
@@ -164,6 +169,27 @@ const assistantChatBodySchema = z.object({
     .object({
       assistantPackage: z.string().min(1).max(200),
       instanceId: z.string().min(1).max(200).nullish(),
+    })
+    .strict()
+    .optional(),
+  // OPTIONAL BOUND-CARD CLAIM (cinatra#2932, lifecycle-b W5a): what the
+  // composer could SEE when the person pressed send — the opaque refs of the
+  // lifecycle cards on screen, and the one they explicitly picked.
+  //
+  // ASSERTED, NEVER TRUSTED, and the schema is the smaller half of that. Every
+  // ref is re-resolved server-side under the reader's OWN access before
+  // anything binds (`resolveBoundCard`), so a ref for a card this person may
+  // not see contributes nothing, a forged ref does not decode, and a page that
+  // claims one card while two are really open still gets the platform's
+  // refusal. The schema's job is only to bound the SHAPE so a body cannot ask
+  // the server to do unbounded resolve work.
+  //
+  // ABSENT is the ordinary case: no binding, no grant, and a turn byte-identical
+  // to one sent before this field existed.
+  boundCard: z
+    .object({
+      refs: z.array(z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH)).max(10),
+      focused: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH).nullish(),
     })
     .strict()
     .optional(),
@@ -433,7 +459,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   });
 
   // Thread binding. The widget user is the caller, in its own org, and — since
-  // cinatra#2674 (codex round 0, finding 5) — with its REAL admin standing. The
+  // cinatra#2674 (convergence round 0, finding 5) — with its REAL admin standing. The
   // `isAdmin: false` that stood here was the last of the widget floors: it would
   // have refused a platform admin a thread they can continue in the app, which is
   // an under-grant and therefore still a divergence. `authorizeThreadForTurn`'s
@@ -545,7 +571,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     projectGrants: [],
     projectIds: [],
     // EVERY axis here is floored, and that is what this context IS (cinatra#2674,
-    // codex round 0, finding 5, considered and kept). This is NOT the widget
+    // convergence round 0, finding 5, considered and kept). This is NOT the widget
     // platform floor S8e removed: that one was widget-vs-app asymmetry on
     // permission-bearing surfaces — the lifecycle actor, the OBO token, the
     // carrier run, the selector audience, the thread gate — and every one of them
@@ -560,6 +586,16 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   };
 
   const messages: ChatRequestMessage[] = parsed.data.messages;
+  // cinatra#2932 (lifecycle-b W5a) — the bound-card claim, normalized ONCE for
+  // both producers. Normalizing here and not in the runtime keeps the wire shape
+  // (`refs`/`focused`) a property of this route's schema and the runtime's input
+  // a plain claim, so a second entry point cannot invent a third spelling.
+  const boundCardClaim = parsed.data.boundCard
+    ? {
+        candidateRefs: parsed.data.boundCard.refs,
+        focusedRef: parsed.data.boundCard.focused ?? null,
+      }
+    : null;
   const runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"] = (
     send,
     signal,
@@ -581,6 +617,10 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
       // durable skill-delivery record.
       turnIdentity,
       widgetPrincipal,
+      // cinatra#2932 — the bound-card claim, re-checked inside the runtime under
+      // this person's own standing. The widget is on the same road as the chat
+      // page and carries it the same way.
+      ...(boundCardClaim ? { boundCard: boundCardClaim } : {}),
     });
 
   const response = await streamAgUiChatTurn({
@@ -654,6 +694,17 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
       { status: 400 },
     );
   }
+
+  // cinatra#2932 (lifecycle-b W5a) — the bound-card claim, normalized ONCE.
+  // Normalizing here rather than in the runtime keeps the WIRE shape
+  // (`refs`/`focused`) a property of this route's schema and the runtime's input
+  // a plain claim, so a second entry point cannot invent a third spelling.
+  const boundCardClaim = parsed.data.boundCard
+    ? {
+        candidateRefs: parsed.data.boundCard.refs,
+        focusedRef: parsed.data.boundCard.focused ?? null,
+      }
+    : null;
   const { threadId } = parsed.data;
   const messages: ChatRequestMessage[] = parsed.data.messages;
 
@@ -720,7 +771,7 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   // replace. The producer's throwing resolver was never reached, so the naming
   // error class could not help: the guard SHADOWED it.
   //
-  // WHY IT SITS AFTER AUTHENTICATION AND THREAD AUTHORIZATION (codex round 1).
+  // WHY IT SITS AFTER AUTHENTICATION AND THREAD AUTHORIZATION (convergence round 1).
   // The pre-F10 guard ran before the session check, which was harmless while its
   // body was a constant. Naming the stored provider makes the body PRIVILEGED
   // configuration: run it any earlier and an unauthenticated caller could
@@ -769,6 +820,8 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         signal,
         // cinatra#2240 — keys this turn's durable skill-delivery record.
         turnIdentity,
+        // cinatra#2932 — the bound-card claim; re-checked inside the runtime.
+        ...(boundCardClaim ? { boundCard: boundCardClaim } : {}),
       });
   } else {
     const handle = parsed.data.assistant.trim().toLowerCase();

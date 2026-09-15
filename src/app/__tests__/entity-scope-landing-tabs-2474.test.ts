@@ -191,10 +191,26 @@ describe("the `/<scope>/<id>/dashboards` collection routes are GONE (#2474 PR2)"
   });
 });
 
-describe("personal keeps its Dashboards-only tablist (#2474 PR1 leaves it alone)", () => {
-  it("still mounts EntityScopeTabs with no settingsHref (#1904 — no personal Settings pane)", () => {
-    const src = read(PERSONAL_LANDING);
-    expect(src).toContain('<EntityScopeTabs dashboardsHref="/personal" active="dashboards" />');
+describe("personal keeps a Settings-LESS tablist (#2474 PR1 left it alone; #2807 widens it)", () => {
+  it("mounts EntityScopeTabs with the five scope tabs and no settingsHref (#1904 — no personal Settings pane)", () => {
+    // #2807 replaced the one-line Dashboards-only call with the five-tab strip
+    // (Dashboards | Assistants | Agents | Artifacts | Skills). The invariant
+    // this lock actually guards is unchanged and is the LAST assertion:
+    // personal never grows a Settings tab.
+    const src = stripComments(read(PERSONAL_LANDING));
+    // The lock binds to the ELEMENT the landing actually mounts, so a matching
+    // string somewhere else in the file can never satisfy it, and it stays a
+    // single-mount lock the way the retired one-line lock was.
+    const mounts = src.match(/<EntityScopeTabs[\s\S]*?\/>/g) ?? [];
+    expect(mounts).toHaveLength(1);
+    const el = mounts[0]!;
+    expect(el).toContain('dashboardsHref="/personal"');
+    expect(el).toContain('assistantsHref="/personal/assistants"');
+    expect(el).toContain('agentsHref="/personal/agents"');
+    expect(el).toContain('artifactsHref="/personal/artifacts"');
+    expect(el).toContain('skillsHref="/personal/skills"');
+    expect(el).toContain('active="dashboards"');
+    expect(el).not.toContain("settingsHref");
     expect(src).not.toContain("settingsHref");
   });
 });
@@ -220,18 +236,20 @@ describe("the #1897 scope collection is mounted on the landing (#2474 PR2)", () 
       expect(src).toContain(scopeId);
     });
 
-    it(`${file} — keeps the per-user shell + Overview untouched above the panel`, () => {
+    it(`${file} — the collection panel IS the tab body: no dashboard canvas above it`, () => {
       const src = read(file);
-      // #2474's constraint: the collection is folded onto the landing WITHOUT
-      // unioning secondary listings into the per-user dropdown. The per-user
-      // shell must still be mounted, and the panel must come AFTER it.
-      const shell = /<(OrganizationDashboards|TeamDetailDashboards|ProjectDashboardsTab)\b/.exec(
+      // RE-POINTED by cinatra#2807 fix leg 3. #2474 folded the collection onto
+      // the landing BELOW the per-user dashboard shell; the ratified drawing's
+      // Dashboards-tab section gives the tab one body and names none of that
+      // shell's parts, and the Components Toolbar rule forbids the band it
+      // carried ("never stack a toolbar and the etched paired rule"). The
+      // constraint #2474 actually needed — a secondary listing is never unioned
+      // into a per-user dropdown — survives trivially: there is no dropdown.
+      const shell = /<(OrganizationDashboards|TeamDetailDashboards|ProjectDashboardsTab|EntityDashboardsShell)\b/.exec(
         src,
       );
-      expect(shell).not.toBeNull();
-      expect(src.indexOf("<ScopeDashboardsSection")).toBeGreaterThan(
-        shell!.index,
-      );
+      expect(shell).toBeNull();
+      expect(src).toContain("<ScopeDashboardsSection");
     });
   }
 
@@ -246,16 +264,18 @@ describe("the #1897 scope collection is mounted on the landing (#2474 PR2)", () 
 describe("the collection panel's heading names the scope KIND, not the entity (#2474 PR2)", () => {
   const TAB = "src/components/dashboards/scope-dashboards-tab.tsx";
 
-  it("renders a heading element, not a second page lede", () => {
+  it("renders the drawn muted caption naming the entity, not a kind-named heading", () => {
     const src = read(TAB);
-    // Folded onto a landing whose PageHeader already carries the entity name as
-    // the h1 and its own description above the tablist, the collection's old
-    // "The dashboards in <Entity>." lede was a second, near-identical lede (the
-    // placement observation recorded on the PR1 proof, #2547). It is now the
-    // panel's heading, below the tablist where §IX's illustration puts it.
-    expect(src).toContain("<h2");
-    expect(src).toContain("Dashboards in this {SCOPE_NOUN[data.scopeKind]}");
-    expect(stripComments(src)).not.toContain("The dashboards in");
+    // RE-POINTED by cinatra#2807 fix leg 3. #2474 promoted this row to a
+    // kind-named h2 to avoid a second page lede; the third proof round graded
+    // that against the drawing, which draws a MUTED 13px line naming the entity
+    // — "The dashboards in <b>Team: Growth</b>." — and no heading at all.
+    expect(src).not.toContain("<h2");
+    expect(src).not.toContain("Dashboards in this");
+    expect(src).toContain("The dashboards in");
+    expect(src).toContain("The dashboards you own.");
+    expect(src).toContain("text-scope-caption");
+    expect(src).toContain("text-muted-foreground");
   });
 
   it("keeps the entity-named label for the add-to-scope picker title (§IX.1)", () => {
@@ -297,13 +317,14 @@ describe("the unified Add-dashboard popup is wired from every shared landing (#2
       expect(src).toContain(`const scopeLabel = ${label}`);
     });
 
-    it(`${file} — the provider wraps the SHELL, so the toolbar can reach it`, () => {
+    it(`${file} — the provider wraps the TAB BODY, so the drawn Add can reach it`, () => {
+      // RE-POINTED by cinatra#2807 fix leg 3: the Add affordance moved out of
+      // the toolbar band (undrawn) into the tab body's caption row, where the
+      // drawing puts it, so the provider must wrap the body.
       const src = read(file);
-      const shell = /<(OrganizationDashboards|TeamDetailDashboards|ProjectDashboardsTab)\b/.exec(
-        src,
-      );
-      expect(shell).not.toBeNull();
-      expect(src.indexOf("<ScopeAddSourcesProvider")).toBeLessThan(shell!.index);
+      const body = src.indexOf("<ScopeDashboardsSection");
+      expect(body).toBeGreaterThan(-1);
+      expect(src.indexOf("<ScopeAddSourcesProvider")).toBeLessThan(body);
     });
   }
 
@@ -316,26 +337,24 @@ describe("the unified Add-dashboard popup is wired from every shared landing (#2
     );
   });
 
-  it("personal gets NO add-to-scope source (not an add-to-scope target, §IX)", () => {
-    // cinatra#2474 PR4 wires personal into the provider (for concept B), so the
-    // lock is no longer "no provider" — it is the STRONGER property the spec
-    // actually names: personal never receives the §IX.1 reference source, so it
-    // can never grow an "Add dashboard". `reference={null}` is a LITERAL here,
-    // not an expression that could evaluate non-null.
+  it("personal carries NO add path at all (not an add-to-scope target, §IX)", () => {
+    // STRENGTHENED by cinatra#2807 fix leg 3. #2474 PR4 wired personal into the
+    // provider for concept B's catalog while keeping `reference={null}`; the
+    // drawing gives this scope's tab no Add of any kind — "a personal user scope
+    // and the whole-workspace scope are not add-to-scope targets — they carry no
+    // Add" — so the landing now mounts no add sources whatsoever, which no
+    // literal can later evaluate around.
     const src = read(PERSONAL_LANDING);
-    expect(src).toContain("<ScopeAddSourcesProvider");
-    expect(src).toMatch(/reference=\{null\}/);
+    expect(src).not.toContain("<ScopeAddSourcesProvider");
     expect(src).not.toContain("buildScopeReferenceSource");
+    expect(src).not.toContain("buildScopeCatalogNode");
   });
 
   // ── cinatra#2474 PR4 — concept B's catalog node ──────────────────────────
   describe("the installed-catalog node (PR4)", () => {
-    const CATALOG_LANDINGS = [
-      ORG_LANDING,
-      TEAM_LANDING,
-      PROJECT_LANDING,
-      PERSONAL_LANDING,
-    ];
+    // NARROWED by cinatra#2807 fix leg 3: the catalog reaches a scope through
+    // that scope's Add affordance, and the drawing gives personal none.
+    const CATALOG_LANDINGS = [ORG_LANDING, TEAM_LANDING, PROJECT_LANDING];
 
     for (const file of CATALOG_LANDINGS) {
       it(`${file} — builds the catalog through the ONE shared node builder and passes it down`, () => {
@@ -380,7 +399,8 @@ describe("the unified Add-dashboard popup is wired from every shared landing (#2
       expect(read(ORG_LANDING)).toContain(
         'surface: { kind: "organization", orgId: id, scopeId: id, userId }',
       );
-      expect(read(PERSONAL_LANDING)).toContain('kind: "personal"');
+      // Personal builds no surface descriptor at all — it has no add path.
+      expect(read(PERSONAL_LANDING)).not.toContain("buildScopeCatalogNode");
     });
 
     it("NO landing hands the read a destination ref — it is derived, never supplied", () => {

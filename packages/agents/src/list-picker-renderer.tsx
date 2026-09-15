@@ -74,6 +74,7 @@ export function ListPickerRenderer({
   error,
   label,
   description,
+  context,
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,11 +91,20 @@ export function ListPickerRenderer({
     onChangeRef.current = onChange;
   });
 
+  // The run whose step this renderer is drawing. `context.runId` is the shared
+  // field-renderer contract's run identity
+  // (packages/sdk-ui/src/field-renderer-props.ts). It is what authorizes the
+  // loader (cinatra#3050): the lists are loaded with the RUN's access, not with
+  // a platform-administrator session, so the run's own non-administrator owner
+  // is no longer redirected to `/not-authorized` at this step.
+  const runId = context?.runId;
+
   // Mount-once fetch, guarded with a cancellation flag so React Strict Mode's
-  // double-mount in dev does not double-fetch.
+  // double-mount in dev does not double-fetch. Keyed on the run identity so a
+  // runId that only arrives after mount re-issues the (now authorized) load.
   useEffect(() => {
     let cancelled = false;
-    fetchAvailableLists()
+    fetchAvailableLists(runId ?? "")
       .then((items) => {
         if (!cancelled) {
           setLists(items);
@@ -110,7 +120,7 @@ export function ListPickerRenderer({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [runId]);
 
   // v1: client-side search filter only. The crm_list_search facade accepts a
   // server-side query param, but the v1 dataset is small enough that

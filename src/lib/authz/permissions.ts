@@ -34,6 +34,12 @@ export type Permission =
   | "agent.delete"
   | "agent.share"
   | "agent.managePermissions"
+  // Per-scope assignment authority (cinatra#2813 S1, epic #2812). ADMISSION
+  // only: holding it means "may administer assignments somewhere", and WHICH
+  // scope is decided by the exact-scope resolver in
+  // src/lib/authz/assignment-authority.ts. Never granted to platform_admin —
+  // a platform admin acts through the audited bypass.
+  | "agent.assignments.manage"
   // Runs
   | "run.read"
   | "run.list"
@@ -85,6 +91,10 @@ export type Permission =
   | "skill.delete"
   | "skill.install"
   | "skill.manageVisibility"
+  // The context-artifact sibling of agent.assignments.manage. Same admission/
+  // fence split, same platform-admin exclusion (its `.assign` suffix is what
+  // the platform-admin invariant test keys on).
+  | "context.assign"
   // Connectors
   | "connector.read"
   | "connector.use"

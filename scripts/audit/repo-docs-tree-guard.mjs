@@ -8,9 +8,13 @@
 //      (tracked files beneath it, no tracked entry named exactly docs/internals).
 //   2. NO *.json anywhere under docs/** — machine-consumed config/data lives
 //      under config/ (e.g. config/upgrade/upgrade-matrix.json), never in docs.
-//   3. pr-evidence is ABSENT from the tree — both the directory and any
-//      tracked entry named exactly `pr-evidence` (render/screenshot evidence
-//      goes to an evidence branch by commit-SHA permalink, never the product tree).
+//   3. NO PROOF ARTIFACTS ARE TRACKED — neither `pr-evidence` nor `evidence`,
+//      as a directory or as a tracked entry with that exact name. Captures,
+//      run records and PR proof bundles are posted on the pull request and
+//      cited by commit-SHA permalink; they never enter the product tree.
+//      `.gitignore` is not enforcement — `git add -f` walks straight past it,
+//      and a 150MB proof tree is exactly the thing somebody force-adds "just
+//      this once". This is the check that actually holds the line.
 //
 // Deterministic and dependency-free (node + git only): asserts against the
 // TRACKED tree (git ls-files), so it is independent of build artifacts,
@@ -92,15 +96,23 @@ if (jsonUnderDocs.length > 0) {
   );
 }
 
-// 3. pr-evidence absent — the pathspec `pr-evidence` matches both a tracked
-// entry named exactly pr-evidence AND everything under pr-evidence/.
-const prEvidence = tracked("pr-evidence");
-if (prEvidence.length > 0) {
-  errors.push(
-    `pr-evidence must be absent from the product tree (evidence goes to an evidence branch): ${prEvidence
-      .slice(0, 5)
-      .join(", ")}${prEvidence.length > 5 ? ` … (+${prEvidence.length - 5} more)` : ""}`,
+// 3. No proof-artifact tree is tracked. Each pathspec matches BOTH a tracked
+// entry with exactly that name AND everything beneath it as a directory.
+const PROOF_ARTIFACT_ROOTS = ["evidence", "pr-evidence"];
+
+/** The tracked proof-artifact paths, as an error string, or null when clean. */
+function proofArtifactViolation(root, paths) {
+  if (paths.length === 0) return null;
+  return (
+    `${root}/ must be absent from the product tree — proof artifacts are posted on the PR and ` +
+    `cited by commit-SHA permalink, never committed: ${paths.slice(0, 5).join(", ")}` +
+    `${paths.length > 5 ? ` … (+${paths.length - 5} more)` : ""}`
   );
+}
+
+for (const root of PROOF_ARTIFACT_ROOTS) {
+  const violation = proofArtifactViolation(root, tracked(root));
+  if (violation) errors.push(violation);
 }
 
 if (errors.length > 0) {
@@ -109,5 +121,6 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `[repo-docs-tree-guard] OK — docs/ = {README.md, internals/} (${docsFiles.length} tracked files, 0 json), pr-evidence absent.`,
+  `[repo-docs-tree-guard] OK — docs/ = {README.md, internals/} (${docsFiles.length} tracked files, 0 json), ` +
+    `no tracked proof artifacts (${PROOF_ARTIFACT_ROOTS.map((r) => `${r}/`).join(", ")}).`,
 );

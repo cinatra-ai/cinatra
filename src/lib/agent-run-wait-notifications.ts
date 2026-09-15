@@ -56,6 +56,7 @@ import type {
 // unit-testable and pulls no agents service graph onto a cold import.
 import {
   classifyRunWaitInterrupt,
+  waitNotificationLandsInConversation,
   type RunWaitInterruptDescriptor,
   type RunWaitInterruptKind,
 } from "@cinatra-ai/agents/run-surface-status";
@@ -381,8 +382,16 @@ export const runWaitNotifier: RunWaitNotifier = {
       // recommendation hold, which carries no interrupt to derive from — enters
       // through `onEnterRecommendationHold` below instead (cinatra#2838 dropped the
       // unused caller-supplied field from this seam).
+      //
+      // AND THE REVIEW LANDS THERE TOO (cinatra#2930, epic #2926 W3). The plan
+      // states the destination for both in one sentence — "the notification
+      // links to the conversation the run was started from — for the review as
+      // for a question — and to the run page otherwise" — so the predicate is
+      // `waitNotificationLandsInConversation`, which asks WHERE, while
+      // `classifyRunWaitInterrupt` goes on answering WHAT THE COPY IS. A review
+      // is still an approval in every word the reader sees; only the link moves.
       let href = runHref;
-      if (classifyRunWaitInterrupt(interrupt) === "input") {
+      if (waitNotificationLandsInConversation(interrupt)) {
         const { findChatConversationPathForAgentRun } = await import(
           "@/lib/assistant-thread-store"
         );

@@ -72,6 +72,8 @@ import {
   type LifecycleCardHost,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
+  DELEGATED_WIDGET_BOUND_CARD_ACTION,
+  DELEGATED_WIDGET_NAMED_AGENT_START,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -124,7 +126,15 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
     const carried = [...LIFECYCLE_DATA_PART_VIEW_TYPES, ...LIFECYCLE_INTERRUPT_KINDS].sort();
     expect(carried).toEqual([...LIFECYCLE_CARD_KINDS].sort());
     for (const kind of LIFECYCLE_CARD_KINDS) {
-      expect(LIFECYCLE_CARD_CARRIAGE[kind], kind).toMatch(/^(data_part|interrupt)$/);
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two
+      // axes. `represent` is the wire one this matrix is about; `canonical`
+      // says which fact decides the card is live, and both are closed sets.
+      expect(LIFECYCLE_CARD_CARRIAGE[kind].represent, kind).toMatch(
+        /^(data_part|interrupt)$/,
+      );
+      expect(LIFECYCLE_CARD_CARRIAGE[kind].canonical, kind).toMatch(
+        /^(run_state|data_part)$/,
+      );
     }
   });
 
@@ -220,14 +230,44 @@ describe("BROKER exclusion, leg 2: a carrier run has no trigger interaction", ()
 });
 
 describe("BROKER exclusion, leg 3: the broker allowlist is TOTAL", () => {
-  it("a widget delegation reaches its OWN content-editor primitive plus the read-only pulls, and nothing else", () => {
+  it("a widget delegation reaches its OWN content-editor primitive, the read-only pulls and the ONE lent action, and nothing else", () => {
+    // AMENDED for cinatra#2932 (lifecycle-b W5a). The set gains exactly one
+    // entry — the lent action — and the assertion stays TOTAL, which is the
+    // property this case exists for: it is still an exhaustive equality, so a
+    // second addition fails here as loudly as the first would have.
+    //
+    // WHY THE WIDGET HAS IT. The epic's parity rule: a person does the same
+    // things inside a third-party application as in the app. Withholding it
+    // would not be a safety property — it would be the widget refusing a button
+    // the person can see on the card in front of them. Nothing is offered that
+    // the widget's own credential cannot do: the deciding authority is built
+    // fresh from that credential at the call, and the primitive does NOTHING at
+    // all without the message's single-use grant.
     for (const kind of ["wordpress", "drupal"] as const) {
       const allowed = [...delegatedWidgetAllowedToolNames(kind)].sort();
+      // AMENDED AGAIN for cinatra#2935 (lifecycle-b W5d): exactly one MORE
+      // entry — the one narrowly scoped start that replaces the removed
+      // sentence-matcher, which was the widget's ONLY way to start an agent.
+      // The assertion stays TOTAL. Nothing is offered that the widget's own
+      // credential cannot do: the start resolves the person's LIVE standing at
+      // the call and runs `agent_run`'s own execute gate under it, so an agent
+      // they may not start is refused in the platform's own words.
       const expected = [
         `${kind}_content_editor_run`,
         ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+        DELEGATED_WIDGET_BOUND_CARD_ACTION,
+        DELEGATED_WIDGET_NAMED_AGENT_START,
       ].sort();
       expect(allowed, kind).toEqual(expected);
+    }
+  });
+
+  it("the widget still cannot reach `agent_run` itself — the start is a door, not a second one", () => {
+    // cinatra#2790's invariant, unchanged by the one widening above.
+    for (const kind of ["wordpress", "drupal"] as const) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run"), kind).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_get"), kind).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_resume"), kind).toBe(false);
     }
   });
 

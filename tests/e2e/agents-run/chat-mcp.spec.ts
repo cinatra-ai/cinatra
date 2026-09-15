@@ -34,7 +34,7 @@ import {
   driveHitlScreen,
   waitForRunCompletion,
 } from "./hitl-actions";
-import { assertExpectedOutputs } from "./objects-assertions";
+import { assertExpectedArtifactRows, assertExpectedOutputs } from "./objects-assertions";
 import {
   agentRunIdFromWire,
   describeAgUiEvents,
@@ -415,6 +415,17 @@ for (const fixture of CHAT_MCP_FIXTURES) {
       // 6. Object-persistence assertion when declared.
       if (fixture.agentFixture) {
         await assertExpectedOutputs(runId!, fixture.agentFixture);
+      }
+
+      // 7. cinatra#3208 — the artifact rows the run OWED, in the shape the
+      // run's own structured output defines. A run that completes without
+      // filing them is not a pass.
+      if (fixture.expectedArtifactRows) {
+        await assertExpectedArtifactRows(
+          runId!,
+          fixture.packageName,
+          fixture.expectedArtifactRows,
+        );
       }
     });
   });

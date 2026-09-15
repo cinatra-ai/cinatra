@@ -20,13 +20,6 @@ let streamBehaviour: (input: Record<string, unknown>) => Promise<void> | void =
   async () => {};
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
-  serverSideExplicitDispatch: vi.fn(),
-}));
 vi.mock("@/app/api/chat/chat-user-context", () => ({
   buildChatUserContextSections: vi.fn(async () => []),
 }));

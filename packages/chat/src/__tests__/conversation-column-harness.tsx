@@ -33,6 +33,11 @@ import {
 import { createChatWidgetRuntime, EMPTY_WIDGETS, EMPTY_WIDGET_MANIFESTS } from "../widget-runtime";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
 import {
+  LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
+  LIFECYCLE_HITL_SCREEN_PATH,
+  LIFECYCLE_RECOMMENDATION_HOLD_PATH,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
+import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
   TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
   VERIFICATION_SUMMARY_VIEW_VERSION,
@@ -384,6 +389,44 @@ export type WidgetServiceStubOptions = {
    * not a transport failure.
    */
   lifecycle?: (viewType: string) => unknown | null;
+  /**
+   * The BROKER READ of a recommendation hold (cinatra#2790, epic #2784 S9f).
+   *
+   * The hold is the one lifecycle kind carried as a typed INTERRUPT, so it has
+   * no view ref to post at the resolve route and is addressed by its run. On a
+   * credential-declaring host the card reads it HERE rather than through the
+   * cookie-bound server action, so the widget's server has to answer this too —
+   * otherwise a card would draw nothing for want of a stub and a suite could
+   * read that silence as a surface that carries no card.
+   *
+   * `null` means "this reader gets nothing", which is the 404 the route's
+   * refusal produces, not a state.
+   */
+  recommendationHold?: (runId: string) => unknown | Promise<unknown> | null;
+  /** The BROKER DECISION on that hold. Answers the route's `{ outcome }` shape. */
+  recommendationDecide?: (body: Record<string, unknown>) => unknown | Promise<unknown> | null;
+  /**
+   * The BROKER READ of the HITL SCREEN (cinatra#2930, lifecycle-b W3).
+   *
+   * The second kind carried as a typed INTERRUPT, so it has no view ref to
+   * post at the resolve route and is addressed by its run. Same rule as the
+   * hold's read above: a credential-declaring host reads HERE, so the
+   * widget's server has to answer it or a card would draw nothing for want
+   * of a stub and a suite could read that silence as a surface with no card.
+   */
+  hitlScreen?: (runId: string) => unknown | Promise<unknown> | null;
+  /**
+   * The RUN SEED read (cinatra#3044).
+   *
+   * The transcript reads the run itself to learn which lifecycle moment it
+   * stands at — the same route the inline run panel seeds from — so the
+   * widget's server has to answer it too. Without a stub the column would draw
+   * the run's progress reading over a moment that is actually open, and a suite
+   * could read that as a surface with no moment.
+   *
+   * `null` means "this reader gets nothing", which is the route's own 404.
+   */
+  runSeed?: (runId: string) => unknown | Promise<unknown> | null;
 };
 
 /**
@@ -416,6 +459,49 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
       const answer = options.lifecycle(requested);
       return answer === null ? json({ error: "Not available to you." }, 404) : json(answer);
     }
+    if (url === LIFECYCLE_HITL_SCREEN_PATH) {
+      if (!options.hitlScreen) return json({ state: "none" });
+      const runId = (() => {
+        try {
+          return String(JSON.parse(String(init?.body ?? "{}")).runId ?? "");
+        } catch {
+          return "";
+        }
+      })();
+      const answer = await options.hitlScreen(runId);
+      return answer === null || answer === undefined
+        ? json({ error: "Not available to you." }, 404)
+        : json(answer);
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_HOLD_PATH) {
+      if (!options.recommendationHold) return json({ error: "no hold stub" }, 404);
+      const runId = (() => {
+        try {
+          return String(JSON.parse(String(init?.body ?? "{}")).runId ?? "");
+        } catch {
+          return "";
+        }
+      })();
+      const answer = await options.recommendationHold(runId);
+      return answer === null || answer === undefined
+        ? json({ error: "Not available to you." }, 404)
+        : json(answer);
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_DECIDE_PATH) {
+      const body = (() => {
+        try {
+          return JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        } catch {
+          return {} as Record<string, unknown>;
+        }
+      })();
+      const answer = options.recommendationDecide
+        ? await options.recommendationDecide(body)
+        : { ok: true, dispatched: true };
+      return answer === null || answer === undefined
+        ? json({ error: "Not available to you." }, 404)
+        : json({ outcome: answer });
+    }
     if (url.startsWith("/api/assistants/list")) {
       return json({ assistants: options.mentionables ?? [] });
     }
@@ -430,6 +516,16 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
       return options.threadMessages
         ? json({ messages: options.threadMessages })
         : json({ error: "Not found" }, 404);
+    }
+    if (url.startsWith("/api/agents/runs/")) {
+      if (!options.runSeed) return json({ error: "Not found" }, 404);
+      const runId = decodeURIComponent(
+        url.slice("/api/agents/runs/".length).split("?")[0] ?? "",
+      );
+      const answer = await options.runSeed(runId);
+      return answer === null || answer === undefined
+        ? json({ error: "Not found" }, 404)
+        : json(answer);
     }
     if (url.startsWith("/api/chat/pending-tool-calls")) {
       return json({ rows: options.pendingRows ?? [] });
@@ -525,12 +621,18 @@ function RefusedSurface(options: SurfaceMountOptions) {
   );
 }
 
+/** How long a cold mount of the lazily-loaded column may take before it counts
+ *  as a column that drew nothing. See `mountSurface` for why it is not the
+ *  default. */
+const MOUNT_TIMEOUT_MS = 15_000;
+
 export async function mountRefusedSurface(
   options: SurfaceMountOptions = {},
 ): Promise<RenderResult> {
   const result = render(refusedSurfaceElement(options));
-  await waitFor(() =>
-    expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull(),
+  await waitFor(
+    () => expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull(),
+    { timeout: MOUNT_TIMEOUT_MS },
   );
   return result;
 }
@@ -540,8 +642,16 @@ export async function mountSurface(
   options: SurfaceMountOptions = {},
 ): Promise<RenderResult> {
   const result = render(surfaceElement(surface, options));
-  await waitFor(() =>
-    expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull(),
+  await waitFor(
+    () => expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull(),
+    // THE COLD CHUNK, waited for rather than raced (cinatra#2930). The column is
+    // lazily loaded, so the FIRST mount in a worker pays the whole chunk's
+    // import cost while every later one is free — and the default one-second
+    // budget is a race against that import, not a measurement of anything. A
+    // suite that lost it read a mounted transcript as EMPTY, which is
+    // indistinguishable from a column that drew nothing. Waiting longer weakens
+    // no assertion: what is asserted is still that the list appears.
+    { timeout: MOUNT_TIMEOUT_MS },
   );
   return result;
 }

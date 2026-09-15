@@ -10,7 +10,7 @@
  *
  * ONE type-agnostic screen on which a human reviews an artifact produced inside an
  * agent run and approves, rejects, or comments on it. Ratified design spec
- * `specs/app-artifact-review.html` @ design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 (owner-approved) — build
+ * `specs/app-artifact-review.html` @ design@0c484154b069c6369a33c1375056126289888997 (owner-approved) — build
  * EXACTLY to §I–VI, no invented affordances.
  *
  * The surface reads as a review DOCUMENT (§I): a gate header (what is under
@@ -41,12 +41,14 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
+import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
 import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
@@ -56,7 +58,14 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
+import { recommendationDecidedForRun } from "@cinatra-ai/agents/run-recommendation-core";
+import {
+  recommendationRailEntry,
+  recommendationRailStepOpens,
+} from "@cinatra-ai/agents/recommendation-rail-entry";
 import {
   encodeLifecycleGateRef,
   encodeScheduleRunRef,
@@ -66,8 +75,7 @@ import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
-import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
-import { ReviewPromptWindow } from "./review-prompt-window";
+import { ReviewRunSurface } from "./review-run-surface";
 import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
@@ -103,7 +111,13 @@ async function loadRunStepsContext(
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
-      runSteps = buildRunStepperSteps(policySteps).map((s) => ({ index: s.index, label: s.label }));
+      // The run's own record of each step, as the run page hands it over
+      // (cinatra#3226): the two surfaces project ONE list, so a step the run
+      // page names by its work is named the same here.
+      runSteps = buildRunStepperSteps(policySteps, { stepResults: run.stepResults ?? null }).map((s) => ({
+        index: s.index,
+        label: s.label,
+      }));
     }
   } catch {
     runSteps = [];
@@ -181,7 +195,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     );
   }
 
-  const surface = await loadReviewGateSurface({ runId, reviewTaskId, actorCtx });
+  const surface = await loadReviewGateSurface({
+    runId,
+    reviewTaskId,
+    actorCtx,
+    // WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091): the
+    // content channel, so "the json, cms-snapshot and text displays draw
+    // through the content channel on EVERY host" — this one included. The byte
+    // road stays the session routes here: they work under a cookie and they are
+    // the narrower grant.
+    roads: firstPartyReviewSurfaceRoads(),
+  });
 
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;
@@ -278,6 +302,50 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     ? encodeScheduleRunRef({ runId })
     : null;
 
+  // §V's card AS THE SKILLS STEP IN THE RAIL (cinatra#3047, the re-shoot's
+  // first and second defects).
+  //
+  // NEVER ABOVE THE REVIEW CARD. The change request: "Every HITL shows on its
+  // own dedicated page. Do not show skills on top of a HITL card. Do not show
+  // the skills on top of the review card or the schedule card or any other card
+  // either." The ratified drawing at the capture contract's pin puts it as one
+  // page per gate, and draws this page's own rail with the Skills entry first,
+  // settled, above the run's steps. The card was mounted straight into the gate
+  // region here — above the review card, in the reading point C retired — while
+  // the rail carried no Skills entry at all, and this route is a second
+  // composition of the run surface that the run page's own fix never reached.
+  //
+  // THE PARK ROW IS THE WHOLE READING, and it is the SAME read the run page and
+  // the setup run page make (`recommendation-rail-entry.ts`): a run that never
+  // held has no entry at all, a live hold is the step the run is paused on, a
+  // decided one is the rail's read-only history row, and a park the TTL sweeper
+  // left terminal-but-unanswered opens onto nothing and so is closed and muted.
+  // Nothing is prefetched, no candidates are resolved and no decision state is
+  // derived here — the card owns the interaction (cinatra#2573); this asks only
+  // whether the question was ever asked. It is a plain run-scoped read behind
+  // the access door `loadReviewGateSurface` cleared above.
+  const recommendationPark = await readRecommendationParkForRun(runId).catch(() => null);
+  const recommendationEntry = recommendationRailEntry({
+    hasPark: recommendationPark !== null,
+    held: recommendationPark?.status === "parked",
+  });
+  const recommendationStepOpens = recommendationRailStepOpens({
+    entry: recommendationEntry,
+    parkStatus: recommendationPark?.status,
+    // A DECISION THAT RACED THE TTL SWEEPER IS STILL A DECISION (cinatra#3047,
+    // convergence). The park's status and the decision's evidence are not
+    // written atomically, so a confirm or a skip that lands as the sweeper fires
+    // leaves `policy_unresolved` behind with the answer on file — and the card
+    // draws that run's settled row. Reading the status alone would leave this
+    // page's Skills row settled on the rail and closed, with the run's own
+    // answer reachable nowhere, while the run page opens the same card. One
+    // definition of "decided" (`recommendationDecidedForRun`), asked by both.
+    decided: recommendationDecidedForRun({
+      runId,
+      parkStatus: recommendationPark?.status,
+    }),
+  });
+
   return (
     <ReviewShell>
       <div className="flex items-start gap-6" data-run-detail-contract="">
@@ -302,6 +370,31 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
           configuration fault to fix, not a reason to fork the surface. */
           const detailNode = (
             <LifecycleCardSurfaceProvider host="page_gate_region">
+              {/* THE GATE REGION CARRIES THE REVIEW CARD AND THE RUN'S OWN
+                  PARKED QUESTION — AND NOT THE SKILLS ROW (cinatra#3047, the
+                  re-shoot's first defect).
+
+                  §V's card stood HERE, above the gate card, and the ordering was
+                  argued as the design's: "the recommendation is the decision
+                  taken BEFORE the run produced anything, and the review is the
+                  decision taken after". The drawing at the capture contract's
+                  pin has since ruled the other way and the change request says
+                  so in its own words — one page per gate, and "do not show the
+                  skills on top of the review card". So the Skills question is a
+                  STEP on this page's rail now, and its row opens in the run
+                  detail in place of what is here, never stacked over it. The
+                  mount moved to `review-run-surface.tsx`; the HOST did not. */}
+              {/* THE QUESTION THE RUN IS PARKED ON, on the same host and by the
+                  same rule (cinatra#2930, lifecycle-b W3). Section IX's "every
+                  card appears on every host" is the epic's structural thesis,
+                  and this region is the fourth host: the card is keyed by the
+                  run and nothing else, and it owns whether it draws. A run that
+                  is not parked asking a question renders NOTHING here, which on
+                  this page is the usual reading — a review and a mid-flight
+                  question are different moments of the same run. What the mount
+                  buys is that a reviewer who arrives while the run IS waiting
+                  sees the question rather than a page that looks stalled. */}
+              <AgentHitlScreenCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard
                   view={{
@@ -310,61 +403,75 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                     ref: gateCardRef,
                   }}
                   submitAction={submitAction}
+                  // §VI — the gate's own conversational prompt window keeps its
+                  // exchange with the RUN (cinatra#3141 item 1); the card draws
+                  // the window now, so the page names the run and mounts none.
+                  runId={runId}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>
           );
-          if (scheduleCardRef) {
-            return (
-              <ScheduleRailStep
-                host="page_gate_region"
-                cardRef={scheduleCardRef}
-                displayStep={1}
-                rail={railNode}
-                detail={detailNode}
-                initialSelection="detail"
-              />
-            );
-          }
+          // THE TWO COLUMNS, AND THE GATE STEPS THAT HEAD THEM. Which steps
+          // this run has, which numeral each carries and which of them can be
+          // opened are the rail's own rules rather than this page's — see
+          // `review-run-surface.tsx`, which is the one place they are applied
+          // for this route.
           return (
-            <>
-              {railNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
-            </>
+            <ReviewRunSurface
+              runId={runId}
+              recommendationEntry={recommendationEntry}
+              recommendationStepOpens={recommendationStepOpens}
+              scheduleCardRef={scheduleCardRef}
+              rail={railNode}
+              detail={detailNode}
+            />
           );
         })()}
       </div>
 
-      {/* owner ruling (1) — the REAL conversational prompt window (the
-          changes-request channel). Sticky, portalled into <main>; mounted only when
-          the reviewer may Comment (respond access) on a gate that is still OPEN.
-          A settled gate carries no comment channel and no permission answer to
-          read one from: the loader resolves the decision axis for a pending gate
-          only, and the card's own settled branch draws no floor either, so the
-          foot of the page agrees with the card above it. */}
-      {surface.kind === "ready" ? (
-        <ReviewPromptWindow
-          submitAction={submitAction}
-          canComment={surface.permissions.canComment}
-          storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
-        />
-      ) : null}
+      {/* §VI's conversational prompt window IS THE GATE'S, and the gate is the
+          card (cinatra#3141 item 1). It used to be mounted here, at page level
+          and outside the card — which is why the run page's own review gate
+          carried no window at all while this page carried one. The drawing puts
+          it inside the gate's frame, beneath the decision bar, so `ReviewGateCard`
+          draws it on every surface the gate opens on and this page mounts none:
+          one card per gate is one window per gate, and the review page cannot
+          draw a second. */}
     </ReviewShell>
   );
 }
 
-/** The canonical review-document shell (§I) — inherits the app's single light
- * treatment + the shared shell (Main + PageHeader + PageContent). */
+/**
+ * The review shell — the app's single light treatment and the shared shell
+ * (Main + PageContent), and NO page-title block.
+ *
+ * THE GATE IS THE WHOLE SURFACE. §III of the ratified artifact-review drawing:
+ * "the gate itself — header, the one review target, decision bar and the run's
+ * prompt window — fills the run detail on the right. There is no standalone
+ * review document." The shell used to open with an eyebrow ("Agent run"), a page
+ * heading ("Review") and a subtitle above the gate; the drawing gives the run
+ * detail none of the three, and the graded proof frames measured all three. The gate's
+ * own header — "Review requested" over the awaiting-your-decision pill — is the
+ * heading this surface has, and the card draws it on every host.
+ *
+ * The not-authorized panel below keeps its own header: that reading is not the
+ * gate at all (§VII), and a refusal with no title names nothing.
+ *
+ * WHAT THE BLOCK CARRIED THAT IS NOT PIXELS STAYS. The drawing fixes what is
+ * DRAWN; it does not ask this route to stop naming itself to a screen reader or
+ * to the breadcrumb. The page-title block was also the surface's only `h1` and
+ * the only thing broadcasting a leaf-crumb title, so removing it outright left
+ * the reading with no heading at all and left the breadcrumb humanising the raw
+ * review-task id (`buildBreadcrumbTrail` falls through to `idSegmentPlaceholder`
+ * with no page title on the bus). Both are kept here with zero drawn pixels: an
+ * `sr-only` heading and the same title broadcast the removed header mounted.
+ */
 function ReviewShell({ children }: { children: React.ReactNode }) {
   return (
     <Main className="min-h-screen">
-      <PageHeader
-        label="Agent run"
-        title="Review"
-        description="Approve, reject, or comment on what an agent produced — before the run continues."
-        divider={false}
-      />
-      <PageContent className="flex flex-col gap-4 pb-10" data-surface="artifact-review">
+      <h1 className="sr-only">Review</h1>
+      <PageHeaderTitleSync title="Review" />
+      <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
         {children}
       </PageContent>
     </Main>

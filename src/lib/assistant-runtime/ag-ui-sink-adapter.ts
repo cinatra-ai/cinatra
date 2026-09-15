@@ -132,6 +132,31 @@ export type AgUiTurnDurableContent = {
    * field existed.
    */
   dataPartSlots?: Array<string | null>;
+  /**
+   * WHO DELIVERED each entry in `dataParts`, positionally aligned with it
+   * (cinatra#2930, epic #2926 W3).
+   *
+   *   `platform_injected` — the run reached a moment and the platform wrote the
+   *     card into this turn. No model was asked and none could withhold it.
+   *   `tool_represented`  — a "show me" tool brought the card back into view.
+   *   `null`              — a part that is not a lifecycle view (the `agent_run`
+   *     pointer), which has no delivery to record.
+   *
+   * OUT OF BAND, for exactly the reason `dataPartSlots` is: `dataParts[i]` has
+   * to stay the byte-identical strict `{ viewType, schemaVersion, ref }` object a
+   * `.strict()` parser accepts on re-read, so a provenance written into it would
+   * be re-emitted AS PAYLOAD on reload and rejected there.
+   *
+   * WHY IT IS RECORDED AT ALL. The plan keeps the pull tools and keeps them
+   * second — "recorded as exactly that" — and a delivery nobody wrote down is a
+   * delivery nobody can tell apart afterwards: the injected card and the
+   * re-presented one are the same card, and only the record says which arrived.
+   *
+   * OMITTED unless at least one entry has one, so a turn that minted no
+   * lifecycle view persists byte-identically to what it persisted before this
+   * field existed.
+   */
+  dataPartProvenance?: Array<string | null>;
 };
 
 export type AgUiSinkAdapter = {
@@ -164,6 +189,26 @@ export type AgUiSinkAdapter = {
    */
   durableContent(): AgUiTurnDurableContent | null;
 };
+
+/**
+ * The tool names whose result may carry a started run's id (cinatra#2935,
+ * lifecycle-b W5d).
+ *
+ * DUPLICATED FROM `packages/chat/src/run-start-tool-names.ts` ON PURPOSE, and
+ * machine-compared rather than trusted: this module lives in the app tree and
+ * the two renderers that read the same list live in the chat package, and
+ * neither vitest root resolves the other's specifier. The same dependency-free
+ * doctrine the delegated tool policies use for their allowlists — a duplicated
+ * literal that a test pins EQUAL in both directions cannot drift, while an
+ * import only some roots can resolve fails at collection time rather than at
+ * review. The pin is
+ * `packages/chat/src/__tests__/run-start-tool-names.test.ts`.
+ */
+const RUN_START_TOOL_NAMES: readonly string[] = ["agent_run", "agent_named_start"];
+
+function isRunStartToolName(name: unknown): boolean {
+  return typeof name === "string" && RUN_START_TOOL_NAMES.includes(name);
+}
 
 /** Parse an `agent_run` tool result for the runId to pin on the run card.
  *  Mirrors the legacy client's `extractAgentRunId` (defensive: silent null). */
@@ -208,6 +253,8 @@ export function createAgUiSinkAdapter(params: {
   const contentDataParts: Array<Record<string, unknown>> = [];
   /** Positionally aligned with `contentDataParts` — see `dataPartSlots`. */
   const contentDataPartSlots: Array<string | null> = [];
+  /** Positionally aligned with `contentDataParts` — see `dataPartProvenance`. */
+  const contentDataPartProvenance: Array<string | null> = [];
   let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
@@ -256,9 +303,11 @@ export function createAgUiSinkAdapter(params: {
   function emitDurableDataPart(
     data: Record<string, unknown>,
     producingToolCallId?: string,
+    provenance?: string,
   ): void {
     contentDataParts.push(data);
     contentDataPartSlots.push(producingToolCallId ?? null);
+    contentDataPartProvenance.push(provenance ?? null);
     emit({
       type: "DATA_PART",
       data,
@@ -370,7 +419,11 @@ export function createAgUiSinkAdapter(params: {
         // agent_run results carry the spawned run's id — pinned client-side on
         // the tool_call part via DATA_PART (the reducer contract's only
         // sanctioned source for the inline-run-card runId).
-        if (d.name === "agent_run") {
+        // BOTH START DOORS, not one literal (cinatra#2935, lifecycle-b W5d).
+        // The widget's `agent_named_start` produces the SAME run through the
+        // SAME primitive; comparing against `agent_run` alone meant a widget
+        // start that succeeded and drew nothing — silence with a run behind it.
+        if (isRunStartToolName(d.name)) {
           const agentRunId = extractAgentRunIdFromResult(d.result);
           if (agentRunId) {
             emitDurableDataPart({ kind: "agent_run", toolCallId: id, runId: agentRunId });
@@ -395,7 +448,22 @@ export function createAgUiSinkAdapter(params: {
           // instead of appending it after the turn. It rides the durable-emit
           // helper (cinatra#2823 S9j) so the stamp and the durable keep stay one
           // statement: this call emits the slotted card AND retains its payload.
-          emitDurableDataPart({ ...lifecycleView }, id);
+          //
+          // THE PAYLOAD IS SPELLED OUT (cinatra#2930). The recognition now
+          // carries WHO produced it, and provenance is not payload: spreading
+          // the answer would put a fourth key inside the strict object and the
+          // reload parser would reject the card it is meant to restore. So the
+          // three payload fields are named and the delivery rides beside them,
+          // the same separation the slot already makes.
+          emitDurableDataPart(
+            {
+              viewType: lifecycleView.viewType,
+              schemaVersion: lifecycleView.schemaVersion,
+              ref: lifecycleView.ref,
+            },
+            id,
+            lifecycleView.provenance,
+          );
         }
         return;
       }
@@ -463,7 +531,21 @@ export function createAgUiSinkAdapter(params: {
     durableContent(): AgUiTurnDurableContent | null {
       // Nothing produced (e.g. an immediate error before any text/tool) → no
       // durable content to persist; the turn row keeps content NULL.
-      if (contentText.length === 0 && contentParts.length === 0) return null;
+      //
+      // A DATA_PART IS SOMETHING PRODUCED (cinatra#2930, epic #2926 W3). The
+      // test used to read text and the ordered trace only, so a turn whose ONLY
+      // content was an injected lifecycle card persisted NOTHING: the card
+      // rendered live and was gone after a reload — the exact defect S9j was
+      // filed for, reappearing on the one turn shape this wave creates. A run
+      // that parks at a moment while the assistant says nothing is not an empty
+      // turn; it is a turn that is entirely a card.
+      if (
+        contentText.length === 0 &&
+        contentParts.length === 0 &&
+        contentDataParts.length === 0
+      ) {
+        return null;
+      }
       return {
         format: "assistant-turn-v1",
         role: "assistant",
@@ -477,6 +559,10 @@ export function createAgUiSinkAdapter(params: {
         // something was actually stamped (see `dataPartSlots`).
         ...(contentDataPartSlots.some((slot) => slot !== null)
           ? { dataPartSlots: contentDataPartSlots }
+          : {}),
+        // The delivery record rides alongside on the same terms (cinatra#2930).
+        ...(contentDataPartProvenance.some((p) => p !== null)
+          ? { dataPartProvenance: contentDataPartProvenance }
           : {}),
       };
     },

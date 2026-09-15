@@ -1,6 +1,11 @@
 import { z } from "zod/v4";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminSession } from "@/lib/auth-session";
+import { getAuthSession, requireAdminSession } from "@/lib/auth-session";
+// cinatra#2933 (lifecycle-b W5b) — the RUN's own access, asked through the one
+// helper every prompt window asks. This route is retired by #2934 together with
+// the fill that replaces it; until then it must not be the one door that still
+// refuses the very person the window is now drawn for.
+import { canRespondInRunWindow } from "@/lib/lifecycle/run-window-turn";
 import { buildActorContext } from "@/lib/authz/enforce";
 import { readAgentTemplateById } from "@cinatra-ai/agents";
 import { generate } from "@cinatra-ai/llm";
@@ -20,33 +25,42 @@ const hitlAssistBodySchema = z.object({
   schemaProperties: z.array(z.string()).optional(),
   // Last assistant reply sent back so the LLM can resolve references like "insert it".
   lastAssistantMessage: z.string().max(4000).nullable().optional(),
+  // The RUN this screen belongs to (cinatra#2933). Present ⇒ the run's own
+  // access decides; absent ⇒ the pre-run schedule screen, which has no run to
+  // ask and keeps the platform-administrator check it had.
+  runId: z.string().min(1).max(200).optional(),
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/agents/builder/[templateId]/hitl-assist
 //
-// Admin-only endpoint that uses the LLM to suggest field-level changes for a
-// mid-run HITL screen. The renderer POSTs the user's natural-language prompt
-// plus the current interrupt values; the LLM returns a JSON object with only
-// the editable fields that should change.
+// Suggests field-level changes for a mid-run HITL screen. The renderer POSTs the
+// user's natural-language prompt plus the current interrupt values; the LLM
+// returns a JSON object with only the editable fields that should change.
+//
+// ACCESS (cinatra#2933, lifecycle-b W5b). The plan: "Who may type in a window is
+// who may use the run … no separate rule, and no window shown to a person whose
+// message it would refuse." The body now carries the run, and the run's own
+// `respondToHitl` decides — replacing `requireAdminSession()`, which refused a
+// run owner who was not a platform administrator on the very screens the window
+// is drawn for. A body with NO run is the pre-run schedule screen: nothing to
+// ask, so the administrator check stands there unchanged.
 // ---------------------------------------------------------------------------
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ templateId: string }> },
 ) {
-  // 1. Admin guard — requireAdminSession redirects on failure; catch any non-redirect
-  //    throws and return 401 to the client (API route, not a page).
-  let session: Awaited<ReturnType<typeof requireAdminSession>>;
-  try {
-    session = await requireAdminSession();
-  } catch {
+  // 1. AUTHENTICATE first, so an unauthenticated caller still gets 401 rather
+  //    than a parse error — the answer it got before this slice moved the
+  //    authorization step. WHO is asking does not depend on the body; WHAT they
+  //    may do does, and that is settled in step 2.
+  const plain = await getAuthSession();
+  if (!plain?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  // Build actorContext so generate's requireActorFrame gate is satisfied.
-  const actorContext = buildActorContext(session);
 
-  // 2. Parse request body
+  // 2. Parse the request body — the access answer depends on the run it names.
   let body: unknown;
   try {
     body = await req.json();
@@ -59,10 +73,31 @@ export async function POST(
     return NextResponse.json({ error: "Invalid request", details: parsed.error.issues }, { status: 400 });
   }
 
-  const { prompt, xRenderer, currentValue, schemaProperties, lastAssistantMessage } = parsed.data;
+  const { prompt, xRenderer, currentValue, schemaProperties, lastAssistantMessage, runId } = parsed.data;
 
-  // 3. Load template
+  // 3. Access. With a run: the RUN's own `respondToHitl`, the same answer the
+  //    window used to decide whether to draw itself, so the box and the route
+  //    can never disagree — and the run is pinned to THIS route's template, so
+  //    the two identifiers cannot name different things. Without a run: the
+  //    administrator check, unchanged.
   const { templateId } = await params;
+  let session: Awaited<ReturnType<typeof requireAdminSession>>;
+  if (runId) {
+    if (!(await canRespondInRunWindow(runId, templateId))) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    session = plain as Awaited<ReturnType<typeof requireAdminSession>>;
+  } else {
+    try {
+      session = await requireAdminSession();
+    } catch {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+  // Build actorContext so generate's requireActorFrame gate is satisfied.
+  const actorContext = buildActorContext(session);
+
+  // 4. Load template
   const template = await readAgentTemplateById(templateId);
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });

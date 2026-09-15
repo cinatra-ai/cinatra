@@ -19,7 +19,7 @@
 //
 //   2. The compose invocation was unscoped: no `-p`, so the project name fell
 //      out of the checkout directory's basename. A lane that already runs its
-//      own compose project (see evidence/2747-e2e: `p2747-*` containers) got a
+//      own compose project (see https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2747-e2e: `p2747-*` containers) got a
 //      SECOND, basename-derived project rather than the one it owns, so the
 //      "heal" started a duplicate stack the lane could not see. The rest of the
 //      stack already scopes itself with COMPOSE_PROJECT_NAME, so this module

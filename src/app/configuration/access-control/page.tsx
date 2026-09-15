@@ -22,7 +22,9 @@ export default async function AccessControlPage() {
   await requireAdminSession();
   const [singleOrg, registrationClosed, retentionDays] = await Promise.all([
     isSingleOrgMode().catch(() => false),
-    isRegistrationClosed().catch(() => false),
+    // Fails to CLOSED, matching the reader itself, so the toggle never shows
+    // an open instance the admin did not choose.
+    isRegistrationClosed().catch(() => true),
     getAuditRetentionDays().catch(() => 365),
   ]);
 

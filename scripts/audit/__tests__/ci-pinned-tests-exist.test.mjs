@@ -39,6 +39,24 @@ import {
   packageDiscoverySet,
   readPackageSuiteExceptions,
   auditPackageSuiteRunners,
+  rootTierConfigs,
+  rootPackageScripts,
+  vitestConfigTokens,
+  argvNamesConfig,
+  scriptRunsTierWholesale,
+  scriptChainSegments,
+  scriptsReachingTier,
+  rootTierIsEnforced,
+  readRootTierExceptions,
+  auditRootIntegrationTiers,
+  bareNodeScriptRun,
+  auditGateIsEnforced,
+  auditSection6Gates,
+  SECTION_6_GATES,
+  COMMAND_PREFIX_WORDS,
+  segmentHasCommandPrefix,
+  ROOT_TIER_EXCEPTIONS_FILE,
+  ROOT_TIER_CONFIG_RE,
   isNonUnitTierFile,
   hasUnquotedExpansion,
   hasTopLevelRedirect,
@@ -2111,6 +2129,65 @@ describe("direction 3 — round-8 fail-open closures", () => {
     ).toEqual([]);
   });
 
+  it("READS the variable-driven fromJSON runs-on form by the expression's DEFAULT literal", () => {
+    const job = (value) => ["jobs:", "  a:", "    runs-on: " + value, "    steps:", "      - run: x"];
+    // The plain scalar is the reference classification every other spelling of
+    // the same runner has to match.
+    expect(jobRunsOnLinux(job("ubuntu-latest"), 4)).toBe(true);
+    // `runs-on: ${{ fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') }}` routes the
+    // job through a repository variable, and the literal CI falls back to when
+    // that variable is unset is written right there in the expression. A quoted
+    // label default names the runner exactly as the scalar it stands for.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }}"), 4)).toBe(true);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-24.04\"') }}"), 4)).toBe(true);
+    // A JSON label ARRAY default is read the same way — the labels are joined
+    // and classified exactly as a `runs-on:` list of the same labels would be.
+    expect(
+      jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_HEAVY || '[\"self-hosted\",\"linux\",\"x64\",\"cinatra-ci\"]') }}"), 4),
+    ).toBe(true);
+    // …and the default still has to NAME linux/ubuntu. A self-hosted array that
+    // does not is refused, because nothing there says which shell CI gets.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '\"windows-latest\"') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '[\"self-hosted\",\"windows\"]') }}"), 4)).toBe(false);
+    // No readable default literal ⇒ the value stays an unreadable expansion.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL) }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ inputs.runner }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '{not json') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }} ${{ steps.x.outputs.y }}"), 4)).toBe(false);
+    // Only the DOCUMENTED routing variables are read. Any other `vars.` name is
+    // outside the contract this parser is allowed to assume, so it stays refused.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.MY_RUNNER || '\"ubuntu-latest\"') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_BUILD_RUNNER || '\"ubuntu-latest\"') }}"), 4)).toBe(false);
+    // …and only a literal that actually NAMES labels is read as one.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[]') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[\"ubuntu-latest\",3]') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '{\"labels\":[\"ubuntu-latest\"]}') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '7') }}"), 4)).toBe(false);
+    // A label is read LABEL BY LABEL, never as one joined string: a label only
+    // names Linux when it IS `linux`/`ubuntu` or is a variant spelled off one of
+    // them. A vendor label that merely CONTAINS the word proves nothing about
+    // the shell, so it is refused rather than credited.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"windows-linux-tools\"') }}"), 4)).toBe(false);
+    expect(
+      jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '[\"self-hosted\",\"windows-linux-tools\",\"x64\"]') }}"), 4),
+    ).toBe(false);
+    // …while the real spellings of a Linux label all still read as Linux.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[\"self-hosted\",\"linux-arm64\"]') }}"), 4)).toBe(true);
+    // The JOB is recognised, so the wholesale package run inside it is enforcing
+    // — the same verdict the plain `ubuntu-latest` scalar earns. Both default
+    // shapes are asserted end to end, not just at the classifier.
+    expect(
+      wf("jobs:\n  a:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }}\n    steps:\n      - run: cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+    expect(
+      wf("jobs:\n  a:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '[\"self-hosted\",\"linux\",\"x64\",\"cinatra-ci\"]') }}\n    steps:\n      - run: cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+    expect(wf("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+    // The routing DEFAULT is the repository's declared floor, not proof of what a
+    // SET variable resolves to — a fact no text parser can read. Held narrow (the
+    // documented variables and label shapes only) and recorded here on purpose.
+  });
+
   it("reads a QUOTED `run:` key", () => {
     const blocks = extractRunBlocks("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - \"run\": pnpm exec vitest run\n");
     expect(blocks.length).toBe(1);
@@ -2135,5 +2212,630 @@ describe("direction 3 — round-8 fail-open closures", () => {
     expect(rootSuiteIsEnforced()).toBe(true);
     expect(findUngatedAuditTests(REPO_ROOT)).toEqual([]);
     expect(findMissingPinnedTests()).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// DIRECTION 4 — root integration tiers (cinatra#2936).
+//
+// The failure this direction exists to prevent is a FALSE POSITIVE: crediting a
+// tier as run when nothing runs it. So most cases below assert a REFUSAL, and
+// the adversarial bar is the one directions 2 and 3 set — every way a workflow
+// line or a package script can LOOK like a tier runner without being one.
+// ---------------------------------------------------------------------------
+
+/** A fixture repository root: root package.json scripts, tier configs, workflows. */
+function tierFixture({ workflow = "", scripts = {}, configs = [], exceptions, trigger = "on: [pull_request, push]\n" } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ci-tier-"));
+  mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(root, "vitest", "integration"), { recursive: true });
+  const withRunner = workflow.includes("runs-on:")
+    ? workflow
+    : workflow.replace(/\n(\s*)steps:/g, "\n$1runs-on: ubuntu-latest\n$1steps:");
+  writeFileSync(join(root, ".github", "workflows", "build-image.yml"), trigger + withRunner);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", scripts }));
+  for (const c of configs) writeFileSync(join(root, c), "export default {};\n");
+  if (exceptions !== undefined) {
+    mkdirSync(join(root, "scripts", "audit"), { recursive: true });
+    writeFileSync(join(root, ROOT_TIER_EXCEPTIONS_FILE), JSON.stringify({ exceptions }));
+  }
+  return { root, workflowDir: join(root, ".github", "workflows") };
+}
+
+/** One tier, one script, one workflow body — the shape most cases only vary in. */
+function enforced(workflowBody, { script = "test:x", body = "vitest run --config vitest/integration/1.config.ts" } = {}) {
+  const fx = tierFixture({
+    workflow: workflowBody,
+    scripts: { [script]: body },
+    configs: ["vitest/integration/1.config.ts"],
+  });
+  return rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir });
+}
+
+const STEP = (run) => `jobs:\n  j:\n    steps:\n      - run: ${run}\n`;
+
+describe("direction 4 — the tier config vocabulary", () => {
+  it("recognises the root tier naming convention and nothing else", () => {
+    for (const ok of ["vitest/integration/2882.config.ts", "vitest/integration/2936.config.ts", "vitest/integration/a.b-c.config.ts"]) {
+      expect(ROOT_TIER_CONFIG_RE.test(ok), ok).toBe(true);
+    }
+    for (const no of ["vitest.config.ts", "vitest.integration.config.ts", "packages/x/vitest/integration/1.config.ts", "vitest/integration/1.config.mts"]) {
+      expect(ROOT_TIER_CONFIG_RE.test(no), no).toBe(false);
+    }
+  });
+
+  it("names a config only when the ARGV carries it", () => {
+    expect(argvNamesConfig(["--config", "a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["--config=a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["-c", "a.ts"], "a.ts")).toBe(true);
+    expect(argvNamesConfig(['--config', '"a.ts"'], "a.ts")).toBe(true);
+    expect(argvNamesConfig(["--config", "b.ts"], "a.ts")).toBe(false);
+    expect(argvNamesConfig([], "a.ts")).toBe(false);
+    expect(argvNamesConfig(["a.ts"], "a.ts")).toBe(false);
+    expect(argvNamesConfig(["--project", "a.ts"], "a.ts")).toBe(false);
+  });
+
+  it("reads --config in every spelling, and reads nothing else", () => {
+    expect(vitestConfigTokens("vitest run --config a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run --config=a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run -c a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run -c=a.ts")).toEqual(["a.ts"]);
+    expect(vitestConfigTokens('vitest run --config "a.ts"')).toEqual(["a.ts"]);
+    expect(vitestConfigTokens("vitest run --project a.ts")).toEqual([]);
+    expect(vitestConfigTokens("vitest run a.ts")).toEqual([]);
+  });
+
+  it("lists the tier configs that exist on disk", () => {
+    const fx = tierFixture({ configs: ["vitest/integration/1.config.ts", "vitest/integration/2.config.ts"] });
+    writeFileSync(join(fx.root, "vitest.config.ts"), "export default {};\n");
+    expect(rootTierConfigs(fx.root)).toEqual(["vitest/integration/1.config.ts", "vitest/integration/2.config.ts"]);
+    expect(rootPackageScripts(fx.root)).toEqual({});
+  });
+});
+
+describe("direction 4 — a package script body that can carry a failure", () => {
+  it("accepts an unconditional && chain", () => {
+    expect(scriptChainSegments("a && b && c")).toEqual(["a", "b", "c"]);
+    expect(scriptChainSegments("vitest run")).toEqual(["vitest run"]);
+  });
+
+  it("refuses every separator and construct that masks a status", () => {
+    for (const cmd of [
+      "vitest run; echo done",
+      "vitest run || true",
+      "vitest run | tee out",
+      "vitest run & wait",
+      "(vitest run)",
+      "vitest run > out",
+      "cd packages/x && vitest run",
+      "exit 0 && vitest run",
+      "set +e && vitest run",
+      "vitest run $EXTRA",
+    ]) {
+      expect(scriptChainSegments(cmd), cmd).toBeNull();
+    }
+    expect(scriptChainSegments(42)).toBeNull();
+  });
+});
+
+describe("direction 4 — which scripts reach a tier", () => {
+  const CONFIG = "vitest/integration/1.config.ts";
+  const reach = (scripts) => {
+    const fx = tierFixture({ scripts, configs: [CONFIG] });
+    return [...scriptsReachingTier(fx.root, CONFIG)].sort();
+  };
+
+  it("credits the script whose body is a wholesale run of that config", () => {
+    expect(reach({ "test:x": `vitest run --config ${CONFIG} --no-coverage` })).toEqual(["test:x"]);
+  });
+
+  it("credits an AGGREGATE script that invokes it, transitively", () => {
+    expect(
+      reach({ "test:x": `vitest run --config ${CONFIG}`, "test:all": "pnpm test:x", "test:everything": "pnpm test:all" }),
+    ).toEqual(["test:all", "test:everything", "test:x"]);
+  });
+
+  it("refuses a script narrowed by a positional, pointed elsewhere, or neutralised", () => {
+    expect(reach({ "test:x": `vitest run --config ${CONFIG} src/a.test.ts` })).toEqual([]);
+    expect(reach({ "test:x": "vitest run --config vitest.config.ts" })).toEqual([]);
+    expect(reach({ "test:x": "true" })).toEqual([]);
+    expect(reach({ "test:x": `vitest run --config ${CONFIG}; echo done` })).toEqual([]);
+  });
+
+  it("refuses a DECOY: the tier config beside an invocation that never receives it", () => {
+    // The config token is in the script, and the script really does run vitest
+    // wholesale — but on the DEFAULT config, which for a repository-root run is
+    // the root unit tier and not this tier at all.
+    expect(reach({ "test:x": `echo --config ${CONFIG} && vitest run` })).toEqual([]);
+    expect(reach({ "test:x": `X=--config vitest run` })).toEqual([]);
+    expect(reach({ "test:x": "vitest run" })).toEqual([]);
+  });
+
+  it("refuses an aggregate whose chain cannot carry the tier's failure", () => {
+    const scripts = { "test:x": `vitest run --config ${CONFIG}`, "test:all": "pnpm test:x || true" };
+    expect(reach(scripts)).toEqual(["test:x"]);
+  });
+});
+
+describe("direction 4 — what a workflow has to say to be credited", () => {
+  it("credits a bare `pnpm <script>` step at the repository root", () => {
+    expect(enforced(STEP("pnpm test:x"))).toBe(true);
+    expect(enforced(STEP("pnpm run test:x"))).toBe(true);
+    expect(enforced(STEP("nice -n 10 pnpm test:x"))).toBe(true);
+  });
+
+  it("credits a direct wholesale `vitest run --config <tier>`", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest/integration/1.config.ts --no-coverage"))).toBe(true);
+  });
+
+  it("refuses a direct run that names a DIFFERENT config, or names none", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest.config.ts"))).toBe(false);
+    expect(enforced(STEP("pnpm exec vitest run"))).toBe(false);
+  });
+
+  it("refuses a direct DECOY: the config named beside the run, not passed to it", () => {
+    expect(enforced(STEP("X=--config=vitest/integration/1.config.ts pnpm exec vitest run"))).toBe(false);
+  });
+
+  it("refuses a narrowed direct run", () => {
+    expect(enforced(STEP("pnpm exec vitest run --config vitest/integration/1.config.ts src/a.test.ts"))).toBe(false);
+  });
+
+  it("refuses a forwarded argument on the script call — a flag it cannot tell from a filter", () => {
+    expect(enforced(STEP("pnpm test:x --maxWorkers=2"))).toBe(false);
+    expect(enforced(STEP("pnpm test:x -- src/a.test.ts"))).toBe(false);
+  });
+
+  it("refuses a step that cannot turn the check red", () => {
+    expect(enforced("jobs:\n  j:\n    steps:\n      - run: pnpm test:x\n        continue-on-error: true\n")).toBe(false);
+    expect(enforced("jobs:\n  j:\n    if: false\n    steps:\n      - run: pnpm test:x\n")).toBe(false);
+    expect(enforced(STEP("pnpm test:x || true"))).toBe(false);
+    expect(enforced(STEP("pnpm test:x | tee out"))).toBe(false);
+  });
+
+  it("refuses a workflow that never fires on a change", () => {
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:x"),
+      trigger: "on: workflow_dispatch\n",
+      scripts: { "test:x": "vitest run --config vitest/integration/1.config.ts" },
+      configs: ["vitest/integration/1.config.ts"],
+    });
+    expect(rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
+  });
+
+  it("refuses a run that happens somewhere other than the repository root", () => {
+    expect(enforced("jobs:\n  j:\n    steps:\n      - run: pnpm test:x\n        working-directory: packages/x\n")).toBe(false);
+    expect(enforced(STEP("cd packages/x && pnpm test:x"))).toBe(false);
+  });
+
+  it("credits the tier through an aggregate script named in the workflow", () => {
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:all"),
+      scripts: { "test:x": "vitest run --config vitest/integration/1.config.ts", "test:all": "pnpm test:x" },
+      configs: ["vitest/integration/1.config.ts"],
+    });
+    expect(rootTierIsEnforced("vitest/integration/1.config.ts", { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(true);
+  });
+});
+
+describe("direction 4 — the ledger", () => {
+  const ok = {
+    config: "vitest/integration/1.config.ts",
+    slice: "https://github.com/cinatra-ai/cinatra/issues/1",
+    reason: "no workflow runs this tier and wiring it belongs to its own slice",
+  };
+  const ledger = (entries) => JSON.stringify({ exceptions: entries });
+
+  it("accepts a well-formed ledger", () => {
+    expect(readRootTierExceptions(".", ledger([ok]))).toEqual([ok]);
+    expect(readRootTierExceptions(".", ledger([]))).toEqual([]);
+  });
+
+  it("throws on a malformed ledger rather than degrading in either direction", () => {
+    expect(() => readRootTierExceptions(".", "{oops")).toThrow(/not valid JSON/);
+    expect(() => readRootTierExceptions(".", "{}")).toThrow(/exceptions/);
+    expect(() => readRootTierExceptions(".", ledger(["x"]))).toThrow(/expected an object/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, config: "vitest.config.ts" }]))).toThrow(/config/);
+    expect(() => readRootTierExceptions(".", ledger([ok, ok]))).toThrow(/duplicate/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, slice: "cinatra#1" }]))).toThrow(/slice/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, slice: "https://github.com/o/r/pull/1" }]))).toThrow(/slice/);
+    expect(() => readRootTierExceptions(".", ledger([{ ...ok, reason: "later" }]))).toThrow(/reason/);
+  });
+
+  it("a missing ledger file reads as no exceptions", () => {
+    const fx = tierFixture({});
+    expect(readRootTierExceptions(fx.root)).toEqual([]);
+  });
+});
+
+describe("direction 4 — the verdict", () => {
+  const CONFIG = "vitest/integration/1.config.ts";
+  const base = {
+    scripts: { "test:x": `vitest run --config ${CONFIG}` },
+    configs: [CONFIG],
+  };
+  const verdict = (fx) => auditRootIntegrationTiers(fx.root, fx.workflowDir);
+
+  it("a wired tier is enforced and reported by the script that reaches it", () => {
+    const v = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x") }));
+    expect(v.ungated).toEqual([]);
+    expect(v.enforced).toEqual([{ config: CONFIG, scripts: ["test:x"] }]);
+  });
+
+  it("an unwired tier with no ledger entry is a HARD failure that names it", () => {
+    const v = verdict(tierFixture({ ...base, workflow: STEP("echo nothing") }));
+    expect(v.ungated).toEqual([{ config: CONFIG, scripts: ["test:x"] }]);
+    expect(v.exempt).toEqual([]);
+  });
+
+  it("a tier no script reaches at all is still governed", () => {
+    const v = verdict(tierFixture({ workflow: STEP("echo nothing"), scripts: {}, configs: [CONFIG] }));
+    expect(v.ungated).toEqual([{ config: CONFIG, scripts: [] }]);
+  });
+
+  it("a ledger entry moves an unwired tier from ungated to exempt", () => {
+    const entry = { config: CONFIG, slice: "https://github.com/cinatra-ai/cinatra/issues/1", reason: "its own slice owns the wiring of this tier" };
+    const v = verdict(tierFixture({ ...base, workflow: STEP("echo nothing"), exceptions: [entry] }));
+    expect(v.ungated).toEqual([]);
+    expect(v.exempt).toEqual([entry]);
+  });
+
+  it("a ledger entry for a tier that IS run, or for a config that is gone, is itself a failure", () => {
+    const redundant = { config: CONFIG, slice: "https://github.com/cinatra-ai/cinatra/issues/1", reason: "claims a gap that CI does not have any more" };
+    const wired = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [redundant] }));
+    expect(wired.redundantExceptions).toEqual([redundant]);
+
+    const stale = { config: "vitest/integration/9.config.ts", slice: "https://github.com/cinatra-ai/cinatra/issues/9", reason: "names a config file that no longer exists at all" };
+    const gone = verdict(tierFixture({ ...base, workflow: STEP("pnpm test:x"), exceptions: [stale] }));
+    expect(gone.staleExceptions).toEqual([stale]);
+  });
+});
+
+describe("direction 4 — the LIVE repo", () => {
+  it("every root integration tier is run by CI or recorded in the ledger", () => {
+    const v = auditRootIntegrationTiers();
+    expect(v.ungated).toEqual([]);
+    expect(v.staleExceptions).toEqual([]);
+    expect(v.redundantExceptions).toEqual([]);
+    expect(v.tiers.length).toBeGreaterThan(0);
+  });
+
+  it("this plan's four proof tiers are wired (cinatra#2936)", () => {
+    const enforcedConfigs = new Set(auditRootIntegrationTiers().enforced.map((e) => e.config));
+    for (const config of [
+      "vitest/integration/2928.config.ts",
+      "vitest/integration/2932.config.ts",
+      "vitest/integration/2935.config.ts",
+      // W5b (cinatra#2933). It landed after the other three were wired, so it
+      // spent the interval as a ledger row rather than as a step — which is the
+      // two lawful states working, not an exception to them. Named here for the
+      // same reason as its three siblings: this list is what makes a silent
+      // un-wiring of THIS plan's proof cost a red.
+      "vitest/integration/2933.config.ts",
+      // The negative control: the one tier that was already wired. A green
+      // above cannot mean "this direction credits everything".
+      "vitest/integration/2882.config.ts",
+    ]) {
+      expect(enforcedConfigs.has(config), `${config} is run by no workflow`).toBe(true);
+    }
+  });
+
+  it("…and none of the four is ALSO recorded as unwired (cinatra#2933)", () => {
+    // THE OTHER HALF OF WIRING ONE. A tier has exactly two lawful states, so
+    // wiring the W5b tier had to delete its ledger row in the same change; a row
+    // that outlived its gap would describe a CI this repository is not running.
+    // Said of these four BY NAME, so re-recording one of them reds a case whose
+    // title says which tier, and the two halves of "wired" fail separately
+    // rather than as one line number.
+    //
+    // READ OFF THE LEDGER FILE, NOT off `exempt`. A row for a tier a workflow
+    // DOES run never reaches `exempt` at all — `auditRootIntegrationTiers`
+    // classifies enforced first and only then looks the config up — it is
+    // reported as `redundantExceptions`. Asserting the absence on `exempt`
+    // would therefore be vacuous for exactly the mutation this arm exists to
+    // catch, which is the false-green direction, so the ledger is read directly.
+    const recorded = new Set(readRootTierExceptions().map((e) => e.config));
+    for (const config of [
+      "vitest/integration/2928.config.ts",
+      "vitest/integration/2932.config.ts",
+      "vitest/integration/2933.config.ts",
+      "vitest/integration/2935.config.ts",
+    ]) {
+      expect(recorded.has(config), `${config} is wired AND recorded as unwired`).toBe(false);
+    }
+  });
+
+  it("the LIVE ledger parses, and every entry names a config on disk that no workflow runs", () => {
+    // The ledger FILE stays even when empty — an empty one is the healthy end
+    // state, and the reader maps a missing file to [], so without this the whole
+    // ledger could be deleted and every check here would pass vacuously.
+    expect(
+      existsSync(join(REPO_ROOT, ROOT_TIER_EXCEPTIONS_FILE)),
+      "the root-tier ledger must remain a durable policy artifact even when empty",
+    ).toBe(true);
+    const entries = readRootTierExceptions();
+    const onDisk = new Set(rootTierConfigs());
+    for (const e of entries) {
+      expect(onDisk.has(e.config), `${e.config} is not a root tier config on disk`).toBe(true);
+      expect(rootTierIsEnforced(e.config), `${e.config} IS run — delete its ledger entry`).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DIRECTION 5 — plan (B) §6's own named gates (cinatra#2936).
+//
+// The failure this direction exists to prevent is the one that let the one-card
+// gate sit unrun through five waves: a FALSE POSITIVE, crediting a gate as run
+// when no step runs it. So most cases below assert a REFUSAL, at the adversarial
+// bar directions 3 and 4 set.
+// ---------------------------------------------------------------------------
+
+const GATE = "scripts/audit/x-gate.mjs";
+
+/** A fixture whose root carries an audit gate script, plus workflows/scripts. */
+function gateFixture({ workflow = "", scripts = {}, trigger = "on: [pull_request, push]\n", gate = GATE } = {}) {
+  const fx = tierFixture({ workflow, scripts, trigger });
+  mkdirSync(join(fx.root, "scripts", "audit"), { recursive: true });
+  writeFileSync(join(fx.root, gate), "// fixture gate\n");
+  return fx;
+}
+
+/** Is the fixture gate credited by this workflow body? */
+const gateRun = (workflowBody, scripts = {}) => {
+  const fx = gateFixture({ workflow: workflowBody, scripts });
+  return auditGateIsEnforced(GATE, { repoRoot: fx.root, workflowDir: fx.workflowDir });
+};
+
+describe("direction 5 — a BARE `node <path>` run", () => {
+  it("reads the script a segment runs, in the spellings a step really uses", () => {
+    expect(bareNodeScriptRun(`node ${GATE}`)).toBe(GATE);
+    expect(bareNodeScriptRun(`node ./${GATE}`)).toBe(GATE);
+    expect(bareNodeScriptRun(`  node ${GATE}  `)).toBe(GATE);
+    expect(bareNodeScriptRun(`node "${GATE}"`)).toBe(GATE);
+  });
+
+  it("refuses a MODE flag — the weaker question is not the done-check", () => {
+    // `--audit` asks "no NEW false claim" and `--complete` a different question
+    // again. A step that ran only one of those would hold nothing, so the gate
+    // must be run with no argument at all to be credited.
+    expect(bareNodeScriptRun(`node ${GATE} --audit`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} --complete`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} extra`)).toBeNull();
+  });
+
+  it("refuses everything that is not one node process running that file", () => {
+    for (const seg of [
+      `node --test ${GATE}`, // a test-runner invocation, direction 2's business
+      `node ${GATE} > out`, // the target is a file the shell writes
+      `node ${GATE} | tee out`, // the exit status is tee's
+      `pnpm gate:x`, // resolved through the script table, not here
+      `nice -n 10 node ${GATE}`, // a wrapper this reader does not model
+      `node --version`, // prints and exits 0
+      `node`,
+      `# node ${GATE}`,
+      ``,
+    ]) {
+      expect(bareNodeScriptRun(seg), seg).toBeNull();
+    }
+  });
+
+  it("reads a prefix off the head word alone, and an unprefixed command as unprefixed", () => {
+    expect(segmentHasCommandPrefix(`node ${GATE}`)).toBe(false);
+    expect(segmentHasCommandPrefix("pnpm gate:x")).toBe(false);
+    expect(segmentHasCommandPrefix("")).toBe(false);
+    expect(segmentHasCommandPrefix(`CI=1 node ${GATE}`)).toBe(true);
+    expect(segmentHasCommandPrefix("cross-env X=1 pnpm gate:x")).toBe(true);
+  });
+
+  it("refuses an ENVIRONMENT PREFIX, because the prefix decides which node runs", () => {
+    // THE FAIL-OPEN THIS SHAPE EXISTS TO CLOSE. A prefix can point `node` at a
+    // different binary or start the real one already neutered, and neither is
+    // distinguishable from a harmless `CI=1` without modelling the shell's own
+    // lookup. So every prefix is refused, harmless ones included — the cost is a
+    // step written bare, and the alternative is a gate credited for a process
+    // that never read it.
+    for (const seg of [
+      `PATH=./fake-bin node ${GATE}`, // a `node` that can exit 0 having read nothing
+      `NODE_OPTIONS=--require=./exit-zero.cjs node ${GATE}`, // the real node, short-circuited
+      `NODE_PATH=./fake node ${GATE}`,
+      `CI=1 node ${GATE}`, // harmless, and refused all the same
+      `command node ${GATE}`,
+      `eval node ${GATE}`,
+      `nohup node ${GATE}`,
+    ]) {
+      expect(bareNodeScriptRun(seg), seg).toBeNull();
+    }
+  });
+
+  it("counts RAW shell words, so an empty quoted argument is still an argument", () => {
+    // `node <gate> ''` is three words and passes one. Dropping the empty token
+    // before counting would read it as the bare two-word form.
+    expect(bareNodeScriptRun(`node ${GATE} ''`)).toBeNull();
+    expect(bareNodeScriptRun(`node ${GATE} ""`)).toBeNull();
+    expect(bareNodeScriptRun(`node ''`)).toBeNull();
+  });
+
+  it("…and the same refusal holds through a workflow step and a root script", () => {
+    // Not only the parser: the two doors a gate can actually be credited
+    // through both close on it.
+    expect(gateRun(STEP(`PATH=./fake-bin node ${GATE}`))).toBe(false);
+    expect(gateRun(STEP("pnpm gate:x"), { "gate:x": `NODE_OPTIONS=--require=./x.cjs node ${GATE}` })).toBe(false);
+  });
+
+  it("refuses a prefix on the PACKAGE-SCRIPT door, where the two-word rule cannot reach", () => {
+    // `invokesRootSuite` steps OVER an environment assignment, so without an
+    // explicit refusal a fake `pnpm` — or a preload that exits 0 while starting
+    // the real one — would be credited for a gate it never ran.
+    const scripts = { "gate:x": `node ${GATE}` };
+    expect(gateRun(STEP("pnpm gate:x"), scripts)).toBe(true); // the control
+    expect(gateRun(STEP("PATH=./fake-bin pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("env NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("command pnpm gate:x"), scripts)).toBe(false);
+    // The ENVIRONMENT-ALTERING LAUNCHERS this file already steps over. Each one
+    // can put a preload in front of the package manager, or point it at a
+    // different binary, and still look like a bare invocation.
+    expect(gateRun(STEP("cross-env NODE_OPTIONS=--require=./exit-zero.cjs pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("dotenv -e .env -- pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("env pnpm gate:x"), scripts)).toBe(false);
+    // …and the plain wrappers, refused with them rather than modelled.
+    expect(gateRun(STEP("nice -n 10 pnpm gate:x"), scripts)).toBe(false);
+    expect(gateRun(STEP("timeout 600 pnpm gate:x"), scripts)).toBe(false);
+  });
+
+  it("derives the wrapper list from this file's own launcher set, so it cannot fall behind it", () => {
+    // The round that found `cross-env` missing found it because the list was
+    // written out by hand. It is derived now: every launcher word this file
+    // steps over, except the package managers that ARE the invocation.
+    for (const w of ["env", "cross-env", "dotenv", "nice", "time", "timeout", "command", "exec"]) {
+      expect(COMMAND_PREFIX_WORDS.has(w), `${w} must be refused as a prefix`).toBe(true);
+    }
+    for (const w of ["pnpm", "pnpx", "npm", "yarn", "corepack"]) {
+      expect(COMMAND_PREFIX_WORDS.has(w), `${w} is the invocation, not a prefix`).toBe(false);
+    }
+  });
+
+  it("…and the prefix cannot hide one aggregate script further up", () => {
+    const inner = { "gate:x": `node ${GATE}` };
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "pnpm gate:x" })).toBe(true); // the control
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "PATH=./fake-bin pnpm gate:x" })).toBe(false);
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: `PATH=./fake-bin node ${GATE}` })).toBe(false);
+    expect(gateRun(STEP("pnpm gates"), { ...inner, gates: "cross-env X=1 pnpm gate:x" })).toBe(false);
+  });
+});
+
+describe("direction 5 — what a workflow has to say to run an audit gate", () => {
+  it("credits a bare step at the repository root", () => {
+    expect(gateRun(STEP(`node ${GATE}`))).toBe(true);
+  });
+
+  it("credits the gate through a root package script, and transitively", () => {
+    expect(gateRun(STEP("pnpm gate:x"), { "gate:x": `node ${GATE}` })).toBe(true);
+    expect(gateRun(STEP("pnpm run gate:x"), { "gate:x": `node ${GATE}` })).toBe(true);
+    expect(gateRun(STEP("pnpm gates"), { "gate:x": `node ${GATE}`, gates: "pnpm gate:x" })).toBe(true);
+  });
+
+  it("refuses a script whose chain cannot carry the gate's failure", () => {
+    for (const body of [`node ${GATE} || true`, `node ${GATE}; echo done`, `node ${GATE} & wait`, "true"]) {
+      expect(gateRun(STEP("pnpm gate:x"), { "gate:x": body }), body).toBe(false);
+    }
+  });
+
+  it("refuses a forwarded argument on the script call", () => {
+    // `pnpm gate:x --audit` reaches the gate in a mode this direction does not
+    // credit, and the walk cannot tell a mode flag from a harmless one.
+    expect(gateRun(STEP("pnpm gate:x --audit"), { "gate:x": `node ${GATE}` })).toBe(false);
+  });
+
+  it("refuses a step that cannot turn the check RED", () => {
+    expect(gateRun(`jobs:\n  j:\n    steps:\n      - run: node ${GATE}\n        continue-on-error: true\n`)).toBe(false);
+    expect(gateRun(`jobs:\n  j:\n    if: false\n    steps:\n      - run: node ${GATE}\n`)).toBe(false);
+    expect(gateRun(STEP(`node ${GATE} || true`))).toBe(false);
+    expect(gateRun(STEP(`node ${GATE} | tee out`))).toBe(false);
+  });
+
+  it("refuses a step whose SHELL is not known to carry a failure", () => {
+    // THE MUTATION cinatra#3021 CALLED LOAD-BEARING, held here. A `runs-on:` that is an
+    // expression can resolve to anything, so an omitted `shell:` cannot be read
+    // as `bash -e` and the step is refused; the explicit line is what makes it
+    // countable.
+    const expr = (extra) =>
+      `jobs:\n  j:\n    runs-on: \${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}\n    steps:\n      - run: node ${GATE}\n${extra}`;
+    expect(gateRun(expr(""))).toBe(false);
+    expect(gateRun(expr("        shell: bash\n"))).toBe(true);
+  });
+
+  it("refuses a run that happens somewhere other than the repository root", () => {
+    expect(gateRun(`jobs:\n  j:\n    steps:\n      - run: node ${GATE}\n        working-directory: packages/x\n`)).toBe(false);
+    expect(gateRun(STEP(`cd packages/x && node ${GATE}`))).toBe(false);
+  });
+
+  it("refuses a workflow that never fires on a change", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`), trigger: "on: workflow_dispatch\n" });
+    expect(auditGateIsEnforced(GATE, { repoRoot: fx.root, workflowDir: fx.workflowDir })).toBe(false);
+  });
+
+  it("refuses a step that runs a DIFFERENT gate", () => {
+    expect(gateRun(STEP("node scripts/audit/other-gate.mjs"))).toBe(false);
+  });
+});
+
+describe("direction 5 — the shared aggregate walk keeps direction 4's behaviour", () => {
+  it("credits direction 4's aggregate chain exactly as before the refusal hook", () => {
+    // The hook defaults to refusing nothing, so direction 4 reads the same
+    // scripts the same way. Asserted here because the walk is now shared.
+    const CONFIG = "vitest/integration/1.config.ts";
+    const fx = tierFixture({
+      workflow: STEP("pnpm test:all"),
+      scripts: { "test:x": `vitest run --config ${CONFIG}`, "test:all": "PATH=./fake-bin pnpm test:x" },
+      configs: [CONFIG],
+    });
+    expect([...scriptsReachingTier(fx.root, CONFIG)].sort()).toEqual(["test:all", "test:x"]);
+  });
+});
+
+describe("direction 5 — the verdict", () => {
+  const oneCard = { clause: "the one-card gate", artifact: GATE, kind: "audit-gate" };
+
+  it("splits the clause's gates into run and not-run", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`) });
+    const v = auditSection6Gates(fx.root, fx.workflowDir, { gates: [oneCard] });
+    expect(v.unwired).toEqual([]);
+    expect(v.enforced.map((g) => g.clause)).toEqual(["the one-card gate"]);
+
+    const bare = tierFixture({ workflow: STEP(`node ${GATE}`) });
+    const gone = auditSection6Gates(bare.root, bare.workflowDir, { gates: [oneCard] });
+    expect(gone.enforced).toEqual([]);
+    expect(gone.unwired[0].why).toMatch(/not on disk/);
+  });
+
+  it("reports a gate no step runs, and names the clause it belongs to", () => {
+    const fx = gateFixture({ workflow: STEP("pnpm lint") });
+    const v = auditSection6Gates(fx.root, fx.workflowDir, { gates: [oneCard] });
+    expect(v.enforced).toEqual([]);
+    expect(v.unwired).toHaveLength(1);
+    expect(v.unwired[0].clause).toBe("the one-card gate");
+    expect(v.unwired[0].artifact).toBe(GATE);
+  });
+
+  it("refuses a kind it does not model rather than passing it", () => {
+    const fx = gateFixture({ workflow: STEP(`node ${GATE}`) });
+    expect(() =>
+      auditSection6Gates(fx.root, fx.workflowDir, { gates: [{ ...oneCard, kind: "vibes" }] }),
+    ).toThrow(/unknown kind/);
+  });
+});
+
+describe("direction 5 — the LIVE repo", () => {
+  it("governs exactly the three gates the plan's Conformance clause names", () => {
+    // The clause is: "The lifecycle-screens epic's own gates — the one-card
+    // gate, the host-parity ratchet, the held-turn card contract — stay green
+    // through every wave." Three, written out, so a silent fourth cannot be
+    // slipped in and the three cannot be quietly reduced to two.
+    expect(SECTION_6_GATES.map((g) => g.clause)).toEqual([
+      "the one-card gate",
+      "the host-parity ratchet",
+      "the held-turn card contract",
+    ]);
+    for (const g of SECTION_6_GATES) {
+      expect(existsSync(join(REPO_ROOT, g.artifact)), `${g.artifact} is not on disk`).toBe(true);
+    }
+  });
+
+  it("every gate the clause names is executed by a CI runner", () => {
+    expect(auditSection6Gates().unwired).toEqual([]);
+  });
+
+  it("the ONE-CARD GATE is run by a workflow step (cinatra#3014 made it green; this keeps it watched)", () => {
+    // NAMED, so deleting its step reds a case whose title says which gate went
+    // dark — the same reason direction 4 names this plan's four tiers one by
+    // one rather than asserting a count.
+    expect(auditGateIsEnforced("scripts/audit/chat-hitl-one-card-gate.mjs")).toBe(true);
+  });
+
+  it("…and a gate no step runs is NOT credited, so the green above is not vacuous", () => {
+    expect(auditGateIsEnforced("scripts/audit/__no-such-gate__.mjs")).toBe(false);
   });
 });

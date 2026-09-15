@@ -33,7 +33,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, configure, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, render, waitFor } from "@testing-library/react";
 
 // The column loads the message list behind a lazy boundary. Alone that resolves
 // in milliseconds; inside the full package run it competes with ~57 other files
@@ -74,6 +74,8 @@ const PACKAGE = "@cinatra-ai/blog-draft-writer-agent";
 const holdState = vi.hoisted(() => ({
   current: null as Record<string, unknown> | null,
   calls: [] as unknown[],
+  /** When set, the read HANGS on this promise — the endpoint that never answers. */
+  pending: null as Promise<Record<string, unknown> | null> | null,
 }));
 // The card imports these by relative path inside the agents package; vitest
 // resolves a relative mock specifier to the same module id, so this replaces
@@ -81,14 +83,29 @@ const holdState = vi.hoisted(() => ({
 vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: async (input: unknown) => {
     holdState.calls.push(input);
+    if (holdState.pending) return holdState.pending;
     return holdState.current;
   },
   confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
   skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 // The chip row prefetches the agent's assignable skills while a hold is live.
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: async () => [],
+  getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({})),
 }));
 
 // The run panel is the OTHER host, and it is the one that used to draw a SECOND
@@ -148,7 +165,11 @@ import {
 } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 
-import { mountSurface } from "./conversation-column-harness";
+import {
+  installWidgetServiceStub,
+  mountSurface,
+  surfaceElement,
+} from "./conversation-column-harness";
 
 /** The assistant turn a parked chat dispatch actually produces: one `agent_run`
  *  tool call with the server-pinned run id, and the dispatch line beside it. */
@@ -191,6 +212,7 @@ const HELD = {
 beforeEach(() => {
   holdState.current = HELD;
   holdState.calls = [];
+  holdState.pending = null;
 });
 afterEach(cleanup);
 
@@ -243,11 +265,80 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
+  it("KEEPS TODAY'S DRAWING while the run page changes (cinatra#3047, review point E)", async () => {
+    // The review changed the RUN PAGE's reading of this card: its Skills step
+    // draws a checkbox in front of each skill name and one Continue beneath the
+    // list, and no per-chip Confirm / Adjust / Skip. Point E asks for a separate
+    // issue to bring the same two changes to the chat and the widget — so until
+    // that issue lands, the conversation must keep drawing exactly what it draws
+    // today. This is the pin for that: the three affordances are present, and
+    // NEITHER of the run page's two new controls has leaked onto this host.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    await waitFor(() => {
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
+      }
+    });
+
+    expect(wrapper?.querySelectorAll('[data-skill-action="confirm"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="adjust"]').length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll('[data-skill-action="skip"]').length).toBeGreaterThan(0);
+    // The run page's Skills-step reading, absent here.
+    expect(wrapper?.querySelector("[data-skills-step-checkbox]")).toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-continue]")).toBeNull();
+    expect(wrapper?.querySelector('[role="checkbox"]')).toBeNull();
+    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBeNull();
+    // …and the host that decided which reading is drawn is this one.
+    expect(wrapper?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("keeps it while the run page's THREE REFINEMENTS land too (cinatra#3047, points 1-4)", async () => {
+    // The second round of the same review refined the run page further: its
+    // boxes stay editable until the run starts, its settled all-clear reading
+    // drops the skip outcome panel, every pill prints "<Skill name> by
+    // <vendor>", and the row sits in the detail with no card around it. Point E
+    // still governs this host, so NONE of those four has reached it — stated as
+    // four absences rather than left to be inferred from the arm above.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    await waitFor(() => {
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
+      }
+    });
+
+    // 1. no editable-until-started reading, and nothing that states one.
+    expect(wrapper?.getAttribute("data-skills-step-editable")).toBeNull();
+    expect(wrapper?.getAttribute("data-skills-step-submitted")).toBeNull();
+    // 2. the conversation's own chips, not the run page's pills.
+    expect(wrapper?.querySelector("[data-skills-step-pill]")).toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-list]")).toBeNull();
+    // 3. no vendor byline on this host's chips.
+    expect(wrapper?.querySelector("[data-skills-step-vendor]")).toBeNull();
+    // 4. and the card root is the row itself, exactly as it is today.
+    expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+    expect(wrapper?.getAttribute("data-lifecycle-card-state")).toBe("held");
+  });
+
   it("keeps the card OUTSIDE the inline run panel's subtree", async () => {
     // The panel is the `run_card` host and mounts its own copy of the same
     // component. A card nested inside it would be that host's card, not this
     // one, and the evidence for this slice could not tell them apart.
-    const { container } = await mountHeldTurn();
+    //
+    // MEASURED IN THE DECIDED STATE, and that is the ruling rather than a
+    // convenience: while the skills can still be chosen the turn draws NO run
+    // panel at all (the block below pins that), so the held turn has no second
+    // subtree to be outside of. The moment the decision lands both are on
+    // screen together, which is where "one is not inside the other" is a
+    // question with an answer.
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+    await waitFor(() => {
+      if (!container.querySelector("[data-run-card-host]")) {
+        throw new Error("no inline run panel after the decision");
+      }
+    });
 
     const panel = container.querySelector("[data-run-card-host]");
     const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
@@ -439,11 +530,279 @@ describe("the turn shows exactly one recommendation card", () => {
     expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
   });
 
-  it("leaves the panel's own copy alone where no chat host owns the card", async () => {
-    // The run page: no outer lifecycle host, so the panel keeps its copy. The
-    // rule is a function, so this is the same call the panel makes.
+  it("reads the ambient-host rule the panel still holds its HITL screen to", async () => {
+    // The recommendation card is no longer one of the panel's mounts at all
+    // (cinatra#3047) — the run page draws the row in one place, its own rail
+    // step. The RULE survives for the kind that still has two possible hosts in
+    // one turn (the HITL screen card), and it is the same function this
+    // transcript's mount is written against, so the values stay pinned here.
     expect(runCardOwnsLifecycleCopy(null)).toBe(true);
     expect(runCardOwnsLifecycleCopy("run_card")).toBe(true);
     expect(runCardOwnsLifecycleCopy("chat_thread")).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE RUN PROGRESS CARD WAITS FOR THE SKILLS DECISION.
+//
+// Plan sentences, verbatim (PLAN: Agents Lifecycle (A), section 6.2 step 2 and
+// section 6.4 step 2):
+//
+//   "An agentic run progress card is not visible while the recommended skills
+//    can be selected, because they are being chosen before the agent actually
+//    runs."
+//
+// and section 6.2 step 3 / section 6.4 step 4:
+//
+//   "The agentic run progress card appears once the skills are decided; no
+//    skill inside it can be selected."
+//
+// So the turn's shape is decided by the ROW'S STATE, not by the presence of an
+// `agent_run` part: held draws the chip row alone, and the decision is what
+// brings the run card in. Both conversation hosts are measured, because one
+// column serves `/chat` and the widget and a rule that holds on only one of
+// them is not the rule.
+// ---------------------------------------------------------------------------
+describe("the agentic run progress card waits for the skills decision", () => {
+  it("draws the chip row and NO run card while the hold is open", async () => {
+    const { container } = await mountHeldTurn();
+
+    expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(container.querySelector('[data-recommendation-chip]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+  });
+
+  it("draws no run card on the widget host either", async () => {
+    // The widget reads the SAME hold through its own broker transport, so the
+    // rule has to hold against that read rather than against the cookie one.
+    const stub = installWidgetServiceStub({
+      lifecycle: () => null,
+      recommendationHold: () => HELD,
+    });
+    try {
+      const RUN_PANEL = '[data-testid="inline-run-panel"]';
+      const result = render(surfaceElement("widget", { messages: dispatchTurn() }));
+      // RECORDED FROM THE FIRST FRAME, exactly as the chat arm records it: the
+      // widget's broker read has its own unresolved window, and a card that
+      // appears inside it and vanishes after is still a card the person saw.
+      let everSeen = result.container.querySelector(RUN_PANEL) !== null;
+      const observer = new MutationObserver(() => {
+        if (result.container.querySelector(RUN_PANEL)) everSeen = true;
+      });
+      observer.observe(result.container, { childList: true, subtree: true });
+      try {
+        await waitFor(() => {
+          if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+            throw new Error("no recommendation card on the widget host");
+          }
+        });
+        await waitFor(() => {
+          if (!result.container.querySelector("[data-recommendation-chip]")) {
+            throw new Error("no chip drawn on the widget host");
+          }
+        });
+      } finally {
+        observer.disconnect();
+      }
+      expect(everSeen, "the run progress card was on screen on the widget host").toBe(false);
+      expect(result.container.querySelector(RUN_PANEL)).toBeNull();
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("brings the run card in once the decision has landed", async () => {
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!container.querySelector('[data-run-recommendation-decision="confirmed"]')) {
+        throw new Error("settled row not drawn");
+      }
+    });
+    await waitFor(() => {
+      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
+        throw new Error("no run card after the decision");
+      }
+    });
+    // The settled chips are ABOVE it, in the same container, exactly as before.
+    const slot = container.querySelector('[data-testid="inline-run-panel"]')?.parentElement;
+    expect(slot?.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+  });
+
+  it("brings the run card in for a skipped decision too", async () => {
+    holdState.current = {
+      state: "skipped",
+      runId: RUN_ID,
+      decided: [{ skillId: "@cinatra-ai/chat:blog-content", name: "blog-content", mark: "skipped" }],
+    };
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
+        throw new Error("no run card after the skip");
+      }
+    });
+  });
+
+  it("FAILS OPEN: a run that was never held keeps its run card", async () => {
+    // The negative control this rule is paid for with. A run with no
+    // recommendation at all — and a hold read that answers "none" — must draw
+    // exactly what it drew before this gate existed.
+    holdState.current = { state: "none" };
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
+        throw new Error("an unheld run lost its run card");
+      }
+    });
+    expect(container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
+  });
+
+
+  it("never draws the run card at ANY point of a held turn — not even for a frame", async () => {
+    // THE ARM THAT CATCHES THE FLICKER, and the reason the rule waits on an
+    // unresolved read instead of failing open on it. A host that reads "no
+    // answer yet" as "not held" mounts the run progress card, discovers the hold
+    // a moment later and takes it away again — and every assertion written after
+    // `waitFor` passes while the person still SAW the card the plan forbids.
+    //
+    // So this watches instead of sampling: it renders synchronously, records
+    // every DOM change from the first frame, and only then lets the resolve
+    // land. The run panel must appear in none of them.
+    const RUN_PANEL = '[data-testid="inline-run-panel"]';
+    const result = render(surfaceElement("chat", { messages: dispatchTurn() }));
+    let everSeen = result.container.querySelector(RUN_PANEL) !== null;
+    const observer = new MutationObserver(() => {
+      if (result.container.querySelector(RUN_PANEL)) everSeen = true;
+    });
+    observer.observe(result.container, { childList: true, subtree: true });
+    try {
+      await waitFor(() => {
+        if (!result.container.querySelector("[data-chat-thread-recommendation-hold]")) {
+          throw new Error("the held card never resolved");
+        }
+      });
+      // Let anything queued behind the resolve run, then read the recorder.
+      await waitFor(() => {
+        if (!result.container.querySelector("[data-recommendation-chip]")) {
+          throw new Error("no chip drawn");
+        }
+      });
+    } finally {
+      observer.disconnect();
+    }
+    expect(everSeen, "the run progress card was on screen while the hold was open").toBe(false);
+    expect(result.container.querySelector(RUN_PANEL)).toBeNull();
+  });
+
+  it("FAILS OPEN when the hold cannot be read at all", async () => {
+    // The other side of the same boundary. The authority never answers here — it
+    // returns nothing, which is a failed read rather than a state — so after the
+    // card's own bounded retries it reports the question unreadable and the turn
+    // goes back to drawing what it drew before this rule existed. A dead endpoint
+    // must not empty every conversation of its run cards.
+    vi.useFakeTimers();
+    try {
+      holdState.current = null;
+      const result = render(surfaceElement("chat", { messages: dispatchTurn() }));
+      // Drive the card's whole failure budget (400ms, 1.5s, 4s) plus slack.
+      await act(async () => {
+        for (let i = 0; i < 12; i += 1) {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+      });
+      expect(
+        result.container.querySelector('[data-testid="inline-run-panel"]'),
+        "an unreadable hold withheld the run card for ever",
+      ).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops withholding when the read never answers at all", async () => {
+    // THE HANG, which the failure budget alone cannot see: a request that never
+    // settles never fails, so it never spends a retry and never reports itself
+    // unreadable. Without a deadline on the whole read the run card would be
+    // withheld for as long as the tab stays open, with nothing on screen saying
+    // why. The card's own deadline is what ends that.
+    vi.useFakeTimers();
+    try {
+      let settle: ((value: Record<string, unknown> | null) => void) | null = null;
+      holdState.pending = new Promise<Record<string, unknown> | null>((resolve) => {
+        settle = resolve;
+      });
+      const result = render(surfaceElement("chat", { messages: dispatchTurn() }));
+      // Well inside the deadline: nothing is known, so nothing is drawn.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(result.container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+      // Past it: the question is unreadable and the turn draws what it always did.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        result.container.querySelector('[data-testid="inline-run-panel"]'),
+        "a read that never answers withheld the run card for ever",
+      ).not.toBeNull();
+      expect(settle).not.toBeNull();
+    } finally {
+      holdState.pending = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps withholding when a REFRESH fails after an answered hold", async () => {
+    // THE PRECEDENCE, pinned. Fail-open is for a question that was never
+    // answered. Once this run's authority has said HELD, the run really is
+    // parked, and a refresh that fails changes nothing about it — drawing its
+    // progress card on the strength of a failed request would show a person a
+    // running run that is not running. So the last authorized answer stands and
+    // the card stays withheld, for as long as the failures last.
+    const { container } = await mountHeldTurn();
+    expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+
+    vi.useFakeTimers();
+    try {
+      // Every read from here on FAILS (an answer of nothing is a failed read).
+      holdState.current = null;
+      // The wake channel the card listens on — a reader coming back to the tab.
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      // Past the whole failure budget AND the read deadline.
+      await act(async () => {
+        for (let i = 0; i < 15; i += 1) {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+      });
+      expect(
+        container.querySelector('[data-testid="inline-run-panel"]'),
+        "a failed refresh drew the run progress card over a run that is still parked",
+      ).toBeNull();
+      // And the person still has the question in front of them.
+      expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-projects the same shape after a reload of the held turn", async () => {
+    // THE DURABLE ARM (S9j). A reload rebuilds the turn from the persisted
+    // parts and re-resolves the hold; what comes back must be what was there —
+    // the chip row, and no run card. Mounted twice from the same durable
+    // transcript, with the first mount torn down, which is what a reload is
+    // from this column's point of view.
+    const first = await mountHeldTurn();
+    expect(first.container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+    cleanup();
+
+    const { container } = await mountHeldTurn();
+    expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
   });
 });

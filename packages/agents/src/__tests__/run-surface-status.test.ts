@@ -16,6 +16,7 @@ import {
   isSetupInterruptTaskId,
   mapInterruptToHitlContext,
   resolveStreamFirst,
+  runStandsAtMidRunScreenMoment,
   runStatusBadgeLabel,
   statusBadgeVariant,
   AWAITING_INPUT_BADGE_LABEL,
@@ -156,6 +157,41 @@ describe("classifyRunWaitInterrupt", () => {
   });
 });
 
+describe("runStandsAtMidRunScreenMoment — the mid-run screen moment, read HERE", () => {
+  // WHY THIS PREDICATE EXISTS AT ALL (cinatra#3221, fix leg 3). The run page's
+  // rail elects a trailing entry for the screen an agent opens MID-RUN, and the
+  // question it has to answer first is "which moment is this run standing at".
+  // Fix leg 2 answered it in the screen. PLAN (B) §6, The runner: "A waiting
+  // run's row states its moment, card kind and card reference; a wait for a
+  // setup field and a wait for a review are told apart from the row alone, and
+  // no screen re-derives a moment." So the reading moved here, to the one
+  // module that is allowed to know how a moment is spelled, and the screen asks
+  // it instead of comparing.
+  it("is TRUE only at the moment the mid-run screen is recorded at", () => {
+    expect(runStandsAtMidRunScreenMoment("hitl")).toBe(true);
+  });
+
+  it("is FALSE at every other recorded moment, and at none", () => {
+    // A review gate, a held skills question and an armed schedule each have a
+    // rail entry of their own; a run that records one of them must not also
+    // elect the trailing entry, or one pause is drawn twice.
+    for (const moment of [
+      "review",
+      "recommendation",
+      "schedule",
+      "audit",
+      "something_new",
+      "",
+      "HITL",
+    ]) {
+      expect(runStandsAtMidRunScreenMoment(moment), moment).toBe(false);
+    }
+    // Fails CLOSED on a run that states nothing: the rail is what it was.
+    expect(runStandsAtMidRunScreenMoment(null)).toBe(false);
+    expect(runStandsAtMidRunScreenMoment(undefined)).toBe(false);
+  });
+});
+
 describe("runStatusBadgeLabel — run-card badge copy fixtures", () => {
   it("a setup-field INPUT pause reads 'Awaiting input', never 'pending approval'", () => {
     const label = runStatusBadgeLabel("pending_approval", SETUP_INPUT_INTERRUPT);
@@ -243,5 +279,37 @@ describe("applyJustSubmittedSuppression", () => {
       context: null,
       clearSuppression: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RUN-STATUS -> PILL-FAMILY MAPPING (cinatra#3002 fix leg 3, and the
+// convergence round that corrected it).
+// ---------------------------------------------------------------------------
+describe("runStatusPillStatus", () => {
+  it("draws a run parked at a trigger step as the RUNNING run it is", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    // `waiting_trigger` is an IN-FLIGHT WayFlow run holding an open A2A context
+    // (run-status.ts, the union's own note); the write kernel classifies it
+    // unconditionally live in the same set as `running`
+    // (org-write-kernel/src/live-attempt.ts), and it is absent from
+    // PRE_EXECUTION_RUN_STATUSES. Drawing it in the queued family said the run
+    // had not begun.
+    expect(runStatusPillStatus("waiting_trigger")).toBe("running");
+    expect(runStatusPillStatus("running")).toBe("running");
+  });
+
+  it("keeps the pre-execution waits out of the live family", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    expect(runStatusPillStatus("queued")).toBe("queued");
+    expect(runStatusPillStatus("armed")).toBe("queued");
+    expect(runStatusPillStatus("pending_trigger")).toBe("needs-review");
+  });
+
+  it("keeps the terminal families as the drawing gives them", async () => {
+    const { runStatusPillStatus } = await import("../run-surface-status");
+    expect(runStatusPillStatus("completed")).toBe("approved");
+    expect(runStatusPillStatus("failed")).toBe("failed");
+    expect(runStatusPillStatus("stopped")).toBe("failed");
   });
 });

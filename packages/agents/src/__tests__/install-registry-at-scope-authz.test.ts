@@ -20,6 +20,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // HAS_REAL_DB predicate. vitest.config.ts unconditionally injects a placeholder
@@ -28,7 +29,7 @@ import { POLICY_VERSION } from "@/lib/authz/actor-context";
 // ---------------------------------------------------------------------------
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@");
+  DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
