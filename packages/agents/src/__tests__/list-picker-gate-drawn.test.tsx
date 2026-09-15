@@ -54,6 +54,7 @@ import { ListPickerRenderer } from "../list-picker-renderer";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import { COMPLETION_PRODUCED_PARAM } from "@/lib/agent-url";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 
 function makeProps(
   overrides: Partial<FieldRendererProps> = {},
@@ -392,5 +393,48 @@ describe("the offer defers to an answer that arrives AFTER mount (convergence ro
     expect(held!.getAttribute("aria-pressed")).toBe("true");
     const offered = screen.getByText("Q2 targets").closest("[aria-pressed]");
     expect(offered!.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE ROAD THE PINNED TREE ACTUALLY RAISES. Every test above hands the gate a
+// hand-written `bindingParams` fixture, so they prove the RENDERER and say
+// nothing about what the host's pinned extension universe declares. The road
+// a reader reaches is minted from the binding the generated table carries, so
+// the gate is rendered here from THAT declaration — the one the pinned
+// packages produce — and not from a fixture.
+// ---------------------------------------------------------------------------
+describe('"the make-one road\'s destination is declared by the binding" — on the PINNED bindings', () => {
+  const listPickerBindings = GENERATED_FIELD_RENDERER_BINDINGS.filter(
+    (b) => b.kind === "list-picker",
+  );
+
+  it("carries the list builder on the one generated list-picker binding, once", () => {
+    // The two packages that raise this gate CO-DECLARE the same binding id;
+    // the manifest generator records it once and refuses a disagreement, so a
+    // single row is the whole reading.
+    expect(listPickerBindings.map((b) => b.id)).toEqual([
+      "@cinatra-ai/email-outreach-agent:list-picker",
+    ]);
+    const declared = listPickerBindings[0]?.params?.listBuilderPackage;
+    expect(
+      declared,
+      "the pinned list-picker binding declares no list builder",
+    ).toBe("@cinatra-ai/list-curator-agent");
+  });
+
+  it("reaches the declared builder from the gate's zero-content reading", async () => {
+    const params = listPickerBindings[0]?.params;
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    render(<ListPickerRenderer {...makeProps({ bindingParams: params })} />);
+
+    await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
+
+    const road = screen.getByTestId("build-list-with-ai-cta");
+    expect(road.getAttribute("href")).toContain(
+      "cinatra-ai/list-curator-agent/new",
+    );
+    expect(road.getAttribute("href")).toContain("onCompleteRunId=run-parked");
   });
 });

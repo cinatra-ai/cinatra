@@ -54,6 +54,7 @@ import {
   isRunSurfaceStepSelectable,
   type RunSurfaceRailStep,
 } from "../run-surface-rail-step";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 
 // Minimal-required props every FieldRendererProps consumer expects. The
 // picker reads `value`, `onChange`, `disabled`, `required`, `error`, `label`,
@@ -546,5 +547,42 @@ describe("declaredListBuilderPackage — runtime data never breaks the host", ()
     expect(
       declaredListBuilderPackage({ [LIST_BUILDER_PACKAGE_PARAM]: "@vendor/pkg/extra" }),
     ).toBeNull();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// WHAT THE PINNED TREE DECLARES. `declaredListBuilderPackage` is proved above
+// against fixtures; this block reads the generated binding table the host
+// actually ships and pins that the declaration is THERE — the pin advance is
+// what puts it there, and without it the road above never reaches a reader.
+// ---------------------------------------------------------------------------
+describe("the pinned list-picker binding declares the list builder", () => {
+  it("reads the list builder out of the generated binding's own params", () => {
+    const binding = GENERATED_FIELD_RENDERER_BINDINGS.find(
+      (b) => b.id === "@cinatra-ai/email-outreach-agent:list-picker",
+    );
+    expect(binding, "the host declares no list-picker binding").toBeTruthy();
+    expect(
+      declaredListBuilderPackage(binding!.params),
+      "the pinned binding declares no list builder",
+    ).toBe("@cinatra-ai/list-curator-agent");
+    expect(binding!.params?.[LIST_BUILDER_PACKAGE_PARAM]).toBe(
+      "@cinatra-ai/list-curator-agent",
+    );
+  });
+
+  // The filter is deliberately KIND-AGNOSTIC: the reading this pins is "the
+  // param appears once in the whole generated table", so the sweep is the
+  // whole table and the kind of the one row that carries it is asserted here
+  // rather than assumed by a narrower filter.
+  it("declares it on exactly one generated binding, anywhere in the table", () => {
+    const declaring = GENERATED_FIELD_RENDERER_BINDINGS.filter(
+      (b) => b.params?.[LIST_BUILDER_PACKAGE_PARAM] !== undefined,
+    );
+    expect(declaring.map((b) => b.id)).toEqual([
+      "@cinatra-ai/email-outreach-agent:list-picker",
+    ]);
+    expect(declaring[0]?.kind).toBe("list-picker");
   });
 });
