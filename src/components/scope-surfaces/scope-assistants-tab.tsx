@@ -90,8 +90,12 @@ function ScopeAssistantCard({ row }: { row: ScopeAssistantCardRow }) {
                     Chat locally
                   </Link>
                 </Button>
+                {/* The jump-out to the connected site, in the shadcn link
+                    pattern the design-system boundary names (Button asChild over
+                    Link) rather than a raw anchor — the destination is external,
+                    so it keeps target/rel exactly as it had them. */}
                 <Button asChild size="sm" variant="outline">
-                  <a
+                  <Link
                     href={instance.remoteHref}
                     target="_blank"
                     rel="noreferrer noopener"
@@ -100,7 +104,7 @@ function ScopeAssistantCard({ row }: { row: ScopeAssistantCardRow }) {
                   >
                     <ExternalLink data-icon="inline-start" aria-hidden="true" />
                     Remote chat
-                  </a>
+                  </Link>
                 </Button>
               </span>
             ))

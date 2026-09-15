@@ -116,6 +116,9 @@ export type ScopeAssistantDirectoryRow = {
    * from the install map as "this scope does not reach it".
    */
   readonly isBuiltin?: boolean;
+  /** The assistant's own description as the directory carries it. The BUILT-IN
+   *  row has no install to take one from, so this is what its middle panel draws. */
+  readonly description?: string | null;
   readonly remoteCapable: boolean;
   readonly remoteInstances: readonly {
     readonly instanceId: string;
@@ -161,7 +164,10 @@ export function buildScopeSurfaceAssistantRows(
       vendor: row.vendor,
       slug: row.slug,
       displayName: row.displayName,
-      description: install ? install.description : null,
+      // The install's description where there is an install; otherwise the
+      // descriptor's own, which is what the built-in row has (design
+      // app-extensions §III / §IV draw the description in the middle panel).
+      description: install ? install.description : (row.description ?? null),
       chatHref: scopeSurfaceAssistantLaunchHref(scope, assistant),
       settingsHref: scopeSurfaceAssistantSettingsHref(scope, assistant),
       remoteCapable: row.remoteCapable,

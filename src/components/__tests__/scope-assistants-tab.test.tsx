@@ -242,8 +242,14 @@ describe("ScopeAssistantsTab", () => {
   it("names each connected site and keeps the jump-out a new-tab, noreferrer link", () => {
     const html = render();
     expect(html).toContain("Marketing site");
-    const jumpOut = html.slice(html.indexOf('href="https://site.example/wp-admin"'));
-    expect(jumpOut.slice(0, 200)).toContain('target="_blank"');
-    expect(jumpOut.slice(0, 200)).toContain('rel="noreferrer noopener"');
+    // The whole opening tag of the jump-out, matched by its href: the link is
+    // the shadcn pattern the design-system boundary names, and that renderer
+    // writes `href` LAST, so a forward slice from the href reads the children
+    // rather than the attributes. The coverage is unchanged - the jump-out is
+    // still a new-tab, noreferrer link - only its reading is order-independent.
+    const jumpOut = html.match(/<a[^>]*href="https:\/\/site\.example\/wp-admin"[^>]*>/)?.[0];
+    expect(jumpOut).toBeDefined();
+    expect(jumpOut!).toContain('target="_blank"');
+    expect(jumpOut!).toContain('rel="noreferrer noopener"');
   });
 });

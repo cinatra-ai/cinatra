@@ -134,6 +134,22 @@ describe("the Assistants tab with NO installed assistant package", () => {
     expect(row!.settingsHref).toBe(scopeSurfaceAssistantSettingsHref(WORKSPACE, assistant));
   });
 
+  it("draws the built-in assistant's OWN description, never an empty middle panel", async () => {
+    // §III / §IV draw the description in the middle panel of the row. The
+    // built-in has no `installed_extension` row to carry one, so the row reads
+    // the descriptor's own description rather than rendering the panel empty.
+    mocks.buildAssistantsDirectoryForCurrentActor.mockResolvedValue([
+      { ...BUILTIN_DIRECTORY_ROW, description: "The assistant that ships with Cinatra." },
+    ]);
+    const [row] = await readScopeSurfaceAssistantRows(WORKSPACE);
+    expect(row!.description).toBe("The assistant that ships with Cinatra.");
+  });
+
+  it("leaves the built-in row's description null when the descriptor carries none", async () => {
+    const [row] = await readScopeSurfaceAssistantRows(WORKSPACE);
+    expect(row!.description).toBeNull();
+  });
+
   it("drops a NON-built-in directory row the scope has no eligible install for", async () => {
     mocks.buildAssistantsDirectoryForCurrentActor.mockResolvedValue([
       BUILTIN_DIRECTORY_ROW,
