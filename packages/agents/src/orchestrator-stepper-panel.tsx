@@ -122,12 +122,15 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
+// DOES THE RUN SURFACE'S FRAME ALREADY DRAW THE RAIL (cinatra#3478)? Asked of
+// the composition itself, so this column and the frame's can never both draw.
 import {
   electRunRailActiveStep,
   RailExtraEntry,
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
@@ -1624,6 +1627,24 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     railDrawsTheFrame = false,
   } = props;
 
+  // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
+  //
+  // `StepperColumn` below is THE step rail on this branch (cinatra#2739), and
+  // it was drawn unconditionally. The run surface's own frame draws a rail
+  // column too — whenever the screen hands it a rail step: a schedule, an
+  // input form, the gate the run is stopped at, the run's own record — and
+  // that column is NOT the page-level rail the 2739 answer stands down. So a
+  // run carrying any of those drew two live rail columns side by side, which
+  // is what three run pages photographed on 2026-09-13.
+  //
+  // THE FRAME'S COLUMN IS THE ONE THAT SURVIVES, and it is not a preference:
+  // the frame swaps its right-hand slot for the surface of a step that owns
+  // one, so a rail drawn inside that slot — this one — disappears the moment
+  // such a step is selected. The rows this column would have drawn are drawn
+  // in the frame's column by the page-level rail, which the screen mounts
+  // there for exactly this branch (`screenDrawsPageRail`).
+  const railFrameDrawsTheRail = useRunSurfaceRailFrame();
+
   const router = useRouter();
 
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
@@ -2073,6 +2094,63 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     read: slotReader,
   });
 
+  // -------------------------------------------------------------------------
+  // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
+  // (cinatra#3423).
+  //
+  // The tab that presses Continue and loses the race is answered: the decision
+  // road refuses it with the typed no-longer-pending outcome and the submit
+  // paths above draw the blocked state from it. The tab that was ASLEEP while
+  // the gate was decided somewhere else is answered by nobody. It wakes holding
+  // a gate that is gone, its own gate read comes back empty, and the surface had
+  // nothing to draw for "parked, with no gate": the reader is left in front of a
+  // region that says nothing and never resolves.
+  //
+  // So the surface re-reads on RESUME — the two events that mean the reader came
+  // back, a window focus and a visibility change — and when the answer is still
+  // "no gate" it draws the state the surface already draws for a gate that is no
+  // longer open, ratified copy and Refresh and all.
+  //
+  // A tab that never slept fires neither event, so the ordinary flicker of the
+  // gate context (the poll tick that briefly nulls it while the stream re-derives
+  // state) is never mistaken for a decided gate; and the moment a gate is
+  // drawable again the reading is released.
+  //
+  // AND ONLY FOR A TAB THAT ACTUALLY HELD THE GATE. A null interrupt context does
+  // not mean "there is no gate": the server synthesizes a context for every
+  // paused run, so a surface holding null was told NOTHING YET — the state of
+  // every healthy first paint, and of the tick between one gate being answered
+  // and the next one arriving. Those keep the waiting spinner they have always
+  // had: a gate that has not ARRIVED is not a gate that "was already settled or
+  // the run moved on", and drawing the settled state over one would be the stale
+  // reading the drawing's section IV exists to prevent. So the resume reading is
+  // armed only once this surface has actually drawn a gate for this run.
+  const heldAGateRef = useRef(false);
+  useEffect(() => {
+    if (effectiveInterruptContext !== null) heldAGateRef.current = true;
+  }, [effectiveInterruptContext]);
+  const parkedWithNoGate =
+    status === "pending_approval" &&
+    effectiveInterruptContext === null &&
+    heldAGateRef.current;
+  const [gateGoneOnResume, setGateGoneOnResume] = useState(false);
+  useEffect(() => {
+    if (!parkedWithNoGate) {
+      setGateGoneOnResume(false);
+      return;
+    }
+    const onResume = () => {
+      if (document.visibilityState === "hidden") return;
+      setGateGoneOnResume(true);
+    };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [parkedWithNoGate]);
+
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
@@ -2154,6 +2232,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         }}
         embedMode={embedMode}
       />
+    );
+  } else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {
+    // cinatra#3423 — the reader came back to a gate this surface was holding and
+    // that is no longer here. Drawn INSTEAD of the waiting spinner below, whose
+    // "Processing response…" says "working" about a gate nobody is going to
+    // answer and which therefore never resolves. `awaitingNextStep` is excluded
+    // because that is this tab's OWN answer being processed, which the spinner is
+    // right about.
+    stageCard = (
+      <Card>
+        <CardContent className="p-6">
+          <ReviewGateBlocked reason="no-longer-pending" />
+        </CardContent>
+      </Card>
     );
   } else if (
     awaitingNextStep ||
@@ -2349,6 +2441,28 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else {
     rightColumn = stageCard;
+  }
+
+  // ONE RAIL ON THE RUN PAGE (cinatra#3478). Inside the run surface's frame the
+  // rail is the frame's column, so this panel is the run DETAIL and nothing
+  // else — the same handover `embedMode` and the step-less branch above already
+  // make, for the same reason: the chrome belongs to whoever draws the frame.
+  //
+  // AND WHAT DOES NOT TRAVEL WITH THE ROWS, WRITTEN DOWN WHERE IT IS LOST.
+  // The rows come back in the frame's column from the page-level rail, which is
+  // SERVER-rendered and reaches the frame as a fixed node — so on this branch
+  // the rail no longer carries this column's client affordances: the
+  // completed-step replay click, the active-step exit-replay click, the dev
+  // stepper click, the per-step tooltip, the pause glyph, and a highlight that
+  // follows the live run stream (it follows the server's `activeOrdinal`, i.e.
+  // the next server render). Carrying them across would mean the rail's rows
+  // becoming client-fed data rather than a node the frame is handed — a change
+  // to the rail's own composition, which cinatra#3478 does not ask for. Every
+  // branch where the frame draws no rows keeps this column exactly as
+  // cinatra#2739 left it, and the gates stay reachable on both (their rows are
+  // deep links, drawn by the same shared row component).
+  if (railFrameDrawsTheRail) {
+    return <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>;
   }
 
   return (
