@@ -29,6 +29,8 @@ import {
   type CompiledManifestLifecycle,
   type PolicyDecision,
 } from "@/lib/lifecycle/lifecycle-policy";
+import { setRepresentingTargetIds } from "@/lib/artifacts/artifact-review-target";
+import { parseArtifactBindingDeclaration } from "./artifact-binding";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { db } from "./db";
 import { readAgentTemplateById } from "./store";
@@ -75,10 +77,44 @@ export async function decideDeclaredReviewForGate(
     return decideDeclaredReview({ binding, perTarget: [] });
   }
 
-  const manifest = await resolveTemplateManifest(input.templateId, input.packageVersion);
+  const declared = await resolveTemplateDeclarations(input.templateId, input.packageVersion);
+  const manifest = declared.manifest;
+
+  // The artifact's semantic TYPE, once per named artifact — the fact both the
+  // policy below and the set-payload rule read.
+  const typeOf = new Map<string, string | null>();
+  for (const target of binding.targets) {
+    if (typeOf.has(target.artifactId)) continue;
+    typeOf.set(target.artifactId, await resolveArtifactType(input.orgId, target.artifactId));
+  }
+
+  // cinatra#3458 — "The JSON is not supposed to be presented in the review,
+  // because it represents a list of artifacts, not the artifact itself." The
+  // production's own list payload is left OUT of what the gate pins; its members
+  // are what the work produced for a person to review. The exclusion rides the
+  // same per-target filter an org bound rides — the core removes a target whose
+  // answer did not fire — so there is exactly one place a target leaves a set.
+  const setPayloads = setRepresentingTargetIds({
+    targets: binding.targets,
+    facts: binding.targets.map((target) => ({
+      artifactId: target.artifactId,
+      objectType: typeOf.get(target.artifactId) ?? null,
+    })),
+    declaredProducedTypes: declared.producedTypes,
+  });
+
   const perTarget: PolicyDecision[] = [];
   for (const target of binding.targets) {
-    const artifactType = await resolveArtifactType(input.orgId, target.artifactId);
+    if (setPayloads.has(target.artifactId)) {
+      perTarget.push({
+        outcome: "skip",
+        fired: false,
+        reason: "the artifact represents the set the work produced, not a piece of that work",
+        decidedBy: "core-default",
+      });
+      continue;
+    }
+    const artifactType = typeOf.get(target.artifactId) ?? null;
     const orgRule =
       artifactType === null
         ? { bound: "silent" as const }
@@ -121,20 +157,33 @@ async function resolveArtifactType(orgId: string, artifactId: string): Promise<s
   }
 }
 
+/** What ONE read of the run's template version tells the review: the producing
+ *  agent's compiled lifecycle refinements, and the object types it DECLARES it
+ *  produces. */
+interface TemplateDeclarations {
+  readonly manifest: CompiledManifestLifecycle | undefined;
+  /** The declared produced object type ids; empty when the template declares
+   *  none, or when nothing about this version may be trusted to speak. */
+  readonly producedTypes: readonly string[];
+}
+
 /**
- * The producing agent's compiled lifecycle refinements, or undefined.
+ * The producing agent's declarations, or the empty answer.
  *
  * VERSION-PINNED, on the same rule the produced path applies: a manifest skip
  * REMOVES a review, so a template PROVABLY on another version than the run must
  * not supply one — a reinstall would otherwise take a review off a run that
- * started before the skip was declared. An unpinned run keeps its manifest,
- * which is the behaviour it has always had.
+ * started before the skip was declared. The declared produced types ride the
+ * SAME guard for the same reason: they decide which named artifact a gate leaves
+ * out, and a version the run never executed does not get to say. An unpinned run
+ * keeps its manifest, which is the behaviour it has always had.
  */
-async function resolveTemplateManifest(
+async function resolveTemplateDeclarations(
   templateId: string | null,
   runPackageVersion: string | null,
-): Promise<CompiledManifestLifecycle | undefined> {
-  if (!templateId) return undefined;
+): Promise<TemplateDeclarations> {
+  const none: TemplateDeclarations = { manifest: undefined, producedTypes: [] };
+  if (!templateId) return none;
   try {
     const tmpl = await readAgentTemplateById(templateId);
     const pinContradicted =
@@ -142,9 +191,21 @@ async function resolveTemplateManifest(
       runPackageVersion.length > 0 &&
       typeof tmpl?.packageVersion === "string" &&
       tmpl.packageVersion !== runPackageVersion;
-    if (pinContradicted) return undefined;
-    return parseLifecycleConfigText(tmpl?.lifecycleConfig ?? null) ?? undefined;
+    if (pinContradicted) return none;
+    // The EXECUTED artifact-binding declaration (cinatra#3208) carries the typed
+    // `produces` refs the compile that made this template version was validated
+    // against — the extension's own word on what this production produces. An
+    // unreadable or absent declaration parses to null: "unknown", and unknown
+    // leaves every named target pinned.
+    const bindings = parseArtifactBindingDeclaration(tmpl?.artifactBindings ?? null);
+    const producedTypes = (bindings?.producesRefs ?? [])
+      .map((ref) => ref.objectTypeId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    return {
+      manifest: parseLifecycleConfigText(tmpl?.lifecycleConfig ?? null) ?? undefined,
+      producedTypes,
+    };
   } catch {
-    return undefined;
+    return none;
   }
 }

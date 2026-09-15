@@ -62,7 +62,7 @@ import {
   parseIslandColorScheme,
   REVIEW_ISLAND_COLOR_SCHEME_PARAM,
 } from "../island-color-scheme";
-import ReviewTargetIslandPage from "../page";
+import ReviewTargetIslandPage, { REVIEW_ISLAND_TARGET_QUERY_PARAM } from "../page";
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
 
@@ -529,5 +529,61 @@ describe("the island paints in the palette the host named", () => {
     }
     const shapes = new Set(denials.map((el) => JSON.stringify(el.props)));
     expect(shapes.size).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3356 — ONE BLOCK, ONE TARGET.
+//
+// "Every artifact must render itself, i.e. do not show the head of all artifacts
+// stacked, then their bodies stacked. Instead, always show one artifact with head
+// plus body, then the next artifact with head plus body and so on." The card
+// draws one block per pinned target and frames each block at the address of the
+// one target it is about; this document is the half that answers with that one
+// target's body.
+// ---------------------------------------------------------------------------
+
+describe("the frame of ONE block draws ONE target (cinatra#3356)", () => {
+  const READY = (ids: string[]) => ({
+    kind: "ready",
+    agentSummary: null,
+    targets: ids.map((id) => target(id)),
+    pinnedCapturePairs: {},
+    permissions: { canDecide: true, canComment: true },
+  });
+
+  it("draws only the target whose pinned revision the address names", async () => {
+    loadReviewGateSurface.mockResolvedValue(READY(["a1", "a2", "a3"]));
+    const el = await renderIsland(REF, { [REVIEW_ISLAND_TARGET_QUERY_PARAM]: "a2-rev" });
+    const props = el.props as { "data-target-count"?: number };
+    expect(props["data-target-count"]).toBe(1);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(1);
+    expect(
+      (panels[0].prepared as { target: { artifactId: string } }).target.artifactId,
+    ).toBe("a2");
+  });
+
+  it("an address that names no target still draws the gate's whole pinned set", async () => {
+    loadReviewGateSurface.mockResolvedValue(READY(["a1", "a2", "a3"]));
+    const el = await renderIsland(REF);
+    expect((el.props as { "data-target-count"?: number })["data-target-count"]).toBe(3);
+  });
+
+  it("a revision this gate never pinned draws the ONE empty document every absence draws", async () => {
+    loadReviewGateSurface.mockResolvedValue(READY(["a1", "a2"]));
+    const el = await renderIsland(REF, { [REVIEW_ISLAND_TARGET_QUERY_PARAM]: "a9-rev" });
+    expect(isEmptyIsland(el)).toBe(true);
+  });
+
+  it("a DECIDED gate answers the same way — its frozen set, narrowed to the block's target", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      ...READY(["a1", "a2"]),
+      kind: "settled",
+    });
+    const el = await renderIsland(REF, { [REVIEW_ISLAND_TARGET_QUERY_PARAM]: "a1-rev" });
+    const props = el.props as { "data-target-count"?: number; "data-review-reading"?: string };
+    expect(props["data-review-reading"]).toBe("decided");
+    expect(props["data-target-count"]).toBe(1);
   });
 });

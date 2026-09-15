@@ -447,3 +447,140 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
     expect(headers(container)).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3356 — EVERY ARTIFACT RENDERS ITSELF (the ruling of 2026-09-13).
+//
+// "Every artifact must render itself, i.e. do not show the head of all artifacts
+// stacked, then their bodies stacked. Instead, always show one artifact with head
+// plus body, then the next artifact with head plus body and so on."
+// ---------------------------------------------------------------------------
+
+const blocks = (root: ParentNode) =>
+  root.querySelectorAll('[data-conformance-id="review-target-block"]');
+const islands = (root: ParentNode) =>
+  root.querySelectorAll('[data-conformance-id="review-target-island"]');
+
+describe("#3356 — one block per artifact: its head directly over its own body", () => {
+  const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComment: true };
+
+  async function renderBlocks(headerList = [HEADER_ONE, HEADER_TWO]) {
+    mockResolve(PENDING, { targetHeaders: headerList });
+    const rendered = renderOn("run_card");
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      ).not.toBeNull(),
+    );
+    return rendered;
+  }
+
+  it("draws ONE block per artifact, in the gate's order", async () => {
+    const { container } = await renderBlocks();
+    expect(blocks(container)).toHaveLength(2);
+    const revisions = [...blocks(container)].map((b) =>
+      b
+        .querySelector("[data-review-target-revision]")
+        ?.getAttribute("data-review-target-revision"),
+    );
+    expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
+  });
+
+  it("each block carries its own head and its own body, the head first", async () => {
+    const { container } = await renderBlocks();
+    expect(islands(container)).toHaveLength(2);
+    for (const block of [...blocks(container)]) {
+      const head = block.querySelector('[data-conformance-id="review-target-header"]');
+      const body = block.querySelector('[data-conformance-id="review-target-island"]');
+      expect(head, "the block draws its own head").not.toBeNull();
+      expect(body, "the block draws its own body").not.toBeNull();
+      expect(
+        head!.compareDocumentPosition(body!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        "the head sits directly over its own body",
+      ).toBeTruthy();
+    }
+  });
+
+  it("ONE bordered block per artifact — the head and its own body inside the SAME border", async () => {
+    // THE MEASURED DEPARTURE (round 2). The head sat in its own bordered card and
+    // the body in a second one, with 8 CSS px of page ground between them: two
+    // cards where the drawing draws one thing. §IV puts the two
+    // halves in ONE block — "Every target opens with a header …" and "Beneath the
+    // header sits the representation slot" — and the card's own loading skeleton
+    // has always drawn exactly that: one bordered box, a hairline, the body.
+    const { container } = await renderBlocks();
+    expect(blocks(container)).toHaveLength(2);
+    for (const block of [...blocks(container)]) {
+      const head = block.querySelector('[data-conformance-id="review-target-header"]')!;
+      const body = block.querySelector('[data-conformance-id="review-target-island"]')!;
+      // The BLOCK is the one bordered container.
+      expect(block.className, "the block draws the border").toMatch(/\bborder border-line\b/);
+      expect(block.className).toContain("rounded-control");
+      // Neither half draws a card of its own inside it.
+      expect(head.className, "the head draws no card of its own").not.toMatch(
+        /\bborder border-line\b/,
+      );
+      expect(head.className).not.toContain("rounded-control");
+      expect(body.className, "the body draws no card of its own").not.toMatch(
+        /\bborder border-line\b/,
+      );
+      expect(body.className).not.toContain("rounded-control");
+      // What divides them is a hairline, not a gap.
+      expect(head.className, "a hairline under the head").toContain("border-b");
+      expect(
+        block.className,
+        "no page ground between the head and its own body",
+      ).not.toMatch(/\bgap-/);
+      expect(head.nextElementSibling, "the body follows its head with nothing between").toBe(body);
+    }
+  });
+
+  it("never a column of heads followed by a region of bodies", async () => {
+    const { container } = await renderBlocks();
+    const [firstHead, secondHead] = [...headers(container)];
+    const firstBody = blocks(container)[0].querySelector(
+      '[data-conformance-id="review-target-island"]',
+    )!;
+    expect(
+      firstHead.compareDocumentPosition(firstBody) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      firstBody.compareDocumentPosition(secondHead) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the FIRST artifact's body comes before the SECOND artifact's head",
+    ).toBeTruthy();
+  });
+
+  it("each block's frame asks for THAT artifact's body and no other", async () => {
+    const { container } = await renderBlocks();
+    const srcs = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
+    expect(srcs).toHaveLength(2);
+    expect(srcs[0]).toContain(`tr=${HEADER_ONE.revisionId}`);
+    expect(srcs[1]).toContain(`tr=${HEADER_TWO.revisionId}`);
+  });
+
+  it("a SETTLED gate keeps the same composition", async () => {
+    mockResolve({ state: "settled", outcome: "approved" }, {
+      targetHeaders: [HEADER_ONE, HEADER_TWO],
+    });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(blocks(container)).toHaveLength(2));
+    expect(islands(container)).toHaveLength(2);
+    const firstBody = blocks(container)[0].querySelector(
+      '[data-conformance-id="review-target-island"]',
+    )!;
+    const secondHead = [...headers(container)][1];
+    expect(
+      firstBody.compareDocumentPosition(secondHead) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("an answer that carries no headers still frames the gate's own pinned set", async () => {
+    mockResolve(PENDING);
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(blocks(container)).toHaveLength(0);
+    expect(islands(container)).toHaveLength(1);
+  });
+});

@@ -121,6 +121,16 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
+  // cinatra#3356 — ONE BLOCK PER ARTIFACT. "Every artifact must render itself,
+  // i.e. do not show the head of all artifacts stacked, then their bodies
+  // stacked. Instead, always show one artifact with head plus body, then the
+  // next artifact with head plus body and so on." The card pairs each target's
+  // header with that target's own frame, and the block is the pairing. It is
+  // listed here rather than in SPEC_CONFORMANCE for the same reason the card and
+  // the island are: this suite's closed set is the OLDER spec's, and the anchor
+  // is what makes "one block per pinned target, its head over its own body"
+  // checkable.
+  "review-target-block",
   // cinatra#3141 item 7 — §IV's target HEADER, drawn by the card. The header is
   // the older spec's own ("Every target opens with a header that names what is
   // under review and fixes it in place"), and it used to be part of
