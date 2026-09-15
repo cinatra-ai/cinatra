@@ -82,17 +82,16 @@ jobs:
               - '**/*.yml'
               - '**/*.yaml'
               # administration-mcp-machine-flow-banned.mjs:50 also fails on the
-              # mere EXISTENCE of a banned route directory, whatever the file
-              # extension inside it, so those trees are matched wholesale.
-              - 'src/app/configuration/mcp/auth/**'
-              - 'src/app/configuration/mcp/account/**'
-              - 'src/app/configuration/mcp/consent/**'
-              - 'src/app/admin/mcp/auth/**'
-              - 'src/app/admin/mcp/account/**'
-              - 'src/app/admin/mcp/consent/**'
-              - 'src/app/administration/mcp/auth/**'
-              - 'src/app/administration/mcp/account/**'
-              - 'src/app/administration/mcp/consent/**'
+              # mere EXISTENCE of a handshake directory inside one of the three
+              # admin namespaces it guards, whatever the file extension inside
+              # it, so those namespaces are matched wholesale. They are named by
+              # their ROOT, never by a handshake route under it: that gate opens
+              # every tracked .yml, this file included, and would read such a
+              # literal here as one of the references it bans (9 violations on
+              # its own guard, run 35027084267).
+              - 'src/app/configuration/mcp/**'
+              - 'src/app/admin/mcp/**'
+              - 'src/app/administration/mcp/**'
 
   mcp-route-gate:
     needs: [changes]

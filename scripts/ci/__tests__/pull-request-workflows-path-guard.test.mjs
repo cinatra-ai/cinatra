@@ -315,3 +315,61 @@ describe("changed-path detection uses one pinned action", () => {
     expect(offenders, "a changed-files action must stay on the repository's own SHA pin").toEqual([]);
   });
 });
+
+/** The MCP route gate — the repository's own scanner of every tracked `.yml`. */
+const MCP_ROUTE_GATE = path.join(
+  REPO_ROOT,
+  "scripts",
+  "audit",
+  "administration-mcp-machine-flow-banned.mjs",
+);
+
+/**
+ * The MCP route gate's OWN banned-URL matcher, read out of the gate script
+ * rather than copied: a second copy of that pattern here would itself be one of
+ * the strings the gate bans (it opens every tracked `.mjs`), and it would drift
+ * the day the gate's pattern changes.
+ */
+function mcpRouteGateBannedMatcher() {
+  const source = fs.readFileSync(MCP_ROUTE_GATE, "utf8");
+  const literal = source.match(/^const\s+BANNED_URL_RE\s*=\s*([\s\S]*?);\s*$/m)?.[1]?.trim();
+  const parts = literal?.match(/^\/([\s\S]+)\/([a-z]*)$/);
+  if (!parts) {
+    throw new Error(
+      `could not read BANNED_URL_RE out of ${path.relative(REPO_ROOT, MCP_ROUTE_GATE)} — the gate's pattern moved; re-point this guard at it`,
+    );
+  }
+  return new RegExp(parts[1], parts[2]);
+}
+
+/** Every path glob of every detector job's filter lists, across the directory. */
+function everyFilterGlob() {
+  const out = [];
+  for (const file of workflowFiles()) {
+    const jobs = parseJobBlocks(read(file));
+    for (const id of detectorsOf(jobs)) {
+      for (const [key, globs] of filterLists(jobs.get(id)) ?? []) {
+        for (const glob of globs) out.push({ file, job: id, key, glob });
+      }
+    }
+  }
+  return out;
+}
+
+describe("no changed-path list spells a route the repository's own gates ban", () => {
+  it("every filter glob passes the MCP route gate's own matcher", () => {
+    const banned = mcpRouteGateBannedMatcher();
+    const globs = everyFilterGlob();
+    expect(
+      globs,
+      "no detector job declares a filter list — this guard would pass vacuously",
+    ).not.toHaveLength(0);
+    const offenders = globs
+      .filter(({ glob }) => banned.test(glob))
+      .map(({ file, key, glob }) => `${file}: filter \`${key}\` names ${glob}`);
+    expect(
+      offenders,
+      "a path list names what the workflow READS; it must not spell a route the MCP machine-flow gate bans — that gate scans .github/workflows too, so such a literal turns the gate red on the guard's own file. Name the namespace root instead.",
+    ).toEqual([]);
+  });
+});
