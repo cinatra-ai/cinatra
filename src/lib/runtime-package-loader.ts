@@ -326,6 +326,11 @@ export async function loadRuntimePackageExtensions(
         integrityVerified: integrityOk,
         persistedTrustDecision: anchor.trustDecision,
         signatureVerified,
+        // The ORIGIN factor for a package the operator supplied: the anchor
+        // carries the road's own activation standing, exactly as the install
+        // pipeline passes it at install time, so boot and install cannot reach
+        // two different verdicts about the same row.
+        ...(anchor.operatorSuppliedOrigin ? { operatorSuppliedOrigin: true } : {}),
         trustedActivationHosts: activationHosts,
         allowMarketplaceBootstrapTrust: bootstrapTrust,
       });

@@ -518,11 +518,17 @@ function AccessComboboxSingleSelect({
   // Scope-prefixed row label (spec §2.3 / §3.2): `<Scope>: <name>`, no heading.
   // The muted title-case prefix matches the multi-mode row prefix so the two
   // modes read consistently.
+  //
+  // The literal SPACE between the two spans is part of the label, not decoration
+  // (cinatra#3204): the row reads `<Scope>: <name>` in the DOM and in every
+  // text extraction of it, not only to a reader looking at the flex gap. A
+  // white-space-only anonymous flex item is not rendered, so the pixels are
+  // unchanged and the gap keeps owning the visual spacing.
   const rowLabel = (prefix: string, name: string) => (
     <span className="flex items-baseline gap-1 min-w-0">
       <span className="text-xs tracking-wide text-muted-foreground shrink-0">
         {prefix}:
-      </span>
+      </span>{" "}
       <span className="text-foreground whitespace-nowrap">{name}</span>
     </span>
   );
@@ -795,9 +801,11 @@ function AccessComboboxSingleSelect({
                 trigger-specific overflow handling, not a text difference. */}
             <span className="flex items-center min-w-0 gap-1">
               {selected.type && (
-                <span className="text-xs tracking-wide text-muted-foreground shrink-0">
-                  {selected.type}:
-                </span>
+                <>
+                  <span className="text-xs tracking-wide text-muted-foreground shrink-0">
+                    {selected.type}:
+                  </span>{" "}
+                </>
               )}
               <span className="text-foreground truncate">{selected.name}</span>
             </span>
@@ -961,9 +969,11 @@ function AccessComboboxMultiSelect({
         />
         <span className="flex items-baseline gap-1 min-w-0">
           {parts.type && (
-            <span className="text-xs tracking-wide text-muted-foreground shrink-0">
-              {parts.type}:
-            </span>
+            <>
+              <span className="text-xs tracking-wide text-muted-foreground shrink-0">
+                {parts.type}:
+              </span>{" "}
+            </>
           )}
           <span className="text-foreground whitespace-nowrap">{parts.name}</span>
         </span>
