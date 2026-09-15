@@ -12,6 +12,7 @@ import { AgentInstanceNav } from "@/components/agent-instance-nav";
 import type { AgentInstanceNavProps } from "@/components/agent-instance-nav";
 import { InlinePageTitle, type InlinePageTitleHandle } from "@cinatra-ai/sdk-ui";
 import {
+  agentRunCrumbEntries,
   publishCrumbContributions,
   type CrumbContribution,
 } from "@/lib/breadcrumb-contributions";
@@ -158,11 +159,15 @@ export function AgentPageLayout({
   // The ONE crumb channel (cinatra#1737): this layout owns the page header's
   // identity (the editable run title → template name → short-id placeholder,
   // ensureRunTitle populating the title on every SSR path), so it publishes
-  // that same identity for the collapsed "Agents > <name>" crumb — replacing
-  // the former divergent pair (the name-changed event + the AppShell
-  // instance-name fetch). Rename + name-set flows update `runName`, which
-  // re-publishes.
-  const crumbLabel = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  // that same identity for the run's own crumb — replacing the former divergent
+  // pair (the name-changed event + the AppShell instance-name fetch). Rename +
+  // name-set flows update `runName`, which re-publishes.
+  //
+  // AND ONE TRAIL SHAPE FOR THE RUN'S PAGES (cinatra#3446): the entries are
+  // composed by `agentRunCrumbEntries` — the one composer this layout and the
+  // run's review page both publish — so the trail reads the agent's name, then
+  // the run, in the same words wherever the run is read.
+
   // Epoch-capture guard (mirrors CrumbContributions): the identity this
   // layout publishes was authorized by the server render that mounted it. A
   // later epoch-context change with the SAME instance still mounted (router
@@ -180,25 +185,49 @@ export function AgentPageLayout({
       armedRef.current = { identity, epoch: crumbEpoch };
     }
     if (armedRef.current.epoch !== crumbEpoch) return;
-    // UNDER THE SCOPE IT IS READ AT (cinatra#2809). The instance crumb targets a
-    // crumb PATH, and on a scoped address that path carries the scope base in
-    // front of it — published at the bare path it matched nothing, and the
-    // trail fell back to the run id's abbreviation on every scoped run page.
-    const instancePath = `${scopeBase ?? ""}/agents/${agentId}/${instanceId}`;
+    // UNDER THE SCOPE IT IS READ AT (cinatra#2809). The run's crumbs target
+    // crumb PATHS, and on a scoped address those paths carry the scope base in
+    // front of them — published at the bare path they matched nothing, and the
+    // trail fell back to the run id's abbreviation on every scoped run page. So
+    // the base travels into the composer, which mints both paths under it.
     publishCrumbContributions(pathname, crumbEpoch, [
       ...(JSON.parse(serializedScopeCrumbs) as CrumbContribution[]),
-      { prefix: instancePath, label: crumbLabel },
-      // AND NO STEP AFTER IT (cinatra#3223). The layout used to append a third
+      ...agentRunCrumbEntries({
+        scopeBase,
+        agentId,
+        instanceId,
+        templateName,
+        runName,
+      }),
+      // AND NO STEP AFTER IT (cinatra#3223). The layout used to append a
       // crumb here naming the step the run detail was showing. The ratified
       // drawing's Breadcrumb section: "A breadcrumb always reflects the
       // navigation hierarchy — the route the page sits on, not the thing the
-      // page happens to be about", and "'Agents › Agent run › Review' is not a
-      // possible breadcrumb — the review is read on its run's own route, under
-      // that run's trail." A step is a reading inside this one route, not a
-      // route of its own, so it is not a crumb at all; the rail beside the
-      // detail is the you-are-here anchor.
+      // page happens to be about." A step is a reading inside this one route,
+      // not a route of its own, so it is not a crumb at all; the rail beside
+      // the detail is the you-are-here anchor. That still holds: nothing is
+      // published here for the step the detail is showing.
+      //
+      // THE REVIEW SURFACE IS NOT A STEP OF THAT KIND (cinatra#3446). The same
+      // Breadcrumb section closed on "'Agents › Agent run › Review' is not a
+      // possible breadcrumb", and the trail the two measured runs drew is the
+      // reading that conclusion produced: a review page that named neither the
+      // agent nor its run. Issue #3446's Expected is the newer word on exactly
+      // that pair — "one trail shape for a run's pages: the agent's name, then
+      // the run, then the step or surface (Review)" — and the review route
+      // answers at a path segment of its own, which is the level this trail
+      // names. The step elision above is untouched by it.
     ]);
-  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel, scopeBase, serializedScopeCrumbs]);
+  }, [
+    pathname,
+    crumbEpoch,
+    agentId,
+    instanceId,
+    runName,
+    templateName,
+    scopeBase,
+    serializedScopeCrumbs,
+  ]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
 
   // Listen for cross-component name updates from HitlApprovalCard:

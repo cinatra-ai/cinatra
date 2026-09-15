@@ -19,10 +19,20 @@
  *
  *   "an id never stands where a name belongs"
  *
- * The run page's layout used to append a third crumb naming the step the run
- * detail was showing. A step is a reading inside one route, not a route of its
- * own, so the drawing's conclusion is that it is not a crumb at all — not that
- * it is a non-navigable one.
+ * The run page's layout used to append a crumb naming the step the run detail
+ * was showing. A step is a reading inside one route, not a route of its own, so
+ * the drawing's conclusion is that it is not a crumb at all — not that it is a
+ * non-navigable one. THAT is what this file pins, and it is unchanged.
+ *
+ * THE LEVELS THE TRAIL NAMES HAVE MOVED ON (cinatra#3446). The quoted section
+ * also concluded that "Agents › Agent run › Review" is not a possible
+ * breadcrumb, and the trail two measured runs drew under that conclusion is the
+ * defect issue #3446 was filed on: a review page naming neither the agent nor
+ * its run, beside a run page naming them in one crumb. Its Expected is the
+ * newer word on that pair — "one trail shape for a run's pages: the agent's
+ * name, then the run, then the step or surface (Review)" — so the trail here
+ * reads three levels where it read two. No step is published for any of them:
+ * every assertion below about what a STEP contributes stands exactly as it was.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -42,6 +52,8 @@ import { buildBreadcrumbTrail } from "@/lib/breadcrumb-trail";
 const AGENT_ID = "cinatra-ai/blog-draft-writer-agent";
 const INSTANCE_ID = "run-3223";
 const RUN_PATH = `/agents/${AGENT_ID}/${INSTANCE_ID}`;
+const AGENT_PATH = `/agents/${AGENT_ID}`;
+const AGENT_NAME = "Blog Draft Writer Agent";
 const RUN_NAME = "Blog Draft Writer Agent (1)";
 const EPOCH = "anon";
 
@@ -128,11 +140,16 @@ describe("under an agent instance the trail is exactly the drawing's levels (ite
       renderReading(reading);
       const published = selectCrumbContributions(RUN_PATH, EPOCH);
       expect(published.map((c) => ({ prefix: c.prefix, label: c.label }))).toEqual([
+        { prefix: AGENT_PATH, label: AGENT_NAME },
         { prefix: RUN_PATH, label: RUN_NAME },
       ]);
       expect(published.some((c) => c.prefix.includes("#step"))).toBe(false);
       expect(published.some((c) => c.appendAfter !== undefined)).toBe(false);
-      expect(trailOn(RUN_PATH).map((c) => c.label)).toEqual(["Agents", RUN_NAME]);
+      expect(trailOn(RUN_PATH).map((c) => c.label)).toEqual([
+        "Agents",
+        AGENT_NAME,
+        RUN_NAME,
+      ]);
     });
   }
 });
@@ -148,6 +165,7 @@ describe("the trail is byte-identical across the run's step readings (item 2)", 
     expect(new Set(trails).size).toBe(1);
     expect(JSON.parse(trails[0]!)).toEqual([
       { label: "Agents", href: "/agents" },
+      { label: AGENT_NAME, href: AGENT_PATH },
       { label: RUN_NAME, href: RUN_PATH },
     ]);
   });
@@ -169,7 +187,7 @@ describe("the scheduling route composes the same trail as every other reading (i
   // step is open, whatever path that step happens to answer at.
   const SCHEDULE_ROUTE = `${RUN_PATH}/trigger`;
 
-  it("reads two crumbs on the scheduling route, byte-identical to the gate reading", () => {
+  it("reads the run's own trail on the scheduling route, byte-identical to the gate reading", () => {
     nav.pathname = RUN_PATH;
     renderReading(READINGS[2]!);
     const gateTrail = JSON.stringify(trailOn(RUN_PATH));
@@ -182,6 +200,7 @@ describe("the scheduling route composes the same trail as every other reading (i
 
     expect(JSON.parse(scheduleTrail)).toEqual([
       { label: "Agents", href: "/agents" },
+      { label: AGENT_NAME, href: AGENT_PATH },
       { label: RUN_NAME, href: RUN_PATH },
     ]);
     expect(scheduleTrail).toBe(gateTrail);

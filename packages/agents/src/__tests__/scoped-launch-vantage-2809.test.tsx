@@ -174,11 +174,15 @@ function trailOn(pathname: string) {
 }
 
 describe("the scoped run page's trail (issue #2809 item 3)", () => {
+  // The levels BELOW "Agents" are the run's own (cinatra#3446): the agent's
+  // name, then the run. The scope head this item is about is unchanged by that,
+  // and is still read from the scope's own resolved crumb.
   it("heads the trail with the scope's resolved NAME, linked to the scope landing", () => {
     renderScopedRun("Northwind Labs");
     expect(trailOn(SCOPED_RUN_PATH)).toEqual([
       { label: "Northwind Labs", href: ORG_BASE },
       { label: "Agents", href: `${ORG_BASE}/agents` },
+      { label: "Blog Draft Writer Agent", href: `${ORG_BASE}/agents/${AGENT_ID}` },
       { label: RUN_NAME, href: SCOPED_RUN_PATH },
     ]);
   });
@@ -193,7 +197,12 @@ describe("the scoped run page's trail (issue #2809 item 3)", () => {
   it("shows the id's first eight characters plus an ellipsis while the name is unavailable", () => {
     renderScopedRun(undefined);
     const labels = trailOn(SCOPED_RUN_PATH).map((c) => c.label);
-    expect(labels).toEqual([`${ORG_ID.slice(0, 8)}…`, "Agents", RUN_NAME]);
+    expect(labels).toEqual([
+      `${ORG_ID.slice(0, 8)}…`,
+      "Agents",
+      "Blog Draft Writer Agent",
+      RUN_NAME,
+    ]);
     // Never a title-cased raw id.
     expect(labels[0]).not.toContain("-4d2e");
   });
@@ -217,9 +226,13 @@ describe("the scoped run page's trail (issue #2809 item 3)", () => {
     expect(selectCrumbContributions(BARE_RUN_PATH, EPOCH).map((c) => ({
       prefix: c.prefix,
       label: c.label,
-    }))).toEqual([{ prefix: BARE_RUN_PATH, label: RUN_NAME }]);
+    }))).toEqual([
+      { prefix: `/agents/${AGENT_ID}`, label: "Blog Draft Writer Agent" },
+      { prefix: BARE_RUN_PATH, label: RUN_NAME },
+    ]);
     expect(trailOn(BARE_RUN_PATH)).toEqual([
       { label: "Agents", href: "/agents" },
+      { label: "Blog Draft Writer Agent", href: `/agents/${AGENT_ID}` },
       { label: RUN_NAME, href: BARE_RUN_PATH },
     ]);
   });
