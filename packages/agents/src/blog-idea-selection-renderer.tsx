@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import {
   choiceBody,
   choiceReference,
@@ -27,15 +26,22 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 // reference shape and the title/body split are the generic offered-choice road
 // on `field-renderer-registry.ts`, which knows no pack.
 
+/** What the step says when it has no list to offer and the offer named no
+ *  reason of its own. The drawn empty reading of the stored-ideas step, stated
+ *  in one place so the page is never blank and never a form. */
+export const NOTHING_TO_PICK_READING =
+  "No blog idea is on offer on this step, so there is nothing to pick here.";
+
 /**
  * The idea-selection field renderer. Reads the offered ideas from
  * `props.value.ideas` (surfaced from the gate's pendingApproval render input)
  * and the run-ending sentence, when there is one, from `props.value.reason`.
  *
- * With no offered ideas and a stated reason it draws the reason: "an empty list
- * ends the run with a plain reason" is something a person must be able to READ,
- * not a state the surface leaves blank. With no ideas and no reason it degrades
- * to the schema-driven floor as before.
+ * THE STEP IS A LIST, NEVER A FIELD. With no offered ideas it draws the stated
+ * reason the offer carried, else the drawn empty reading above — never the
+ * schema-driven field floor, on any envelope: "an empty list draws no rows and
+ * no Continue", and a response box with a Continue over it settles the subject
+ * of the run with no row picked, the one shape this step may not draw.
  */
 export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
   const value = (props.value ?? {}) as {
@@ -47,15 +53,13 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
   const offered = offerableChoices(value.ideas);
   const reason = statedReason(value.reason);
   if (offered.length === 0) {
-    if (reason) {
-      return (
-        <p className="text-sm text-muted-foreground" role="status">
-          {reason}
-        </p>
-      );
-    }
-    // Never blank: no offered ideas and nothing said -> schema-driven floor.
-    return <SchemaOnlyFloorRenderer {...props} />;
+    // No rows, no Continue, no field — and a sentence either way: the offer's
+    // own reason when it stated one, else the drawn empty reading.
+    return (
+      <p className="text-sm text-muted-foreground" role="status">
+        {reason ?? NOTHING_TO_PICK_READING}
+      </p>
+    );
   }
   const summary =
     typeof value.summary === "string" && value.summary.trim().length > 0
