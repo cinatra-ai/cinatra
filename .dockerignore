@@ -66,5 +66,13 @@ scripts/exec-worker-service.bundle.mjs
 # otherwise merge/clobber the image-owned seed with unpinned local content.
 .cinatra-required-oas-seed
 
+# Image extension-fleet marker (engineering#666). WRITTEN INSIDE the build by
+# the fleet block (RUN record-extension-fleet.mjs) from the same build arg the
+# acquisition step took. A stale or hand-made local copy must never enter the
+# build context: the later `COPY . .` would clobber the image-owned marker and
+# a required-only image would boot claiming the dev fleet, widening the seed
+# set of a real deployment. Same reason as the OAS seed above.
+.cinatra-extension-fleet.json
+
 # OS
 .DS_Store
