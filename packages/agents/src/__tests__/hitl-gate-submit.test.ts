@@ -104,6 +104,32 @@ describe("wrapPrimitiveSetupPayload", () => {
     });
   });
 
+  // cinatra#3452 — THE EMPTY BOX HAS TO SURVIVE THE BOUNDARY.
+  //
+  // A renderer whose field is left empty emits `undefined`. Wrapped as
+  // `{ [fieldName]: undefined }`, the key does not survive the Server Action
+  // boundary at all, so the setup approval saw a submission that never named
+  // the field and refused Continue with
+  // `fieldName "ideaCount" is not present in the submitted values` — even for a
+  // field the agent declared optional. Wrapping the empty box as an explicit
+  // `null` keeps "the operator answered this field, with nothing" legible on
+  // the far side, where the required/optional split is made.
+  it("wraps an EMPTY field as an explicit null that survives the Server Action boundary", () => {
+    const wrapped = wrapPrimitiveSetupPayload("ideaCount", undefined);
+    expect(wrapped).toEqual({
+      payload: { ideaCount: null },
+      payloadFieldName: "ideaCount",
+    });
+    // The boundary itself: an undefined-valued key is dropped by serialization,
+    // a null-valued one is not.
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        JSON.parse(JSON.stringify(wrapped.payload)),
+        "ideaCount",
+      ),
+    ).toBe(true);
+  });
+
   it("passes objects through unchanged (grouped forms key off inputSchema.properties)", () => {
     const obj = { a: 1 };
     expect(wrapPrimitiveSetupPayload("field", obj)).toEqual({
