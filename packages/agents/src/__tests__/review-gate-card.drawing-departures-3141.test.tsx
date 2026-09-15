@@ -436,12 +436,6 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
 // "Every artifact must render itself, i.e. do not show the head of all artifacts
 // stacked, then their bodies stacked. Instead, always show one artifact with head
 // plus body, then the next artifact with head plus body and so on."
-//
-// And cinatra#3456, which falls with it: the target region was capped at 380 CSS
-// px and scrolled inside itself, so a gate over several targets showed only the
-// first body. §IV draws each target with its header and its representation in the
-// page's own flow; the card grows with its targets, and the page — not a box
-// inside it — scrolls.
 // ---------------------------------------------------------------------------
 
 const blocks = (root: ParentNode) =>
@@ -544,27 +538,6 @@ describe("#3356 — one block per artifact: its head directly over its own body"
     expect(srcs).toHaveLength(2);
     expect(srcs[0]).toContain(`tr=${HEADER_ONE.revisionId}`);
     expect(srcs[1]).toContain(`tr=${HEADER_TWO.revisionId}`);
-  });
-
-  it("no inner capped region — the frame is never held at a fixed height (cinatra#3456)", async () => {
-    const { container } = await renderBlocks();
-    for (const island of [...islands(container)]) {
-      expect(
-        island.className,
-        "the target region clips nothing — the page scrolls, not a box inside it",
-      ).not.toContain("overflow-hidden");
-      expect((island as HTMLElement).style.height, "the region takes no fixed height").toBe("");
-    }
-    for (const frame of [...container.querySelectorAll("iframe")]) {
-      expect(
-        (frame as HTMLIFrameElement).style.height,
-        "the frame is not capped while its own height is unknown",
-      ).toBe("");
-      expect(
-        (frame as HTMLIFrameElement).style.minHeight,
-        "it stands at a floor until its document says how tall it is",
-      ).not.toBe("");
-    }
   });
 
   it("a SETTLED gate keeps the same composition", async () => {

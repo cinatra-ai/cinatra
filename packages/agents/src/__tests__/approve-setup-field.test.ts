@@ -480,6 +480,334 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     ).rejects.toThrow(/fieldName "name" is not present/);
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#3452 — a field left EMPTY is not a missing fieldName.
+  //
+  // The drawing (specs/app-setup.html, the rail-states paragraph): "If a step
+  // offered an optional field and the operator left it blank, the step is still
+  // done and still carries its check." The single-field guard used to refuse
+  // EVERY valueless submission, so a blank optional box could not be submitted
+  // at all — the operator had to type a number they did not want to give.
+  //
+  // The split these tests pin:
+  //   - declares a DEFAULT + no value -> accepted; that default is merged and
+  //     the step continues (the reported `ideaCount` case: the agent declares
+  //     it required AND with `default: 5`).
+  //   - declared optional, no default, no value -> accepted; the key stays
+  //     absent and the step continues.
+  //   - declared required, no default, no value -> the refusal stands, naming
+  //     the field.
+  //   - schema cannot say (no template, or the field is not declared at all)
+  //     -> FAIL CLOSED, the refusal stands.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3452: an OPTIONAL field left empty is accepted and the step continues (explicit empty)", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt1",
+      templateId: "tpl-opt1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt1",
+      "actor-1",
+      { ideaCount: null }, // the empty box, as the submission carries it
+      "ideaCount",
+    );
+
+    // Nothing merged for the field the operator left blank...
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeUndefined();
+    // ...and the step continues: status -> queued and the setup loop re-runs.
+    const statusWrite = dbWrites.find((w) => w.set?.status === "queued");
+    expect(statusWrite).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-opt1", resumedFromSetup: true },
+      // The id carries the FIELD, not just the road (the cinatra#3035
+      // regression pinned above): this decision is `ideaCount`'s own.
+      { jobId: "resume-setup-run-opt1-field-ideaCount-db3eb011" },
+    );
+  });
+
+  it("cinatra#3452: an OPTIONAL field whose key never crossed the boundary is accepted too", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt2",
+      templateId: "tpl-opt2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt2",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    // `{ ideaCount: undefined }` reaches the server with the key GONE — that is
+    // what the Server Action boundary does to an undefined-valued key, and it
+    // is the exact shape the reported refusal was raised on.
+    await approveReviewTaskInternal("setup-run-opt2", "actor-1", {}, "ideaCount");
+
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
+  it("cinatra#3452: an OPTIONAL field left empty carries its DECLARED DEFAULT into inputParams", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt3",
+      templateId: "tpl-opt3",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt3",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt3",
+      "actor-1",
+      { ideaCount: null },
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("5");
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
+  it("cinatra#3452: THE REPORTED CASE — a field that declares a DEFAULT, left empty, is satisfied by that default and the step continues", async () => {
+    // The Blog Pipeline Agent's own StartNode declares `ideaCount` in its
+    // `required` list AND with `default: 5`. Leaving the idea count blank drew
+    // `Setup approval rejected: fieldName "ideaCount" is not present in the
+    // submitted values` and the wizard would not advance — the person had to
+    // type a number they did not want to give. A declared default IS the
+    // answer for an empty box: it is merged, and the step continues.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-def1",
+      templateId: "tpl-def1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-def1",
+      inputSchema: {
+        type: "object",
+        required: ["brief", "ideaCount"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-def1",
+      "actor-1",
+      { ideaCount: null }, // the empty box, as the submission carries it
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("5");
+    // ...and the step continues: status -> queued and the setup loop re-runs.
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-def1", resumedFromSetup: true },
+      // The id carries the FIELD, not just the road (the cinatra#3035
+      // regression pinned above): this decision is `ideaCount`'s own.
+      { jobId: "resume-setup-run-def1-field-ideaCount-db3eb011" },
+    );
+  });
+
+  it("cinatra#3452: a REQUIRED field with NO declared default left empty still refuses Continue, naming that field", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-req1",
+      templateId: "tpl-req1",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-req1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await expect(
+      approveReviewTaskInternal("setup-run-req1", "actor-1", { brief: null }, "brief"),
+    ).rejects.toThrow(/fieldName "brief" is not present/);
+
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3452: a field the schema does not declare FAILS CLOSED when left empty", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-req2",
+      templateId: "tpl-req2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-req2",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" } },
+      },
+    });
+
+    await expect(
+      approveReviewTaskInternal("setup-run-req2", "actor-1", { mystery: null }, "mystery"),
+    ).rejects.toThrow(/fieldName "mystery" is not present/);
+  });
+
+  it("cinatra#3452: a value of 0 for an optional field is an ANSWER, not an empty box", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt4",
+      templateId: "tpl-opt4",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt4",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt4",
+      "actor-1",
+      { ideaCount: 0 },
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    // the submitted 0, not the declared default
+    expect(stringChunks).toContain("0");
+    expect(stringChunks).not.toContain("5");
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3452 (convergence round) — the two readings the first cut got wrong.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3452: an INHERITED Object.prototype name is not a declaration — it fails closed", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-proto1",
+      templateId: "tpl-proto1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-proto1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" } },
+      },
+    });
+
+    // `properties.toString` answers truthy on ANY plain object. Read as a
+    // declaration it would be "declared and not required" — optional — and the
+    // guard would let a field the agent never declared settle silently.
+    await expect(
+      approveReviewTaskInternal("setup-run-proto1", "actor-1", {}, "toString"),
+    ).rejects.toThrow(/fieldName "toString" is not present/);
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3452: CLEARING an optional field that already carries an answer removes it", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-clear1",
+      templateId: "tpl-clear1",
+      status: "pending_approval",
+      // the field was answered on an earlier pass
+      inputParams: { brief: "a brief", ideaCount: 8 },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-clear1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-clear1",
+      "actor-1",
+      { ideaCount: null }, // the box emptied again
+      "ideaCount",
+    );
+
+    // "absent" is made true: the stale 8 is DELETED, not left standing and not
+    // rewritten as a merged null.
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    // the fragment's literal SQL text (drizzle keeps it in StringChunk.value)
+    const rendered = (chunks as Array<unknown>)
+      .map((c) =>
+        typeof c === "string"
+          ? c
+          : Array.isArray((c as { value?: unknown })?.value)
+            ? ((c as { value: unknown[] }).value as unknown[]).join("")
+            : "",
+      )
+      .join("");
+    expect(rendered).not.toContain("jsonb_build_object");
+    expect(rendered).toContain("::jsonb) - ");
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("ideaCount");
+    // ...and the step still continues.
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-clear1", resumedFromSetup: true },
+      // The id carries the FIELD, not just the road (the cinatra#3035
+      // regression pinned above): this decision is `ideaCount`'s own.
+      { jobId: "resume-setup-run-clear1-field-ideaCount-db3eb011" },
+    );
+  });
+
   it("throws when values payload exceeds 65536 bytes", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
       id: "run-s5",

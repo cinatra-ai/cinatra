@@ -501,7 +501,7 @@ describe("the island paints in the palette the host named", () => {
   it("draws exactly what it drew before when the host names no palette", async () => {
     ready();
     const named = await renderIsland(REF, {});
-    expect(classOf(named)).toBe("flex flex-col gap-3 bg-surface p-3");
+    expect(classOf(named)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
     expect(
       (named.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"],
     ).toBeUndefined();
@@ -512,7 +512,7 @@ describe("the island paints in the palette the host named", () => {
     for (const junk of ["", "DARK", "cinatra", "system", "dark ", "'/><script>"]) {
       expect(parseIslandColorScheme(junk)).toBeNull();
       const el = await renderIsland(REF, { scheme: junk });
-      expect(classOf(el)).toBe("flex flex-col gap-3 bg-surface p-3");
+      expect(classOf(el)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
     }
   });
 

@@ -329,23 +329,83 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /**
- * The FLOOR a target's frame stands on while its own document has not yet said
- * how tall it is — never a CAP on it (cinatra#3456).
+ * THE FRAME'S FLOOR — the height it holds while the island has said nothing.
  *
- * The region used to be held at this height and scrolled inside itself, so a gate
- * over several targets showed only the first body and the rest were reachable
- * only by scrolling a box within the page. §IV draws each target with its header
- * and its representation in the page's own flow: the card grows with its targets,
- * and the PAGE — not a box inside it — scrolls. So a frame takes its height from
- * the document it frames, and this number is only what the loading skeleton and
- * the recovery panel stand on until that reading arrives.
- *
- * §III's "a wide representation scrolls inside its own container rather than
- * widening the page" is unchanged and is about WIDTH; the Expand / Collapse
- * toggle that once sat under the frame stays gone — §IV forbids a control the
- * surface adds of its own.
+ * §III of the ratified artifact-review drawing gives the target no height
+ * control: "a wide representation scrolls inside its own container rather than
+ * widening the page". The frame is that container; the Expand / Collapse toggle
+ * that used to sit under it was a control the surface added of its own, which
+ * §IV forbids. This is not a control either — it is the box a document that has
+ * not yet reported gets, and it is the ONLY number this side chooses.
  */
-const ISLAND_PLACEHOLDER_MIN_HEIGHT = 380;
+const ISLAND_MIN_HEIGHT = 380;
+
+/**
+ * THE FRAME ENDS WHERE THE LAST BODY ENDS (the twelfth proof round's counted
+ * defect on cinatra#3143, 2026-09-10).
+ *
+ * The tenth round's fix made the frame a constant PER PINNED TARGET, and the
+ * twelfth round measured what a constant costs from both sides at once: on the
+ * review route the island drew about 508 px of EMPTY panel below the last
+ * target's body, and on the run route the sixth target's body was CLIPPED
+ * mid-sentence at the frame's bottom edge with no scroll. §IV gives every target
+ * "the single region into which the artifact's type renderer mounts" — half a
+ * panel of nothing and a body cut in two break that sentence from opposite
+ * sides, and no single constant avoids both.
+ *
+ * So the height is MEASURED, and it is measured where the work is: the island
+ * document reports its own rendered height out of the frame
+ * (`src/app/lifecycle/review-island/island-height-report.ts`) and the card sizes
+ * the frame from that number, with the floor above while nothing has arrived.
+ * There is still no control on the surface — nothing here is pressable and no
+ * Expand came back; the frame simply stops guessing.
+ *
+ * WHAT THIS DOES NOT WEAKEN. The message carries ONE NUMBER, in one direction.
+ * It is not content, not a selector and not a callback, the card checks its
+ * shape on arrival, and it is accepted only from the window of the frame this
+ * component is sizing — so the island is exactly as display-only as it was, and
+ * a document that never reports keeps the floor rather than a wrong constant.
+ */
+const REVIEW_ISLAND_HEIGHT_MESSAGE_TYPE = "cinatra.review-island.height";
+
+/** The reported height in a message, or `null` for "not that message". The
+ *  server half is `parseReviewIslandHeight` in the module named above, and the
+ *  two are pinned to each other by this side's suite and by the island's. */
+function islandReportedHeight(raw: unknown): number | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const message = raw as { type?: unknown; height?: unknown };
+  if (message.type !== REVIEW_ISLAND_HEIGHT_MESSAGE_TYPE) return null;
+  const height = message.height;
+  if (typeof height !== "number" || !Number.isFinite(height) || height <= 0) return null;
+  return Math.ceil(height);
+}
+
+/**
+ * The island address WITHOUT the palette it is painted in — the identity of the
+ * DOCUMENT the frame is showing (the tenth proof round's counted defect 1 on
+ * cinatra#3143: "all four dark frames ... draw grey skeleton pulse bars and
+ * nothing else").
+ *
+ * The load-state bag and the iframe's key used to be keyed on the whole `src`.
+ * The palette is a parameter ON that address, so a reader switching the surface
+ * to dark changed the string, which remounted the frame, which reset the bag to
+ * `loading` — and the card painted its skeleton over work it had already drawn.
+ * Every dark proof frame caught exactly that window.
+ *
+ * A palette change is a REPAINT of the same target, not a new one. Keying on
+ * this identity leaves the frame mounted and lets the `src` attribute navigate
+ * it: the painted document stays on screen until the newly-painted one commits,
+ * and the skeleton is drawn only where it was meant to be — the first arrival of
+ * a target that has never painted. §XI: "the display draws the named gap in the
+ * missing thing's place, never a blank plate".
+ */
+function islandTargetIdentity(src: string): string {
+  const query = src.indexOf("?");
+  if (query < 0) return src;
+  const params = new URLSearchParams(src.slice(query + 1));
+  params.delete(REVIEW_ISLAND_COLOR_SCHEME_PARAM);
+  return `${src.slice(0, query)}?${params.toString()}`;
+}
 
 // ---------------------------------------------------------------------------
 // The island's OWN load state (cinatra#2713). The island is a same-origin,
@@ -1533,36 +1593,33 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
 }
 
 /**
- * The island frame: a same-origin, authenticated, DISPLAY-ONLY iframe holding the
- * server-rendered §III ladder, with NO height control of any kind — §IV: "the
- * review surface adds no per-type controls of its own around it".
- *
- * IT IS AS TALL AS WHAT IT DRAWS (cinatra#3456). The frame used to be held at one
- * fixed height and scrolled inside itself, which is how a gate over several
- * targets came to show only the first body. It now takes its height from the
- * document it is framing: the island is SAME-ORIGIN, so the card reads that
- * document's own height directly and needs no message channel into it — which is
- * what lets the frame grow without the display-only posture gaining a channel it
- * deliberately does not have. A document whose height cannot be read leaves the
- * floor standing, which is exactly the reading this surface had before it grew.
+ * The island frame: a same-origin, authenticated, DISPLAY-ONLY iframe holding
+ * the server-rendered §III ladder, scrolling inside its own container, with NO
+ * height control of any kind — §IV: "the review surface adds no per-type
+ * controls of its own around it". The height is the one the island document
+ * reports (see `ISLAND_MIN_HEIGHT` above): the frame ends where the last body
+ * ends, so a card in a transcript is exactly as tall as the work it is showing
+ * and never taller — which is the reason the height is not a constant and also
+ * the reason it is not a control.
  *
  * cinatra#2713 — the region draws THREE states while the iframe's own document
- * loads, layered over the same box so the card never jumps under the reviewer: a
- * skeleton (the shipped `ReviewGateLoading` bar motif, extended into this taller
- * box — no dedicated island mockup exists in `specs/app-lifecycle-cards.html` or
- * `app-components.html`'s Skeleton/Spinner section for THIS iframe's own load
- * window, only the generic bar-skeleton language this reuses); the painted iframe
- * once `onLoad` fires; and, past the bound, a retry panel. The panel deliberately
- * does NOT mount the shipped `ReviewGateBlocked` component: that component's
- * `ReviewBlockedReason` is a closed set about the GATE's own lifecycle (no longer
- * pending / mismatched / revision not live) that `review-surface-model.ts` shares
- * with the review page server-side — none of its three reasons is true here (the
- * gate is exactly as open as it was; only the PREVIEW failed to arrive), and
- * drawing one anyway would tell the reviewer something false. What IS reused,
- * verbatim, is that component's established VISUAL shape — the destructive icon
- * circle, the title/body pairing, the `link` retry button — so the card still has
- * exactly one "this didn't work" drawing language, just not the gate-scoped
- * component whose props don't fit.
+ * loads, layered over the same clamped box so the card never resizes under the
+ * reviewer: a skeleton (the shipped `ReviewGateLoading` bar motif, extended
+ * into this taller box — no dedicated island mockup exists in
+ * `specs/app-lifecycle-cards.html` or `app-components.html`'s Skeleton/Spinner
+ * section for THIS iframe's own load window, only the generic bar-skeleton
+ * language this reuses); the painted iframe once `onLoad` fires; and, past the
+ * bound, a retry panel. The panel deliberately does NOT mount the shipped
+ * `ReviewGateBlocked` component: that component's `ReviewBlockedReason` is a
+ * closed set about the GATE's own lifecycle (no longer pending / mismatched /
+ * revision not live) that `review-surface-model.ts` shares with the review
+ * page server-side — none of its three reasons is true here (the gate is
+ * exactly as open as it was; only the PREVIEW failed to arrive), and drawing
+ * one anyway would tell the reviewer something false. What IS reused,
+ * verbatim, is that component's established VISUAL shape — the destructive
+ * icon circle, the title/body pairing, the `link` retry button — so the card
+ * still has exactly one "this didn't work" drawing language, just not the
+ * gate-scoped component whose props don't fit.
  *
  * Applies identically on every host this card mounts on: nothing here reads
  * `host`, so the chat thread, the run card, the page gate region and the site
@@ -1590,19 +1647,14 @@ function ReviewTargetIsland({
   // the same shape `useLifecycleCardState` uses above for the identical
   // reason: an effect-based reset would leave one committed frame in which
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
-  // The measured height rides the same bag, so a new address can never keep the
-  // previous document's measurement for a frame (cinatra#3456).
-  const [load, setLoad] = useState<{
-    src: string;
-    attempt: number;
-    loaded: boolean;
-    timedOut: boolean;
-    height: number | null;
-  }>({ src, attempt: 0, loaded: false, timedOut: false, height: null });
-  if (load.src !== src) {
-    setLoad({ src, attempt: 0, loaded: false, timedOut: false, height: null });
+  // KEYED BY THE TARGET, NOT BY THE PALETTE. `islandTargetIdentity` drops the
+  // scheme parameter, so repainting the surface navigates the frame that is
+  // already up instead of resetting this bag and blanking the work.
+  const identity = islandTargetIdentity(src);
+  const [load, setLoad] = useState({ identity, attempt: 0, loaded: false, timedOut: false });
+  if (load.identity !== identity) {
+    setLoad({ identity, attempt: 0, loaded: false, timedOut: false });
   }
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     if (load.loaded) return;
@@ -1610,66 +1662,61 @@ function ReviewTargetIsland({
       setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
     }, ISLAND_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [load.src, load.attempt, load.loaded]);
+  }, [load.identity, load.attempt, load.loaded]);
 
-  /** The framed document's own height, or nothing when it cannot be read. */
-  const measure = useCallback(() => {
-    const frame = frameRef.current;
-    if (!frame) return;
-    let measured = 0;
-    try {
-      measured = frame.contentDocument?.documentElement?.scrollHeight ?? 0;
-    } catch {
-      // An opaque framing: the floor stands, and the card draws what it drew
-      // before the frame could grow.
-      return;
-    }
-    if (measured <= 0) return;
-    setLoad((current) =>
-      current.height === measured ? current : { ...current, height: measured },
-    );
-  }, []);
+  // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
+  // load bag is keyed on, and for the same reason: a palette repaint is the SAME
+  // document navigating, so the height it already reported still describes the
+  // work on screen and must survive the repaint. A genuinely new target starts
+  // from the floor again and reports its own.
+  const [measured, setMeasured] = useState<{ identity: string; height: number | null }>({
+    identity,
+    height: null,
+  });
+  if (measured.identity !== identity) {
+    setMeasured({ identity, height: null });
+  }
 
-  // Re-read after the paint, and again whenever the framed document changes size
-  // under its own reflow (a renderer that finishes a late layout, a wide
-  // representation wrapping). Same-origin, so the observation needs no channel.
+  const frame = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => {
-    if (!load.loaded) return;
-    measure();
-    let observer: ResizeObserver | null = null;
-    try {
-      const body = frameRef.current?.contentDocument?.body ?? null;
-      if (body && typeof ResizeObserver !== "undefined") {
-        observer = new ResizeObserver(() => measure());
-        observer.observe(body);
-      }
-    } catch {
-      // No observation available; the reading above still stands.
-    }
-    return () => observer?.disconnect();
-  }, [load.loaded, load.src, load.attempt, measure]);
+    const onMessage = (event: MessageEvent) => {
+      // ONLY THIS FRAME'S OWN DOCUMENT. The island is same-origin, so the origin
+      // check is exact; the source check is what stops any other document on the
+      // page — or the page itself — from naming this frame's height.
+      if (event.origin !== window.location.origin) return;
+      const current = frame.current;
+      if (!current || !current.contentWindow || event.source !== current.contentWindow) return;
+      const reported = islandReportedHeight(event.data);
+      if (reported === null) return;
+      setMeasured((held) =>
+        held.identity === identity && held.height === reported ? held : { identity, height: reported },
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [identity]);
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
-  const measured = load.height;
+  const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
 
   return (
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
-      // No clipping and no held height: what the frame draws is in the page's own
-      // flow, and the page is what scrolls (cinatra#3456). The border is the
-      // BLOCK's when this body is a section of one (cinatra#3356).
+      // The border is the BLOCK's when this body is a section of one
+      // (cinatra#3356).
       className={
-        framed ? "relative rounded-control border border-line bg-surface-strong" : "relative bg-surface-strong"
+        framed
+          ? "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+          : "relative overflow-hidden bg-surface-strong"
       }
-      style={measured === null ? { minHeight: ISLAND_PLACEHOLDER_MIN_HEIGHT } : undefined}
     >
       <iframe
-        ref={frameRef}
         // Keyed by src+attempt so a retry (or a genuinely new target) forces a
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
-        key={`${load.src}:${load.attempt}`}
+        key={`${load.identity}:${load.attempt}`}
+        ref={frame}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -1684,25 +1731,23 @@ function ReviewTargetIsland({
         // has no such clock and keeps `lazy`, which is what lets a thread mount
         // several of these off screen without fetching them all.
         loading={credentialed ? "eager" : "lazy"}
-        className={`w-full rounded-control border-0 bg-surface-strong transition-opacity duration-200 ${
+        className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
-        // The floor until the document says how tall it is; then exactly that.
-        style={
-          measured === null ? { minHeight: ISLAND_PLACEHOLDER_MIN_HEIGHT } : { height: measured }
+        style={{ height }}
+        onLoad={() =>
+          setLoad((current) =>
+            current.identity === identity ? { ...current, loaded: true } : current,
+          )
         }
-        onLoad={() => {
-          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current));
-          measure();
-        }}
       />
-      {/* Overlays the frame's own box exactly — never the footer below, so
-          neither state changes the card's footprint. The iframe stays mounted
-          underneath while timed out: a late `onLoad` self-heals the display
-          instead of leaving a reviewer stuck on a retry panel for content that
-          did, eventually, arrive. */}
+      {/* Overlays the iframe's own box exactly (same height) — never the
+          footer below, so neither state changes the card's footprint. The
+          iframe stays mounted underneath while timed out: a late `onLoad`
+          self-heals the display instead of leaving a reviewer stuck on a
+          retry panel for content that did, eventually, arrive. */}
       {state !== "loaded" ? (
-        <div className="absolute inset-0">
+        <div className="absolute inset-x-0 top-0" style={{ height }}>
           {state === "loading" ? (
             <IslandLoadingSkeleton />
           ) : (
@@ -1720,7 +1765,6 @@ function ReviewTargetIsland({
                   attempt: current.attempt + 1,
                   loaded: false,
                   timedOut: false,
-                  height: null,
                 }));
               }}
             />
