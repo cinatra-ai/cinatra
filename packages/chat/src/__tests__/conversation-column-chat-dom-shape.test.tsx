@@ -28,7 +28,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
 
 // The mounted list reaches two cookie-bound server actions and the AG-UI run
 // panel. Replaced here for the same reasons set out in
@@ -79,7 +79,10 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
 
 import { mountSurface } from "./conversation-column-harness";
-import { COMPOSER_RESERVED_SPACE_FLOOR_PX } from "../composer-reserved-space";
+import {
+  COMPOSER_RESERVED_SPACE_FLOOR_PX,
+  composerReservedSpacePx,
+} from "../composer-reserved-space";
 
 afterEach(cleanup);
 
@@ -293,6 +296,45 @@ describe("§I — the chat box is the one primary input, on every host (#2865)",
     for (const surface of ["chat", "widget"] as const) {
       const { container } = await mountSurface(surface);
       expect(container.querySelectorAll(COMPOSER)).toHaveLength(1);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // THE DOCKED COMPOSER'S CLEARANCE IS MEASURED (cinatra#3080).
+  // -------------------------------------------------------------------------
+  // The composer is absolutely positioned over the foot of the scrolling list,
+  // and the list cleared it with `pb-24` — 96 fixed pixels. A card whose FOOT is
+  // the thing a person has to reach — a review card's decision floor — then sits
+  // under the composer wherever the composer is taller than the guess, which is
+  // what a 1440x900 reading found: Comment, Regenerate and Continue painted over
+  // and unreachable. The class string stays (it is this file's golden, and it is
+  // still the pre-measurement paint); what must be true is that the list's real
+  // padding comes from the composer's own height.
+  it("clears the docked composer by MEASURING it, never by the fixed guess", async () => {
+    // THE ONE MEASUREMENT (fix leg 7). This branch measured the composer with
+    // its own observer; main landed the same measurement for cinatra#3044 with a
+    // shared floor helper, and the two are now one: the stream reserves
+    // `composerReservedSpacePx(composer.offsetHeight)`, with the old `pb-24`
+    // constant kept only as the floor a zero measurement answers. The invariant
+    // this test exists for is unchanged — 96px of guess leaves a review card's
+    // decision floor under the composer, and the measurement is what puts it
+    // above.
+    const measured = 180;
+    const offsetHeight = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(measured);
+    try {
+      const { container } = await mountSurface("chat");
+      const column = container.querySelector<HTMLElement>("[data-parity-surface='chat'] > div");
+      const list = column!.children[0] as HTMLElement;
+      await waitFor(() =>
+        expect(list.style.paddingBottom).toBe(`${composerReservedSpacePx(measured)}px`),
+      );
+      expect(composerReservedSpacePx(measured)).toBeGreaterThan(
+        COMPOSER_RESERVED_SPACE_FLOOR_PX,
+      );
+    } finally {
+      offsetHeight.mockRestore();
     }
   });
 });
