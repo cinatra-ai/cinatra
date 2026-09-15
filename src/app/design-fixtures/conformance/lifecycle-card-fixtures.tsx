@@ -36,7 +36,7 @@
 // one production module and the repository proves that by scanning. The binding
 // from mount to manifest surface lives in the driver map, on the test side.
 //
-// Kept OFF the pixel-diffed /design-fixtures index page (same convention as the
+// Kept OFF the now-retired /design-fixtures catalog page (same convention as the
 // other conformance fixtures): coverage here is assertion-based —
 // tests/e2e/design/conformance/functional-acceptance.spec.ts.
 // ---------------------------------------------------------------------------

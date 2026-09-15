@@ -47,7 +47,7 @@ import {
  * which resolve fail-closed (`whenNotReady`) against the fixture install id —
  * both copies are identical, exactly like real help-prose declarations. The
  * status card probes only on an explicit Check click. This route is
- * assertion-driven, NOT pixel-diffed (same convention as the other
+ * assertion-driven (same convention as the other
  * conformance fixtures), so it adds no screenshot baselines.
  */
 const RAW_SURFACE = {

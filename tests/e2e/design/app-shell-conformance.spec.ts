@@ -3,7 +3,7 @@
  *
  * Locks in two shipped app-shell behaviours that previously had NO automated
  * coverage (each verified once by a manual live boot), driven on the real
- * AppShell that already wraps `/design-fixtures`:
+ * AppShell that already wraps the `/design-fixtures/*` harness routes:
  *
  *   1. Sidebar group LABEL-click expansion (from cinatra#819). Clicking a
  *      sidebar group's label — not just its chevron — toggles that group's
@@ -30,15 +30,19 @@
  *      this guard asserts, at a wide 1920px viewport, that they sit at the edge
  *      gutters and NOT at the content-cap edges, so that regression fails red.
  *
- * Assertion-based (no pixel baselines) — pixel-diff + axe stay owned by
- * design-fixtures.spec.ts. Runs in the `design-fixtures-chromium` project of
- * tests/e2e/config/design.config.ts, which boots the app with
- * CINATRA_E2E_SETUP_BYPASS=true so the full shell (sidebar + app bar) renders
- * on the otherwise-static `/design-fixtures` route.
+ * Assertion-based, and now the ONLY kind here: cinatra#3189 retired the
+ * `/design-fixtures` primitives catalog and its pixel-diff + axe gate, whose
+ * committed baselines had been read as proof that the primitives conform to
+ * the drawings. This guard therefore drives the shell on a surviving harness
+ * sub-route, `/design-fixtures/conformance` — the same real AppShell, the same
+ * static dataless boot, one route deeper. Runs in the
+ * `design-fixtures-chromium` project of tests/e2e/config/design.config.ts,
+ * which boots the app with CINATRA_E2E_SETUP_BYPASS=true so the full shell
+ * (sidebar + app bar) renders on the otherwise-static route.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
-const FIXTURE_PATH = "/design-fixtures";
+const FIXTURE_PATH = "/design-fixtures/conformance";
 
 /**
  * Land on the fixture route and confirm the real app shell (not the
