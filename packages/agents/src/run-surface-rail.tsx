@@ -42,8 +42,6 @@
 import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
-  createContext,
-  useContext,
   useState,
   type ReactElement,
   type ReactNode,
@@ -51,7 +49,14 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { RUN_RAIL_MARK_CLASS } from "./run-step-rail-extra-entry";
+// THE FRAME STATES THAT IT DRAWS THE RAIL (cinatra#3478) -- see the
+// declaration beside the rail vocabulary in ./run-step-rail-extra-entry.
+import {
+  RUN_RAIL_MARK_CLASS,
+  RunStepSelectionProvider,
+  RunSurfaceRailFrameProvider,
+  useRunStepSelection,
+} from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -86,11 +91,6 @@ export type { RunStepSelection, RunSurfaceRailStep, RunSurfaceRailStepKey };
 // plain value instead. The components stay here — a component is exactly what
 // the boundary is built to carry.
 
-const RunStepSelectionContext = createContext<{
-  selected: RunStepSelection;
-  select: (next: RunStepSelection) => void;
-} | null>(null);
-
 /**
  * The selection, for a rail row drawn by the rail BESIDE this frame.
  *
@@ -100,10 +100,15 @@ const RunStepSelectionContext = createContext<{
  * property, not any one row's. `null` when there is no gate step on the page at
  * all, which is how a rail keeps its inert shape unchanged for a run that has
  * none.
+ *
+ * DECLARED BESIDE THE RAIL'S OTHER VOCABULARY (cinatra#3478, the click leg) and
+ * re-exported here, where its readers already import it: the run page's own
+ * rail rows read the selection too — the gate the run is parked on opens as a
+ * step of this frame rather than as a page of its own — and a row reaching back
+ * into this module for the context would close a cycle with it. See the
+ * declaration in `run-step-rail-extra-entry`.
  */
-export function useRunStepSelection() {
-  return useContext(RunStepSelectionContext);
-}
+export { useRunStepSelection };
 
 /**
  * THE ROW VOCABULARY, shared so the rail's rows cannot drift apart.
@@ -465,7 +470,20 @@ export function RunSurfaceRail({
   };
 
   return (
-    <RunStepSelectionContext.Provider value={{ selected, select }}>
+    <RunStepSelectionProvider value={{ selected, select }}>
+      {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
+
+          A run panel drawn inside this detail raises a live rail column of
+          its own (`StepperColumn`), and nothing stood it down: the frame's
+          column and the panel's drew side by side, two rails on one run
+          page. The drawing gives one — "a step rail down the left names the
+          run's ordered steps, and the run detail on the right". The frame's
+          column is the one that survives, because the rail cannot live in
+          the slot the detail occupies: selecting a step with a surface of
+          its own REPLACES that slot, and a rail drawn inside it would leave
+          with it. The panel's rows come back through the page-level rail
+          the screen mounts in this column (`screenDrawsPageRail`). */}
+      <RunSurfaceRailFrameProvider value={true}>
       {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows,
           with the drawing's separator standing between adjacent entries.
 
@@ -550,6 +568,7 @@ export function RunSurfaceRail({
           {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
         </RunPageChrome>
       </div>
-    </RunStepSelectionContext.Provider>
+      </RunSurfaceRailFrameProvider>
+    </RunStepSelectionProvider>
   );
 }
