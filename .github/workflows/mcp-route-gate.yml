@@ -31,8 +31,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the job below reads?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group) there is no changed-file set
+  # to read, so the output is forced true and the job below runs for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (mcp-route-gate)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mcp: ${{ github.event_name != 'pull_request' || steps.filter.outputs.mcp == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            mcp:
+              # Derived from the job's two steps: `MCP machine-flow route banned
+              # gate` walks the tracked tree but only ever OPENS the SCAN_EXTS
+              # extensions of scripts/audit/administration-mcp-machine-flow-banned.mjs
+              # (.ts .tsx .js .jsx .mjs .cjs .mts .cts .md .mdx .json .yml .yaml),
+              # and `MCP advertised-URL route shape test` runs the
+              # packages/mcp-server suite against the src/app/api/mcp route files.
+              - '.github/workflows/**'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/*.js'
+              - '**/*.jsx'
+              - '**/*.mjs'
+              - '**/*.cjs'
+              - '**/*.mts'
+              - '**/*.cts'
+              - '**/*.md'
+              - '**/*.mdx'
+              - '**/*.json'
+              - '**/*.yml'
+              - '**/*.yaml'
+              # administration-mcp-machine-flow-banned.mjs:50 also fails on the
+              # mere EXISTENCE of a banned route directory, whatever the file
+              # extension inside it, so those trees are matched wholesale.
+              - 'src/app/configuration/mcp/auth/**'
+              - 'src/app/configuration/mcp/account/**'
+              - 'src/app/configuration/mcp/consent/**'
+              - 'src/app/admin/mcp/auth/**'
+              - 'src/app/admin/mcp/account/**'
+              - 'src/app/admin/mcp/consent/**'
+              - 'src/app/administration/mcp/auth/**'
+              - 'src/app/administration/mcp/account/**'
+              - 'src/app/administration/mcp/consent/**'
+
   mcp-route-gate:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    needs: [changes]
+    # A skipped job still reports `mcp-route-gate` as skipped, which branch
+    # protection counts as a pass — the required context never hangs.
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.mcp == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
