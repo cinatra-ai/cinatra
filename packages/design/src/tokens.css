@@ -229,6 +229,17 @@
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
+  /* Section rule (cinatra#3142) — the MAJOR divider ink the etched paired-line
+     treatment paints from. Left out of this palette, the light palette's full
+     navy cascaded in and every etched rule in the dark theme was painted
+     near-black on a dark ground. The drawing states the rule as an INK, not as
+     a colour of its own — the section rule, the strong hairline and the page's
+     own text are one navy in the light palette — and over a dark ground the
+     pairing inverts to that palette's own ink rather than to a hand-picked
+     neutral white, which is the "neutral grey on a divider" the principle
+     forbids. Kept identical to the host token layer in `src/app/globals.css`,
+     which this package mirrors. */
+  --line-strong: var(--foreground);
   /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
      held at or above the 3:1 non-text contrast floor against the grounds a
      control sits on. Kept identical to the host token layer in
