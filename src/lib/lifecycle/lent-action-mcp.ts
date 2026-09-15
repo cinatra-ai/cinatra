@@ -116,6 +116,7 @@ async function loadApproveScreen(): Promise<ApproveReviewTaskInternal> {
 }
 import { LIFECYCLE_REF_MAX_LENGTH } from "@/lib/assistant-runtime/lifecycle-view-envelope";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
+import type { ReviewFloorAction } from "@/lib/artifacts/review-surface-model";
 import {
   controlsLentBy,
   resolveBoundReference,
@@ -277,12 +278,12 @@ export async function handleLentAction(
   // THE CARD'S OWN PATH.
   if (bound.kind === "review") {
     const submit = deps.submitReviewDecision ?? (await loadSubmitReviewDecision());
-    const disposition = reviewDisposition(parsed.data.control);
-    if (!disposition) return refuseCardUnavailable();
+    const action = reviewFloorAction(parsed.data.control);
+    if (!action) return refuseCardUnavailable();
     const outcome = await submit(
       bound.runId,
       bound.reviewTaskId,
-      disposition,
+      action,
       text,
       // ONE actor context for the resolve above and the decision-op check
       // inside — the decision route's own rule, for the same reason.
@@ -317,14 +318,19 @@ export async function handleLentAction(
   }
 }
 
-/** The review card's three buttons, as the decision core names them. */
-function reviewDisposition(
-  control: LentActionControl,
-): "approve" | "reject" | "comment" | null {
-  if (control === "approve") return "approve";
-  if (control === "reject") return "reject";
-  if (control === "comment") return "comment";
-  return null;
+/**
+ * The review card's three buttons, as the ONE decision entry names them
+ * (cinatra#3080): Comment, Regenerate, Continue.
+ *
+ * The grant's control vocabulary and the floor are now the SAME three words, so
+ * this is a narrowing rather than a translation — `submit` (the waiting screen's
+ * button) is the only control a review can be handed that it does not draw, and
+ * it is refused. The retired `approve` / `reject` cannot arrive here at all: the
+ * grant vocabulary no longer contains them, and a person who TYPES either is
+ * resolved (or answered) at the mint, in `typedControlFor`.
+ */
+function reviewFloorAction(control: LentActionControl): ReviewFloorAction | null {
+  return control === "submit" ? null : control;
 }
 
 export function registerLentActionPrimitive(server: McpRuntimeToolServer): void {

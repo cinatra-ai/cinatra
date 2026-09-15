@@ -492,6 +492,13 @@ async function prepareOneTarget(
   // (cinatra#3091) needed that same allowance before the three browser fetchers
   // could move onto this port. A synchronous binder is unaffected: `await` on a
   // plain value is the value.
+  //
+  // The review floor needs the same allowance (cinatra#3080, fix leg 7). The
+  // content channel reads the pinned revision on the SERVER — "the text arm
+  // streams bytes off the blob store, and the plan asks for an asynchronous
+  // builder precisely so no display is ever tempted to fetch them itself" — so
+  // the props a review target is built with cannot be assembled synchronously
+  // any more.
   const props = await ports.buildProps({
     artifact,
     representationRevisionId: target.representationRevisionId,

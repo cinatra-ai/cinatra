@@ -28,6 +28,23 @@
 // the redraw had to move exactly the states that carry suggestions and no
 // others, and that is what the regeneration diff showed.
 //
+// SIXTEEN ENTRIES WERE RE-TAKEN ON PURPOSE (cinatra#3080, fix leg 8). The
+// ninth proof round graded the decision floor's three affordances against the
+// ratified drawing and found all three off it: Comment carried a speech-bubble
+// glyph and the ghost variant's inherited ink where the drawing gives it
+// `.btn.ghost` in `var(--muted)` with no glyph; Regenerate stood on
+// `.btn.secondary`'s FILLED muted plate where the drawing gives it
+// `.btn.outline` — `var(--surface)` inside a `var(--line-strong)` stroke; and
+// Continue led with its arrow where the drawing sets it after the word. Moving
+// the three is the whole point of that leg, so the captures that DRAW the floor
+// had to move with them.
+//
+// EXACTLY SIXTEEN DID, and that is the guard doing its job: the four states that
+// carry a decision bar — pending, pending-no-comment, pending-with-suggestions
+// and restricted — on each of the four hosts. Every settled, blocked, loading
+// and absent capture is byte-identical to what it was, which is the proof that a
+// change to the floor's own controls touched the floor and nothing else.
+//
 // THE SAME FOUR ENTRIES WERE RE-TAKEN AGAIN (cinatra#3107). Raising the dark
 // `--input` boundary to the 3:1 contrast floor changed what `--input` means,
 // so the tinted control FILLS that used to draw from it were moved onto their
@@ -39,6 +56,33 @@
 // entries that carry a chip, and the ONLY bytes that moved in them are those
 // two class names — the painted colour is unchanged and no other byte of DOM
 // differs. Every other entry is still its earlier capture, byte for byte.
+//
+// TWENTY-EIGHT ENTRIES CARRY THE REVIEW FLOOR (cinatra#3080, PR #3100). The
+// pending review floor is now Comment, Regenerate and Continue on every host:
+// Reject is retired and Approve is relabelled Continue, so every capture that
+// draws a decision control or a settled decision word legitimately moved. The
+// four `*/pending-with-suggestions` entries carry BOTH that redraw and the
+// cinatra#3107 `--input-fill` rename above; the twenty-four other moved entries
+// (`pending`, `pending-no-comment`, `restricted`, `settled-approved`,
+// `settled-approved-no-decider`, `settled-rejected` on each of the four hosts)
+// carry the floor alone. The sixteen entries that draw no decision control
+// (`loading`, `settled`, `advisory`, `absent`) are still their earlier capture,
+// byte for byte — which is what keeps this guard honest here too: the floor had
+// to move exactly the states that draw a decision and no others.
+
+//
+// THIRTY-TWO ENTRIES CARRY THE REDRAWN HEADER STRIP AND SETTLED MARKER
+// (cinatra#3080, PR #3100, fix leg 7). The eighth proof round graded the gate
+// against the ratified drawing and charged the header strip with three things —
+// a clipboard glyph the drawing draws nowhere, no bottom rule, and no
+// target-naming line beside the word — and the settled marker with being a
+// centred icon stack over the wrong sentence. Both are redrawn to the drawing,
+// so every capture that draws a header or a settled marker legitimately moved:
+// the twelve that did NOT move are the four `absent` captures (no DOM at all),
+// the four `advisory` ones (§VII owns them and the card draws nothing) and the
+// four `settled` ones with no recorded outcome, which draw `ReviewGateBlocked`
+// and no header. That is what keeps this guard honest here too: the redraw had
+// to move exactly the states that draw a header and no others.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -128,7 +172,7 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
       state: "restricted",
       canDecide: false,
       canComment: true,
-      reason: "Approving or rejecting needs approve access on this run.",
+      reason: "Continuing or regenerating needs decision access on this run.",
     },
   },
   { name: "settled", state: { state: "settled" } },
@@ -140,6 +184,12 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
   // pre-envelope capture and do not claim to be — they were recorded against the
   // component on this branch, and what they pin from here on is that the four
   // hosts keep drawing them identically.
+  //
+  // RE-RECORDED AGAIN for cinatra#3080 fix leg 6, deliberately and for the same
+  // class of reason: the settled entries pinned a marker naming a person, which
+  // no settled marker in the ratified drawings carries, and a settled reading
+  // with no header at all, which §XIII draws with one. The pending entries move
+  // too, because the island frame is now the height of its own document.
   //
   // RE-RECORDED for cinatra#2931 W4, deliberately, because what these three
   // entries pinned had become false: "A resolved gate opens read-only: what was
@@ -273,7 +323,10 @@ describe("review card render parity across the resolve envelope", () => {
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
-        expect(drawn[host]).toContain("Ada Lovelace");
+        // AND NOT THE DECIDER (cinatra#3080, fix leg 6). The wire still carries
+        // the name for the audit trail; no settled marker the ratified drawing
+        // draws carries one, so no host draws one either.
+        expect(drawn[host]).not.toContain("Ada Lovelace");
       }
     }
   });
