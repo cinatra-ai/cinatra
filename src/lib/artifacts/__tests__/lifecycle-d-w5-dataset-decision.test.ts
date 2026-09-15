@@ -108,10 +108,18 @@ describe("the fact the decision rests on: neither dataset has a member shape to 
     expect(items.required).toBeUndefined();
   });
 
-  it("declares the scraped dataset as a bare array — not even an item type", () => {
+  it("declares the scraped dataset as an array whose members have NO declared properties", () => {
     const items = output(SCRAPE_AGENT, "items");
     expect(items.type).toBe("array");
-    expect(items.json_schema?.items).toBeUndefined();
+    const member = (items.json_schema?.items ?? {}) as Record<string, unknown>;
+    // The @cinatra-ai/web-scrape-agent 0.1.3 pin (web-scrape-agent#39/#40)
+    // replaced the bare array with an OPEN OBJECT member schema, the same form
+    // the research dataset already carries: each item conforms to the
+    // caller-supplied outputSchema at run time, so no `properties` and no
+    // `required` are declared and no member field can be named.
+    expect(member.type).toBe("object");
+    expect(member.properties).toBeUndefined();
+    expect(member.required).toBeUndefined();
   });
 
   it("takes the row shape from a per-run outputSchema INPUT on both agents", () => {
