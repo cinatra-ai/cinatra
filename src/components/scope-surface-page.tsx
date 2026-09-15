@@ -56,15 +56,28 @@ import {
  */
 const PLACEHOLDER_TITLE = "This tab is not ready yet";
 
-/** The honest empty reading of a tab whose rows WERE read (cinatra#2808). */
-const EMPTY_TITLE: Record<"assistants" | "agents", string> = {
+/**
+ * The honest empty reading of a tab whose rows WERE read (cinatra#2808;
+ * artifacts and skills added by cinatra#2810).
+ *
+ * A tab this slice reads must not keep saying "This tab is not ready yet" when
+ * the read HAPPENED and the scope simply owns nothing — that placeholder is a
+ * statement about the tab, and it stops being true the moment the tab lists.
+ * So each of the four tabs now has its own honest empty reading, and the
+ * placeholder is left to the tabs whose rows are still never read.
+ */
+const EMPTY_TITLE: Record<ScopeSurfaceTab, string> = {
   assistants: "No assistants here yet",
   agents: "No agents here yet",
+  artifacts: "No artifacts here yet",
+  skills: "No skills here yet",
 };
 
-const EMPTY_BODY: Record<"assistants" | "agents", string> = {
+const EMPTY_BODY: Record<ScopeSurfaceTab, string> = {
   assistants: "No assistant is reachable in this scope for you.",
   agents: "No agent is reachable in this scope for you.",
+  artifacts: "This scope owns no artifacts you can see.",
+  skills: "This scope owns no skills you can see.",
 };
 
 /** Honest placeholder copy — what the tab WILL list, never a claim of empty data. */
@@ -155,7 +168,7 @@ export function ScopeSurfacePage({
         ) : tabBody ? (
           tabBody
         ) : (
-          <ScopedTabEmpty tab={tab} read={tabRead} />
+          <ScopeSurfaceTabEmpty tab={tab} read={tabRead} />
         )}
       </PageContent>
     </Main>
@@ -195,18 +208,35 @@ function DashboardsTabBody({
 }
 
 /**
- * One of the four scoped tabs holding nothing to list. The drawing binds those
- * four by name to the shared Empty state — "it reads as the Empty state of
+ * One of the four scoped tabs holding nothing to list.
+ *
+ * EXPORTED (cinatra#2810) because a tab that hands the shell a `tabBody` can
+ * never reach the fallback below: an element is truthy even when it renders
+ * nothing, so the body is the only place that knows its read came back empty.
+ * A body with no rows renders THIS, so every one of the four tabs draws the one
+ * empty state the drawing binds them to — never a second one of its own.
+ *
+ * The Artifacts tab is the exception, and deliberately: `LibraryMode` carries
+ * the library's OWN empty state, and that tab reuses the landed component
+ * whole rather than replacing part of it.
+ *
+ * The drawing binds those four by name to the shared Empty state — "it reads as the Empty state of
  * Components and nothing else — that pattern at its own values" — carrying "a
  * single primary action button — never just empty text", inside the tab body
  * with "no bespoke panel, and no page-wide dashed frame".
  */
-function ScopedTabEmpty({ tab, read = false }: { tab: ScopeSurfaceTab; read?: boolean }) {
+export function ScopeSurfaceTabEmpty({
+  tab,
+  read = false,
+}: {
+  tab: ScopeSurfaceTab;
+  read?: boolean;
+}) {
   const TabIcon = TAB_ICON[tab];
   const action = SCOPE_SURFACE_TAB_ACTION[tab];
   // `read` distinguishes the two truths: the tab's rows were read and there are
   // none, versus no read has happened on this route at all.
-  const listed = read && (tab === "agents" || tab === "assistants") ? tab : null;
+  const listed = read ? tab : null;
   return (
     <Empty data-testid={scopeSurfaceEmptyTestId(tab)}>
       <EmptyHeader>

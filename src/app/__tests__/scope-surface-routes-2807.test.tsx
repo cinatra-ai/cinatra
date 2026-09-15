@@ -7,8 +7,10 @@
 // is not the acceptance: every route is RENDERED and must show the shared
 // five-tab strip, the correct active tab, the scope-based hrefs, and its own
 // named empty-state surface. S1 loads no scope data — the contents of the
-// Assistants/Agents tabs (#2808) and of the Artifacts/Skills tabs (#2810) are
-// their own slices, so what these shells render is an honest placeholder.
+// Assistants/Agents tabs (#2808) are their own slice, so what those two shells
+// render is an honest placeholder. The Artifacts and Skills tabs DO read as of
+// #2810: their bodies are stood in for below and the shell's honest EMPTY
+// reading is what this suite pins for them.
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -50,6 +52,20 @@ const names = vi.hoisted(() => {
   };
 });
 vi.mock("@/lib/scope-surface-entity-name", () => names);
+
+// The Artifacts and Skills tab BODIES (cinatra#2810) are stood in for here: the
+// subject of this suite is the shell those tabs are tabs OF, and each body's
+// own read is proven in its own suite. They render nothing, so the shell falls
+// to its empty state — which is exactly where the two tabs' honest EMPTY
+// reading is asserted below.
+vi.mock("@/components/scope/scope-surface-artifacts-tab", () => ({
+  ScopeSurfaceArtifactsTab: () =>
+    createElement("div", { "data-testid": "scope-artifacts-body" }),
+}));
+vi.mock("@/components/scope/scope-surface-skills-tab", () => ({
+  ScopeSurfaceSkillsTab: () =>
+    createElement("div", { "data-testid": "scope-skills-body" }),
+}));
 
 const FIVE_TABS = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"] as const;
 const NEW_TABS = ["assistants", "agents", "artifacts", "skills"] as const;
@@ -162,6 +178,13 @@ describe("the 5x4 scoped tab routes render the shared strip and their empty stat
       const label = tab[0]!.toUpperCase() + tab.slice(1);
 
       describe(`${base}/${tab}`, () => {
+        // The two truths the shell must keep apart. A tab whose rows were
+        // never read may state its OWN condition and name what it will list —
+        // never that the scope has nothing. A tab whose rows WERE read says
+        // what the read found. Artifacts and Skills read as of cinatra#2810;
+        // Assistants and Agents still carry the S1 placeholder here.
+        const READS = tab === "artifacts" || tab === "skills";
+
         beforeEach(async () => {
           await renderRoute(loaders[tab]!, props);
         });
@@ -186,17 +209,28 @@ describe("the 5x4 scoped tab routes render the shared strip and their empty stat
           }
         });
 
-        it(`shows the scope-${tab}-empty surface`, () => {
-          expect(screen.getByTestId(`scope-${tab}-empty`)).toBeTruthy();
-        });
+        it(
+          READS
+            ? `mounts the scope-${tab}-body its slice wired onto this route`
+            : `shows the scope-${tab}-empty surface`,
+          () => {
+            expect(
+              screen.getByTestId(READS ? `scope-${tab}-body` : `scope-${tab}-empty`),
+            ).toBeTruthy();
+          },
+        );
 
-        it("promises what the tab will hold and never claims the scope is empty", () => {
-          // S1 reads nothing, so the surface may state its own condition and
-          // name what the tab will list — never that the scope has nothing.
-          const copy = screen.getByTestId(`scope-${tab}-empty`).textContent ?? "";
-          expect(copy).toMatch(/appear here/);
-          expect(copy).not.toMatch(/nothing|\bnone\b|\bempty\b|\bno \w+ (?:yet|here)/i);
-        });
+        if (!READS) {
+          it("promises what the tab will hold and never claims the scope is empty", () => {
+            // A tab whose rows were never read may state its OWN condition and
+            // name what it will list — never that the scope has nothing.
+            const copy = screen.getByTestId(`scope-${tab}-empty`).textContent ?? "";
+            expect(copy).toMatch(/appear here/);
+            expect(copy).not.toMatch(
+              /nothing|\bnone\b|\bempty\b|\bno \w+ (?:yet|here)/i,
+            );
+          });
+        }
 
         it("requires an authenticated viewer", () => {
           expect(auth.requireAuthSession).toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ScopeSurfaceArtifactsTab } from "@/components/scope/scope-surface-artifacts-tab";
 import { ScopeSurfacePage } from "@/components/scope-surface-page";
 import { requireAuthSession } from "@/lib/auth-session";
 
@@ -14,9 +15,21 @@ export const metadata: Metadata = { title: "Artifacts" };
 // S1). This scope is named by the drawing itself, so the shell reads nothing
 // about it at all; the tab's contents and their authorization arrive with the
 // slice that fills this tab.
+// The tab's CONTENTS (cinatra#2810, per-scope surfaces S4): the ownership
+// subset this scope owns, read from each row's DURABLE ownership tuple and
+// rendered through the landed list component. `tabRead` tells the shell the
+// read HAPPENED, so an empty tab reports the scope owns nothing rather than
+// claiming the tab is unfinished.
 export default async function WorkspaceArtifactsPage() {
   await requireAuthSession();
+  const scope = { kind: "workspace" } as const;
   return (
-    <ScopeSurfacePage scope={{ kind: "workspace" }} tab="artifacts" title="Workspace" />
+    <ScopeSurfacePage
+      scope={scope}
+      tab="artifacts"
+      title="Workspace"
+      tabRead
+      tabBody={<ScopeSurfaceArtifactsTab scope={scope} />}
+    />
   );
 }
