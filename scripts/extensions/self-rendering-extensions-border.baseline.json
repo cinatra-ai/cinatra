@@ -1,0 +1,153 @@
+{
+  "note": "Self-rendering extensions border floor (cinatra-ai/cinatra#3471, epic #2926 — decision 407 of 2026-09-13: connectors render the setup page themselves, artifacts render the artifact view themselves, and the host shares its primitives with extension bundles at run time). Each entry is a design-primitive BYTE COPY a synced kind:connector / kind:artifact package still carries under src/components/ui/. SHRINK-ONLY: a new copy fails the gate immediately; a removed one makes this file stale until it is ratcheted down with `node scripts/extensions/self-rendering-extensions-border-gate.mjs --write-baseline` (which refuses to write a baseline that grows). The floor empties as packages move to the run-time-shared primitives (slice 2 of #3471).",
+  "copies": {
+    "a2a-server-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/dialog.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "apollo-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/paginated-table.tsx",
+      "src/components/ui/pagination.tsx",
+      "src/components/ui/table.tsx"
+    ],
+    "crm-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "drupal-assistant-connector": [
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx"
+    ],
+    "drupal-mcp-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "email-artifacts": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/checkbox.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/select.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "github-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/dialog.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/select.tsx"
+    ],
+    "gmail-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/dialog.tsx"
+    ],
+    "google-calendar-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/dialog.tsx",
+      "src/components/ui/link.tsx"
+    ],
+    "google-oauth-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/external-link.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx"
+    ],
+    "linkedin-connector": [
+      "src/components/ui/alert.tsx"
+    ],
+    "linkedin-oauth-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/text-link.tsx"
+    ],
+    "mcp-client-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/link.tsx"
+    ],
+    "nango-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/link.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "plane-connector": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/input.tsx"
+    ],
+    "tailscale-connector": [
+      "src/components/ui/alert.tsx",
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/external-link.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "twenty-connector": [
+      "src/components/ui/card.tsx"
+    ],
+    "wordpress-assistant-connector": [
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/field.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/separator.tsx"
+    ],
+    "wordpress-mcp-connector": [
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "youtube-connector": [
+      "src/components/ui/link.tsx"
+    ]
+  }
+}
