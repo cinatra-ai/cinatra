@@ -6,6 +6,28 @@
   "cinatra": {
     "apiVersion": "cinatra.ai/v1",
     "kind": "agent",
+    "declaredTables": [
+      {
+        "name": "fixture_rows",
+        "organizationColumn": "org_id",
+        "runColumn": "run_id",
+        "scopeKindColumn": "scope_kind",
+        "scopeIdColumn": "scope_id",
+        "columns": [
+          { "name": "id", "type": "text", "notNull": true, "primaryKey": true },
+          { "name": "org_id", "type": "text", "notNull": true },
+          { "name": "run_id", "type": "text", "notNull": true },
+          { "name": "scope_kind", "type": "text", "notNull": true },
+          { "name": "scope_id", "type": "text", "notNull": true },
+          { "name": "kind", "type": "text", "notNull": true },
+          { "name": "step", "type": "text" }
+        ],
+        "indexes": [
+          { "name": "fixture_rows_one_per_run", "columns": ["org_id", "run_id", "kind"], "unique": true },
+          { "name": "fixture_rows_by_scope", "columns": ["org_id", "scope_kind", "scope_id", "kind"] }
+        ]
+      }
+    ],
     "tools": [
       {
         "name": "fixture_tool",

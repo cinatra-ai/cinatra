@@ -14,7 +14,7 @@
  *
  *   pnpm vitest run src/lib/__tests__/extension-tool-dispatch.test.ts
  */
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,11 +27,14 @@ import {
   dispatchExtensionTool,
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
+import { buildExtensionDataStatement } from "@/lib/extension-data-tool";
 import {
   ExtensionToolModuleRefusal,
   loadDeclaredToolModule,
   resolveDeclaredToolModulePath,
 } from "@/lib/extension-tool-module-loader";
+import { parseDeclaredTables } from "@cinatra-ai/sdk-extensions/manifest";
+import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PACK_ROOT = path.join(HERE, "fixtures", "extension-tool-pack");
@@ -87,7 +90,12 @@ describe("extension_tool — a declared name resolves to the declared module", (
       cinatra: CINATRA,
       request: {
         name: "fixture_tool",
-        input: { kind: "one", type: "fixture-scope:thing", artifactId: "artifact-1" },
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
       },
       ports,
       deps: { resolvePackageRoot },
@@ -97,19 +105,27 @@ describe("extension_tool — a declared name resolves to the declared module", (
     expect(result.ok).toBe(true);
     // EVERY PORT REACHED THE MODULE: the caller's own table operations, the two
     // dependency-scoped artifact reads, the review-gate filing and the clock.
-    expect(ports.data.select).toHaveBeenCalledWith({
+    expect(ports.data.select).toHaveBeenNthCalledWith(1, {
       table: "fixture_rows",
-      where: { kind: "one" },
+      where: { kind: "one", run_id: { boundRun: true } },
+    });
+    expect(ports.data.select).toHaveBeenNthCalledWith(2, {
+      table: "fixture_rows",
+      where: {
+        kind: "one",
+        scope_kind: { boundScope: true },
+        scope_id: { boundScope: true },
+      },
     });
     expect(ports.data.insertIfAbsent).toHaveBeenCalledWith({
       table: "fixture_rows",
-      row: { kind: "one" },
+      row: { id: "row-1", kind: "one", step: "first" },
       conflictKeys: ["kind"],
     });
     expect(ports.data.updateWhere).toHaveBeenCalledWith({
       table: "fixture_rows",
       set: { step: "second" },
-      where: { kind: "one" },
+      where: { kind: "one", run_id: { boundRun: true } },
       expect: { step: "first" },
     });
     expect(ports.artifacts.list).toHaveBeenCalledWith({
@@ -150,6 +166,167 @@ describe("extension_tool — a declared name resolves to the declared module", (
         deps: { resolvePackageRoot: rootResolver() },
       }),
     ).rejects.toThrow(/exports no callable `extensionTool`/);
+  });
+});
+
+describe("extension_tool — the run- and scope-bound table a pack declares (cinatra#3249)", () => {
+  /**
+   * The fixture pack declares a table bound to the RUN and to the SCOPE that
+   * run belongs to, and its module never names either: it writes a row without
+   * them and asks for this run's rows, and for this scope's rows, with the two
+   * markers the data contract defines. Here the ports COMPILE each request the
+   * module makes, against the pack's OWN declared tables, so what the host
+   * actually sends the database is read as text.
+   */
+  const SCOPE = { kind: "project", id: "project-fixture" } as const;
+
+  const compilingPorts = async (runId: string, scope = SCOPE) => {
+    const manifest = JSON.parse(
+      await readFile(path.join(FIXTURE_PACK_ROOT, "package.json"), "utf8"),
+    ) as { cinatra: { declaredTables?: unknown } };
+    const tables = parseDeclaredTables(manifest.cinatra.declaredTables, PACK);
+    const compiled: Record<string, { text: string; values: unknown[] }[]> = {};
+    const compile = (operation: "select" | "insertIfAbsent" | "updateWhere") => async (
+      request: Record<string, unknown>,
+    ) => {
+      const c = buildExtensionDataStatement({
+        packageName: PACK,
+        schemaName: "cinatra",
+        tables,
+        orgId: "org-fixture",
+        runId,
+        scope,
+        request: { ...request, operation } as never,
+      });
+      (compiled[operation] ??= []).push({ text: c.text, values: c.values });
+      return { rows: [] };
+    };
+    return {
+      tables,
+      compiled,
+      ports: {
+        data: {
+          select: compile("select"),
+          insertIfAbsent: compile("insertIfAbsent"),
+          updateWhere: compile("updateWhere"),
+        },
+        artifacts: {
+          list: async () => ({ artifacts: [], nextCursor: null }),
+          contentRead: async () => ({ text: "fixture text" }),
+        },
+        clock: { now: () => new Date("2026-09-12T00:00:00.000Z") },
+      } satisfies Omit<ExtensionToolPorts, "review">,
+    };
+  };
+
+  it("declares the run column and the scope columns beside the organisation column", async () => {
+    const { tables } = await compilingPorts("run-fixture");
+    expect(
+      tables.map((t) => [
+        t.name,
+        t.organizationColumn,
+        t.runColumn,
+        t.scopeKindColumn,
+        t.scopeIdColumn,
+      ]),
+    ).toEqual([["fixture_rows", "org_id", "run_id", "scope_kind", "scope_id"]]);
+  });
+
+  it("writes the BOUND run and scope on the insert and substitutes them on the this-run and this-scope reads", async () => {
+    const { compiled, ports } = await compilingPorts("run-fixture");
+    await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      cinatra: CINATRA,
+      request: {
+        name: "fixture_tool",
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
+      },
+      ports,
+      deps: { resolvePackageRoot: rootResolver() },
+    });
+
+    // The insert: the module named none of the organisation, the run and the
+    // scope, and the host wrote all three.
+    expect(compiled.insertIfAbsent?.[0]?.text).toContain(
+      '("org_id", "run_id", "scope_kind", "scope_id", "id", "kind", "step") ' +
+        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    );
+    expect(compiled.insertIfAbsent?.[0]?.values.slice(0, 4)).toEqual([
+      "org-fixture",
+      "run-fixture",
+      "project",
+      "project-fixture",
+    ]);
+    // This run's rows: the marker carried the run, never a value the module chose.
+    // The scope floor stands first, with the organisation; the run marker
+    // narrows to this run on top of it.
+    expect(compiled.select?.[0]?.text).toContain(
+      '"scope_kind" = $2 AND "scope_id" = $3 AND "kind" = $4 AND "run_id" = $5',
+    );
+    expect(compiled.select?.[0]?.values).toEqual([
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+      "run-fixture",
+    ]);
+    // This scope's rows: the second marker carried the kind and the id.
+    expect(compiled.select?.[1]?.text).toContain(
+      '"scope_kind" = $2 AND "scope_id" = $3 AND "kind" = $4',
+    );
+    expect(compiled.select?.[1]?.values).toEqual([
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+    ]);
+    expect(compiled.updateWhere?.[0]?.text).toContain(
+      '"scope_kind" = $3 AND "scope_id" = $4 AND "kind" = $5 AND "run_id" = $6',
+    );
+    expect(compiled.updateWhere?.[0]?.values).toEqual([
+      "second",
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+      "run-fixture",
+      "first",
+    ]);
+  });
+
+  it("carries a WORKSPACE-anchored run's scope with the storage sentinel as its id", async () => {
+    const { compiled, ports } = await compilingPorts("run-fixture", {
+      kind: "workspace",
+      id: WORKSPACE_SCOPE_SENTINEL,
+    } as never);
+    await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      cinatra: CINATRA,
+      request: {
+        name: "fixture_tool",
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
+      },
+      ports,
+      deps: { resolvePackageRoot: rootResolver() },
+    });
+    expect(compiled.select?.[1]?.values).toEqual([
+      "org-fixture",
+      "workspace",
+      WORKSPACE_SCOPE_SENTINEL,
+      "one",
+    ]);
   });
 });
 
