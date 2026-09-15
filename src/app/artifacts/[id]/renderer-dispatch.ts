@@ -11,11 +11,11 @@
  *      If that renderer module is in THIS build → render it; if the claimant is
  *      runtime-installed but ABSENT from the build ("never built") → the generic
  *      renderer + a "requires rebuild" diagnostic (deterministic, never blank).
- *   2. Representation viewer — an org-effective representation PROVIDER (or the
- *      always-effective first-party host handler) for the row's representation.
- *      An extension provider absent from the build again degrades to
- *      requires-rebuild; a first-party default is a host MIME handler.
- *   3. Generic fallback — the read-only structured-data view. Always terminal.
+ *   2. Representation viewer — an org-effective representation PROVIDER for the
+ *      row's representation. A provider absent from the build again degrades to
+ *      requires-rebuild.
+ *   3. The terminal floor — a host diagnostic. No package draws this row, and
+ *      core draws no artifact content in its place. Always terminal.
  *
  * This module is PURE (no React / DB / server-only) so the dispatch table is
  * unit-testable. The `hasTypedRenderer` boolean of the pre-spine dispatch — true
@@ -28,8 +28,6 @@
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
-import { type HandlerKind } from "./pick-handler";
-
 /** SEMANTIC detail renderer resolved from the per-org effective-identity winner
  * (via the semantic-type registry + the generated build map). `built` is false
  * when the winning claimant is runtime-installed but absent from THIS build. */
@@ -40,8 +38,9 @@ export interface SemanticRendererResolution {
 }
 
 /** REPRESENTATION viewer resolved from the org-scoped representation-provider
- * registry: an effective extension provider, or the always-effective first-party
- * host default. `null` means neither matched → generic fallback. */
+ * registry. ONE TIER, and it is an extension's: the host owns no viewer to fall
+ * back to any more, so `null` means no installed package covers this
+ * representation and the row lands on the terminal floor. */
 export type RepresentationRendererResolution =
   | {
       tier: "extension";
@@ -53,8 +52,7 @@ export type RepresentationRendererResolution =
        * degrade diagnoses the ACTUAL slot, not a hardcoded one. */
       slot: ArtifactUiSlot;
       built: boolean;
-    }
-  | { tier: "first-party"; handler: Exclude<HandlerKind, "fallback"> };
+    };
 
 export interface ArtifactRenderDispatchInput {
   /** The row's resolved effective identity. */
@@ -62,8 +60,8 @@ export interface ArtifactRenderDispatchInput {
   /** Semantic detail renderer for the org's winner, or null when the winner
    * ships none / the identity is not an extension. */
   semantic: SemanticRendererResolution | null;
-  /** Representation viewer for the row's representation, or null when neither an
-   * extension provider nor a first-party default matches. */
+  /** Representation viewer for the row's representation, or null when no
+   * installed package covers it. */
   representation: RepresentationRendererResolution | null;
 }
 
@@ -72,19 +70,17 @@ export type ArtifactRenderDispatch =
   | { kind: "semantic"; packageName: string; generatedKey: string }
   /** Render the extension-shipped representation viewer. */
   | { kind: "representation"; packageName: string; generatedKey: string; pattern: string }
-  /** Render the first-party host MIME handler (the always-effective default). */
-  | { kind: "mime"; handler: Exclude<HandlerKind, "fallback"> }
   /** A resolved claimant is installed at runtime but ABSENT from this build:
    * render the generic renderer + a "requires rebuild" diagnostic (never blank). */
   | { kind: "requires-rebuild"; packageName: string; slot: ArtifactUiSlot }
-  /** Generic read-only structured-data view. Always terminal. */
+  /** No installed package draws this row: the surface renders a host diagnostic
+   * and no artifact content at all. Always terminal. */
   | { kind: "fallback" };
 
 /**
  * Resolve the single renderer for a row. Total: every input lands on exactly one
- * dispatch — a semantic renderer, a representation viewer, a first-party MIME
- * handler, a requires-rebuild degrade, or the generic fallback. Never throws,
- * never returns "no renderer".
+ * dispatch — a semantic renderer, a representation viewer, a requires-rebuild
+ * degrade, or the terminal floor. Never throws, never returns "no renderer".
  */
 export function pickArtifactRenderer(
   input: ArtifactRenderDispatchInput,
@@ -112,31 +108,29 @@ export function pickArtifactRenderer(
     return { kind: "requires-rebuild", packageName: input.semantic.packageName, slot: "detail" };
   }
 
-  // 2. Representation viewer — an org-effective extension provider or the
-  // always-effective first-party host default.
+  // 2. Representation viewer — an org-effective extension provider. There is no
+  // host viewer under it any more: the core text, markdown and metadata-card
+  // arms retired, so an uncovered representation falls through to (3).
   if (input.representation) {
-    if (input.representation.tier === "extension") {
-      if (input.representation.built) {
-        return {
-          kind: "representation",
-          packageName: input.representation.packageName,
-          generatedKey: input.representation.generatedKey,
-          pattern: input.representation.pattern,
-        };
-      }
-      // Degrade at the slot the representation was ACTUALLY resolved at (the
-      // detail page resolves at `detail`) — a hardcoded slot would mislabel the
-      // user-facing "requires rebuild" notice (Codex convergence, cinatra#1630).
+    if (input.representation.built) {
       return {
-        kind: "requires-rebuild",
+        kind: "representation",
         packageName: input.representation.packageName,
-        slot: input.representation.slot,
+        generatedKey: input.representation.generatedKey,
+        pattern: input.representation.pattern,
       };
     }
-    return { kind: "mime", handler: input.representation.handler };
+    // Degrade at the slot the representation was ACTUALLY resolved at (the
+    // detail page resolves at `detail`) — a hardcoded slot would mislabel the
+    // user-facing "requires rebuild" notice.
+    return {
+      kind: "requires-rebuild",
+      packageName: input.representation.packageName,
+      slot: input.representation.slot,
+    };
   }
 
-  // 3. Generic fallback: read-only structured-data view. Always terminal.
+  // 3. The terminal floor: a host diagnostic, never core artifact content.
   return { kind: "fallback" };
 }
 

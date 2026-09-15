@@ -122,7 +122,7 @@ export function ReviewTargetPanel({
           body draws: without it the slot takes its width from its content and
           the overflow moves back out to the document. */}
       <div className="min-w-0 overflow-x-auto p-4" data-review-representation-slot="">
-        <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
+        <ReviewTargetMount mount={mount} props={props} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
     </div>

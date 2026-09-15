@@ -1,8 +1,8 @@
 /**
  * MOUNTING the dynamic seam end-to-end (epic #1620 M1 Slice A/B — cinatra#1630,
- * plan §2.4–§2.5, AC-1/AC-5/AC-7). `ExtensionRendererMount` is the piece that
- * WIRES the resolved dispatch into an actual mount: it classifies the loadable
- * path and routes a build-map claimant to the server-only `ExtensionRendererSlot`
+ * plan §2.4–§2.5, AC-1/AC-5/AC-7). The SHARED display primitive is the piece
+ * that WIRES the resolved dispatch into an actual mount: it classifies the
+ * loadable path and routes a build-map claimant to `ExtensionRendererSlot`
  * (SSR fast path) and a runtime-installed claimant to the main-realm
  * `DynamicRendererLoader` with a server-serialized descriptor + bound freshness
  * preflight — and floors (never blank) when the binding vanished.
@@ -43,7 +43,8 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
 
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
-import { ExtensionRendererMount } from "../extension-renderer-mount";
+import { ArtifactDisplayMountPoint } from "../artifact-display-mount";
+import { classifyArtifactDisplayMount } from "../renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "../runtime-renderer-route";
 import { ExtensionRendererSlot } from "../extension-renderer-slot";
 import { DynamicRendererLoader } from "../dynamic-renderer-loader";
@@ -101,14 +102,40 @@ afterEach(() => {
   runtimeAssetRegistry._clearForTests();
 });
 
-describe("ExtensionRendererMount — classifies + mounts the loadable path", () => {
+/** The page's own floor pixels, so the mount point is driven exactly as the
+ * artifact page drives it. */
+function renderFloor({ packageName, slot, reason }: { packageName: string | null; slot: string; reason: string }) {
+  return packageName && reason === "requires-rebuild" ? (
+    <>
+      <RendererDegradedNotice
+        packageName={packageName}
+        slot={slot as "detail"}
+        failureClass="not-built"
+      />
+      {"FLOOR"}
+    </>
+  ) : (
+    "FLOOR"
+  );
+}
+
+/** Resolve + mount, the way both roads do it. */
+async function mountFor(args: { packageName: string; generatedKey: string; props: ArtifactRendererProps | null }) {
+  const mount = await classifyArtifactDisplayMount({
+    dispatch: "semantic",
+    packageName: args.packageName,
+    generatedKey: args.generatedKey,
+    propsApiVersion: 1,
+  });
+  return ArtifactDisplayMountPoint({ mount, props: args.props, fallback: null, renderFloor });
+}
+
+describe("the shared display primitive — classifies + mounts the loadable path", () => {
   it("build-map claimant → mounts the server-only ExtensionRendererSlot (SSR fast path)", async () => {
-    const el = (await ExtensionRendererMount({
-      generatedKey: BUILD_MAP_KEY,
+    const el = (await mountFor({
       packageName: "@fixture/built-ext",
-      slot: "detail",
+      generatedKey: BUILD_MAP_KEY,
       props: props(),
-      fallback: null,
     })) as ReactElement;
     expect(el.type).toBe(ExtensionRendererSlot);
     expect((el.props as { generatedKey: string }).generatedKey).toBe(BUILD_MAP_KEY);
@@ -118,13 +145,7 @@ describe("ExtensionRendererMount — classifies + mounts the loadable path", () 
     await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate });
     const key = runtimeAssetRegistry.keyFor(PKG, "detail");
 
-    const el = (await ExtensionRendererMount({
-      generatedKey: key,
-      packageName: PKG,
-      slot: "detail",
-      props: props(),
-      fallback: null,
-    })) as ReactElement;
+    const el = (await mountFor({ packageName: PKG, generatedKey: key, props: props() })) as ReactElement;
 
     expect(el.type).toBe(DynamicRendererLoader);
     const p = el.props as {
@@ -143,13 +164,7 @@ describe("ExtensionRendererMount — classifies + mounts the loadable path", () 
     const key = runtimeAssetRegistry.keyFor(PKG, "detail");
     runtimeAssetRegistry.retireByPackage(PKG); // revocation-via-lifecycle (ruling 8)
 
-    const el = (await ExtensionRendererMount({
-      generatedKey: key,
-      packageName: PKG,
-      slot: "detail",
-      props: props(),
-      fallback: "FLOOR",
-    })) as ReactElement;
+    const el = (await mountFor({ packageName: PKG, generatedKey: key, props: props() })) as ReactElement;
 
     // A fragment: the requires-rebuild notice + the generic floor (never blank).
     const kids = (el.props as { children: ReactElement[] }).children;

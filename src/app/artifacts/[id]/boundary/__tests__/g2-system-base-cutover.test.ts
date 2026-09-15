@@ -103,9 +103,11 @@ describe("G2 — never-blank guardrail", () => {
       generatedKey: "@cinatra-ai/markdown-artifact::detail",
       pattern: expect.any(String),
     });
-    // PLAIN TEXT DID NOT MOVE: text-artifact declares representations=[text/csv]
-    // ONLY, so nothing displaces the host floor here.
-    expect(dispatchFor("text/plain")).toEqual({ kind: "mime", handler: "text" });
+    // PLAIN TEXT HAS NO DISPLAY AT ALL as a bare representation: text-artifact
+    // declares representations=[text/csv] only, and the host viewer that used to
+    // stand under it retired with the core content arms — so an untyped
+    // plain-text row lands on the terminal floor and draws a host diagnostic.
+    expect(dispatchFor("text/plain")).toEqual({ kind: "fallback" });
   });
 });
 
