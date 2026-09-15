@@ -319,6 +319,16 @@
       "timeoutMinutes": 5
     },
     {
+      "context": "design-anchor-resolution",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
       "context": "design-pin-drift",
       "app": "github-actions",
       "workflow": ".github/workflows/gates.yml",
@@ -330,6 +340,16 @@
     },
     {
       "context": "design-pin-freshness",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "design-record-grammar",
       "app": "github-actions",
       "workflow": ".github/workflows/gates.yml",
       "paths": [
