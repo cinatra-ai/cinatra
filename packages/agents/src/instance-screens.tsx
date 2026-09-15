@@ -445,7 +445,16 @@ export function runDetailPanelKind(params: {
  * by side: the left column plain, the right one with the ⓘ tooltips. Owner
  * ruling 2026-08-14: exactly ONE column.
  *
- * WHICH RAIL OWNS IT. The panel's column, whenever it draws one. Its active
+ * WHICH RAIL OWNS IT, AND WHERE THAT ANSWER STOPS (amended cinatra#3478).
+ * INSIDE THE RUN SURFACE'S OWN FRAME the answer is the other way round: the
+ * frame draws a rail column for the rows the screen hands it, that column
+ * cannot be the panel's (selecting a step with a surface of its own REPLACES
+ * the slot the panel occupies), so the panel stands ITS column down and the
+ * page's rows are mounted inside the frame's column instead. That is decided in
+ * `screenDrawsPageRail` below; this function keeps answering for the
+ * composition it was written for, and is asked only there.
+ *
+ * OUTSIDE THE FRAME, unchanged: the panel's column, whenever it draws one. Its active
  * step, pause state, replay clicks, dev stepper and ⓘ tooltips are all bound to
  * the panel's live run-stream state, which a server-rendered rail cannot carry;
  * the deep links the page rail owned move DOWN into it as `railExtras`. So the
@@ -484,7 +493,10 @@ export function screenHostsStepRail(params: {
  * stands down for one that has any.
  *
  * Nothing else moves: an empty rail is still no rail, and the stepper branch's
- * own live column is still the one rail where it draws (`screenHostsStepRail`).
+ * own live column is still the one rail where it draws (`screenHostsStepRail`)
+ * — OUTSIDE the run surface's frame. Inside it (cinatra#3478) these rows are
+ * the frame column's rows and the branch below is not reached; see the note on
+ * `gateStepCount` in the body.
  *
  * Exported so the regression test can pin the whole table without a DB, a
  * session or a Next.js render.
@@ -498,6 +510,20 @@ export function screenDrawsPageRail(params: {
 }): boolean {
   if (params.railEntryCount === 0) return false;
   if (params.runStatus === "pending_input" && params.gateStepCount === 0) return false;
+  // AND WHERE THE FRAME DRAWS A RAIL COLUMN, THESE ROWS ARE DRAWN IN IT
+  // (cinatra#3478). `gateStepCount` is the number of rows the screen hands the
+  // run surface's frame, and a frame with rows draws a rail column of its own.
+  // That column is not the one the answer below stands down for: the 2739
+  // answer retires this panel in favour of the run panel's live column, and the
+  // frame's column is a THIRD thing, which nothing suppressed — so a run
+  // carrying any frame row drew the frame's column AND the panel's, side by
+  // side, and the page's own rows (the run's work steps, its review gates,
+  // their verifications, its lifecycle decisions) were drawn by neither.
+  //
+  // The frame's column is the rail that survives (`run-step-rail-extra-entry.tsx`),
+  // so these rows come back to this panel and are mounted INSIDE that column,
+  // beneath the frame's own rows and renumbered behind them (`stepOffset`).
+  if (params.gateStepCount > 0) return true;
   return screenHostsStepRail({
     panel: params.panel,
     stepperStepCount: params.stepperStepCount,
@@ -1506,6 +1532,25 @@ export async function SetupScreen({
     }) === "rail_step"
       ? encodeScheduleRunRef({ runId: run.id })
       : null;
+  // AND WHETHER THE RUN CARRIES A SCHEDULE AT ALL IS A DIFFERENT QUESTION
+  // (cinatra#3478, the re-cut's first leg).
+  //
+  // `scheduleRailRef` above answers which CARD the schedule step opens onto,
+  // and it is null for a run dispatched with "Run right after setup" that no
+  // conversation proposed: that row resolves to no card. The rail's own
+  // question is the run's history — the ratified drawing, section I: "Where the
+  // run carries a schedule, the rail's first entry is Schedule", and "A run set
+  // to Run right after setup or Schedule for later is spent when it fires: its
+  // Schedule entry settles on the rail". A run dispatched on a schedule carries
+  // one whatever kind it was, so the trigger ROW is the whole answer, and the
+  // third proof round of this pull request counted the omission: the merged
+  // rail drew no Schedule entry for exactly that run.
+  const runCarriesScheduleStep = trigger !== null;
+  // SPENT, OR STILL THE READER'S TO CHANGE — the predicate the screen already
+  // reads for the same rule (cinatra#2980), asked once more rather than
+  // restated: everything that is not recurring is a one-off, and a one-off is
+  // frozen by its own fired stamp.
+  const scheduleStepSettled = shouldFreezeFiredOneOffSchedule(trigger);
   // cinatra#2487: ONE predicate for the strip on every route (was an inline
   // duplicate of shouldShowPersistentTab here, `!!run` on /trigger, and nothing
   // at all on /permissions — so the strip's contents changed between tabs).
@@ -1996,9 +2041,15 @@ export async function SetupScreen({
   // WHAT THIS RUN MADE (cinatra#3029, acceptance item 5). Read HERE, in the
   // screen's async body, because the rail below is composed synchronously and
   // the step's rows are a database read. A run that is not over yet has not
-  // finished making anything, so the step is drawn only on a TERMINAL run — and
-  // it is drawn even when the run made nothing, because the drawing gives the
+  // finished making anything, so the ROWS are read only on a TERMINAL run — and
+  // they are read even when the run made nothing, because the drawing gives the
   // empty case its own reading rather than an empty panel.
+  //
+  // THE ROWS AND THE RAIL ROW ARE TWO QUESTIONS (cinatra#3478, third leg). The
+  // rail also carries the record as a step STILL TO COME while a gate holds the
+  // run in front of it, and that row is unreached, so it opens nothing: this
+  // read stays where it is rather than paying for a list the reader cannot
+  // reach.
   const runMadeRows: RunMadeArtifactRow[] =
     run && isTerminalRunStatus(run.status)
       ? await (async () => {
@@ -2251,7 +2302,13 @@ export async function SetupScreen({
                     railExtras={railExtras}
                     reviewHrefBase={reviewHrefBase}
                     inputStepInRail={inputStepIsOpen}
-                    railDrawsTheFrame={railFramesTheRunDetail}
+                    // AND THE SCHEDULE ENTRY FRAMES IT TOO (cinatra#3478):
+                    // the rail draws a Schedule row for the schedule the run
+                    // CARRIES, not only for the one that opens a card, so a run
+                    // whose rail is that row and its work steps still stands
+                    // this panel's own column down — or the page draws two
+                    // rails again.
+                    railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -2294,7 +2351,13 @@ export async function SetupScreen({
                     // the run's own park row, before the first paint.
                     recommendationDecided={recommendationDecided}
                     inputStepInRail={inputStepIsOpen}
-                    railDrawsTheFrame={railFramesTheRunDetail}
+                    // AND THE SCHEDULE ENTRY FRAMES IT TOO (cinatra#3478):
+                    // the rail draws a Schedule row for the schedule the run
+                    // CARRIES, not only for the one that opens a card, so a run
+                    // whose rail is that row and its work steps still stands
+                    // this panel's own column down — or the page draws two
+                    // rails again.
+                    railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
                   />
                 )
               )}
@@ -2351,6 +2414,66 @@ export async function SetupScreen({
                   reached: recommendationRailStepReached,
                 });
               }
+              // THE RUN'S SCHEDULE HEADS THE RAIL (cinatra#3478, the
+              // re-cut's first leg).
+              //
+              // The ratified drawing, section I: "Where the run carries a
+              // schedule, the rail's first entry is Schedule, above the run's
+              // work steps and above Review." The third proof round of this
+              // pull request counted two departures from that in one rail:
+              //
+              //   • the entry was composed AFTER the run's input steps, so
+              //     where it was drawn at all it stood beneath the work it
+              //     comes before;
+              //   • and for the run that was actually photographed — dispatched
+              //     with "Run right after setup" — it was not composed at all,
+              //     because the presence test was the ref that names the card
+              //     rather than the schedule the run carries.
+              //
+              // IT OPENS ONTO NOTHING IT CANNOT DRAW. Where the step has a card
+              // (`scheduleRailRef`), it opens it, exactly as it always has.
+              // Where it has none, the surface is nullish and the frame falls
+              // back to the run detail — the same fallback the parked schedule
+              // step below takes, and never an empty column.
+              if (runCarriesScheduleStep) {
+                const scheduleRailStep: RunSurfaceRailStep = {
+                  key: "schedule",
+                  // THE RUN HAS BEEN THROUGH IT: the schedule is how the run
+                  // was dispatched, so the reader may open it wherever the run
+                  // now stands.
+                  reached: true,
+                  settled: scheduleStepSettled,
+                  surface: scheduleRailRef ? (
+                    <ScheduleStepSurface
+                      host="run_card"
+                      cardRef={scheduleRailRef}
+                      promptWindowTemplateId={template.id}
+                      // cinatra#2933 -- the window under this scheduler is the
+                      // RUN's conversation, gated on the run's own access.
+                      runId={run?.id ?? null}
+                      canRespondInWindow={canRespondInWindow}
+                    />
+                  ) : null,
+                  row: null,
+                };
+                railSteps.push({
+                  ...scheduleRailStep,
+                  row: (
+                    <ScheduleRailStepRow
+                      host="run_card"
+                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
+                      // (cinatra#3047). The Skills entry above draws the
+                      // drawing's own glyph and consumes no numeral, so the
+                      // schedule is "1" whether or not it is the second gate
+                      // row — which is exactly what the drawing shows.
+                      displayStep={
+                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
+                      }
+                      settled={scheduleStepSettled}
+                    />
+                  ),
+                });
+              }
               // AND THE RUN'S OWN INPUT FORMS BENEATH IT (cinatra#3068, order
               // corrected by cinatra#3047 fix leg 8). One entry per form the
               // agent asks, in the order it asks them; each opens the run
@@ -2367,40 +2490,12 @@ export async function SetupScreen({
               // is no second drawn sentence to weigh, and the Skills entry
               // stands above these.
               if (inputStepsInRail) {
-                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode));
-              }
-              if (scheduleRailRef) {
-                railSteps.push({
-                  key: "schedule",
-                  row: (
-                    <ScheduleRailStepRow
-                      host="run_card"
-                      // THE NUMERAL IS THE RAIL'S RULE, not this list's length
-                      // (cinatra#3047). The Skills entry above draws the
-                      // drawing's own glyph and consumes no numeral, so the
-                      // schedule is "1" whether or not it is the second gate
-                      // row — which is exactly what the drawing shows.
-                      displayStep={
-                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) + 1
-                      }
-                    />
-                  ),
-                  // AND THE PROMPT WINDOW UNDER THE SCHEDULER (cinatra#2972)
-                  // — "The run page's prompt window shows below the scheduler"
-                  // (plan (A) §7.2, amended 2026-08-25). The review page passes
-                  // none: the plan names the run page.
-                  surface: (
-                    <ScheduleStepSurface
-                      host="run_card"
-                      cardRef={scheduleRailRef}
-                      promptWindowTemplateId={template.id}
-                      // cinatra#2933 -- the window under this scheduler is the
-                      // RUN's conversation, gated on the run's own access.
-                      runId={run?.id ?? null}
-                      canRespondInWindow={canRespondInWindow}
-                    />
-                  ),
-                });
+                // BENEATH THE SCHEDULE, AND NUMBERED AFTER IT (cinatra#3478).
+                // These rows number themselves from their own index, so an
+                // entry standing above them has to be counted here, or two rows
+                // carry the numeral 1.
+                const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode, railRowsAboveTheInputSteps));
               }
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
@@ -2418,7 +2513,17 @@ export async function SetupScreen({
               // states: the schedule form the reader is answering already stands
               // there, and a surface of its own would be a second mount of it.
               // A nullish surface falls back to that detail.
-              if (!scheduleRailRef && parkedScheduleStep) {
+              // AND ONLY WHERE THE BLOCK ABOVE DREW NONE (cinatra#3478, the
+              // re-cut first leg, convergence round 1). This block is written
+              // for the run that holds NO trigger row yet — its own words, two
+              // paragraphs up. Its guard asked that as "no schedule CARD", and a
+              // run dispatched with "Run right after setup" holds a trigger row
+              // while resolving to no card, so with the entry above now composed
+              // from the trigger row the two blocks could push the key
+              // "schedule" twice for one run — a rail with two Schedule rows,
+              // both answering the same selection. The question is asked of the
+              // trigger row, which is what the paragraph above always meant.
+              if (!scheduleRailRef && !runCarriesScheduleStep && parkedScheduleStep) {
                 const parkedScheduleRailStep: RunSurfaceRailStep = {
                   key: "schedule",
                   reached: true,
@@ -2576,14 +2681,69 @@ export async function SetupScreen({
               }
               // The page's OWN rail rows. The gate rows above are drawn by
               // their own step components rather than by this rail, because the
-              // live orchestrator column is the rail on the flow branch
-              // (`screenHostsStepRail`) and the plan puts both gate steps above
+              // frame composes them (and, where the frame draws none, the live
+              // orchestrator column is the rail on the flow branch —
+              // `screenHostsStepRail`), and the plan puts both gate steps above
               // the run's steps on every branch — not only the one where the
               // server-rendered rail happens to draw.
+              // AND THE RUN'S OWN RECORD IS ONE OF THE FRAME'S ROWS TOO
+              // (cinatra#3478). It is composed BELOW this answer, because its
+              // numeral counts the page's rows — but it makes the frame draw a
+              // rail column exactly as every other row does. A terminal run
+              // that carries nothing else would otherwise answer "no frame
+              // column" here, stand the panel's column down all the same, and
+              // draw its work steps in neither.
+              //
+              // AND A RUN HELD AT ITS REVIEW GATE CARRIES IT AS A STEP STILL TO
+              // COME (cinatra#3478, third leg). The third proof round measured
+              // this row drawn as a step already PASSED — the completed circle,
+              // reached and settled — on a run that was waiting at its review
+              // gate to be told whether to file the work at all. The ratified
+              // drawing's step rail: "The step the run is paused on is
+              // highlighted; steps already passed sit above it, steps still to
+              // come below." So the two questions are separated here:
+              //
+              //   • WHETHER the rail carries the row — it does from the moment
+              //     the run has work to record, which includes the run held in
+              //     front of the gate that decides that work's fate, so the
+              //     reader can see what is still to come beneath the pause;
+              //   • and whether the run has REACHED it — it has not while a
+              //     gate is still holding it, whatever the run's own status
+              //     reads at that instant, because the record row is the step
+              //     AFTER the gate.
+              //
+              // An unreached row is closed by `isRunSurfaceStepSelectable`
+              // (`reached: false`), which is what first paint and every press
+              // ask, so the empty rows read for a run that is not over yet are
+              // not opened onto: while the run is not terminal the row is
+              // unreached at every paint of the page, so no press can have
+              // opened it. The row states its place in the series and nothing
+              // else, which is what an upcoming row is.
+              //
+              // AND WHAT "HELD AT ITS REVIEW GATE" IS READ FROM (the third
+              // leg's convergence round, finding 1). `initialReviewGate.awaiting`
+              // is NOT that question: `readRunReviewSlot` answers it from a
+              // still-`pending` `artifact_produced_outbox` row — the seconds
+              // between the run producing something and the sweeper opening a
+              // gate on it — and it goes back to `false` the moment the gate
+              // ROW EXISTS, answered or not. The run the third proof round
+              // measured is exactly the run that reads `false` there: its gate
+              // was open and undecided. So the OPEN GATE ITSELF is read, from
+              // the rail's own gate list (`railGates`, `pending` until a
+              // decision is committed to it), and the outbox window is kept
+              // beside it for the moment in which the gate row does not exist
+              // yet.
+              const runHasAnUndecidedReviewGate = railGates.some((g) => g.status === "pending");
+              const runParkedAtReviewGate =
+                runHasAnUndecidedReviewGate || initialReviewGate?.awaiting === true;
+              const runReachedItsRecord =
+                run != null && isTerminalRunStatus(run.status) && !runParkedAtReviewGate;
+              const railCarriesMadeStep =
+                run != null && (isTerminalRunStatus(run.status) || runParkedAtReviewGate);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
-                gateStepCount: railSteps.length,
+                gateStepCount: railSteps.length + (railCarriesMadeStep ? 1 : 0),
                 panel: runDetailPanel,
                 stepperStepCount: stepperSteps.length,
               });
@@ -2617,16 +2777,22 @@ export async function SetupScreen({
               //     page's own rows were then offset by, which numbered the
               //     work steps after the record they come before.
               //
-              // Nothing else moves with the reorder: `screenDrawsPageRail`
-              // reads `gateStepCount` only to keep a pre-dispatch run's rail
-              // suppressed (`pending_input`), and a run at a TERMINAL status —
-              // the only run that carries this step at all — is never at that
+              // The reorder moves nothing about the pre-dispatch suppression,
+              // and it does move the OTHER reading of the same count
+              // (cinatra#3478): `gateStepCount` is also how the screen knows
+              // the frame will draw a rail column, and this row makes it draw
+              // one — which is why `railCarriesMadeStep` is decided above the
+              // answer and only pushed here. `screenDrawsPageRail`
+              // reads `gateStepCount` to keep a pre-dispatch run's rail
+              // suppressed (`pending_input`), and neither run that carries this
+              // step — the one at a TERMINAL status, and the one held at its
+              // review gate over work it has already produced — is ever at that
               // status.
-              if (run && isTerminalRunStatus(run.status)) {
+              if (run && railCarriesMadeStep) {
                 const madeRailStep: RunSurfaceRailStep = {
                   key: "made",
-                  reached: true,
-                  settled: true,
+                  reached: runReachedItsRecord,
+                  settled: runReachedItsRecord,
                   tail: true,
                   surface: (
                     <RunMadeStepSurface rows={runMadeRows} reading={runMadeReading(runMadeRows)} />
@@ -2644,8 +2810,8 @@ export async function SetupScreen({
                         (railDraws ? rail.entries.length : 0) +
                         1
                       }
-                      reached
-                      settled
+                      reached={runReachedItsRecord}
+                      settled={runReachedItsRecord}
                       selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
                       conformanceId="run-surface-rail-step"
                       indicatorConformanceId="run-surface-rail-indicator"

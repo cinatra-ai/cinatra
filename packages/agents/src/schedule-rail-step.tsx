@@ -68,6 +68,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { Check } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
@@ -105,6 +107,7 @@ export { useRunStepSelection } from "./run-surface-rail";
 export function ScheduleRailStepRow({
   host,
   displayStep,
+  settled = false,
 }: {
   /** Which page this rail belongs to. The two page hosts are the only
    *  callers: a transcript has no rail, and its card is served by the registry
@@ -112,6 +115,20 @@ export function ScheduleRailStepRow({
   host: "run_card" | "page_gate_region";
   /** The numeral this row shows — its position among the rail's gate steps. */
   displayStep: number;
+  /**
+   * HAS THIS RUN'S SCHEDULE BEEN SPENT? (cinatra#3478, the re-cut's first leg.)
+   *
+   * The ratified drawing, section I: "A run set to Run right after setup or
+   * Schedule for later is spent when it fires: its Schedule entry settles on
+   * the rail." A settled entry is the rail's read-only history row — the same
+   * completed circle every other settled step on this rail carries
+   * (`RunSurfaceRailRow`, `RecommendationRailStepRow`), in place of the numeral,
+   * and the title left unhighlighted because the reader is not standing on it.
+   *
+   * OPT-IN, and `false` by default, because the review page's own rail draws
+   * this row too and nothing about that reading changes here.
+   */
+  settled?: boolean;
 }): ReactElement {
   const selection = useRunStepSelection();
   const scheduleSelected = selection?.selected === "schedule";
@@ -124,6 +141,10 @@ export function ScheduleRailStepRow({
       data-schedule-rail-step=""
       data-schedule-rail-host={host}
       data-schedule-step-selected={scheduleSelected ? "true" : "false"}
+      // The same name the rail's other gate rows give this reading
+      // (`data-recommendation-step-settled`), so one walk reads the settled
+      // circle the same way on every row it appears in.
+      data-schedule-step-settled={settled ? "true" : "false"}
       data-action="open-schedule-step"
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
@@ -131,9 +152,12 @@ export function ScheduleRailStepRow({
     >
       <span
         data-conformance-id="schedule-rail-indicator"
-        className={runSurfaceRailIndicatorClass(Boolean(scheduleSelected))}
+        // A settled circle takes the drawing's MUTED ground whether or not its
+        // step is the open one, which is what makes the row read as history
+        // rather than as the entry the reader is standing on.
+        className={runSurfaceRailIndicatorClass(Boolean(scheduleSelected), settled)}
       >
-        {displayStep}
+        {settled ? <Check className="h-3 w-3" /> : displayStep}
       </span>
       <span className={runSurfaceRailTitleClass(Boolean(scheduleSelected))}>
         {SCHEDULE_RAIL_STEP_LABEL}

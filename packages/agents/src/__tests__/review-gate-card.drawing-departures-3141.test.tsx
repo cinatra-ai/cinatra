@@ -187,17 +187,35 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     expect(document.querySelectorAll('[data-conformance-id="review-prompt-window"]')).toHaveLength(1);
   });
 
-  it("wherever the gate is mounted WITH its run, it draws that one window and no other", async () => {
-    // The window is the RUN's conversation, so what it needs is the run — not a
-    // host identity. Given the run, every host draws the same single window; the
-    // host makes no difference to it, which is the point of one card for every
-    // surface. What decides whether a window is drawn at all is the next case.
-    for (const host of ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const) {
+  it("wherever the gate is mounted OUTSIDE a conversation WITH its run, it draws that one window and no other", async () => {
+    // The window is the RUN's conversation, so what it needs is the run. Given
+    // the run, every host OUTSIDE a conversation draws the same single window,
+    // which is the point of one card for every surface. THE CONVERSATION IS THE
+    // ONE DIVISION (cinatra#3481, `app-lifecycle-cards.html` §II): "No prompt
+    // window is drawn inside a conversation — the prompt window is the box
+    // outside the chat", so the chat-hosted card draws none even with its run,
+    // and `review-card-in-the-thread-draws-no-prompt-window-3481.test.tsx`
+    // holds it to that. What decides whether a window is drawn at all on these
+    // hosts is the next case.
+    for (const host of ["run_card", "page_gate_region", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container } = renderOn(host);
       await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
       cleanup();
     }
+  });
+
+  it("the CONVERSATION's card draws no window even when it names its run", async () => {
+    // The same loop's fourth host, split out because its reading is the
+    // opposite one: inside a conversation the composer at the foot of the
+    // thread is where a change request is typed (§II), so the card adds no box
+    // of its own above it.
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(promptWindows(container)).toHaveLength(0);
   });
 
   it("a card dispatched in a TRANSCRIPT names no run and draws no window — a thread ends in its composer", async () => {

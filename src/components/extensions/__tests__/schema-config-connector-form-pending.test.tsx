@@ -20,6 +20,22 @@ import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
 import { toast } from "@/lib/cinatra-toast";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: () => {},
+    push: () => {},
+    replace: () => {},
+    prefetch: () => {},
+    back: () => {},
+    forward: () => {},
+  }),
+}));
+
+
 vi.mock("@/lib/cinatra-toast", () => {
   const base = vi.fn();
   const t = Object.assign(base, {
