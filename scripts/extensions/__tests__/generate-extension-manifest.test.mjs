@@ -1482,6 +1482,12 @@ describe("the generated display map imports through package exports, never a hos
     // same guarded-optional road, so they stand in the roster by name too: the
     // remainder is the pre-existing guarded packs plus those two, and nothing
     // else — a re-introduced alias for any other package still fails here.
+    //
+    // The blog-post and linkedin displays ride the SAME guarded-optional road:
+    // this branch registers those two artifact kinds, their detail and preview
+    // renderers carry the host alias exactly as the blog-idea display's do, so
+    // they stand in the roster by name as well. The bound is unchanged in kind
+    // — an alias for any package NOT named here still fails this test.
     const buildConfig = buildConfigAliases();
     const emitted = emittedRendererSpecifiers();
     const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
