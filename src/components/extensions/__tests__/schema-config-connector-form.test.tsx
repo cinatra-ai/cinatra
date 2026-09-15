@@ -17,6 +17,22 @@ import { toast } from "@/lib/cinatra-toast";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: () => {},
+    push: () => {},
+    replace: () => {},
+    prefetch: () => {},
+    back: () => {},
+    forward: () => {},
+  }),
+}));
+
+
 // Action outcomes (the form-level banner variant + per-row Done/error) toast
 // via the canonical wrapper (cinatra#1109) rather than rendering an in-form
 // Alert; mock it so the tests can assert the toasted static message.
@@ -655,7 +671,7 @@ describe("SchemaConfigConnectorForm — §II state treatments (cinatra#2357)", (
       packageName: "@x/y",
       surface,
       conformanceState: "loading",
-      setupFooter: <p data-testid="host-footer">sharing</p>,
+      sharingTab: <p data-testid="host-sharing">sharing</p>,
     });
     const root = container.querySelector(
       '[data-conformance-id="connector-setup"][data-state="loading"]',
@@ -693,27 +709,24 @@ describe("SchemaConfigConnectorForm — §II state treatments (cinatra#2357)", (
     expect(container.querySelector('input[name="apiKey"]')).toBeTruthy();
   });
 
-  it("suppresses setupFooter under loading and error, and renders it when ready", async () => {
+  it("keeps the Sharing panel live under loading and error — it is not part of the setup body", async () => {
+    // Sharing is the fixed SECOND TAB (cinatra#3374), a panel of its own: §II's
+    // loading / error treatments replace the SETUP body, and the sharing panels
+    // are no longer part of it. The Setup body itself is still replaced.
     const surface = surfaceOf(STATE_SURFACE);
-    const footer = <p data-testid="host-footer">sharing</p>;
-    for (const state of ["loading", "error"] as const) {
+    const sharing = <p data-testid="host-sharing">sharing</p>;
+    for (const state of ["loading", "error", "ready"] as const) {
       await renderForm({
         installId: "i1",
         packageName: "@x/y",
         surface,
         conformanceState: state,
-        setupFooter: footer,
+        sharingTab: sharing,
       });
-      expect(container.querySelector('[data-testid="host-footer"]')).toBeNull();
+      expect(container.querySelector('[data-testid="host-sharing"]')).toBeTruthy();
+      const setupPanel = container.querySelectorAll('[role="tabpanel"]')[0];
+      expect(setupPanel.querySelector('[data-testid="host-sharing"]')).toBeNull();
     }
-    await renderForm({
-      installId: "i1",
-      packageName: "@x/y",
-      surface,
-      conformanceState: "ready",
-      setupFooter: footer,
-    });
-    expect(container.querySelector('[data-testid="host-footer"]')).toBeTruthy();
   });
 });
 
