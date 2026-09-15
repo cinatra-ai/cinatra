@@ -46,6 +46,11 @@ import "server-only";
 
 import { readAssignedSkillsForAgentPackage } from "@/lib/agent-assigned-skills-store";
 import {
+  EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+  resolveEffectiveAssignedSkills,
+  type AssignedSkillScopeRow,
+} from "@cinatra-ai/agents/effective-assigned-skills";
+import {
   readCatalogSnapshotSource,
   resolveSkillAssignability,
   type AssignabilityRefusal,
@@ -78,6 +83,14 @@ export type WithheldAssignedSkill = {
 export type AssignedSkillTierOutcome = {
   /** Ordered (by stored `position`), deduped, REVALIDATED ids. */
   skillIds: string[];
+  /** True when the run's snapshot was absent, malformed or an unknown version
+   *  and the SOLE legacy fallback (workspace plus the durable organization) was
+   *  the chain that ran. The callers that audit scope decisions record it. */
+  scopeUsedFallback: boolean;
+  /** Distinct assigned ids the scope chain reached but the per-run cap of 5
+   *  refused, in chain order. Never silent: an operator reads here why an
+   *  assignment that exists in settings did not reach the run. */
+  droppedOverEffectiveCap: string[];
   /** The canonical agent package the rows were read for; null when unresolved. */
   agentPackageName: string | null;
   /** Rows read but refused by revalidation. Empty on a degraded arm (nothing
@@ -91,7 +104,7 @@ export type AssignedSkillTierDeps = {
   /** Ordered assignment rows for ONE canonical package. Default = the S1 store. */
   readAssignments?: (
     agentPackageName: string,
-  ) => Promise<ReadonlyArray<{ skillId: string }>>;
+  ) => Promise<ReadonlyArray<AssignedSkillScopeRow>>;
   /**
    * The shared S1 predicate. NEVER re-implemented. Default = the real one,
    * reading the catalog through the PURE snapshot source (see
@@ -107,6 +120,30 @@ export type AssignedSkillTierDeps = {
    * reads the installed-agent population through its own seam.
    */
   resolveAgentPackage?: (rawId: string) => Promise<AgentPackageResolution>;
+  /**
+   * THE RUN'S FROZEN SCOPES (cinatra#2815 S3, epic #2812) — not a seam but the
+   * tier's scope INPUT, carried here so the two positional arguments stay what
+   * they are.
+   *
+   * `snapshot` is the raw `assignment_scope_snapshot` payload of the run (or of
+   * the assistant thread) this resolution is for. `durableOrgId` is the
+   * instance's durable organization, which is the ONLY layer the sole legacy
+   * fallback adds to the workspace when the payload is absent, malformed or an
+   * unknown version.
+   *
+   * A caller that supplies NEITHER gets the narrowest possible answer — the
+   * workspace layer alone — never the un-scoped package-wide set. A run's
+   * delivered assignments must come from scopes somebody actually granted it.
+   */
+  runScope?: AssignedSkillDeliveryScope;
+};
+
+/** The scope input {@link AssignedSkillTierDeps.runScope} carries. */
+export type AssignedSkillDeliveryScope = {
+  /** The raw immutable snapshot payload of the run / assistant thread. */
+  snapshot?: unknown;
+  /** The instance's durable organization — the legacy fallback's org floor. */
+  durableOrgId?: string | null;
 };
 
 /**
@@ -126,7 +163,14 @@ function degraded(
   reason: AssignedSkillTierDegradation,
   agentPackageName: string | null,
 ): AssignedSkillTierOutcome {
-  return { skillIds: [], agentPackageName, withheld: [], degraded: reason };
+  return {
+    skillIds: [],
+    agentPackageName,
+    withheld: [],
+    degraded: reason,
+    scopeUsedFallback: false,
+    droppedOverEffectiveCap: [],
+  };
 }
 
 /**
@@ -231,19 +275,63 @@ export async function resolveAssignedSkillTier(
     return degraded("assignment-read-failed", agentPackageName);
   }
 
-  // First-seen dedup over the stored order (`position` ASC). The store's PK
-  // already makes a duplicate pair impossible; this keeps the tier a pure
-  // function of its input even against a hand-edited row set.
-  const seen = new Set<string>();
-  const orderedIds: string[] = [];
-  for (const row of rows ?? []) {
-    const id = typeof row?.skillId === "string" ? row.skillId.trim() : "";
-    if (id === "" || seen.has(id)) continue;
-    seen.add(id);
-    orderedIds.push(id);
+  // ---- (2b) THE EFFECTIVE-5 CHAIN (cinatra#2815 S3, epic #2812) --------
+  //
+  // The store's cap is per EXACT SCOPE, so the rows just read can legally carry
+  // five project assignments, five organization ones and five workspace ones at
+  // once. A run receives at most FIVE DISTINCT ids, taken along
+  // project -> user -> team(s) -> organization -> workspace from the scopes its
+  // creation FROZE — never a live column, never the actor's current teams.
+  //
+  // The chain, its first-seen dedupe (which replaces the flat dedupe this tier
+  // used to do over the stored order) and the SOLE legacy fallback all live in
+  // ONE pure module, consumed here and by the assistant delivery seam, because
+  // two copies of one authority rule decide differently the first time one of
+  // them is fixed.
+  const effective = resolveEffectiveAssignedSkills(rows ?? [], {
+    snapshot: deps.runScope?.snapshot,
+    durableOrgId: deps.runScope?.durableOrgId ?? null,
+    cap: EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+  });
+  const orderedIds = effective.skillIds;
+  if (effective.droppedOverCap.length > 0) {
+    console.warn(
+      "[agent-assigned-skills] the per-run effective cap of " +
+        `${EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP} refused assignment(s) — they ` +
+        "survive in settings but are NOT delivered to this run. agent / refused:",
+      forLog(agentPackageName),
+      effective.droppedOverCap.map(forLog),
+    );
   }
+  if (effective.fallbackDegraded) {
+    console.warn(
+      "[agent-assigned-skills] no usable assignment-scope snapshot AND no " +
+        "durable organization — the chain narrowed to the WORKSPACE layer alone " +
+        "(fail-closed, never wider). agent / reason:",
+      forLog(agentPackageName),
+      effective.fallbackDegraded,
+    );
+  }
+  if (effective.unplaceableScopeKinds.length > 0) {
+    console.warn(
+      "[agent-assigned-skills] assignment row(s) carry a scope kind this build " +
+        "cannot place — dropped, never widened. agent / kinds:",
+      forLog(agentPackageName),
+      effective.unplaceableScopeKinds.map(forLog),
+    );
+  }
+  const scopeReport = {
+    scopeUsedFallback: effective.usedFallback,
+    droppedOverEffectiveCap: effective.droppedOverCap,
+  };
   if (orderedIds.length === 0) {
-    return { skillIds: [], agentPackageName, withheld: [], degraded: null };
+    return {
+      skillIds: [],
+      agentPackageName,
+      withheld: [],
+      degraded: null,
+      ...scopeReport,
+    };
   }
 
   // ---- (3) resolution-time REVALIDATION --------------------------------
@@ -258,7 +346,7 @@ export async function resolveAssignedSkillTier(
       forLog(agentPackageName),
       err instanceof Error ? err.message : err,
     );
-    return degraded("revalidation-failed", agentPackageName);
+    return { ...degraded("revalidation-failed", agentPackageName), ...scopeReport };
   }
 
   const skillIds: string[] = [];
@@ -278,7 +366,7 @@ export async function resolveAssignedSkillTier(
       withheld.map((w) => `${forLog(w.skillId)}:${w.reason}`),
     );
   }
-  return { skillIds, agentPackageName, withheld, degraded: null };
+  return { skillIds, agentPackageName, withheld, degraded: null, ...scopeReport };
 }
 
 /** Ids-only convenience over {@link resolveAssignedSkillTier}. Never rejects. */

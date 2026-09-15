@@ -43,6 +43,7 @@
     "./wayflow-url": "./src/wayflow-url.ts",
     "./run-status": "./src/run-status.ts",
     "./schema": "./src/schema.ts",
+    "./effective-assigned-skills": "./src/effective-assigned-skills.ts",
     "./auditor-apply": "./src/auditor-apply.ts",
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",

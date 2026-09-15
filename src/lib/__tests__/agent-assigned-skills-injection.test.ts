@@ -156,6 +156,11 @@ describe("stored order, dedup and the empty cases", () => {
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: null,
+      // cinatra#2815 S3 — the outcome also REPORTS the scope decision the
+      // effective-5 chain made. With no rows there is nothing to place, and
+      // this caller names no run scope, so the chain's narrowest answer ran.
+      scopeUsedFallback: true,
+      droppedOverEffectiveCap: [],
     });
     expect(revalidate).not.toHaveBeenCalled();
   });
@@ -430,6 +435,10 @@ describe("fail-closed arms — the run always proceeds (issue AC 5)", () => {
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: "assignment-read-failed",
+      // cinatra#2815 S3 — a degraded arm reports NO scope decision: nothing was
+      // read, so nothing was placed and nothing was refused by the per-run cap.
+      scopeUsedFallback: false,
+      droppedOverEffectiveCap: [],
     });
   });
 
