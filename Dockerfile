@@ -84,6 +84,23 @@ RUN pnpm exec cinatra extensions acquire-prod
 ARG CINATRA_EXTENSION_FLEET=required
 COPY cinatra-dev-extensions.lock.json ./
 RUN node scripts/extensions/acquire-dev-fleet.mjs --fleet "$CINATRA_EXTENSION_FLEET"
+
+# WHICH FLEET THIS IMAGE CARRIES, written down (engineering#666). Nothing the
+# image already records can answer that question: the OAS seed manifest is a
+# slug list and the bundled-digest record is a content-hash map, and a dev-fleet
+# tree and a required-only tree are the same KIND of object to both. This block
+# is the one place that knows, so it writes a marker naming the fleet — the
+# required-only image writes `required`, so a MISSING marker always means an
+# image built before the marker existed and never a road that skipped it. The
+# boot reads it through src/lib/bundled-fleet.ts and uses it for exactly one
+# decision: a dev-fleet image registers every package of its own manifest in the
+# catalogue (and the chat-resolvable record for its agents), a required-only
+# image keeps today's seed set exactly. The value is normalized through the
+# acquisition step's OWN parser, so the marker can never name a fleet that step
+# did not take.
+RUN node scripts/extensions/record-extension-fleet.mjs \
+      --fleet "$CINATRA_EXTENSION_FLEET" --out /app/.cinatra-extension-fleet.json
+
 RUN pnpm install --frozen-lockfile
 
 # Materialize a self-contained, symlink-free copy of the published CLI for the
@@ -374,6 +391,13 @@ COPY --from=build /app/.cinatra-required-oas-seed ./.cinatra-required-oas-seed
 # packages). FAIL-SOFT consumer: a missing file only means anchors carry no
 # digest — bundled activation itself never depends on it.
 COPY --from=build /app/.cinatra-bundled-digests.json ./.cinatra-bundled-digests.json
+
+# The image's extension-fleet marker (engineering#666, written above). The
+# static-bundle lifecycle seeder reads it at boot to decide whether this image
+# registers its whole manifest (a dev-fleet preview instance) or today's
+# serverEntry/required-in-prod set (every real deployment). FAIL-SOFT consumer:
+# a missing file reads as the required fleet, which is the deployment road.
+COPY --from=build /app/.cinatra-extension-fleet.json ./.cinatra-extension-fleet.json
 
 EXPOSE 3000
 CMD ["node", "server.js"]
