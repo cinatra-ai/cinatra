@@ -17,7 +17,10 @@
  */
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
@@ -228,6 +231,100 @@ export function setupFieldRendererValue(
   if (!isObjectTyped || !fieldName) return envelope;
   return envelope[fieldName];
 }
+
+/**
+ * WHO OWES A PER-FIELD SETUP GATE ITS ADVANCE CONTROL (cinatra#3358).
+ *
+ * THE MEASURED WALL. A setup field bound to an extension-declared renderer that
+ * draws its input and nothing else — no Continue, no Next, no start control
+ * anywhere in the run-detail column — left the reader with nothing to press,
+ * while the setup-loop fallback sent every keystroke out as an approval. The
+ * first one moved the run out of `pending_approval`, so every later one was
+ * refused; the text was held nowhere, and the same gate came back for ever.
+ *
+ * Neither half is the renderer's fault to fix. A field renderer is an INPUT: it
+ * draws the field and reports what is in it. Which control ends the step is the
+ * host surface's question, and the host already answers it for every other gate
+ * family — so it answers it here too, rather than each package shipping its own
+ * Continue (the core/extension border: a pack declares the binding, the host
+ * owns the step).
+ *
+ * WHAT IS EXCLUDED, and why each exclusion is the byte-identical path it was:
+ *   - a gate that is not a per-field setup gate — the rule is about the setup
+ *     loop's one-field-at-a-time pause, which is the only place a field's value
+ *     has to survive a round trip before the next field is asked for;
+ *   - the grouped setup form — it owns the single "Save & start run" and the
+ *     reader must never see two;
+ *   - the host's own schema-field fallback — it DRAWS a Continue and treats
+ *     `onChange` as the submit that button makes, so taking that press away
+ *     would buffer into a control that is not there;
+ *   - a mid-run-classified renderer — those already buffer into the outer
+ *     Continue this surface has always drawn for them (`classifyMidRunHitl`);
+ *   - a gate with no resolved renderer — the step draws "no renderer configured"
+ *     and there is nothing to answer with.
+ *
+ * Everything else — every renderer the host hands a field to and cannot read —
+ * gets the host's Continue, is TOLD the host owns it through the shared props
+ * contract (`hideSubmit`, which says in as many words that a renderer drawing
+ * its own Continue must skip it), and has its `onChange` read as a value report
+ * rather than as a submit.
+ */
+export function hostOwnsSetupGateContinue(args: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName: string | undefined;
+  rendererResolved: boolean;
+  midRunClassified: boolean;
+}): boolean {
+  if (!args.rendererResolved) return false;
+  if (!isSetupGateTaskId(args.reviewTaskId)) return false;
+  if (args.fieldName === undefined || args.fieldName.trim() === "") return false;
+  if (args.midRunClassified) return false;
+  if (isGroupedSetupRenderer(args.xRenderer, { includeSetupFormSuffix: true })) return false;
+  if (args.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return false;
+  return true;
+}
+
+/**
+ * The `value` a host-driven per-field setup gate hands its renderer
+ * (cinatra#3358).
+ *
+ * The per-field surfaces pass every renderer the whole values ENVELOPE, and
+ * `setupFieldRendererValue` unwraps it to the field's own slot only for
+ * object-typed fields — deliberately, so a string gate is not pre-filled from a
+ * previously-submitted value. That is still right for what the SERVER holds. It
+ * is wrong for what the READER has just typed: a controlled input fed the
+ * envelope reads its own value as absent and clears itself between keystrokes,
+ * which is why the measured field never accumulated more than one character.
+ *
+ * So the buffer — this step's own uncommitted answer, and nothing else — takes
+ * precedence, and only once the reader has actually put something in it. Absent
+ * a buffered answer the caller's existing resolution stands untouched.
+ */
+export function setupGateBufferedFieldValue(
+  buffered: Record<string, unknown>,
+  fieldName: string | undefined,
+  fallback: unknown,
+): unknown {
+  if (fieldName === undefined || fieldName.trim() === "") return fallback;
+  if (!Object.prototype.hasOwnProperty.call(buffered, fieldName)) return fallback;
+  return buffered[fieldName];
+}
+
+/**
+ * WHY THE HOST'S CONTINUE CAN REFUSE ITS OWN PRESS (cinatra#3358, convergence).
+ *
+ * The host draws this step's only control, so a press with nothing staged is
+ * the one case the reader cannot see coming. Sending it anyway is not harmless:
+ * the server's setup branch strips the approval envelope, finds no field left
+ * to merge, flips the run to `queued` anyway and re-enqueues the setup loop --
+ * which finds the same required input still absent and asks the same question
+ * again. That is the very loop this fix exists to end, reached through the
+ * control the fix added. So the press is refused here, with the reason said out
+ * loud, and the step is left exactly where the reader left it.
+ */
+export const SETUP_GATE_NO_ANSWER_STAGED =
+  "Add an answer before continuing.";
 
 /**
  * The `fieldName` prop for a single-field HITL gate's renderer (cinatra#2541).
@@ -506,4 +603,266 @@ export function applyAttachmentEnvelopeUserResponseOnly(
       : "[Approved by operator]";
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
+}
+
+// ---------------------------------------------------------------------------
+// A GATE ANSWER THAT NAMES NOTHING KEEPS ITS RUN PARKED (cinatra#3358).
+//
+// THE MEASURED DEFECT. A run started on an account that holds no list reached
+// its account-scope step, and the step could be continued with nothing chosen:
+// the panel sent `{approved:true}` plus a snapshot naming an EMPTY list, the
+// resume dispatched, and the run walked past that review step and the one after
+// it without ever raising a gate on the missing list. Neither end of the submit
+// asked the one question the step exists to ask — "is there a list yet?" — so
+// both ends ask it here, from ONE rule, the way every other submit decision in
+// this module is shared between the two surfaces.
+//
+// GENERIC BY CONSTRUCTION, at both ends and for the same reason the lift above
+// is generic: the client end keys on the RENDERER FAMILY (`:list-picker` —
+// every package that declares a list-picking step, and no package by name), the
+// server end on the ANSWER CONTRACT that `liftRendererApprovalNote` mints for
+// that family (`type: "list"`). Nothing here learns which package is at either
+// end, and a package that declares no list-picking step is untouched by it.
+//
+// IT REFUSES, IT DOES NOT BLOCK. The gate is still open and still the reader's
+// to answer — so this is an ordinary incomplete-answer refusal, never one of the
+// three reasons of the closed blocked axis the review surface draws (§V). The
+// step keeps its place in the rail and the run stays where it is.
+// ---------------------------------------------------------------------------
+
+/** What the reader is told when a list-picking step is continued with no list. */
+export const LIST_ANSWER_NAMES_NO_LIST =
+  "Choose a list before continuing — or build one first.";
+
+/**
+ * Does an answer that is supposed to NAME a list name none? An absent answer
+ * names no list just as surely as one carrying an empty id, so both are the
+ * same verdict here.
+ */
+function namesNoList(answer: unknown): boolean {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return true;
+  const listId = (answer as { listId?: unknown }).listId;
+  return typeof listId !== "string" || listId.trim().length === 0;
+}
+
+/**
+ * The same read against a finished run's own completion record — the per-step
+ * result list a completed run persists. The declared output values of a run's
+ * end are surfaced on each entry's `output_data`, so both shapes are asked:
+ * the entry itself, and the values it declared. The FIRST id found wins, and a
+ * completion carrying none answers the empty string.
+ */
+export function producedIdFromRunCompletion(
+  onCompleteName: string,
+  stepResults: unknown,
+): string {
+  if (!Array.isArray(stepResults)) {
+    return producedIdForOfferingStep(onCompleteName, stepResults);
+  }
+  for (const entry of stepResults) {
+    const direct = producedIdForOfferingStep(onCompleteName, entry);
+    if (direct) return direct;
+    const declared =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>).output_data
+        : null;
+    const lifted = producedIdForOfferingStep(onCompleteName, declared);
+    if (lifted) return lifted;
+  }
+  return "";
+}
+
+/**
+ * THE CLIENT END. Why a step about to be continued may not be: read off the
+ * renderer family and the answer the step actually holds. `null` = nothing in
+ * the way, which is every gate of every other family.
+ *
+ * `gateValues` are the gate's OWN current values — what the renderer was drawn
+ * from — and they are read BESIDE the buffer because a step re-drawn with a list
+ * already chosen shows that row selected without the reader touching anything
+ * (the picker seeds its selection from the incoming value and emits only on a
+ * click). A step that already holds a list is not a step that names none, so it
+ * is not refused.
+ */
+// ---------------------------------------------------------------------------
+// WHAT A FINISHED RUN PRODUCED FOR THE STEP THAT SENT IT (cinatra#3358).
+//
+// The step that offered the road is named in the completion contract the link
+// carried (`@/lib/agent-url`). When the run that road started COMPLETES, the
+// screen that draws it holds two things: that name, and the finished run's own
+// completion. This rule is the one place that reads the second through the
+// first, so the parked step can be handed what was made for it.
+//
+// GENERIC BY THE SAME CONSTRUCTION as the refusal above: it keys on the STEP
+// FAMILY the contract names — never on a package — and one entry per family says
+// which id in a completion belongs to it. A family with no entry reads nothing,
+// which is every step that offers no road.
+//
+// THE PACKAGE'S OWN HALF IS NOT THIS. A completion that names no list has
+// nothing here to read, and this rule invents none: a run that finished without
+// raising its own gate hands back an empty string and the parked step opens on
+// the honest "no list yet" reading.
+// ---------------------------------------------------------------------------
+
+/** Which id in a completion belongs to which offering step family. */
+const PRODUCED_ID_KEY_BY_STEP_FAMILY: Record<string, string> = {
+  "list-picker": "listId",
+};
+
+/**
+ * The id a finished run produced FOR the step that offered the road, read off
+ * that run's completion. Empty when the family is unknown to this rule, when the
+ * completion is not an object, or when it names nothing.
+ */
+export function producedIdForOfferingStep(
+  onCompleteName: string,
+  completion: unknown,
+): string {
+  const key = PRODUCED_ID_KEY_BY_STEP_FAMILY[onCompleteName?.trim() ?? ""];
+  if (!key) return "";
+  if (!completion || typeof completion !== "object" || Array.isArray(completion)) return "";
+  const value = (completion as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * AN ANSWER THAT CLEARS THE FIELD ITSELF (cinatra#3358).
+ *
+ * The gate's stored values are a fallback for a submission that says NOTHING
+ * about the list — the lifecycle card's Continue, which submits the form as it
+ * stands and carries no values at all. They are NOT a fallback for a submission
+ * that names the field and empties it: that answer is the reader's own, it is
+ * the one the seams dispatch (nothing merges the stored values back in), and it
+ * names no list. Falling back there let an explicit `{ listId: "" }` walk a
+ * listless run past the very step this rule parks it at.
+ */
+function clearsTheList(answer: unknown): boolean {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return false;
+  return "listId" in (answer as Record<string, unknown>) && namesNoList(answer);
+}
+
+export function gateAnswerIncompleteReason(
+  xRenderer: string,
+  buffered: Record<string, unknown> | null | undefined,
+  gateValues?: Record<string, unknown> | null,
+): string | null {
+  if (!xRenderer.endsWith(":list-picker")) return null;
+  if (!namesNoList(buffered)) return null;
+  if (clearsTheList(buffered)) return LIST_ANSWER_NAMES_NO_LIST;
+  if (!namesNoList(gateValues)) return null;
+  return LIST_ANSWER_NAMES_NO_LIST;
+}
+
+/**
+ * THE ONE ANSWER A RESUME ACTUALLY DISPATCHES, as both resume seams order it:
+ * `userResponse` wins over `approvalNote`, and free text is not a structured
+ * answer. Reading the EFFECTIVE answer — not every key that happens to be
+ * present — is what keeps the rule below from refusing an answer the seam would
+ * have accepted: a superseded note left beside a good `userResponse` is never
+ * what the run receives.
+ */
+function effectiveStructuredAnswer(values: unknown): Record<string, unknown> | null {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return null;
+  const { approvalNote, userResponse } = values as {
+    approvalNote?: unknown;
+    userResponse?: unknown;
+  };
+  for (const raw of [userResponse, approvalNote]) {
+    if (typeof raw !== "string" || raw.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Free text IS the answer this resume sends, and it names no list. Either
+      // way the first non-empty key is the answer — nothing behind it is read.
+    }
+    return null;
+  }
+  return null;
+}
+
+/** The pending gate a resume is answering, as the server derived it itself. */
+/**
+ * THE RESUME MESSAGE'S PRECEDENCE, in ONE place for both seams.
+ *
+ * The UI seam (`approveReviewTaskInternal`, review-task-actions.ts) and the MCP
+ * run-resume seam (mcp/handlers.ts) drive the SAME gate, so the text the gate
+ * receives must be derived the same way — it was kept in lockstep by a comment
+ * on each side, which is a lockstep only for as long as both are read together:
+ *   1. userResponse (string, non-empty after trim) — the structured-form path,
+ *      passed through UNCHANGED so its JSON formatting survives.
+ *   2. the trimmed approval note — the legacy bare-approval path.
+ *   3. "[Approved by operator]" — a bare click-to-approve.
+ * userResponse wins over the note when both are present; a renderer that needs
+ * the note delivered onward embeds it inside the JSON payload.
+ */
+export function resumeTextForAnswer(userResponse: unknown, trimmedNote: string): string {
+  if (typeof userResponse === "string" && userResponse.trim().length > 0) return userResponse;
+  if (trimmedNote.length > 0) return trimmedNote;
+  return "[Approved by operator]";
+}
+
+/**
+ * A resume payload read as the structured submission it claims to be: the JSON
+ * OBJECT a renderer sent, or null for anything else (a bare note, an array, a
+ * scalar, unparseable text). Callers that carry a second source of values apply
+ * their own fallback on top of this reading.
+ */
+export function jsonObjectOrNull(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "string" || raw.trim().length === 0) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export type ResumeGateContract = {
+  /** The renderer family the pending gate declared, or null when unknown. */
+  xRenderer?: string | null;
+  /** The values the pending gate already holds. */
+  currentValues?: unknown;
+};
+
+/**
+ * THE SERVER END, and the authoritative one: the client refusal is a courtesy,
+ * this is the pin. Two readings, in this order:
+ *
+ *  1. THE GATE'S OWN CONTRACT, when the seam derived the pending gate. A step
+ *     whose renderer family asks for a list may not be resumed on an answer that
+ *     names none — INCLUDING NO ANSWER AT ALL. That case is not hypothetical: a
+ *     supported surface reaches the resume seam with no values whatsoever (the
+ *     lifecycle card's Continue submits the form as it stands), and a payload-only
+ *     reading let exactly that walk a listless run past its step. A gate that
+ *     already holds a list is never refused.
+ *  2. THE ANSWER'S OWN DECLARED CONTRACT, when no gate is in hand. A resume that
+ *     reaches a seam any other way (a replayed action, a hand-built payload) is
+ *     still refused when the answer it carries declares itself a list answer and
+ *     names none.
+ *
+ * Generic at both readings: the renderer FAMILY and the answer CONTRACT, never a
+ * package, a template or a renderer id.
+ */
+export function resumeAnswerIncompleteReason(
+  values: unknown,
+  gate?: ResumeGateContract | null,
+): string | null {
+  const answer = effectiveStructuredAnswer(values);
+  const gateAsksForAList =
+    typeof gate?.xRenderer === "string" && gate.xRenderer.endsWith(":list-picker");
+  if (gateAsksForAList) {
+    if (!namesNoList(answer)) return null;
+    if (clearsTheList(answer)) return LIST_ANSWER_NAMES_NO_LIST;
+    if (!namesNoList(gate?.currentValues)) return null;
+    return LIST_ANSWER_NAMES_NO_LIST;
+  }
+  if (!answer) return null;
+  if ((answer as { type?: unknown }).type !== "list") return null;
+  return namesNoList(answer) ? LIST_ANSWER_NAMES_NO_LIST : null;
 }
