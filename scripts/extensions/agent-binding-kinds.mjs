@@ -75,6 +75,11 @@ export const COMPONENT_ENTRY_RE = /^(\.\/)?[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // must be a small plain-JSON object and MUST NOT carry secrets.
 export const MAX_PARAMS_JSON_BYTES = 2048;
 
+// The issue that owns THE THREE-KIND RULE's agent clause; named in the refusal
+// below so a package author reads where the rule comes from, exactly as the
+// ratchet gate's own message does.
+export const AGENT_HITL_RULE_ISSUE = "cinatra#3470";
+
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
@@ -84,8 +89,18 @@ function isPlainObject(v) {
  * `{ entries: [...normalized], errors: [...strings] }`. Callers decide the
  * failure posture (generator: any error -> throw; runtime collector: any
  * error -> skip entry + warn).
+ *
+ * `options` carries THE THREE-KIND RULE's agent clause (cinatra#3470, epic
+ * cinatra#2926):
+ *   - `kind` — the declaring package's `cinatra.kind`;
+ *   - `baselinedComponentBindingIds` — the binding ids this package is
+ *     grandfathered for by the ratchet baseline
+ *     (scripts/extensions/agent-hitl-renders-nothing.baseline.json).
+ * The caller supplies both so this validator stays fs-free (it also runs in the
+ * runtime collector). Omitting `kind` keeps the previous behaviour exactly.
  */
-export function validateFieldRendererDeclarations(packageName, raw) {
+export function validateFieldRendererDeclarations(packageName, raw, options = {}) {
+  const { kind: packageKind, baselinedComponentBindingIds = [] } = options;
   const errors = [];
   const entries = [];
   if (raw === undefined || raw === null) return { entries, errors };
@@ -180,6 +195,25 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       ) {
         errors.push(
           `${where}: component.propsApiVersion must be a positive integer when present (got ${JSON.stringify(propsApiVersion)})`,
+        );
+        return;
+      }
+      // THE THREE-KIND RULE (cinatra#3470, epic cinatra#2926): "Connectors
+      // render the setup page themselves. Artifacts render the artifact view
+      // themselves. Agents do NOT render the HITL view themselves."
+      // `component` is the channel epic #1620 opened for kind:"artifact"
+      // claimants (the S8/M3 road of cinatra#1625); a kind:"agent" package
+      // taking it draws its own pause screen, which the rule refuses. The four
+      // declarations that exist today are grandfathered by the shrink-only
+      // ratchet baseline, which is closed to additions — so this is the SAME
+      // refusal `scripts/extensions/agent-hitl-renders-nothing-gate.mjs` makes,
+      // applied one step earlier (at generation, hence under
+      // `generate-extension-manifest.mjs --check`).
+      if (packageKind === "agent" && !baselinedComponentBindingIds.includes(id)) {
+        errors.push(
+          `${where}: ${AGENT_HITL_RULE_ISSUE} — Agents do NOT render the HITL view themselves; ` +
+            `a kind:"agent" package may not declare component for ${id} ` +
+            "(not listed in scripts/extensions/agent-hitl-renders-nothing.baseline.json, which is closed to additions)",
         );
         return;
       }

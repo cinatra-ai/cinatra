@@ -2192,6 +2192,28 @@ jobs:
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
 
+      # Agent-HITL renders-nothing ratchet (cinatra#3470, epic cinatra#2926).
+      # THE THREE-KIND RULE: connectors render the setup page themselves,
+      # artifacts render the artifact view themselves, agents do NOT render the
+      # HITL view themselves. This gate reads the SAME cloned-back extension tree
+      # the manifest gate above reads, and fails when a kind:"agent" package
+      # declares a fieldRenderers[].component or carries vendored design-registry
+      # primitives beyond the pinned baseline — and when a baselined pair no
+      # longer exists (the ratchet is shrink-only, so a landed migration must
+      # record its win). The generator gate above enforces the same refusal at
+      # declaration time; this step also covers the vendored-primitive arm.
+      - name: Agent-HITL renders-nothing ratchet gate (shrink-only, fail-closed)
+        env:
+          # Also fail if the committed baseline ADDED a pair vs the base branch
+          # (blocks the regenerate-to-pass bypass: declare a renderer and
+          # `--write-baseline` in the same change). Same base ref the other
+          # no-new-rot ratchets use.
+          AGENT_HITL_RENDERS_NOTHING_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/extensions/agent-hitl-renders-nothing-gate.mjs
+
+      - name: Agent-HITL renders-nothing ratchet gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/agent-hitl-renders-nothing-gate.test.mjs --no-coverage
+
       # Build-config consistency check. config/build-config.manifest.json
       # is the single source of truth for the tsconfig.json @cinatra-ai/* path
       # aliases AND the next.config.ts serverExternalPackages + transpilePackages

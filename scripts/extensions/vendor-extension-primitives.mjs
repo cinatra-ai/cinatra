@@ -35,14 +35,14 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // is a Cinatra-ABI widget consumed from @cinatra-ai/sdk-ui/marketplace, not a
 // vendored registry primitive.)
 //
-// KIND-AGNOSTIC CHANNEL (cinatra#1625, epic #1620 S8 — M3): this manifest and
-// the whole vendoring/provenance mechanism are extension-KIND-neutral — an
-// `extensionDir` under `extensions/<scope>/` is vendored the same way whether it
-// is a connector OR an AGENT. A companion HITL-renderer slice that relocates a
-// field-renderer component into its claiming `-agent` extension adds an entry
-// here for that agent dir, exactly like a connector; the relative-import rewrite
-// keeps the vendored primitives clear of the `@/` import-ban (which is itself
-// kind-agnostic). Nothing below is connector-specific.
+// KIND-AGNOSTIC MECHANISM, AGENT-FREE MANIFEST. The vendoring/provenance
+// machinery is extension-KIND-neutral — an `extensionDir` under
+// `extensions/<scope>/` is vendored the same way whatever kind it is, and
+// nothing below is connector-specific. The MANIFEST, however, lists no
+// kind:"agent" package: THE THREE-KIND RULE (cinatra#3470, epic cinatra#2926)
+// says agents do NOT render the HITL view themselves, so an agent has no
+// design-registry primitive to vendor. `scripts/extensions/
+// agent-hitl-renders-nothing-gate.mjs` fails on an agent entry added here.
 const VENDOR_MANIFEST = [
   // google-calendar-connector shed its appointment-schedule form with the
   // extraction (cinatra#2367): field/input-group/label/separator/input/textarea
@@ -123,29 +123,16 @@ const VENDOR_MANIFEST = [
   // the connector no longer ships or imports any design-registry primitives.
   // Its VENDOR_MANIFEST entry (button/input/label/textarea) was removed to
   // match — the provenance gate would otherwise fail on the now-absent files.
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): list-curator-agent
-  // relocated its two HITL field-renderer components into its own repo; they
-  // import these design-registry primitives, vendored the same kind-agnostic
-  // way a connector does (relative imports, provenance-gated).
-  {
-    extensionDir: "extensions/cinatra-ai/list-curator-agent",
-    uiItems: ["badge", "button", "card", "input", "input-group", "label", "textarea"],
-  },
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
-  // relocated its draft-review HITL field renderer into its own repo; it imports
-  // these design-registry primitives, vendored the same kind-agnostic way.
-  {
-    extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
-    uiItems: ["button", "card", "label", "textarea"],
-  },
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-wordpress-publish-agent
-  // relocated its draft-confirm HITL field renderer into its own repo; the pure
-  // confirm/reject card imports only these design-registry primitives (no
-  // editable textarea/label), vendored the same kind-agnostic way.
-  {
-    extensionDir: "extensions/cinatra-ai/blog-wordpress-publish-agent",
-    uiItems: ["button", "card"],
-  },
+  // NO kind:"agent" ENTRY LIVES HERE (cinatra#3470, epic cinatra#2926). THE
+  // THREE-KIND RULE: "Connectors render the setup page themselves. Artifacts
+  // render the artifact view themselves. Agents do NOT render the HITL view
+  // themselves." The S8/M3 claimants that were listed here — list-curator-agent,
+  // blog-linkedin-publish-agent, blog-wordpress-publish-agent — were dropped so
+  // the provenance gate no longer counts an agent package: their vendored copies
+  // stay on disk in their own repositories until #3470's migration removes them,
+  // recorded as existing pairs in
+  // scripts/extensions/agent-hitl-renders-nothing.baseline.json (a shrink-only
+  // ratchet that also refuses a new agent entry here).
 ];
 
 // registryDependencies are namespaced (`@cinatra-ai/label`) so a consumer's

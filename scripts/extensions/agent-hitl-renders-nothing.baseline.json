@@ -1,0 +1,37 @@
+{
+  "note": "Agent-HITL renders-nothing ratchet baseline (cinatra#3470). Connectors render the setup page themselves. Artifacts render the artifact view themselves. Agents do NOT render the HITL view themselves. Each entry is a (package, binding id) / (package, vendored file) / (package, vendoring-manifest entry) pair that ALREADY draws from inside a kind:\"agent\" package. The gate fails on any agent-side drawing NOT listed here, and on any entry listed here that no longer exists: this list may only ever get SHORTER, never longer. Regenerate with `node scripts/extensions/agent-hitl-renders-nothing-gate.mjs --write-baseline` only to record a SHRINK.",
+  "componentBindings": {
+    "@cinatra-ai/blog-linkedin-publish-agent": [
+      "@cinatra-ai/blog-linkedin-publish-agent:draft-review"
+    ],
+    "@cinatra-ai/blog-wordpress-publish-agent": [
+      "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm"
+    ],
+    "@cinatra-ai/list-curator-agent": [
+      "@cinatra-ai/list-curator-agent:final-list-review",
+      "@cinatra-ai/list-curator-agent:scrape-schema-review"
+    ]
+  },
+  "vendoredPrimitives": {
+    "@cinatra-ai/blog-linkedin-publish-agent": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "@cinatra-ai/blog-wordpress-publish-agent": [
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx"
+    ],
+    "@cinatra-ai/list-curator-agent": [
+      "src/components/ui/badge.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/input-group.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/label.tsx",
+      "src/components/ui/textarea.tsx"
+    ]
+  },
+  "vendoringManifestEntries": {}
+}
