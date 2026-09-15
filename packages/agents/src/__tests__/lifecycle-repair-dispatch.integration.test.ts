@@ -1286,4 +1286,80 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate produces the revision and 
     expect(verification).not.toBeNull();
     expect(verification!.outcome).toBe("verified");
   });
+
+  it("THE SWEEP'S BUDGET: old repairs that can never complete do not starve a completable one behind them", async () => {
+    // THE CARRIED DEFECT (cinatra#3080, the fix leg). The sweep reads its
+    // candidates oldest-first and used to spend a unit of its budget on every
+    // row it OWNED, the moment ownership was read — before it had looked at the
+    // run, the production or the delivered request, and so before it could know
+    // whether the row could complete at all. A repair whose run reached a
+    // terminal status having produced nothing stays `dispatched` forever: it
+    // sorts first again on the next pass and buys the same nothing with the same
+    // budget, pass after pass. Enough of them at the head of the queue and a
+    // completable repair behind them is never reached — by this drain, ever.
+    //
+    // The seeding is exactly that shape: MORE unresolvable repairs than the
+    // budget, filed FIRST so the sweep's own ordering puts them ahead, and one
+    // repair behind them that has everything it needs to complete.
+    const templateId = await seedTemplateWithRequiredInput();
+
+    const starved: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const producerRunId = await seedAnsweredRun(templateId, {
+        idea: { title: `Never completable ${i}`, summary: "s", outline: [] },
+      });
+      const { repairId } = await regenerateOn(templateId, producerRunId);
+      starved.push(repairId);
+    }
+
+    const completableProducerRunId = await seedAnsweredRun(templateId, {
+      idea: { title: "Completable, and last in the queue", summary: "s", outline: [] },
+    });
+    const { ev, repairId: completableRepairId } = await regenerateOn(
+      templateId,
+      completableProducerRunId,
+    );
+
+    expect(
+      (await dispatchStore.dispatchPendingProducerRepairs()).dispatched,
+    ).toBeGreaterThanOrEqual(6);
+
+    // Each of the five: a repair run that has STOPPED and produced nothing this
+    // drain can claim — the `unresolved` reading, the one that never resolves.
+    for (const repairId of starved) {
+      await holdRunAt(dispatchStore.repairRunId(repairId), "failed");
+    }
+
+    // The sixth: its repair run did the producing work and finished.
+    const completableRunId = dispatchStore.repairRunId(completableRepairId);
+    await holdRunAt(completableRunId, "completed");
+    await produce(
+      {
+        artifactId: ev.artifactId,
+        representationRevisionId: `rev-regenerated-${randomUUID()}`,
+        producerRunId: completableRunId,
+      },
+      coreRepairableObjectType,
+    );
+
+    // A budget SMALLER than the number of unresolvable rows ahead of it. Before
+    // the fix those rows spent all four units and this pass never reached the
+    // sixth repair at all; the candidate WINDOW (limit x 8) still covers every
+    // row seeded here, so what is under test is the budget and nothing else.
+    const completion = await completionStore.completeDispatchedProducerRepairs({ limit: 4 });
+
+    // ONE SWEEP, and the completable repair is finished.
+    const settled = await repairRow(completableRepairId);
+    expect(settled!.status).toBe("repaired");
+    expect(settled!.successor_gate_id).not.toBeNull();
+    expect(completion.completed).toBeGreaterThanOrEqual(1);
+
+    // And nothing was finalized on the five that could not complete: they are
+    // left open, exactly as they were, and counted.
+    for (const repairId of starved) {
+      expect((await repairRow(repairId))!.status).toBe("dispatched");
+      expect((await repairRow(repairId))!.successor_gate_id).toBeNull();
+    }
+    expect(completion.unresolved).toBeGreaterThanOrEqual(5);
+  });
 });

@@ -581,18 +581,50 @@ export async function loadReviewGateSurface(args: {
  * reason they see no target — and this adds no read path the surface did not
  * already have. A row that records no prompt, or one this reader cannot read,
  * both answer null: the screen draws the note alone.
+ *
+ * A PIN IS FROZEN, THE ROW IS NOT (cinatra#3080, the fix leg for the three
+ * carried defects). The read above is keyed on the artifact id ALONE, and
+ * `recordedPrompt` is projected off the LIVE row — so an older pinned review was
+ * handed whatever prompt the artifact records NOW. A gate's pin is frozen while
+ * the artifact moves on: record a new prompt for a later revision, and every
+ * earlier review of that artifact would have shown that newer prompt as though
+ * it were the one its own revision was made from, and re-sent it on the next
+ * Regenerate. So an older pin is answered with null — the same null this already
+ * uses for a row that records none: the screen draws the note alone rather than
+ * a prompt the reviewed revision was never made from.
+ *
+ * WHAT THIS DOES NOT AND CANNOT ESTABLISH, said plainly because the check reads
+ * like provenance and is not: the ledger keeps ONE prompt per ROW, never one per
+ * revision, and no writer records a prompt beside a revision. So the pin-equals-
+ * latest test only rules a prompt OUT for a pin the row has moved past; it
+ * cannot prove the row's prompt was the one the LATEST revision was made from.
+ * A re-file (`refileRevisionOntoArtifact`) advances
+ * `latestRepresentationRevisionId` and leaves the row's recorded prompt exactly
+ * as it was, so a review pinned on a re-filed revision is still answered with
+ * the prompt the row carried before it — unchanged by this fix, on this head
+ * unknowable without a per-revision prompt record. The unit proof beside this
+ * file pins that limit as well as the fix, so neither is read as more than it
+ * is.
+ *
+ * EXPORTED for its own unit proof — the surface still reads it through
+ * `prepareReviewSurface` alone.
  */
-function readRecordedPromptFor(
+export function readRecordedPromptFor(
   targets: ReadonlyArray<PreparedReviewTarget>,
   actorCtx: ReviewActorContext,
 ): string | null {
   if (targets.length !== 1) return null;
+  const pinned = targets[0].target;
   const access = readArtifactForDetail({
-    artifactId: targets[0].target.artifactId,
+    artifactId: pinned.artifactId,
     orgId: actorCtx.orgId,
     actor: buildActorContextFromPrimitive(actorCtx.actor, actorCtx.orgId, actorCtx.roleHints),
   });
-  return access.kind === "ok" ? (access.artifact.recordedPrompt ?? null) : null;
+  if (access.kind !== "ok") return null;
+  if (access.artifact.latestRepresentationRevisionId !== pinned.representationRevisionId) {
+    return null;
+  }
+  return access.artifact.recordedPrompt ?? null;
 }
 
 // ---------------------------------------------------------------------------

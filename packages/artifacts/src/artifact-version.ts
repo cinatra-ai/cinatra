@@ -68,7 +68,16 @@ export type ArtifactVersion = {
 export type ArtifactObjectData = {
   artifactType: string;
   latestRepresentationRevisionId: string;
-  latestDigest: string;
+  /**
+   * The fingerprint of the substance the LATEST revision binds, or null where
+   * that revision records none (cinatra#3080, the fix leg for the three carried
+   * defects). The pointer writer moves this field with
+   * `latestRepresentationRevisionId` and writes it UNCONDITIONALLY, so a
+   * revision that carries no digest CLEARS it rather than leaving the previous
+   * revision's fingerprint standing beside the new revision id. Declared
+   * nullable because the row can now hold that cleared state honestly.
+   */
+  latestDigest: string | null;
   mime: string;
   size: number;
   originKind: ArtifactOriginKind;
