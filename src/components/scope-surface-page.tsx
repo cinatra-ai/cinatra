@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   Empty,
@@ -48,8 +49,23 @@ import {
  * The shell states its OWN condition. It reads nothing about the scope, so it
  * can never say the scope holds nothing — a viewer with assistants, agents,
  * artifacts or skills in this scope would be told a falsehood.
+ *
+ * A route that HAS read the scope says so (`tabRead`, cinatra#2808), and an
+ * absent body then means what it says: the read happened and found nothing.
+ * Only a tab whose rows were never read still shows this placeholder.
  */
 const PLACEHOLDER_TITLE = "This tab is not ready yet";
+
+/** The honest empty reading of a tab whose rows WERE read (cinatra#2808). */
+const EMPTY_TITLE: Record<"assistants" | "agents", string> = {
+  assistants: "No assistants here yet",
+  agents: "No agents here yet",
+};
+
+const EMPTY_BODY: Record<"assistants" | "agents", string> = {
+  assistants: "No assistant is reachable in this scope for you.",
+  agents: "No agent is reachable in this scope for you.",
+};
 
 /** Honest placeholder copy — what the tab WILL list, never a claim of empty data. */
 const TAB_PROMISE: Record<ScopeSurfaceTab, string> = {
@@ -91,9 +107,25 @@ export function ScopeSurfacePage({
   tab,
   title,
   description,
+  tabRead = false,
+  tabBody,
 }: {
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
+  /**
+   * A tab whose rows the ROUTE has read (cinatra#2808). `tabRead` says the read
+   * happened; `tabBody` is what it produced, absent when it produced nothing.
+   * Both omitted = no read on this route, and the tab keeps the honest S1
+   * placeholder rather than claiming the scope is empty.
+   *
+   * The body arrives as a NODE rather than as rows on purpose: the two lists
+   * are client components over the agents/extensions graph, and this shell is
+   * rendered by all twenty scope-tab routes — importing them here would put
+   * that graph in front of every one of them, including the twelve tabs that do
+   * not list packages at all.
+   */
+  tabRead?: boolean;
+  tabBody?: ReactNode;
   /**
    * The entity's own name, resolved by the route through its gated read.
    * Omitted where the reader may not be told it — the header then falls back to
@@ -120,8 +152,10 @@ export function ScopeSurfacePage({
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
         {tab === "dashboards" ? (
           <DashboardsTabBody scope={scope} title={title} />
+        ) : tabBody ? (
+          tabBody
         ) : (
-          <ScopedTabEmpty tab={tab} />
+          <ScopedTabEmpty tab={tab} read={tabRead} />
         )}
       </PageContent>
     </Main>
@@ -167,17 +201,20 @@ function DashboardsTabBody({
  * single primary action button — never just empty text", inside the tab body
  * with "no bespoke panel, and no page-wide dashed frame".
  */
-function ScopedTabEmpty({ tab }: { tab: ScopeSurfaceTab }) {
+function ScopedTabEmpty({ tab, read = false }: { tab: ScopeSurfaceTab; read?: boolean }) {
   const TabIcon = TAB_ICON[tab];
   const action = SCOPE_SURFACE_TAB_ACTION[tab];
+  // `read` distinguishes the two truths: the tab's rows were read and there are
+  // none, versus no read has happened on this route at all.
+  const listed = read && (tab === "agents" || tab === "assistants") ? tab : null;
   return (
     <Empty data-testid={scopeSurfaceEmptyTestId(tab)}>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <TabIcon aria-hidden />
         </EmptyMedia>
-        <EmptyTitle>{PLACEHOLDER_TITLE}</EmptyTitle>
-        <EmptyDescription>{TAB_PROMISE[tab]}</EmptyDescription>
+        <EmptyTitle>{listed ? EMPTY_TITLE[listed] : PLACEHOLDER_TITLE}</EmptyTitle>
+        <EmptyDescription>{listed ? EMPTY_BODY[listed] : TAB_PROMISE[tab]}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button asChild>

@@ -151,12 +151,29 @@ describe("NewAgentPage merged discovery table", () => {
   // + Active/Archived indicator (cinatra#1007): reuse <InstalledExtensionCard>
   // without those two props, description clamped to 2 lines (since cinatra#1005
   // the default is also 2, so the explicit prop is belt-and-braces).
-  it("renders cards via InstalledExtensionCard without version/status, 3-line description clamp (cinatra#3227)", () => {
+  //
+  // The version/status half is now pinned on the ROW MODEL rather than on the
+  // card's source text (cinatra#2808): the per-scope Agents tab renders this
+  // same card WITH a version and an Active/Locked indicator, so the card does
+  // carry both names — while a /agents picker row, which supplies no `status`,
+  // still gets neither (the spec line is the two together, or nothing). The
+  // guarantee is therefore stated where it is true: the picker's own row model
+  // has no status field at all, so this surface can never mint one.
+  it("renders cards via InstalledExtensionCard, 3-line description clamp (cinatra#3227)", () => {
     const card = readAgentCardSource();
     expect(card).toMatch(/<InstalledExtensionCard/);
     expect(card).toMatch(/descriptionLineClamp=\{3\}/);
-    expect(card).not.toMatch(/\bversion=\{/);
-    expect(card).not.toMatch(/\bstatus=\{/);
+    // The spec line is version AND status together — never one alone.
+    expect(card).toMatch(/row\.version && row\.status/);
+  });
+
+  it("gives the /agents picker rows no status, so the card renders no spec line there", () => {
+    const client = readClientSource();
+    // The picker builds its rows in pages.tsx; none of them sets a status, and
+    // the row model's status field is optional precisely so this surface keeps
+    // rendering without it.
+    expect(readSource()).not.toMatch(/\bstatus:\s*"(active|locked)"/);
+    expect(client).toMatch(/status\?:\s*"active" \| "locked"/);
   });
 
   // cinatra#1121 — AgentRunClient delegates each row to AgentAllCard, which lifts

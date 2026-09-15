@@ -38,6 +38,7 @@
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./screens": "./src/screens.tsx",
     "./pages": "./src/pages.tsx",
+    "./agent-run-client": "./src/agent-run-client.tsx",
     "./client-entry": "./src/client-entry.ts",
     "./cli": "./src/cli/index.ts",
     "./wayflow-url": "./src/wayflow-url.ts",

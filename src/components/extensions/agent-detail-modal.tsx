@@ -40,8 +40,16 @@ export type AgentDetailModalProps = {
   /**
    * /configuration/marketplace/<scope>/<name> — the linkTrigger's no-JS
    * fallback href (JS opens the modal in place instead of navigating).
+   *
+   * NULL on a per-scope tab card (cinatra#2808): that surface is member-facing,
+   * and "no member-facing surface renders a link into `/configuration` for a
+   * non-admin" (epic #2699). There is nothing to fall back TO either — the
+   * in-app full-page detail route is retired (cinatra#2736: this modal "is the
+   * app's ONLY extension-detail surface") — so the opener is the modal's own
+   * default "More details" BUTTON rather than an anchor. The modal itself is
+   * unchanged and identical in both cases.
    */
-  detailHref: string;
+  detailHref?: string | null;
   /**
    * Controlled open state (cinatra#1121). The /agents All-Agents card lifts the
    * modal's open state so the SAME modal is opened by both the "More details"
@@ -83,7 +91,9 @@ export function AgentDetailModal({
     badge: null,
     freshnessAt: null,
     rating: null,
-    detailHref,
+    // Unread by the modal (it renders no link to a detail page); carried only
+    // to satisfy the card wire shape.
+    detailHref: detailHref ?? "",
     installCount: null,
     manifestLogoUrl: null,
     iconSlug: null,
@@ -96,7 +106,7 @@ export function AgentDetailModal({
     <MarketplaceDetailModal
       card={card}
       loadDetail={loadDetail}
-      linkTrigger={{ variant: "link", href: detailHref }}
+      {...(detailHref ? { linkTrigger: { variant: "link" as const, href: detailHref } } : {})}
       open={open}
       onOpenChange={onOpenChange}
     />
