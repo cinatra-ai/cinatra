@@ -359,30 +359,69 @@ export function buildRunInputSteps(params: {
   // THE PER-FIELD PATH — the sequence the person actually walks. The loop asks
   // one field at a time, so each is its own form and its own step, in the order
   // the template declares them.
+  //
+  // AND A FORM THAT DECLARES NO NAME OF ITS OWN IS NOT A STEP OF ITS OWN
+  // (cinatra#3478). `declaredTitle` refuses a title that is only the field's own
+  // key restated — which is what `oas-compiler.ts` writes for every field an
+  // agent maps no `inputTitles` entry to — and the caller then took
+  // `RUN_INPUT_STEP_FALLBACK_LABEL`, the name of the run's setup. For ONE such
+  // form that is the right reading; for two it wrote the SAME name twice, and
+  // the run page drew two rows reading `Setup` one above the other. The
+  // ratified drawing gives one list — "The rail lists the run's steps in order"
+  // — and the issue asks for no duplicated entry.
+  //
+  // So the nameless forms the loop asks one after the other are ONE step: the
+  // run's setup, which already has that name and already draws a single entry
+  // where the agent opts into the grouped form above. The fields stay in the
+  // order the loop asks them, the entry is open while any of them is the form
+  // being asked, and its settled reading records every answer it took. A form
+  // that declares a real name is its own step exactly as before — nothing is
+  // merged across one, so the rail still reads in the run's own order.
   const firstPending = pending[0] ?? null;
-  return visible.map((fieldName, index) => {
-    const answered = answeredField(fieldName);
-    const open = atInputMoment && fieldName === firstPending;
-    // SETTLED is the narrower fact: the run carries a value AND that value is
-    // the one its own field declares (see `recordsADeclaredAnswer`).
+  const forms: { label: string; named: boolean; fields: string[] }[] = [];
+  for (const fieldName of visible) {
+    const title = declaredTitle(properties[fieldName], fieldName);
+    const previous = forms[forms.length - 1];
+    if (title === null && previous !== undefined && !previous.named) {
+      previous.fields.push(fieldName);
+      continue;
+    }
+    forms.push({
+      label: title ?? RUN_INPUT_STEP_FALLBACK_LABEL,
+      named: title !== null,
+      fields: [fieldName],
+    });
+  }
+  return forms.map((form, index) => {
+    const answered = form.fields.every(answeredField);
+    // THE OPEN STEP IS THE ONE HOLDING THE FORM THE LOOP IS ASKING — the same
+    // fact as before, asked of the fields this entry stands for.
+    const open = atInputMoment && firstPending !== null && form.fields.includes(firstPending);
+    // SETTLED is the narrower fact: the run carries a value for every field this
+    // entry asked AND each value is the one its own field declares (see
+    // `recordsADeclaredAnswer`).
     const settled =
-      answered && recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]);
+      answered &&
+      form.fields.every((fieldName) =>
+        recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]),
+      );
     return {
       key: `input:${index}` as RunInputStepKey,
-      label: declaredTitle(properties[fieldName], fieldName) ?? RUN_INPUT_STEP_FALLBACK_LABEL,
-      fields: [fieldName],
+      label: form.label,
+      fields: [...form.fields],
       answered,
       open,
-      reached: answered || open,
+      // REACHED is "the person has been asked this": the open form, and a form
+      // any of whose fields the run already carries an answer for. For a form of
+      // one field — every form before this merge — that is the reading it had.
+      reached: open || form.fields.some(answeredField),
       settled,
       answers: settled
-        ? [
-            {
-              field: fieldName,
-              label: declaredTitle(properties[fieldName]) ?? fieldName,
-              value: answerText(inputParams[fieldName], properties[fieldName]),
-            },
-          ]
+        ? form.fields.map((fieldName) => ({
+            field: fieldName,
+            label: declaredTitle(properties[fieldName]) ?? fieldName,
+            value: answerText(inputParams[fieldName], properties[fieldName]),
+          }))
         : [],
     };
   });

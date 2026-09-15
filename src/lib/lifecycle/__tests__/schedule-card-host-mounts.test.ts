@@ -252,7 +252,14 @@ describe("the four mounts exist and are host-declared", () => {
     expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
     // "No schedule row, no step" is asked once, where the steps are built.
     expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/if \(scheduleCardRef\)/);
-    expect(screens).toMatch(/if \(scheduleRailRef\) \{/);
+    // AND ON THE RUN PAGE IT IS ASKED OF THE TRIGGER ROW (cinatra#3478, the
+    // re-cut's first leg). The ref answers which CARD the step opens onto, and
+    // it is null for a run dispatched with "Run right after setup"; the rail's
+    // own question is whether the run CARRIES a schedule, which is the trigger
+    // row. The rule this line pins is unchanged — a run with no trigger row
+    // draws no step — and `runCarriesScheduleStep` is where it is now asked.
+    expect(screens).toMatch(/const runCarriesScheduleStep = trigger !== null;/);
+    expect(screens).toMatch(/if \(runCarriesScheduleStep\) \{/);
   });
 
   it("the card is defined in exactly ONE module in the whole first-party tree", () => {

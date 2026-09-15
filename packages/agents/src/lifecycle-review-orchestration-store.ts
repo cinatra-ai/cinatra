@@ -70,6 +70,8 @@ import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-s
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
   proveReviewBinding,
+  writeProvenanceFromLedgerPaths,
+  type ProducedWriteProvenance,
   type ReviewBinding,
 } from "@/lib/lifecycle/lifecycle-review-core";
 import {
@@ -140,6 +142,20 @@ const objectsRef = appSchema.table("objects", {
   orgId: text("org_id"),
   type: text("type").notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
+// A minimal read-only projection of the artifact-materialization ledger
+// (cinatra#3476): HOW one recorded write was produced. Same posture as
+// `objectsRef` above — a local table over the SAME app schema — so this store can
+// ask a write for its own provenance without depending on the host ledger module
+// (server-only, and on the pooled-db graph).
+const materializationsRef = appSchema.table("artifact_materializations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull(),
+  runId: text("run_id").notNull(),
+  artifactId: text("artifact_id"),
+  representationRevisionId: text("representation_revision_id"),
+  path: text("path").notNull(),
 });
 
 // ---------------------------------------------------------------------------
@@ -289,12 +305,67 @@ async function resolveProducerDeclarations(
 function proveProducedBinding(
   row: ProducedEventRow,
   declarations: ProducerDeclarations,
+  writeProvenance: ProducedWriteProvenance,
 ): ReviewBinding {
   return proveReviewBinding({
     kind: "produced-output",
     produces: { hasArtifactBindings: declarations.hasArtifactBindings },
     writeEvent: toAxes(row),
+    writeProvenance,
   });
+}
+
+/** Nothing recorded how this write was produced. UNKNOWN, never a refusal. */
+const UNKNOWN_WRITE_PROVENANCE: ProducedWriteProvenance = {
+  materializationPath: null,
+};
+
+/** The read-back identity (org, run, artifact, revision) is not the ledger's
+ *  unique key, so it may name more than one row; the reading takes them all and
+ *  is order-independent. A small ceiling keeps one write's read bounded. */
+const LEDGER_PROVENANCE_SCAN = 16;
+
+/**
+ * How the write this event reports was PRODUCED (cinatra#3476).
+ *
+ * The binding proof is asked PER ARTIFACT, and the answer does not live on the
+ * produced-outbox row: the row names the artifact and its revision, never the
+ * output the write came from. The materialization ledger does — one finalized row
+ * per write, carrying the `path` it took (`end_node_binding` for a declared
+ * binding, `default_road` for the pickup that files what no binding named) — and
+ * the write's (org, run, artifact, revision) reads it back.
+ *
+ * A run-less event (a direct upload, which no run ledger names) is UNKNOWN, and
+ * unknown leaves the decision where it was. A FAILED READ is not unknown and is
+ * NOT swallowed: a refusal on this path marks the event processed for good, so a
+ * read that could not be made must never read as "nothing recorded" — it throws,
+ * the sweep leaves the event PENDING (the caller's per-production and per-event
+ * catches say so in as many words), and the next pass asks again.
+ */
+async function resolveWriteProvenance(
+  row: ProducedEventRow,
+): Promise<ProducedWriteProvenance> {
+  if (!row.producerRunId) return UNKNOWN_WRITE_PROVENANCE;
+  const ledgerRows = await db
+    .select({ path: materializationsRef.path })
+    .from(materializationsRef)
+    .where(
+      and(
+        eq(materializationsRef.orgId, row.orgId),
+        eq(materializationsRef.runId, row.producerRunId),
+        eq(materializationsRef.artifactId, row.artifactId),
+        eq(
+          materializationsRef.representationRevisionId,
+          row.representationRevisionId,
+        ),
+      ),
+    )
+    .limit(LEDGER_PROVENANCE_SCAN);
+  return writeProvenanceFromLedgerPaths(
+    ledgerRows.flatMap((ledgerRow) =>
+      typeof ledgerRow.path === "string" ? [ledgerRow.path] : [],
+    ),
+  );
 }
 
 /** Resolve the review-orchestration context for a produced event. Returns a
@@ -639,7 +710,11 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
   // artifact-bound work: an agent that declares no artifact-bound output reaches
   // no review, whatever its writes and whatever the policy would have said.
   const declarations = await resolveProducerDeclarations(row.producerRunId);
-  const binding = proveProducedBinding(row, declarations);
+  const binding = proveProducedBinding(
+    row,
+    declarations,
+    await resolveWriteProvenance(row),
+  );
   if (!binding.bound) {
     await markProducedEventProcessed(row.eventId);
     return "no-gate";
@@ -1081,7 +1156,11 @@ async function orchestrateProducedBatch(
     // output and still write an unbound revision, and a member that proves no
     // binding must not be sealed into a partition gate.
     const memberDeclarations = await resolveProducerDeclarations(row.producerRunId);
-    const memberBinding = proveProducedBinding(row, memberDeclarations);
+    const memberBinding = proveProducedBinding(
+      row,
+      memberDeclarations,
+      await resolveWriteProvenance(row),
+    );
     if (!memberBinding.bound) {
       await markProducedEventProcessed(row.eventId);
       summary.noGate += 1;
