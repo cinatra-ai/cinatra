@@ -41,7 +41,7 @@ function render(activeTab: Tab, showTriggerTab: boolean): string {
 
 /** The set of trigger labels the strip renders, order preserved. */
 function tabLabels(html: string): string[] {
-  return ["Setup", "Trigger", "Permissions"].filter((label) =>
+  return ["Setup", "Schedule", "Permissions"].filter((label) =>
     html.includes(`>${label}<`),
   );
 }
@@ -57,24 +57,39 @@ describe("AgentInstanceNav — the strip is part of the constant frame (§I)", (
     });
   }
 
-  it("shows Setup + Trigger + Permissions for a scheduled/recurring run", () => {
+  // cinatra#3004 renamed the tab to what it shows — the schedule form, in the
+  // state this run's schedule is in. The route is unchanged; the word is not.
+  it("shows Setup + Schedule + Permissions for a scheduled/recurring run", () => {
     expect(tabLabels(render("setup", true))).toEqual([
       "Setup",
-      "Trigger",
+      "Schedule",
       "Permissions",
     ]);
+    expect(render("setup", true)).not.toContain(">Trigger<");
   });
 
   it("shows Setup + Permissions only when there is no persistent trigger", () => {
     expect(tabLabels(render("setup", false))).toEqual(["Setup", "Permissions"]);
   });
 
-  it("does NOT force the Trigger tab into the strip just because /trigger is active", () => {
+  it("does NOT force the schedule tab into the strip just because /trigger is active", () => {
     // The regression this locks: `showTriggerTab || activeTab === "trigger"`.
     expect(tabLabels(render("trigger", false))).toEqual(["Setup", "Permissions"]);
     expect(tabLabels(render("trigger", false))).toEqual(
       tabLabels(render("permissions", false)),
     );
+  });
+
+  // A STEP IN THE FRAME LIGHTS NOTHING (cinatra#3182 item 8, cinatra#3168).
+  // Application Design — Agents: "A step drawn inside this frame never lights a
+  // tab the strip does not carry."
+  it("lights no tab at all for the 'none' reading, and keeps the same strip", () => {
+    for (const showTriggerTab of [true, false]) {
+      const html = render("none", showTriggerTab);
+      expect(html).not.toContain('data-state="active"');
+      // The strip itself is untouched — the frame is constant either way.
+      expect(tabLabels(html)).toEqual(tabLabels(render("setup", showTriggerTab)));
+    }
   });
 
   it("never renders an Overview trigger — the dead tab is gone (#2487)", () => {
@@ -98,6 +113,6 @@ describe("AgentInstanceNav — the strip is part of the constant frame (§I)", (
     };
     expect(stateOf("Permissions")).toBe("active");
     expect(stateOf("Setup")).toBe("inactive");
-    expect(stateOf("Trigger")).toBe("inactive");
+    expect(stateOf("Schedule")).toBe("inactive");
   });
 });

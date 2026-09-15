@@ -41,9 +41,12 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy,
+  LENT_ACTION_GRANT_HEADER,
+  resolveRequestLentActionGrant,
+} from "./request-context";
 import { resolveFrameOrgWriteAuthority, type OrgWriteAuthorityForwardOptions } from "./org-write-authority-forward";
-import { buildMcpHandshakeUrls } from "./handshake-urls";
+import { normalizeMcpBasePath as normalizePath } from "./handshake-urls";
 import { inferRequestOrigin, rewriteJsonOriginResponse } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
 import { McpAuthUiProvider } from "./components/mcp-auth-ui-provider";
@@ -54,22 +57,19 @@ import { writeMcpServerLogFile } from "@/lib/mcp-logging";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readServiceAccountByClientId } from "./service-accounts";
 import { resolveOrgRoleFromMembership, composeBearerActorContext } from "./actor-identity";
-import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
 import {
-  isTrustedDevHost,
-  parseTrustedHosts,
-  shouldGrantDevAdminBypass,
-  urlRequestHost,
-} from "./dev-admin-bypass";
+  unavailableDelegatedChatAdmissionSnapshot,
+  type DelegatedChatAdmissionSnapshot,
+} from "./delegated-chat-admission";
+import { grantDevAdminBypassThroughPort } from "./dev-admin-bypass";
 import { PageHeader } from "@/components/page-header";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
-import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getLocalMcpServerUrl, getPublicMcpServerUrl, getTrustedTokenOrigins } from "./llm-credentials";
+import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getTrustedTokenOrigins, DEFAULT_MCP_AUTH_SCOPES } from "./llm-credentials";
 import { z } from "zod";
 
-const DEFAULT_SCOPES = ["openid", "profile", "email", "offline_access", "mcp:connect"] as const;
 const SELF_MCP_CLIENT_ID = "cinatra-app-mcp-client";
 const SELF_MCP_CLIENT_NAME = "Cinatra App MCP Client";
-const SELF_MCP_CLIENT_SCOPE = DEFAULT_SCOPES.join(" ");
+const SELF_MCP_CLIENT_SCOPE = DEFAULT_MCP_AUTH_SCOPES.join(" ");
 
 type BetterAuthLike = {
   api: object;
@@ -81,38 +81,6 @@ type SessionLike = {
     role?: string | null;
   };
 } & Record<string, unknown>;
-
-export type CreateMcpServerAuthPluginsOptions = {
-  authBasePath?: string;
-  mcpBasePath?: string;
-  /** Human-facing admin pages (overview, OAuth client management). */
-  adminBasePath?: string;
-  /** OAuth machine-flow pages (auth / account / consent) advertised to external MCP clients. */
-  handshakeBasePath?: string;
-  scopes?: readonly string[];
-  /**
-   * Additional base path(s) whose `<origin>/<path>` URLs (local + public)
-   * become valid token audiences alongside the MCP base path. The CLI control-plane model adds
-   * `/api/cli` so an authorize with `resource=<origin>/api/cli` mints a JWT
-   * bound to `aud=<origin>/api/cli` — a DEDICATED audience the CLI verifier
-   * pins (reciprocal isolation from the `/api/mcp` audience).
-   */
-  extraAudienceBasePaths?: readonly string[];
-  /**
-   * Scopes EXCLUDED from the DCR default-scope set. A client that does not
-   * EXPLICITLY request these never silently receives them (the CLI control-plane model keeps the
-   * `cli:*` scopes out of DCR defaults). When omitted, the DCR default is the
-   * full `scopes` list (today's behaviour).
-   */
-  clientRegistrationDefaultScopes?: readonly string[];
-  /**
-   * Scopes a DCR client MAY request at registration. The CLI control-plane model keeps `cli:*`
-   * here (so the first-party CLI can register with them) — the real authority
-   * boundary is the verified-subject platform-admin gate, not this list.
-   * When omitted, defaults to the full `scopes` list (today's behaviour).
-   */
-  clientRegistrationAllowedScopes?: readonly string[];
-};
 
 export type CreateMcpServerMountOptions = {
   auth: BetterAuthLike;
@@ -138,6 +106,17 @@ export type CreateMcpServerMountOptions = {
    * the connectivity check button. Optional — omitting it hides the selector.
    */
   readConfiguredLlmProviders?: () => Promise<string[]>;
+  /** cinatra#2817 slice 1 — builds the request's primitive→capability-key
+   *  resolver, so the LIVE request-scoped plan carries the same capability keys
+   *  the chat catalog derives (an incomplete live plan is a plan a later
+   *  admission slice cannot decide from). App-wired: the connector catalog is
+   *  app-layer state this package must not reach for. */
+  resolvePrimitiveCapabilityKeys?: () => Promise<(name: string) => string | null | undefined>;
+  /** cinatra#2817 slice 3 — loads the ONE immutable admission snapshot this
+   *  request decides against, BEFORE registration. App-wired (the durable store
+   *  is app-layer state). Omitting it closes the delegated-chat surface; it
+   *  never opens it. */
+  loadDelegatedChatAdmissionSnapshot?: () => Promise<DelegatedChatAdmissionSnapshot>;
   /** #1195 durable run-context binding resolver (run-token-keyed redis binding
    *  written by /api/llm-bridge; resolved via readAgentRunByTokenHash), called ONCE
    *  per request with the RAW bearer. "resolved" beats the header channel;
@@ -189,27 +168,6 @@ export type McpServerSettings = {
 type OAuthClientMutationResponse = OAuthClientRecord & {
   client_secret?: string;
 };
-
-// Strip trailing "/" via a LINEAR char-index scan. The anchored greedy
-// `/\/+$/` is flagged polynomial-ReDoS on slash-heavy input
-// (CodeQL js/polynomial-redos); this mirrors the trim already used in
-// mcp-public-base-url-shape.mjs and is O(n) with no backtracking.
-function trimTrailingSlash(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
-  return value.slice(0, end);
-}
-
-function normalizePath(path: string | undefined, fallback: string) {
-  const value = (path ?? fallback).trim();
-  if (!value) {
-    return fallback;
-  }
-
-  return value.startsWith("/")
-    ? trimTrailingSlash(value) || "/"
-    : `/${trimTrailingSlash(value)}`;
-}
 
 function normalizeOptionalUrl(value: string | null | undefined) {
   const trimmed = String(value ?? "").trim();
@@ -342,68 +300,6 @@ function isLocalhostRequest(request: Request): boolean {
   }
   const hostname = new URL(request.url).hostname;
   return isLocalhostHostname(hostname);
-}
-
-/**
- * Request-level trust check for the MCP dev-admin bypass.
- *
- * Returns true when the request hits a host the operator has declared
- * trusted (loopback by default, plus any hostname in
- * `CINATRA_MCP_DEV_TRUSTED_HOSTS`) AND the env opt-ins are set AND we are
- * not in production. Used ONLY by the OAuth-skip + admin-bypass paths.
- * All other `isLocalhostRequest` call sites (actor identity fallback, A2A
- * dev-bypass org fallback) keep strict loopback semantics.
- */
-function isTrustedDevHostRequest(request: Request): boolean {
-  return isTrustedDevHost({
-    nodeEnv: process.env.NODE_ENV,
-    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-    trustedHostsEnv: process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS,
-    urlHost: urlRequestHost(request.url),
-    // Pass the RAW `x-forwarded-host` header value (or null when absent).
-    // The helper distinguishes "absent" (veto inactive) from "present but
-    // malformed" (veto rejects) — collapsing them here would silently
-    // disable the veto against malformed-spoof headers.
-    forwardedHostRaw: request.headers.get("x-forwarded-host"),
-  });
-}
-
-/**
- * Emits a one-time loud startup warning when the dev-admin bypass is
- * active and a non-empty `CINATRA_MCP_DEV_TRUSTED_HOSTS`
- * allowlist is configured. Lists each normalized host so misconfigured
- * entries (typos, scheme prefixes that won't match) are visible.
- *
- * Skipped entirely in production builds; never logs per-request to keep
- * server log noise bounded.
- */
-let devTrustedHostsWarningEmitted = false;
-function emitDevTrustedHostsWarningOnce(): void {
-  if (devTrustedHostsWarningEmitted) return;
-  devTrustedHostsWarningEmitted = true;
-  if (process.env.NODE_ENV === "production") return;
-  if (process.env.CINATRA_MCP_DEV_ADMIN_BYPASS !== "true") return;
-  const raw = process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS;
-  if (!raw || raw.trim() === "") return;
-  const hosts = Array.from(parseTrustedHosts(raw)).sort();
-  if (hosts.length === 0) {
-    // A fully-malformed allowlist (e.g.
-    // `CINATRA_MCP_DEV_TRUSTED_HOSTS=https://foo.ts.net`) yields no normalized
-    // entries. Surface the raw value so the operator sees the typo.
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[mcp-dev-admin-bypass] CINATRA_MCP_DEV_TRUSTED_HOSTS is set but no entries normalized to valid hostnames — extra-loopback trust is INACTIVE. Raw value: " +
-        JSON.stringify(raw) +
-        ". Bare hostnames only (e.g. `foo.ts.net`); URL-shaped entries with `://` are rejected.",
-    );
-    return;
-  }
-  // eslint-disable-next-line no-console
-  console.warn(
-    "[mcp-dev-admin-bypass] CINATRA_MCP_DEV_TRUSTED_HOSTS active — requests reaching the following hostnames will SKIP OAuth and run as platform_admin: " +
-      hosts.join(", ") +
-      ". Never list a publicly-reachable hostname unless you accept unauthenticated admin access.",
-  );
 }
 
 async function getRequestHeaders() {
@@ -783,79 +679,29 @@ export {
 } from "./runtime-server";
 export {
   mcpRequestContextStorage,
+  // cinatra#2932 (lifecycle-b W5a) — the lent-action grant header name and its
+  // pure admission rule, re-exported so the app-side minter names the SAME
+  // header the transport reads instead of a second literal that can drift.
+  LENT_ACTION_GRANT_HEADER,
+  resolveRequestLentActionGrant,
   type DelegatedMcpActor,
   type McpRequestContext,
 } from "./request-context";
 
-// The delegated-chat tool allowlist predicate — re-exported so in-process
-// primitive invokers (e.g. the host self-MCP `ctx.mcp.callPrimitive`) can apply
-// the SAME delegated-chat gate the live transport's `policedRegisterTool` does.
-export { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
+// The delegated-chat DECISION — re-exported so in-process primitive invokers
+// (e.g. the host self-MCP `ctx.mcp.callPrimitive`) apply the SAME evaluator,
+// against the same planned identity and the same request snapshot, that the
+// live transport's registration choke point applies.
+export { evaluateDelegatedChatAdmission } from "./delegated-chat-admission";
 
-export function createMcpServerAuthPlugins(
-  options: CreateMcpServerAuthPluginsOptions = {},
-): McpAuthPlugins {
-  const mcpBasePath = normalizePath(options.mcpBasePath, "/api/mcp");
-  // OAuth handshake pages (auth/account/consent) advertised to external MCP
-  // clients live under handshakeBasePath; default to the JSON-RPC base.
-  const handshakeBasePath = normalizePath(options.handshakeBasePath, "/api/mcp");
-  const scopes = [...(options.scopes ?? DEFAULT_SCOPES)];
-  const localMcpUrl = getLocalMcpServerUrl(mcpBasePath);
-  // Include the configured public MCP URL (stable HTTPS endpoint set via
-  // /configuration/development?tab=tunnel, or the deployed app origin in
-  // production) so OpenAI's MCP client — which sends `resource=<public URL>`
-  // per RFC 8707 — receives a JWT bound to that audience. Without this entry
-  // the provider's resource check REJECTS the request (`invalid_request`); no
-  // token is issued. Read ONCE per process, so a saved public-base-URL change
-  // needs an app RESTART — see `setMcpPublicBaseUrlAction` (cinatra#2173).
-  const publicMcpUrl = getPublicMcpServerUrl();
-  const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
-
-  // CLI control-plane: extend validAudiences with `<origin><extraBasePath>` for each
-  // configured extra base path (e.g. /api/cli), on BOTH the local and public
-  // origins, so an authorize with `resource=<origin>/api/cli` mints a JWT
-  // bound to that dedicated audience. The MCP audiences are unchanged — each
-  // verifier still pins its OWN audience (reciprocal isolation).
-  const extraBasePaths = (options.extraAudienceBasePaths ?? []).map((p) =>
-    normalizePath(p, p),
-  );
-  if (extraBasePaths.length > 0) {
-    const origins: string[] = [];
-    try {
-      origins.push(new URL(localMcpUrl).origin);
-    } catch {
-      /* malformed local URL — skip */
-    }
-    if (publicMcpUrl) {
-      try {
-        origins.push(new URL(publicMcpUrl).origin);
-      } catch {
-        /* malformed public URL — skip */
-      }
-    }
-    for (const origin of origins) {
-      for (const basePath of extraBasePaths) {
-        const audience = `${origin}${basePath}`;
-        if (!validAudiences.includes(audience)) validAudiences.push(audience);
-      }
-    }
-  }
-
-  const urls = buildMcpHandshakeUrls(handshakeBasePath);
-  return buildMcpAuthPlugins({
-    validAudiences,
-    scopes,
-    loginPage: urls.loginPage,
-    consentPage: urls.consentPage,
-    signupPage: urls.signupPage,
-    ...(options.clientRegistrationDefaultScopes
-      ? { clientRegistrationDefaultScopes: options.clientRegistrationDefaultScopes }
-      : {}),
-    ...(options.clientRegistrationAllowedScopes
-      ? { clientRegistrationAllowedScopes: options.clientRegistrationAllowedScopes }
-      : {}),
-  });
-}
+// The auth-plugin factory moved to ./llm-credentials so `src/lib/auth.ts`
+// can reach it WITHOUT this barrel. Re-exported here for the in-app mount,
+// which loads the barrel anyway.
+export {
+  createMcpServerAuthPlugins,
+  DEFAULT_MCP_AUTH_SCOPES,
+  type CreateMcpServerAuthPluginsOptions,
+} from "./llm-credentials";
 
 export function createMcpServerMount(options: CreateMcpServerMountOptions) {
   const adminBasePath = normalizePath(options.adminBasePath, "/configuration/mcp");
@@ -865,7 +711,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
   const serverName = options.serverName ?? "Cinatra MCP Server";
   const serverVersion = options.serverVersion ?? "0.1.0";
   const reagentName = options.reagentName ?? serverName;
-  const scopes = [...(options.scopes ?? DEFAULT_SCOPES)];
+  const scopes = [...(options.scopes ?? DEFAULT_MCP_AUTH_SCOPES)];
   const protectedResourceScopes = scopes.filter((scope) => !["openid", "profile", "email", "offline_access"].includes(scope));
   const defaultScope = scopes.join(" ");
 
@@ -913,16 +759,32 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       delegatedActor = null;
     }
 
-    // Surface trusted-hosts allowlist visibility on first request.
-    emitDevTrustedHostsWarningOnce();
+    // The dev-only admin bypass, resolved ONCE per request: a loopback SOCKET
+    // PEER presenting this boot's local credential, with no forwarded header
+    // on the request. It reads no hostname — see `./dev-admin-bypass.ts` for
+    // why a Host header cannot carry this decision.
+    //
+    // Asked through the PORT, not by importing the composition: this module is
+    // the package entry, so a credential-file reader and a `node:http` capture
+    // imported here would travel into every graph that imports the package for
+    // anything at all. The boot hook fills the port with the ONE composition
+    // (`installDevAdminBypassRequestPort`), which is also what `/api/cli/*`
+    // calls; an unfilled port refuses, which is what a process with no boot
+    // hook would answer anyway.
+    const devAdminBypassActive = grantDevAdminBypassThroughPort(request.headers);
 
-    // Requests arriving directly at localhost (or an env-allowlisted trusted
-    // dev host; see CINATRA_MCP_DEV_TRUSTED_HOSTS) bypass OAuth —
-    // auth is handled at the network level (only callers who reach a trusted
-    // host can hit it). Requests tunnelled through any other public proxy
-    // must carry a valid Bearer token — UNLESS a valid delegated actor token
-    // is present, which is itself the auth.
-    if (!isTrustedDevHostRequest(request) && !delegatedActor) {
+    // The local operator's own client bypasses OAuth — the connection and the
+    // per-boot credential ARE the auth. Every other request must carry a valid
+    // Bearer token — UNLESS a valid delegated actor token is present, which is
+    // itself the auth.
+    //
+    // `bearerSignatureVerified` records whether THIS request's Authorization
+    // header actually had its signature checked. It is threaded into actor
+    // identity below so an UNVERIFIED token can never name a user: on the
+    // bypass path the verify is skipped, so the identity is the anonymous
+    // local operator rather than whatever subject the token claims.
+    let bearerSignatureVerified = false;
+    if (!devAdminBypassActive && !delegatedActor) {
       try {
         const verified = await verifyMcpAccessToken({
           auth: options.auth,
@@ -935,8 +797,35 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         if (!verified) {
           return createUnauthorizedResponse(resourceMetadataUrl);
         }
+        bearerSignatureVerified = true;
       } catch {
         return createUnauthorizedResponse(resourceMetadataUrl);
+      }
+    }
+
+    // THE SNAPSHOT IS A DELEGATED-CHAT COST, SO ONLY DELEGATED CHAT PAYS IT
+    // (cinatra#2817 slice 3, codex round-3). An unrestricted, agent-run or
+    // delegated-widget request has no admission question to answer; loading the
+    // snapshot for one would make an unrelated store outage abort a request that
+    // never needed it. The policy mode is resolved FIRST and the loader runs only
+    // for `delegated-chat`.
+    //
+    // A LOADER THAT THROWS DENIES, IT DOES NOT ABORT. The refusal a chat client
+    // should see is "this primitive is not available" from a closed perimeter,
+    // not a transport error — so a failure becomes an explicitly UNAVAILABLE
+    // snapshot, which admits nothing.
+    const toolPolicy = selectDelegatedToolPolicy(delegatedActor);
+    let delegatedChatAdmissionSnapshot: DelegatedChatAdmissionSnapshot | undefined;
+    if (toolPolicy.toolPolicyMode === "delegated-chat" && options.loadDelegatedChatAdmissionSnapshot) {
+      try {
+        delegatedChatAdmissionSnapshot = await options.loadDelegatedChatAdmissionSnapshot();
+      } catch (err) {
+        console.error("[mcp] delegated-chat admission snapshot could not be loaded:", err);
+        delegatedChatAdmissionSnapshot = unavailableDelegatedChatAdmissionSnapshot({
+          reason: "admission_snapshot_load_threw",
+          activationGeneration: -1,
+          admissionGeneration: -1,
+        });
       }
     }
 
@@ -946,11 +835,15 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       registerCapabilities: options.registerCapabilities, registerRequestContext: delegatedActor?.delegation === "agent_run" ? { verifiedAgentRunId: delegatedActor.runId } : undefined, // cinatra#1392 S8: the VERIFIED (signed-OBO) agent-run identity for the extension-tool discovery union; chat delegations / plain bearers carry no verified run and stay caller-agnostic (pre-S8 behavior). One line to hold the tracked-file size ratchet.
       instructions: options.serverInstructions,
       experimental: options.serverExperimental,
+      resolveCapabilityKey: options.resolvePrimitiveCapabilityKeys
+        ? await options.resolvePrimitiveCapabilityKeys()
+        : undefined,
+      delegatedChatAdmissionSnapshot,
       // Fail-closed tool-policy dispatch over the VERIFIED delegation type (the
       // widget actor never falls through to "unrestricted"); the kind-scoped
       // widget allowlist keys off the verified `knd`. See
       // selectDelegatedToolPolicy in ./request-context.
-      ...selectDelegatedToolPolicy(delegatedActor),
+      ...toolPolicy,
     });
     // The two inbound serving legs — inbound posture row A. The legacy leg is an
     // EXPLICIT stateless transport on `application/json` framing rather than the
@@ -1033,16 +926,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
           ? "platform_admin"
           : "member")
       : undefined;
-    // Dev-only MCP admin bypass for loopback or an env-allowlisted trusted dev
-    // host. See `./dev-admin-bypass.ts` for the policy + rationale.
-    const devAdminBypassActive = shouldGrantDevAdminBypass({
-      nodeEnv: process.env.NODE_ENV,
-      envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
-      isTrustedDevHost: isTrustedDevHostRequest(request),
-    });
     // A delegated actor token's platformRole/org win over the (absent)
-    // hosted-MCP session. devAdminBypass still wins over everything when
-    // explicitly enabled for loopback/trusted-dev-host.
+    // hosted-MCP session. The dev bypass (resolved above) still wins over
+    // everything when explicitly enabled for the local operator.
     const resolvedPlatformRole: "platform_admin" | "member" | undefined =
       devAdminBypassActive
         ? "platform_admin"
@@ -1063,8 +949,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // unauthenticated remote calls and the env flag is dev-mode-only.
     let trustedDevAdminUserId: string | null = null;
     if (
-      process.env.CINATRA_MCP_DEV_ADMIN_BYPASS === "true" &&
-      isTrustedDevHostRequest(request) &&
+      devAdminBypassActive &&
       !delegatedActor &&
       !sessionUser?.id &&
       !requestClientId
@@ -1106,6 +991,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         sessionUser,
         requestClientId,
         authHeader: delegatedActor ? null : authHeader,
+        bearerSignatureVerified,
         request,
         a2aDevBypass: process.env.A2A_DEV_BYPASS,
         isLocalhost: isLocalhostRequest(request),
@@ -1197,6 +1083,15 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // `enforceMcpBoundary` still gate the rest.
       delegatedActor,
       delegatedRestricted: delegatedActor?.delegation === "chat",
+      // The LENT-ACTION GRANT (cinatra#2932, lifecycle-b W5a). Admitted by the
+      // pure rule in ./request-context — only on the two delegations a person
+      // types under, only inside the codec's shape. This boundary is the ONLY
+      // writer of the field; nothing downstream may take it from a tool
+      // argument.
+      lentActionGrant: resolveRequestLentActionGrant({
+        headerValue: request.headers.get(LENT_ACTION_GRANT_HEADER),
+        delegatedActor,
+      }),
       // Forward the agent-run OBO scope-ceiling chain onto the request frame so
       // the boundary can read it. Only agent-run delegations carry a ceiling;
       // chat / session / machine callers leave it undefined.

@@ -286,13 +286,24 @@ describe("evaluateProducesMaterializationContract — Layer 2 publish contract",
     expect(findings).toHaveLength(0);
   });
 
-  it("WARNS (never blocks) on a produces entry with no materialization edge", () => {
+  // Ratchet R3: the adoption gate blocks. A produces entry no materialization
+  // road resolves is a BLOCKER, not an advisory line.
+  it("BLOCKS on a produces entry no materialization road resolves", () => {
     const findings = evaluateProducesMaterializationContract({
       produces: [ARTIFACT],
       oasDoc: unmigratedOas(),
     });
     expect(codes(findings)).toContain("ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED");
-    expect(findings.every((f) => f.severity === "warning")).toBe(true);
+    expect(findings.every((f) => f.severity === "blocker")).toBe(true);
+  });
+
+  it("the authoring emit is a materialization road of its own", () => {
+    const findings = evaluateProducesMaterializationContract({
+      produces: [ARTIFACT],
+      oasDoc: unmigratedOas(),
+      consumes: [{ primitive: "artifact_authoring_emit", requirement: "required" }],
+    });
+    expect(findings).toHaveLength(0);
   });
 
   it("BLOCKS on a malformed binding annotation (binding.extension ∉ produces)", () => {

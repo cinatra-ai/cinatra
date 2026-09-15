@@ -48,8 +48,12 @@ export const HELD_TURN_FIXTURE_ACTOR = "chat-hitl-s9k-e2e-fixture";
 /**
  * THE DRIVING MESSAGE. Every part of its shape is load-bearing.
  *
- * · A dispatch VERB and a package reference in the LAST user message is what
- *   `detectExplicitDispatchPackage` needs to take the hard pre-router path at all.
+ * · A dispatch VERB and a package reference are what the assistant reads to decide
+ *   this turn asks for an agent to be started (cinatra#2935, lifecycle-b W5d: the
+ *   platform's pre-model dispatch reader is gone, so the ONLY road to a run from a
+ *   conversation is the assistant's own `agent_run` call). On this key-free stack
+ *   the assistant is the deterministic provider, whose reading is
+ *   `scriptedTurnStartsAgent` — the model layer, and nothing below it.
  *
  * · The LEGACY `cinatra_<slug>` form rather than the canonical `@cinatra-ai/<slug>`
  *   one, on purpose: two or more `@` mention tokens flip the thread into the Slack
@@ -58,27 +62,38 @@ export const HELD_TURN_FIXTURE_ACTOR = "chat-hitl-s9k-e2e-fixture";
  *   mentioned package therefore risks proving nothing, with no error to read. Zero
  *   `@` tokens removes the question entirely.
  *
- * · The embedded `inputParams` is what makes the turn FULLY deterministic. Without
- *   it the dispatch boundary asks the model to produce the input params through a
- *   structured-output round trip; with it, `tryParseEmbeddedInputParams` takes the
- *   brace-matched fast path and NO model is consulted for anything. `oasJson` is
- *   this agent's one visible required field, and its value is never executed here —
- *   the run parks before it dispatches, which is the whole point.
+ * · The embedded `inputParams` is what makes the turn FULLY deterministic: the
+ *   assistant passes on the inputs the sentence states outright rather than
+ *   inventing any, so the same message always starts the same run with the same
+ *   arguments. `oasJson` is this agent's one visible required field, and its value
+ *   is never executed here — the run parks before it dispatches, which is the
+ *   whole point.
  */
 export const HELD_TURN_MESSAGE =
   'run cinatra_lint-policy-agent with inputParams: {"oasJson": "{}"}';
 
 /**
- * The pre-router's own HELD-branch sentence (`explicit-dispatch-server.ts`). The
- * flow asserts it verbatim: it is the server saying the run parked, in the same
- * turn that carries the card, and it is the sentence S9b replaced the false "The
- * agent is running" with.
+ * The HELD-branch sentence of the turn that started the run. The flow asserts it
+ * verbatim, and what it proves survived cinatra#2935 (lifecycle-b W5d) intact:
+ * the sentence is chosen by the STATUS the `agent_run` primitive answered, so it
+ * cannot be true of a turn where the run did not park. Only its AUTHOR moved —
+ * from the removed pre-router to the assistant, which is where W5d put the job
+ * of starting an agent. It is the sentence S9b replaced the false "The agent is
+ * running" with, and the negative below is the other half of the same test.
  */
 export const HELD_TURN_PAUSED_TEXT =
   "The run paused for a decision on the recommended skills.";
 
-/** The sentence a QUEUED dispatch gets. A held turn must NEVER carry it. */
-export const HELD_TURN_RUNNING_TEXT = "The agent is running";
+/**
+ * The sentence a dispatch that did NOT park gets. A held turn must NEVER carry
+ * it, which is the whole of what this constant is for.
+ *
+ * It is EVENT TENSE (cinatra#2935, lifecycle-b W5d) because the platform now
+ * writes it and the card beside it goes on re-reading the run after the turn is
+ * written: a present-tense "the agent is running" would be a claim about a
+ * moment that has already passed by the time a person reads the line.
+ */
+export const HELD_TURN_RUNNING_TEXT = "The run started.";
 
 // ---------------------------------------------------------------------------
 // THE RATIFIED §V DRAWING'S ANCHORS (#2841 redraw, #2879 slot identity).
@@ -132,14 +147,19 @@ export const TRANSCRIPT_SLOT = "[data-transcript-slot]";
  * and the generic produced-views container. A non-null read therefore proves the
  * card is inside SOME slot, which is not the positional rule S9i states.
  *
- * The `agent_run` container is identifiable by what only IT carries: the inline run
- * panel for that same run. The panel's link out to the run page is built by the
- * platform from the run id (`buildAgentInstancePath`), so an anchor whose href ends
- * in `/<runId>` is the panel for THIS run and exists in no other container. Pinning
- * the card's slot container to the one holding that link is what makes the runtime
- * gate as strong as the jsdom matrix's `slotOf(card) === producingSlot`.
+ * The `agent_run` container names its own run: `data-agent-run-slot="<runId>"`, put
+ * there by the container itself. Pinning the card's slot container to the one that
+ * names THIS run is what makes the runtime gate as strong as the jsdom matrix's
+ * `slotOf(card) === producingSlot`.
+ *
+ * IT USED TO BE THE PANEL'S LINK. The container was identified by the inline run
+ * panel's own link out to the run page, because that panel was the one thing only
+ * this container held. cinatra#2790 (epic #2784 S9f) made that untrue in exactly
+ * the state this flow measures: while the skills can still be chosen the turn draws
+ * no run panel, so in a HELD turn there is no link to find. The container is the
+ * stabler anchor and was always the thing being asked about.
  */
-export const INLINE_RUN_PAGE_LINK = '[data-testid="inline-run-page-link"]';
+export const AGENT_RUN_SLOT = "[data-agent-run-slot]";
 /** The composer. */
 export const CHAT_PROMPT = '[data-testid="chat-prompt-input"]';
 

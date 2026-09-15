@@ -172,7 +172,23 @@ export function isStructurallyValidAbsorbRecord(rec) {
   if (!Number.isInteger(rec.to) || rec.to <= 0) return false;
   if (rec.to <= rec.from) return false; // a record documents a RAISE
   if (typeof rec.reason !== "string" || rec.reason.trim() === "") return false;
-  if (!Number.isInteger(rec.pr) || rec.pr <= 0) return false;
+  // `pr` — the pull request that carries the raise, and ZERO means "there is no
+  // pull request yet" (cinatra#2788).
+  //
+  // WHY ZERO IS ALLOWED AT ALL. A raise has to be annotated by the change that
+  // makes it, and a change is measured on a BRANCH — often before a PR exists,
+  // and sometimes on a branch whose PR is opened by somebody else later. The
+  // only ways out of that used to be to invent a number or to leave the raise
+  // unannotated, and both are worse than saying so: a wrong number sends a
+  // reader to somebody else's change, and an unannotated raise is the silent
+  // accretion this ratchet exists to stop. Zero is the one value that cannot be
+  // mistaken for a real PR, and the `reason` still has to say what grew and why.
+  //
+  // NOTHING ELSE IS RELAXED. A negative or fractional `pr` is still malformed,
+  // the record must still name a tracked route, `from` must still be less than
+  // `to`, and `to` must still equal the CURRENT ceiling — so a stale record is
+  // still a failure and a raise still cannot pass unrecorded.
+  if (!Number.isInteger(rec.pr) || rec.pr < 0) return false;
   return true;
 }
 
@@ -188,7 +204,9 @@ function absorbRecordsEqual(a, b) {
  * absent is fine (empty result).
  *
  * A record must: be an object with EXACTLY the keys { from, to, reason, pr };
- * carry positive integers `from` < `to` and `pr`; carry a non-empty `reason`;
+ * carry positive integers `from` < `to`, and a non-negative integer `pr` (0 =
+ * the change has no pull request yet, which is stated rather than invented);
+ * carry a non-empty `reason`;
  * name a route tracked in `routes`; and have `to` equal to that route's
  * CURRENT ceiling (a record that no longer describes the current ceiling is
  * stale and must be removed by the change that lowered/re-raised the ceiling).
@@ -203,7 +221,7 @@ export function validateAbsorbRecords(baseline) {
   const routes = baseline?.routes ?? {};
   for (const [route, rec] of Object.entries(absorbs)) {
     if (!isStructurallyValidAbsorbRecord(rec)) {
-      errors.push({ route, reason: "malformed absorb record — must be an object with EXACTLY { from, to, reason, pr }: positive integers from < to, non-empty reason string, positive integer pr" });
+      errors.push({ route, reason: "malformed absorb record — must be an object with EXACTLY { from, to, reason, pr }: positive integers from < to, non-empty reason string, non-negative integer pr (0 = no pull request yet)" });
       continue;
     }
     if (!(route in routes)) {

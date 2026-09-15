@@ -1,4 +1,0 @@
-cinatra#2700 proof — the two sessions used below, as the database records them.
-sign-up status: admin=422 member=422
-gate-admin@local.test  role=admin
-gate-member@local.test  role=user

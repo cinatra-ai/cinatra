@@ -86,12 +86,25 @@ describe("G2 — never-blank guardrail", () => {
     expect(dispatchFor("application/zip")).toEqual({ kind: "fallback" });
   });
 
-  it("the core-owned floor survives the cutover (markdown/plain-text still host-rendered)", () => {
-    // The REPRESENTATION path (a markdown/plain-text REPRESENTATION of a row NOT
-    // typed to a text base) keeps the host floor: text-artifact declares
-    // representations=[text/csv] ONLY, so it registers no representation provider
-    // for text/plain or text/markdown and cannot displace this floor.
-    expect(dispatchFor("text/markdown")).toEqual({ kind: "mime", handler: "markdown" });
+  it("markdown now has its own base; plain text keeps the core-owned floor", () => {
+    // The REPRESENTATION path for a row NOT typed to a text base.
+    //
+    // MARKDOWN MOVED (readiness plan item 0.19, the re-pin of §8.5): the markdown
+    // base is installed and declares representations=[text/markdown], so it
+    // registers a representation provider and a markdown representation now draws
+    // through the base — which is the whole point of giving markdown a home. The
+    // host's markdown handler is UNTOUCHED by that re-pin and stays in this tree
+    // as the defensive floor: §8.5 retires it only after the resolution proof
+    // shows the base drawing on the artifact page, on the review card and inside a
+    // third-party application.
+    expect(dispatchFor("text/markdown")).toEqual({
+      kind: "representation",
+      packageName: "@cinatra-ai/markdown-artifact",
+      generatedKey: "@cinatra-ai/markdown-artifact::detail",
+      pattern: expect.any(String),
+    });
+    // PLAIN TEXT DID NOT MOVE: text-artifact declares representations=[text/csv]
+    // ONLY, so nothing displaces the host floor here.
     expect(dispatchFor("text/plain")).toEqual({ kind: "mime", handler: "text" });
   });
 });
@@ -130,7 +143,14 @@ describe("G2 — a required text base owns its OWN typed rows via the semantic p
       });
     }
     expect(classifyLoadablePath(`${TEXT_PKG}::detail`)).toBe("build-map");
-    // The floor still owns a markdown REPRESENTATION of a row NOT typed to the base.
-    expect(dispatchFor("text/markdown")).toEqual({ kind: "mime", handler: "markdown" });
+    // A markdown REPRESENTATION of a row NOT typed to the text base is the
+    // markdown base's now (item 0.19) — not the text base's, which gave markdown
+    // up in the same re-pin, and no longer the host floor's.
+    expect(dispatchFor("text/markdown")).toEqual({
+      kind: "representation",
+      packageName: "@cinatra-ai/markdown-artifact",
+      generatedKey: "@cinatra-ai/markdown-artifact::detail",
+      pattern: expect.any(String),
+    });
   });
 });

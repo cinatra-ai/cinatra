@@ -27,8 +27,9 @@ import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
  * `archivedAt`, never on this gate) stays inert.
  *
  * Gate storage: its own connector_config row (`org_archive_activation`), read
- * FAIL-CLOSED — any read error means OFF. This deliberately inverts the
- * fail-open instance-mode toggles (see isRegistrationClosed's rationale):
+ * FAIL-CLOSED — any read error means OFF, the same posture the registration
+ * setting takes (isRegistrationClosed) and the opposite of the single-org
+ * toggle's fail-soft read (isSingleOrgMode):
  * a lifecycle feature behind a dark launch must never activate because a
  * config read failed. Only a stored literal `true` enables it, and the
  * activation closeout (V6, owner-gated) is the only place that will ever

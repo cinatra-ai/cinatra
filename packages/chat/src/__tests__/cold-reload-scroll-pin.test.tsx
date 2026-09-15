@@ -35,24 +35,43 @@
 // ---------------------------------------------------------------------------
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 // The mounted list reaches two cookie-bound server actions and the AG-UI run
 // panel. Replaced here for the reasons set out in
 // `conversation-column-inventory.test.tsx`; none of them is part of the scroll
 // behaviour this file measures.
-// The message list now mounts the §V recommendation card directly, and that
-// card statically imports its cookie-bound server actions. Replaced here for
-// the same reason the pending-call and undo actions above are: they reach a
-// database, and none of them is part of what this file measures. Any test that
-// mounts the conversation column needs these two.
+// The recommendation card's own graph. The shared column now mounts that card
+// at the `agent_run` slot on BOTH of its arms — the cookie `/chat` transcript
+// (cinatra#2794, S9b) and the site widget (cinatra#2790, S9f) — and the card
+// statically imports its cookie-bound server actions, which reach a database.
+// Replaced here for the same reason the pending-call and undo actions above
+// are: none of them is part of what this file measures, and without these the
+// column does not mount at all — an empty column would look like a passing
+// negative arm. Any test that mounts the conversation column needs both.
 vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
-  confirmRunRecommendationAction: async () => ({ ok: true }),
-  skipRunRecommendationAction: async () => ({ ok: true }),
+  confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+  skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+}));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
 }));
 vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: async () => [],
+  getSkillsForAgentAction: async () => [],
+  getFieldRendererContextForAgentBuilderAction: async () => ({}),
+  confirmRunSkillSelectionAction: async () => ({ ok: true }),
 }));
 vi.mock("../pending-call-actions", () => ({
   listPendingToolConfirmations: async () => ({ rows: [] }),
@@ -67,7 +86,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
 
 import { startScrollSettlePin, type ScrollSettleEnv } from "../scroll-settle";
-import { chatSurfaceElement } from "./conversation-column-harness";
+import { chatSurfaceElement, mountSurface } from "./conversation-column-harness";
 
 afterEach(cleanup);
 
@@ -375,7 +394,6 @@ describe("the settle pass re-pins until the content height stops moving", () => 
 // ---------------------------------------------------------------------------
 // The column, on the real `/chat` surface.
 // ---------------------------------------------------------------------------
-
 describe("the conversation column arms the settle pass on a cold thread load", () => {
   let frames: ReturnType<typeof createFrameQueue>;
   let observers: ReturnType<typeof createObserverFactory>;
@@ -416,12 +434,33 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     (globalThis as Record<string, unknown>).ResizeObserver = originalObserver;
   });
 
+  /**
+   * The settle pass's OWN observers — the ones watching the stream.
+   *
+   * The column observes a second box now (cinatra#3044): its composer, so the
+   * stream can reserve the height the composer really occupies rather than a
+   * constant. That observer is not this file's subject and it is not created in
+   * a fixed order relative to the pass's, so the passes are found by WHAT THEY
+   * WATCH rather than by when they were made.
+   */
+  const settleObservers = (): FakeObserver[] =>
+    observers.created.filter((observer) =>
+      observer.targets.some((target) =>
+        (target as HTMLElement).classList.contains("overflow-y-auto"),
+      ),
+    );
+
   /** Mount `/chat` and hand back its scroll container, measurable. */
   async function mountChatThread(threadId: string) {
-    const view = render(chatSurfaceElement({ threadId }));
-    await waitFor(() =>
-      expect(view.container.querySelector("[data-conversation-list]")).not.toBeNull(),
-    );
+    // Mounted through the SHARED harness, which waits for the lazily loaded
+    // list under the established cold-mount budget rather than the test
+    // library's default one-second window (cinatra#3344). The list sits behind
+    // the column's own lazy-import boundary, so the FIRST mount in a worker
+    // pays the whole chunk's import cost — on a loaded runner that is a race
+    // against the default budget, not a measurement of the settle pass. What is
+    // asserted below is unchanged: the pass is still driven by the fake
+    // observer and the injected frame queue.
+    const view = await mountSurface("chat", { threadId });
     const scroller = view.container.querySelector<HTMLElement>(
       "[data-parity-surface='chat'] > div > div.overflow-y-auto",
     );
@@ -440,13 +479,13 @@ describe("the conversation column arms the settle pass on a cold thread load", (
 
     // Markdown, highlighted code and the run panel expand after mount.
     metrics.growTo(2400);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
     expect(metrics.scrollTop).toBe(2400);
 
     // The auto-sized textareas grow last.
     metrics.growTo(3100);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
 
     expect(metrics.atBottom).toBe(true);
@@ -464,24 +503,24 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     fireEvent.scroll(scroller);
 
     metrics.growTo(3000);
-    observers.created[0]!.fire();
+    settleObservers()[0]!.fire();
     frames.flush();
 
     expect(metrics.scrollTop).toBe(150);
-    expect(observers.created[0]!.disconnected).toBe(true);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
   });
 
   it("re-arms on a thread switch — a second cold load gets its own pass", async () => {
     const { view } = await mountChatThread("thread-cold-c");
     frames.flush();
-    expect(observers.created).toHaveLength(1);
+    expect(settleObservers()).toHaveLength(1);
 
     view.rerender(chatSurfaceElement({ threadId: "thread-cold-d" }));
-    await waitFor(() => expect(observers.created.length).toBeGreaterThan(1));
+    await waitFor(() => expect(settleObservers().length).toBeGreaterThan(1));
 
     // The first thread's pass is over; the second thread has a live one.
-    expect(observers.created[0]!.disconnected).toBe(true);
-    expect(observers.created[1]!.disconnected).toBe(false);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
+    expect(settleObservers()[1]!.disconnected).toBe(false);
 
     const scroller = view.container.querySelector<HTMLElement>(
       "[data-parity-surface='chat'] > div > div.overflow-y-auto",
@@ -489,7 +528,7 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     const metrics = stubScrollMetrics(scroller, 800, 400);
     frames.flush();
     metrics.growTo(2900);
-    observers.created[1]!.fire();
+    settleObservers()[1]!.fire();
     frames.flush();
     expect(metrics.scrollTop).toBe(2900);
   });
@@ -497,11 +536,11 @@ describe("the conversation column arms the settle pass on a cold thread load", (
   it("leaves nothing behind on unmount — no observer, no frame loop", async () => {
     const { view } = await mountChatThread("thread-cold-e");
     frames.flush();
-    expect(observers.created[0]!.disconnected).toBe(false);
+    expect(settleObservers()[0]!.disconnected).toBe(false);
 
     view.unmount();
 
-    expect(observers.created[0]!.disconnected).toBe(true);
+    expect(settleObservers()[0]!.disconnected).toBe(true);
     expect(frames.pending).toBe(0);
   });
 });

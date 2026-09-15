@@ -28,7 +28,7 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
   // HitlConversationPanel renders the field-assist PromptField. Stub it to a
   // plain element exposing the placeholder text so the cinatra#767 surface test
-  // can assert presence/absence of "Ask Cinatra to suggest edits to the fields
+  // can assert presence/absence of the window's sentence in the field
   // above…". The real PromptField pulls in browser-only deps jsdom can't load.
   // Use a <div> (not a raw <input>, which the design-system lint gate forbids in
   // favor of the shadcn <Input>) and surface the placeholder as text content.
@@ -262,8 +262,10 @@ describe("AgenticRunPanel HITL presentation branch", () => {
 // pending HITL. Default surface ("agent-detail") keeps it.
 // ---------------------------------------------------------------------------
 
-const FIELD_ASSIST_PLACEHOLDER =
-  /Ask Cinatra to suggest edits to the fields above/i;
+// The window opens its sentence the same way in all five of §X's readings
+// ("One window, five readings", design `458fb7ffce6c`), so presence/absence of
+// the box is read off that opening rather than off one surface's wording.
+const FIELD_ASSIST_PLACEHOLDER = /^Ask Cinatra /;
 
 describe("AgenticRunPanel field-assist prompt surface gate (cinatra#767)", () => {
   beforeEach(() => {

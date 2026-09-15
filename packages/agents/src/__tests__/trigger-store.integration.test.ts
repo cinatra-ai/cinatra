@@ -11,6 +11,13 @@
  *   7. releasedAt PRESERVATION — config-only upserts must NOT clobber a
  *      releasedAt set by a prior markTriggerReleasedInDb call
  *   8. releasedAt EXPLICIT CLEAR — passing releasedAt: null clears the column
+ *   9. markTriggerFiredInDb stamps last_fired_at and touches NOTHING else
+ *      (cinatra#2972) — in particular it never opens the run's own gate
+ *  10. stopRunTriggerInDb STOPS without deleting (cinatra#2972) — the row
+ *      survives, `stopped_at` is stamped, `enabled` goes false and the
+ *      scheduler id is KEPT, so the release job can still unschedule it
+ *  11. a config upsert cannot resurrect a stopped schedule — `stopped_at`
+ *      has no escape hatch on the upsert path, unlike `releasedAt`
  *
  * Setup pattern follows the package convention: live DB connection driven by
  * SUPABASE_DB_URL/SUPABASE_SCHEMA from .env.local (already provisioned by
@@ -25,6 +32,8 @@ import {
   readRunTriggerByRunId,
   deleteRunTriggerByRunId,
   markTriggerReleasedInDb,
+  markTriggerFiredInDb,
+  stopRunTriggerInDb,
 } from "../trigger-store";
 import { createAgentRun, createAgentTemplate } from "../store";
 import { db, agentBuilderPool } from "../db";
@@ -133,6 +142,128 @@ describe("trigger-store", () => {
     expect(record.jobSchedulerId).toBeNull();
     expect(record.createdAt).toBeInstanceOf(Date);
     expect(record.updatedAt).toBeInstanceOf(Date);
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2972 — the two writes plan (A) §7.2 as amended 2026-08-25 needs
+  // -------------------------------------------------------------------------
+
+  it("markTriggerFiredInDb stamps last_fired_at and opens no gate", async () => {
+    const runId = await ensureParentRun();
+    createdRunIds.push(runId);
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Europe/Berlin",
+      jobSchedulerId: "sched-2972",
+    });
+
+    const before = await readRunTriggerByRunId(runId);
+    expect(before?.lastFiredAt).toBeNull();
+
+    await markTriggerFiredInDb(runId);
+
+    const after = await readRunTriggerByRunId(runId);
+    expect(after?.lastFiredAt).toBeInstanceOf(Date);
+    expect(Math.abs((after!.lastFiredAt as Date).getTime() - Date.now())).toBeLessThan(60_000);
+    // THE POINT OF A SEPARATE COLUMN: the schedule-defining run's own gate is
+    // untouched, so the tick cannot release the run it was armed from.
+    expect(after?.releasedAt).toBeNull();
+    // …and nothing else moved either.
+    expect(after?.enabled).toBe(true);
+    expect(after?.cronExpression).toBe("0 9 * * 1-5");
+    expect(after?.jobSchedulerId).toBe("sched-2972");
+  });
+
+  it("a config upsert does NOT clobber last_fired_at", async () => {
+    const runId = await ensureParentRun();
+    createdRunIds.push(runId);
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1-5",
+    });
+    await markTriggerFiredInDb(runId);
+    const stamped = (await readRunTriggerByRunId(runId))!.lastFiredAt;
+    expect(stamped).toBeInstanceOf(Date);
+
+    // Save changes on a fired recurring schedule re-arms it — the stamp must
+    // survive, or the control the stamp gates would vanish on the first save.
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 8 * * 1-5",
+    });
+
+    const after = await readRunTriggerByRunId(runId);
+    expect(after?.cronExpression).toBe("0 8 * * 1-5");
+    expect(after?.lastFiredAt?.getTime()).toBe((stamped as Date).getTime());
+  });
+
+  it("stopRunTriggerInDb stops the schedule and does NOT delete the row", async () => {
+    const runId = await ensureParentRun();
+    createdRunIds.push(runId);
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Europe/Berlin",
+      jobSchedulerId: "sched-2972-stop",
+    });
+    await markTriggerFiredInDb(runId);
+
+    await stopRunTriggerInDb(runId);
+
+    const after = await readRunTriggerByRunId(runId);
+    // THE ROW IS STILL THERE — "it never deletes the schedule" — and the
+    // schedule it holds is still readable.
+    expect(after).not.toBeNull();
+    // THE STAMP IS THE STATE. `enabled` is set too, but only so the fire path's
+    // existing disabled-trigger skip keeps working; the reading is the stamp.
+    expect(after?.stoppedAt).toBeInstanceOf(Date);
+    expect(after?.enabled).toBe(false);
+    expect(after?.cronExpression).toBe("0 9 * * 1-5");
+    expect(after?.timezone).toBe("Europe/Berlin");
+    expect(after?.lastFiredAt).toBeInstanceOf(Date);
+    // THE SCHEDULER ID SURVIVES THE STOP, and that is deliberate. The stop
+    // stamps BEFORE it cancels, so the cancel can still fail and leave the
+    // scheduler live — and a stopped row with the id erased would leave a
+    // scheduler nothing can name. The retained id is what the release job
+    // unschedules with, on BOTH of its teardown paths: the `enabled: false`
+    // branch at the top of a tick, and the pre-clone re-read that finds a
+    // `stopped_at` landed mid-tick (see trigger-release-job).
+    expect(after?.jobSchedulerId).toBe("sched-2972-stop");
+    // And the gate is still shut: stopping a schedule releases nothing.
+    expect(after?.releasedAt).toBeNull();
+  });
+
+  it("a config upsert cannot resurrect a STOPPED schedule's stamp", async () => {
+    const runId = await ensureParentRun();
+    createdRunIds.push(runId);
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * 1-5",
+    });
+    await markTriggerFiredInDb(runId);
+    await stopRunTriggerInDb(runId);
+    const stamped = (await readRunTriggerByRunId(runId))!.stoppedAt;
+    expect(stamped).toBeInstanceOf(Date);
+
+    // A Save-changes upsert that lands after the stop — the interleaving the
+    // save guard refuses, pinned here at the STORE so the stamp survives even
+    // if a caller ever gets past that guard. Note `enabled` DOES come back to
+    // true on this path, which is exactly why it could not be the signal.
+    await createOrUpdateRunTrigger({
+      runId,
+      triggerType: "recurring",
+      cronExpression: "0 8 * * 1-5",
+    });
+
+    const after = await readRunTriggerByRunId(runId);
+    expect(after?.stoppedAt?.getTime()).toBe((stamped as Date).getTime());
+    expect(after?.enabled).toBe(true);
   });
 
   it("createOrUpdateRunTrigger upserts on subsequent calls", async () => {

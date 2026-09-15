@@ -201,6 +201,17 @@ function artifactObjectTypeIds(): Set<string> {
   return ids;
 }
 
+/**
+ * The registered artifact object-type ids, as a list (cinatra#3031, epic #3023
+ * W7). The dependency-scoped reads of plan (C) 0.26 need the CANDIDATE set the
+ * listing would otherwise read whole, so they can hand back only the admitted
+ * subset — a read-only projection of the same registry the listing uses, never
+ * a second source of truth about what an artifact type is.
+ */
+export function registeredArtifactTypeIds(): string[] {
+  return [...artifactObjectTypeIds()].sort();
+}
+
 // ---------------------------------------------------------------------------
 // Canonical object authorization (cinatra#1428 RBAC matrix).
 //
@@ -357,6 +368,15 @@ export function listArtifacts(input: {
   orgId: string | null;
   actor?: ActorContext;
   limit?: number;
+  // cinatra#3031 (epic #3023 W7, plan (C) 0.26): "the listing gains a filter by
+  // type and a cursor in place of its flat cap." The filter narrows the type
+  // set the listing reads at all — it is what a dependency-scoped read is
+  // bounded to, so it runs BEFORE the per-type fetch rather than over its
+  // result. An empty array means "no admitted type", which returns nothing;
+  // `undefined` is the historical "every registered artifact type".
+  types?: readonly string[];
+  // The keyset the cursor rides on (see `listArtifactsPage`).
+  before?: { createdAt: string; id: string };
   // Sealed-room read filter passthrough. When set, every per-type call to
   // `listObjectsByFilter` adds `AND project_id = $projectId` (subject to
   // CINATRA_SEALED_ROOM_ARTIFACTS / OBJECTS flags). Artifacts are objects,
@@ -368,9 +388,44 @@ export function listArtifacts(input: {
   // BEFORE the limit/pagination slice (never a caller tenant override).
   extensionPackageName?: string;
 }): ArtifactSummary[] {
+  return scanArtifacts(input).rows.slice(
+    0,
+    typeof input.limit === "number" ? input.limit : undefined,
+  );
+}
+
+/** The keyset one row rides on, in the order the listing sorts by. */
+type ArtifactKey = { createdAt: string; id: string };
+
+/**
+ * ONE read of the store, with the boundary the read is provably complete down
+ * to (cinatra#3031).
+ *
+ * `watermark` is the NEWEST last-row among the types whose fetch came back
+ * SATURATED (as many rows as were asked for). Below it some type's fetch may be
+ * incomplete, so it is the oldest point a page may end at; `null` means every
+ * type ran out and the listing is exhausted. The paging loop needs this because
+ * the per-type limit is applied in SQL while the authorization and extension
+ * filters run afterwards in JS: a page whose rows are all filtered away is NOT
+ * the end of the listing, and reporting it as one skips every older row for
+ * good.
+ */
+function scanArtifacts(input: {
+  orgId: string | null;
+  actor?: ActorContext;
+  limit?: number;
+  types?: readonly string[];
+  before?: ArtifactKey;
+  projectId?: string | null;
+  extensionPackageName?: string;
+}): { rows: ArtifactSummary[]; watermark: ArtifactKey | null } {
   ensureArtifactRegistry();
-  const typeIds = artifactObjectTypeIds();
-  if (typeIds.size === 0) return [];
+  let typeIds = artifactObjectTypeIds();
+  if (input.types !== undefined) {
+    const wanted = new Set(input.types);
+    typeIds = new Set([...typeIds].filter((t) => wanted.has(t)));
+  }
+  if (typeIds.size === 0) return { rows: [], watermark: null };
   // Resolve the extension id-set first so the per-type fetch can pre-filter
   // BEFORE applying the limit (correct pagination semantics).
   const extFilter =
@@ -378,6 +433,8 @@ export function listArtifacts(input: {
       ? listArtifactIdsForExtension(input.orgId, input.extensionPackageName)
       : null;
   let rawRecs: ObjectRecord[] = [];
+  const perTypeLimit = extFilter ? undefined : input.limit;
+  let watermark: ArtifactKey | null = null;
   for (const typeId of typeIds) {
     const recs = listObjectsByFilter(
       {
@@ -385,12 +442,22 @@ export function listArtifacts(input: {
         type: typeId,
         // When an extension filter is active, fetch without the per-type limit so
         // the filter applies BEFORE the final slice; otherwise keep the limit.
-        limit: extFilter ? undefined : input.limit,
+        limit: perTypeLimit,
         projectId: input.projectId ?? null,
+        ...(input.before ? { before: input.before } : {}),
       },
       input.actor,
     );
     rawRecs.push(...recs);
+    // Saturated: this type may have more rows below its last one, so the page
+    // may not end below that row.
+    if (typeof perTypeLimit === "number" && recs.length >= perTypeLimit) {
+      const last = recs[recs.length - 1];
+      if (last) {
+        const key = { createdAt: last.createdAt, id: last.id };
+        if (watermark === null || compareArtifactKeysDesc(key, watermark) < 0) watermark = key;
+      }
+    }
   }
   // Canonical object authorization post-filter (cinatra#1428): drop rows the
   // kernel `object.read` decision denies — the same per-row gate the objects
@@ -424,8 +491,191 @@ export function listArtifacts(input: {
   const out: ArtifactSummary[] = rawRecs.map((r) =>
     toSummary(r, identityByArtifact.get(r.id), presentationByArtifact.get(r.id)),
   );
-  out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  return typeof input.limit === "number" ? out.slice(0, input.limit) : out;
+  // Same order the store applies per type, tie-broken the same way, so a page
+  // boundary means the same thing on both sides of the merge.
+  out.sort((a, b) =>
+    compareArtifactKeysDesc(
+      { createdAt: a.createdAt, id: a.artifactId },
+      { createdAt: b.createdAt, id: b.artifactId },
+    ),
+  );
+  return { rows: out, watermark };
+}
+
+/** `created_at DESC, id DESC` — the order the store applies, in JS. */
+function compareArtifactKeysDesc(a: ArtifactKey, b: ArtifactKey): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? 1 : -1;
+}
+
+// ---------------------------------------------------------------------------
+// THE CURSOR (cinatra#3031, epic #3023 W7; plan (C) enabler 0.26).
+//
+// "the listing returns one bounded page — a hundred rows unless asked for up to
+// five hundred — with no continuation" was the whole of it before: a caller
+// with more than five hundred artifacts could not reach the rest, and a flow
+// reading a page per hundred ideas (§8.9) had no way to ask for the next one.
+//
+// The cursor is the LAST ROW OF THE PAGE, not an offset: `(createdAt, id)`,
+// compared against the same `created_at DESC, id DESC` order the store sorts
+// by. A row written between two pages therefore cannot shift a boundary and
+// make the second page skip or repeat a row, which is exactly what an OFFSET
+// does. It is opaque on purpose — base64 of a tuple, not a promise about the
+// tuple's shape — so the paging key can change without breaking a caller that
+// stored one.
+// ---------------------------------------------------------------------------
+
+/** The default page, and the ceiling a caller may ask for. */
+export const ARTIFACT_PAGE_DEFAULT_LIMIT = 100;
+export const ARTIFACT_PAGE_MAX_LIMIT = 500;
+/** How many store scans one page may take before it returns short. */
+const ARTIFACT_PAGE_MAX_SCANS = 25;
+
+export type ArtifactPage = {
+  artifacts: ArtifactSummary[];
+  /** Pass back as `cursor` for the next page; null when the listing is exhausted. */
+  nextCursor: string | null;
+};
+
+export function encodeArtifactCursor(row: { createdAt: string; artifactId: string }): string {
+  return Buffer.from(
+    JSON.stringify({ c: row.createdAt, i: row.artifactId }),
+    "utf8",
+  ).toString("base64url");
+}
+
+/** Null for anything that is not a cursor this listing wrote. */
+export function decodeArtifactCursor(
+  cursor: string,
+): { createdAt: string; id: string } | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      c?: unknown;
+      i?: unknown;
+    };
+    if (typeof parsed.c !== "string" || typeof parsed.i !== "string") return null;
+    // Shape is not enough: an unparsable timestamp would reach the store as a
+    // `::timestamptz` cast and come back as an untyped database error rather
+    // than as the stated refusal. (The cursor is NOT a capability and is not
+    // signed — it only narrows a listing the caller is already authorised for,
+    // so a forged one can reveal nothing the caller could not already read.)
+    if (parsed.i === "" || Number.isNaN(Date.parse(parsed.c))) return null;
+    return { createdAt: parsed.c, id: parsed.i };
+  } catch {
+    return null;
+  }
+}
+
+export class ArtifactCursorRefusal extends Error {
+  readonly reason = "invalid-cursor";
+  constructor(cursor: string) {
+    super(
+      `artifacts_list: ${JSON.stringify(cursor.slice(0, 32))} is not a cursor this listing wrote — ` +
+        `refusing rather than silently restarting from the first page`,
+    );
+    this.name = "ArtifactCursorRefusal";
+  }
+}
+
+/**
+ * One page of the listing, with the continuation. `listArtifacts` keeps its
+ * flat-cap shape for every caller that had one.
+ */
+export function listArtifactsPage(input: {
+  orgId: string | null;
+  actor?: ActorContext;
+  limit?: number;
+  cursor?: string | null;
+  types?: readonly string[];
+  projectId?: string | null;
+  extensionPackageName?: string;
+}): ArtifactPage {
+  const limit = Math.min(
+    Math.max(1, input.limit ?? ARTIFACT_PAGE_DEFAULT_LIMIT),
+    ARTIFACT_PAGE_MAX_LIMIT,
+  );
+  let before: { createdAt: string; id: string } | undefined;
+  if (input.cursor) {
+    const decoded = decodeArtifactCursor(input.cursor);
+    // A cursor that does not decode is REFUSED, never treated as "no cursor":
+    // silently restarting from the first page is how a paging loop turns into
+    // an endless one that re-reads the same rows.
+    if (!decoded) throw new ArtifactCursorRefusal(input.cursor);
+    before = decoded;
+  }
+  // ONE scan is not enough to answer "is there another page". The per-type
+  // limit is applied in SQL; the `object.read` authorization filter and the
+  // extension id-set filter run afterwards in JS. A scan whose rows are all
+  // filtered away therefore looks exactly like the end of the listing while
+  // older readable rows are still there — and reporting it as the end skips
+  // them for good. So the page is filled by scanning DOWN from the cursor,
+  // each scan starting where the previous one is provably complete to.
+  const seen = new Set<string>();
+  const collected: ArtifactSummary[] = [];
+  let boundary: ArtifactKey | null = before ?? null;
+  let exhausted = false;
+  let scans = 0;
+  for (;;) {
+    const scan = scanArtifacts({
+      orgId: input.orgId,
+      ...(input.actor ? { actor: input.actor } : {}),
+      // One more than the page, so "is there another page" is answered by the
+      // read itself rather than by a second count query.
+      limit: limit + 1,
+      ...(input.types !== undefined ? { types: input.types } : {}),
+      ...(boundary ? { before: boundary } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.extensionPackageName ? { extensionPackageName: input.extensionPackageName } : {}),
+    });
+    for (const row of scan.rows) {
+      if (seen.has(row.artifactId)) continue;
+      seen.add(row.artifactId);
+      collected.push(row);
+    }
+    scans += 1;
+    if (scan.watermark === null) {
+      // Every type ran out: what is in hand is the whole rest of the listing.
+      exhausted = true;
+      break;
+    }
+    const mark: ArtifactKey = scan.watermark;
+    boundary = mark;
+    const usableSoFar = collected.filter(
+      (r) => compareArtifactKeysDesc({ createdAt: r.createdAt, id: r.artifactId }, mark) <= 0,
+    );
+    if (usableSoFar.length > limit) break;
+    // A bounded walk: a listing that is almost entirely unreadable to this
+    // actor returns a SHORT page with a continuation rather than spinning.
+    if (scans >= ARTIFACT_PAGE_MAX_SCANS) break;
+  }
+
+  // Only rows at or above the last boundary are provably complete — below it a
+  // saturated type may still hold rows this walk never read.
+  const usable = exhausted
+    ? collected
+    : collected.filter(
+        (r) =>
+          boundary === null ||
+          compareArtifactKeysDesc({ createdAt: r.createdAt, id: r.artifactId }, boundary) <= 0,
+      );
+  usable.sort((a, b) =>
+    compareArtifactKeysDesc(
+      { createdAt: a.createdAt, id: a.artifactId },
+      { createdAt: b.createdAt, id: b.artifactId },
+    ),
+  );
+  const page = usable.slice(0, limit);
+  const last = page[page.length - 1];
+  let nextCursor: string | null = null;
+  if (usable.length > limit && last) {
+    nextCursor = encodeArtifactCursor(last);
+  } else if (!exhausted && boundary) {
+    // The page is short only because rows were filtered away; the continuation
+    // is the point the walk is complete to, not the last row it could show.
+    nextCursor = encodeArtifactCursor({ createdAt: boundary.createdAt, artifactId: boundary.id });
+  }
+  return { artifacts: page, nextCursor };
 }
 
 /** Fetch one artifact (object metadata), actor-scoped. Null if not an
@@ -504,7 +754,49 @@ export function readArtifactForDetail(input: {
   orgId: string | null;
   actor?: ActorContext;
 }): ArtifactDetailAccess {
-  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor);
+  return readArtifactAccess(input, { allowDeleted: false });
+}
+
+/**
+ * Resolve one artifact for the SETTLED, read-only review reading — the
+ * ARTIFACT-LEVEL half of enabler 0.9 of `PLAN: Agents Lifecycle (C)`
+ * (cinatra#3027 / epic #3023).
+ *
+ * IDENTICAL to {@link readArtifactForDetail} in every authorization respect: the
+ * same actor-scoped ownership filter and the same canonical `object.read`
+ * decision, so a caller who cannot read the row live cannot read it here either.
+ * ONE difference, and it is the enabler's whole sentence: a TOMBSTONED row still
+ * resolves — "a run- or gate-authorized historical reader reads exactly that
+ * pinned representation EVEN AFTER THE ARTIFACT IS TOMBSTONED; the ordinary
+ * artifact page stays live and latest."
+ *
+ * WHY IT HAS TO EXIST. The historical REVISION reader alone could not deliver
+ * the enabler: the live artifact read runs first and answers `not-found` for a
+ * tombstone, so the settled card floored at `unknown-or-tombstoned` before the
+ * revision reader was ever consulted. Both halves of the read go historical
+ * together or neither does.
+ *
+ * ONE CALLER: the review binder's settled reading, over a target the gate itself
+ * pinned. `allowDeleted` is the same option the byte routes' pin override
+ * already uses, under the same visibility check.
+ */
+export function readArtifactForSettledReview(input: {
+  artifactId: string;
+  orgId: string | null;
+  actor?: ActorContext;
+}): ArtifactDetailAccess {
+  return readArtifactAccess(input, { allowDeleted: true });
+}
+
+/** The shared body of the two readings above — one implementation, one place a
+ *  rung could be dropped. `allowDeleted` is the ONLY thing that varies. */
+function readArtifactAccess(
+  input: { artifactId: string; orgId: string | null; actor?: ActorContext },
+  options: { allowDeleted: boolean },
+): ArtifactDetailAccess {
+  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor, {
+    allowDeleted: options.allowDeleted,
+  });
   if (!rec) return { kind: "not-found" };
   ensureArtifactRegistry();
   if (!artifactObjectTypeIds().has(rec.type)) return { kind: "not-found" };

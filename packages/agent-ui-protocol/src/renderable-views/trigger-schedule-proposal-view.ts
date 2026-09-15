@@ -28,11 +28,15 @@
 // question `When should this run?` over the three option rows, the chosen row
 // taking the indigo edge and tint and owning its fields, and the estimated
 // duration beneath", with "no raw cron field: the builder's selections are what
-// the reader sees and confirms", closing on the Adjust / Confirm floor. The
-// settled body is "the read-only Trigger configuration summary — type, the
-// plain-language schedule, timezone — then the steps held until the trigger
-// fires, then two quiet right-aligned controls: Cancel trigger, and Release now
-// for an administrator".
+// the reader sees and confirms". The FLOOR is Confirm and nothing else — plan
+// (A) §7.2: "The option rows are editable as they stand: until you confirm, you
+// change the proposal directly on the card — the rows are never locked behind a
+// separate step. The floor is **Confirm**". The settled body is the SAME rows
+// again, now showing the armed schedule, with **Save changes** to re-arm; the
+// trigger's own chrome — the read-only Trigger configuration summary, the steps
+// held until the trigger fires, and the two quiet controls Cancel trigger and
+// Release now — "lives on the run page's schedule step, not in the
+// conversation", so it is carried in this body and drawn by the page hosts.
 //
 // Tier-neutral: types and zod schemas only. No server-only import.
 // ---------------------------------------------------------------------------
@@ -161,12 +165,36 @@ export const triggerScheduleProposalPendingViewSchema = z
     agentName: z.string().min(1).max(200),
     schedule: proposedScheduleSchema,
     durationCopy: durationCopySchema,
-    /** The floor: Confirm is pressable. Adjust is always available (it only
-     *  re-opens the rows — it mutates nothing, and re-proposing is free). */
+    /** The floor, and the whole floor: Confirm is pressable. There is no second
+     *  control — plan (A) §7.4 as-designed step 3, "Correct the proposal
+     *  directly in the rows if it is not right; press **Confirm** when it is."
+     *  A card whose rows were edited re-proposes and confirms in one press, on
+     *  the new ref, because a proposal is single-use. */
     canConfirm: z.boolean(),
     /** Surface-safe phrase about the READER's own standing when `canConfirm`
      *  is false. Never names the agent, the org, or a policy. */
     restrictedReason: z.string().min(1).max(200).nullable(),
+    /**
+     * THIS PENDING CARD IS A RUN THAT IS ALREADY WAITING (cinatra#3044).
+     *
+     * The phase draws identically either way — the same rows, the same one
+     * Confirm — but the two subjects take two different roads on the press, and
+     * only the server can tell them apart from a ref. A PROPOSAL is single-use,
+     * so an edited Confirm has to re-propose and confirm the replacement; a
+     * WAITING RUN has no token to re-mint and no run to create, so its Confirm
+     * is one op carrying the rows, straight onto the existing run-trigger path.
+     * Sending the composite at a waiting run would ask a re-propose of a
+     * proposal that never existed.
+     *
+     * OMITTED UNLESS TRUE, and deliberately NOT a version bump — the same
+     * reasoning `superseded` records on the settled body. A stale client bundle
+     * parsing this schema with `.strict()` rejects a payload carrying a key it
+     * does not know, so emitting the marker on EVERY pending card would blank
+     * every ordinary proposal card on such a tab. Emitted only when true, the
+     * one card a stale bundle cannot draw is the one that did not exist before
+     * this change.
+     */
+    runPending: z.literal(true).optional(),
   })
   .strict();
 
@@ -191,6 +219,26 @@ export const triggerScheduleProposalSettledViewSchema = z
     /** The run the confirmed proposal created. The card's Cancel / Release
      *  controls act on it, and the reader can already read it. */
     runId: z.string().min(1).max(128),
+    /**
+     * THE ARMED SCHEDULE, AS SELECTIONS — the same vocabulary the proposal
+     * body carries, so the settled card draws THE SAME OPTION ROWS.
+     *
+     * Plan (A) §7.2: "No second card is drawn for the confirmed state: the
+     * same card, with the same option rows, now shows the armed schedule; to
+     * change it you return to the card, change the rows and press **Save
+     * changes**, which re-arms the trigger." Rows cannot be drawn from
+     * `scheduleCopy` — that is prose — so the selections travel too, read back
+     * from what was actually INSTALLED (the trigger row, or the install intent
+     * while it drains) rather than from the token the reader happens to hold.
+     * That is also why a superseded card's rows are right: they come from the
+     * durable row the family settled on, not from this card's own proposal.
+     *
+     * Still no cron field. The recurring expression is parsed back into the
+     * same closed selection vocabulary by the one module that knows what a
+     * selection means, exactly as the scheduling step completes a partial
+     * reading before drawing it.
+     */
+    schedule: proposedScheduleSchema,
     triggerType: z.enum(["immediate", "scheduled", "recurring"]),
     scheduleCopy: z.string().min(1).max(200),
     /** The card was ADJUSTED away from before Confirm landed, so the family
@@ -209,12 +257,135 @@ export const triggerScheduleProposalSettledViewSchema = z
     superseded: z.boolean().optional(),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
-    /** True once the gate has been opened (the trigger fired or was released).
-     *  §VI's controls are both disabled past that point. */
+    /**
+     * True once the side-effect gate has been opened.
+     *
+     * A COMPATIBILITY SHIM, READ BY NOBODY (cinatra#3174 fix leg 2) — the same
+     * standing `canRelease` holds below, reached by the same road.
+     *
+     * IT USED TO BE THE ONE-OFF'S FIRING. §VI names five readings and each is
+     * keyed on the phase and on whether the schedule has FIRED; this field
+     * marks the gate OPENING, which is not the same event. The first graded
+     * proof round of cinatra#3193 drew "Fired, one-off — the schedule was
+     * spent", read-only rows and no floor, over a run whose gate had opened and
+     * which then failed without ever starting. Fix leg 1 moved every reading
+     * onto `firedOnce` — the tick's own stamp for a recurring schedule, the
+     * gate stamp READ TOGETHER WITH THE RUN'S OWN ROW for a one-off — and
+     * removed the status label that was this field's last reader, since §VI
+     * draws none on any reading. No renderer consults this key now, and the
+     * one-card gate's authorized body list no longer names it.
+     *
+     * IT IS STILL EMITTED, as the resolver's honest answer rather than a
+     * constant, because a client still running an older bundle carries its own
+     * copy of this object in which `released` is a REQUIRED key — and a missing
+     * required key fails that parse, `.strict()` or not. (`.strict()` is the
+     * other direction: it is what makes ADDING a key to this object a breaking
+     * change, which is why `firedOnce` travels beside the body instead.)
+     * Dropping the emission would therefore blank every settled schedule card
+     * on such a tab — a wider harm than one unread boolean on the wire. Removable once no bundle predating fix
+     * leg 1 can still be live; the schema entry goes with it. The value stays
+     * live SERVER-side either way — `ProposalResolution.released` is what
+     * refuses a re-save on a spent one-off — so this is a wire retirement, not
+     * a signal's.
+     *
+     * Pinned in `scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs` and
+     * in `trigger-schedule-proposal-card-wire.test.ts`.
+     */
     released: z.boolean(),
+    /**
+     * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)? NOT HERE - IT IS
+     * CARRIED BESIDE THIS BODY (cinatra#3193).
+     *
+     * The reading itself is real and the card needs it: the section names
+     * "Fired, recurring - runs still to come" as a reading of its own, and the
+     * only other signal that could have carried it, `canCancel`, goes false the
+     * moment the schedule is stopped, so a stopped-after-firing card and a
+     * never-fired one answer identically here.
+     *
+     * WHY IT IS NOT A KEY ON THIS OBJECT. This schema is `.strict()` and
+     * `version` is a `z.literal`, which between them leave a version-1 body
+     * exactly one compatible shape: the keys a version-1 parser already
+     * declares, and no others. A NEW key is rejected by every bundle still
+     * running the shipped schema, and a version BUMP is rejected by all of them
+     * for every state at once - so neither road keeps an older client drawing.
+     * `superseded` and `stopped` bought their way past that with omission,
+     * which confines the rejection to a state that is genuinely rare. A fired
+     * schedule is NOT rare: every recurring schedule that has ever run is in
+     * it, and omit-unless-true would therefore blank the common case rather
+     * than a corner of it. That is the whole finding, and it is why this field
+     * is gone from the body rather than made optional in it.
+     *
+     * WHERE IT WENT. `parseLifecycleResolveEnvelope` reads the resolve answer
+     * by NAME - kind, state, body, islandSrc - and ignores every other key on
+     * it, which is exactly the tolerance this `.strict()` object does not have
+     * and cannot be given. So the reading travels there, as a sibling of the
+     * body, the same road `islandSrc` already takes; see
+     * `LifecycleCardAsideByKind` in `lifecycle-cards.ts`. A version-1 parser
+     * then accepts every body this producer emits, and this parser accepts
+     * every version-1 body - both directions, with `.strict()` intact.
+     * Pinned in `trigger-schedule-proposal-card-wire.test.ts`.
+     */
+    /**
+     * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
+     * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: it "stops the
+     * recurring schedule and then makes the scheduler non-editable". The card
+     * draws the rows read-only and no floor at all.
+     *
+     * OPTIONAL AND OMITTED unless true, exactly like `superseded` above and for
+     * the same reason: this schema is `.strict()`, so a client still running an
+     * older bundle would reject EVERY settled payload if the key were always
+     * sent. Omission confines that to the genuinely stopped card.
+     */
+    stopped: z.boolean().optional(),
+    /**
+     * May this reader press **Save changes** — re-arm the trigger from the rows
+     * on this card (plan (A) §7.2 step 6, "change the rows and press **Save
+     * changes** → **End state: re-armed**")?
+     *
+     * False for a released trigger, for one still arming, and for a ONE-OFF
+     * that has already fired: a single delayed job that has run is not a
+     * schedule any more, and re-arming it would silently create a second run.
+     * The server refuses all three regardless — this is the reading that stops
+     * the card offering a control it knows will be refused.
+     */
+    canSave: z.boolean(),
+    /**
+     * May this reader press **Cancel schedule** — the ONE control the page's
+     * schedule step carries (cinatra#2972)?
+     *
+     * Plan (A) §7.2 as amended 2026-08-25: "its one control is **Cancel
+     * schedule**, shown only for a recurring schedule that has fired once".
+     * The whole reading is the producer's, so the renderer draws the control on
+     * this boolean alone and no host re-derives the rule.
+     *
+     * `canRelease` — "Run now for an administrator" — is RETIRED with the
+     * control the same amendment withdrew ("there is no Run now"). It is kept
+     * here as an OPTIONAL key that the producer still emits as a CONSTANT
+     * FALSE and that no renderer reads — a deliberate compatibility choice
+     * rather than dead weight.
+     *
+     * A ROLLING DEPLOY HAS TWO DIRECTIONS, and both are served by that pair:
+     *
+     *   · a NEW client against an OLD server still sending `canRelease` — the
+     *     `.strict()` parse would reject the unknown key and blank the card.
+     *     `.optional()` is what tolerates it.
+     *   · an OLD client against a NEW server — the stale bundle's own schema
+     *     still REQUIRES the key, so the new server has to keep sending one.
+     *     That is why the producer emits a constant `false` rather than
+     *     omitting the field.
+     *
+     * Emitting `false` cannot bring Run now back: there is no control, no
+     * confirm strip and no `release` op left to read it, and a test pins that
+     * the card's source never mentions the name. Bumping
+     * `TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION` would have served neither
+     * direction — it is a `z.literal`, so a bump makes every stale client
+     * reject every card of every state.
+     *
+     * The emission is removable once no bundle predating this change can still
+     * be live; the schema entry goes with it.
+     */
+    canRelease: z.boolean().optional(),
     canCancel: z.boolean(),
-    /** "Release now for an administrator" — admin-only, by design. */
-    canRelease: z.boolean(),
     /** The install is durable but not yet visible to the scheduler: the outbox
      *  intent has not drained. The card says "arming…" rather than offering
      *  controls over a schedule that is still being installed. */
@@ -227,6 +398,46 @@ export type TriggerScheduleProposalSettledView = z.infer<
 >;
 
 /**
+ * EXPIRED, and never confirmed — the proposal's 30-minute window closed with
+ * nobody pressing anything.
+ *
+ * A DRAWN state, not an absence. §VI is explicit that an expired proposal "is
+ * not an error state — the card says so and Adjust re-proposes for free", and
+ * §IV reserves the undrawn answer for a reader who may not see the subject at
+ * all. Collapsing the two would make every reader whose proposal timed out
+ * indistinguishable from a reader who was never entitled to it — and would
+ * delete the card, and the question it asked, out of the transcript.
+ *
+ * IT KEEPS THE SAME FLOOR AS THE LIVE PROPOSAL. Plan (A) §7.2 step 2: "an
+ * expired proposal **stays visible**, still editable, with **Confirm** to
+ * propose again", and §7.4 as-designed step 5 repeats it. So the expired card
+ * is not a dead reading with a second control bolted on: it is the same card,
+ * the same editable rows and the same Confirm — the press simply re-proposes
+ * before it confirms, because the old token is unspendable.
+ *
+ * `schedule` is the SELECTIONS the expired proposal named, so the rows re-open
+ * on what the reader last saw rather than on an empty form. Nothing here is new
+ * disclosure: it is the same projection of the same token the pending body
+ * already carried to the same reader.
+ */
+export const triggerScheduleProposalExpiredViewSchema = z
+  .object({
+    phase: z.literal("expired"),
+    version: z.literal(TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION),
+    agentName: z.string().min(1).max(200),
+    schedule: proposedScheduleSchema,
+    /** The plain-language line ("Every weekday at 9:00 AM") — what expired,
+     *  in the words the reader was shown, from the same one renderer the
+     *  settled card reads back. */
+    scheduleCopy: z.string().min(1).max(200),
+  })
+  .strict();
+
+export type TriggerScheduleProposalExpiredView = z.infer<
+  typeof triggerScheduleProposalExpiredViewSchema
+>;
+
+/**
  * The one body a proposal card resolves to. `null` is not part of the union:
  * "there is nothing to draw" is expressed by S1's `absent` STATE, and a state
  * that draws nothing carries no body at all.
@@ -234,6 +445,7 @@ export type TriggerScheduleProposalSettledView = z.infer<
 export const triggerScheduleProposalViewBodySchema = z.union([
   triggerScheduleProposalPendingViewSchema,
   triggerScheduleProposalSettledViewSchema,
+  triggerScheduleProposalExpiredViewSchema,
 ]);
 
 export type TriggerScheduleProposalViewBody = z.infer<

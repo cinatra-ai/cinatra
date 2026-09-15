@@ -24,7 +24,7 @@
  *
  * Runner (real DB required — else the suite self-skips):
  *   SUPABASE_DB_URL=<verify pg conn> SUPABASE_SCHEMA=<lane schema> \
- *     pnpm exec vitest run --config vitest.integration-1983.config.ts
+ *     pnpm exec vitest run --config vitest/integration/1983.config.ts
  * (The SUPABASE_SCHEMA schema is CREATED + cloned in beforeAll and DROPPED in
  * afterAll; the store's `@/lib/database` is shimmed to resolve conn/schema from
  * these env vars — see tests/__stubs__/database-realconn-1983.ts.)
@@ -34,6 +34,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { HostEmailRoutingService } from "@cinatra-ai/sdk-extensions";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const SCHEMA = (process.env.SUPABASE_SCHEMA ?? "").trim();
@@ -58,7 +59,7 @@ const SHARED_SCHEMAS = new Set([
 // A real DB AND a lane-owned, drop-safe schema are required for this suite to run.
 const HAS_REAL_DB =
   DB_URL !== "" &&
-  !DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 

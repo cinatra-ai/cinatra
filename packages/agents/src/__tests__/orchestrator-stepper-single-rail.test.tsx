@@ -2,7 +2,7 @@
 /**
  * ONE step rail on the run detail — the DOM half (cinatra#2739).
  *
- * The reported regression (owner evidence `evidence/2370-s4-e2e/E12`): the Email
+ * The reported regression (owner evidence, the S4 E2E round, cell E12): the Email
  * Outreach Agent run detail drew the SAME five steps TWICE, side by side — the
  * page-level `RunStepRailPanel` on the left, `OrchestratorStepperPanel`'s own
  * `StepperColumn` on the right. Owner ruling 2026-08-14: exactly ONE column.

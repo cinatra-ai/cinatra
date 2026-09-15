@@ -6,63 +6,73 @@
 // SOURCE assertions (same convention as the runtime-lifecycle
 // `runtime-discovery-surface-wiring.test.ts`) catch a future refactor silently
 // dropping the gate from a surface.
+//
+// AMENDED for cinatra#2935 (lifecycle-b W5d). The chat's server-side
+// sentence-matcher used to be a dispatch surface of its own and carried its own
+// copy of this gate; it is gone, and with it the second surface these guards had
+// to watch. There is now ONE gated start core — the `agent_run` primitive — and
+// two doors onto it: the assistant's own tool call in the chat, and the widget's
+// one narrowly scoped start. So the guards below follow the surfaces that exist:
+// the core still gates, and neither door bypasses it.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(__dirname, "..");
+const REPO = join(ROOT, "..");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+const readRepo = (rel: string) => readFileSync(join(REPO, rel), "utf8");
 
-describe("chat explicit-dispatch surface routes through the config-needs run gate", () => {
-  const src = read("app/api/chat/explicit-dispatch-server.ts");
+describe("the ONE start core routes through the config-needs run gate", () => {
+  const src = readRepo("packages/agents/src/mcp/handlers.ts");
 
-  it("calls assertAgentRunReadyByPackage before dispatch", () => {
+  it("agent_run calls assertAgentRunReadyByPackage before it launches", () => {
     expect(src).toMatch(/assertAgentRunReadyByPackage/);
     expect(src).toMatch(/agent-run-readiness/);
   });
 
-  it("fails closed with a TERMINAL result (no LLM fallthrough) naming the connectors", () => {
-    // A terminal:true short-circuit is how runner.ts early-returns without the
-    // LLM fallback; the unconfigured connectors are surfaced in the SSE.
-    expect(src).toMatch(/terminal:\s*true[\s\S]*notConfigured\.error|notConfigured\.error[\s\S]*terminal:\s*true/);
-    expect(src).toMatch(/unconfiguredConnectors/);
+  it("the gate runs BEFORE the launch, and fails closed by returning its refusal", () => {
+    const gateIdx = src.indexOf("assertAgentRunReadyByPackage");
+    const launchIdx = src.indexOf("await createAgentRunForLaunchFrame({");
+    expect(gateIdx).toBeGreaterThan(-1);
+    expect(launchIdx).toBeGreaterThan(-1);
+    expect(gateIdx).toBeLessThan(launchIdx);
+    expect(src).toMatch(/if \(notConfigured\) return notConfigured;/);
   });
 
-  it("gates BEFORE the input-extraction LLM round-trip", () => {
-    const gateIdx = src.indexOf("assertAgentRunReadyByPackage");
-    const extractIdx = src.indexOf("extractInputsFromPrompt(packageName, input.userPrompt");
-    expect(gateIdx).toBeGreaterThan(-1);
-    expect(extractIdx).toBeGreaterThan(-1);
-    expect(gateIdx).toBeLessThan(extractIdx);
+  it("the agent-creation preflight moved onto the same road with it", () => {
+    // It used to run ONLY on the removed chat pre-router, so a run started any
+    // other way skipped it. It now guards every start.
+    expect(src).toMatch(/refuseIfCreationPreflightFails/);
+    const preflightIdx = src.indexOf(
+      "await refuseIfCreationPreflightFails(template.packageName, identifierForError)",
+    );
+    const launchIdx = src.indexOf("await createAgentRunForLaunchFrame({");
+    expect(preflightIdx).toBeGreaterThan(-1);
+    expect(preflightIdx).toBeLessThan(launchIdx);
   });
 });
 
-describe("chat runner is covered transitively by its two gated dispatch mechanisms", () => {
-  // cinatra#1037 P2a extracted the conversational orchestration out of
-  // app/api/chat/runner.ts into the assistant-config-parameterized runtime
-  // (lib/assistant-runtime/runtime.ts); runner.ts is now a thin binding that
-  // delegates to it, so the dispatch surface these assertions pin lives in the
-  // runtime module.
-  const runner = read("app/api/chat/runner.ts");
+describe("neither door onto that core carries a start path of its own", () => {
   const runtime = read("lib/assistant-runtime/runtime.ts");
+  const runner = read("app/api/chat/runner.ts");
+  const widgetStart = read("lib/lifecycle/named-agent-start-mcp.ts");
 
-  it("dispatches only via serverSideExplicitDispatch (gated) or the MCP agent_run primitive (gated)", () => {
-    // the runtime has no un-gated dispatch path of its own: the explicit path
-    // goes through serverSideExplicitDispatch (config-gated), and the LLM path
-    // goes through the MCP agent_run primitive (config-gated in handlers.ts).
-    expect(runtime).toMatch(/serverSideExplicitDispatch/);
-    // and it honours the terminal short-circuit the gate returns.
-    expect(runtime).toMatch(/terminal/);
-    // runner.ts stays the thin delegate onto that runtime — it must not grow a
-    // dispatch path of its own outside the gated runtime.
+  it("the chat runtime has NO pre-model dispatcher left", () => {
+    // The removed pair, named so a reintroduction is caught by name.
+    expect(runtime).not.toMatch(/serverSideExplicitDispatch/);
+    expect(runtime).not.toMatch(/detectExplicitDispatchPackage/);
+    expect(runtime).not.toMatch(/detectExplicitDispatchDirective/);
+    // runner.ts stays the thin delegate onto the runtime.
     expect(runner).toMatch(/runAssistantTurn/);
     expect(runner).not.toMatch(/serverSideExplicitDispatch/);
   });
-});
 
-// NOTE (cinatra#1221, owner ruling 2026-07-22 (groganz)): the legacy widget
-// relay surface `app/api/agents/[agentSlug]/stream/route.ts` was DELETED — the
-// public-site widget moved onto the unified assistant broker
-// (`app/api/assistants/chat/route.ts`), which pre-creates its OBO-carrier run
-// through the same MCP agent_run primitive (config-gated in the handler barrel).
-// Its dedicated config-needs-gate source assertion was removed with the route.
+  it("the widget's start invokes the gated primitive rather than creating a run", () => {
+    expect(widgetStart).toMatch(/primitiveName: "agent_run"/);
+    // No creation call of its own — the run-creation fence sees one producer.
+    expect(widgetStart).not.toMatch(/createAgentRun\(/);
+    expect(widgetStart).not.toMatch(/launchAgentRun\(/);
+    expect(widgetStart).not.toMatch(/enqueueAgentRun\(/);
+  });
+});

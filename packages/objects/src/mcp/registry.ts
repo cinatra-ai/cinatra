@@ -36,6 +36,16 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     description: "List all registered object types.",
     inputSchema: schemas.objectsTypesListSchema,
   },
+  // cinatra#1380 (epic #1373) — the shared-memory recall surface. The
+  // description is written FOR a tool-calling agent, and it names `mode`
+  // explicitly: a caller that cannot tell semantic recall from a recent-rows
+  // fallback will state things the memory corpus never said, which is the one
+  // failure this primitive exists to prevent.
+  "memory_recall": {
+    description:
+      "Recall shared agent-memory concepts by meaning. Searches ONLY the memory rows the caller is entitled to (scope lanes are derived server-side from the authenticated actor; there is no lane input). Optional `kind` filters on the concept's OKF frontmatter type, optional `projectId` restricts the recall to memory tagged for that project (project memory ONLY: pan-project/ambient memory is not returned; omit `projectId` to recall across your scope). ALWAYS read `mode`: \"semantic\" means the results are ranked answers to your query; \"degraded-recent\" means the semantic index was unavailable or returned no known rows, so these are simply RECENT memory rows in your scope and are NOT an answer to the query — do not present them as one. `ordering` says how the rows were sorted (\"semantic-rank\" or, on the degraded path, a plain \"lexical-fallback\" token match). Each item carries a capped body excerpt; read the whole concept with objects_get. A recall answer is also bounded in total size, so trailing rows can be dropped to keep it under the limit; when that happens the response says so with `meta.responseCeiling: \"applied\"`, which means there were MORE matching rows than you were given; ask again with a smaller `limit` if you need to see them.",
+    inputSchema: schemas.memoryRecallSchema,
+  },
   // Data Safety: Undo & Versioning MCP primitives.
   "change_set_undo": {
     description:
@@ -88,6 +98,36 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     inputSchema: schemas.remoteEffectAttemptRetrySchema,
   },
 };
+
+/**
+ * Resolve the caller's project grants for the frame's OWN identity pair.
+ *
+ * `resolveActorGrantsForUserInOrg` is the single canonical assembly (org role →
+ * teams → `readProjectGrantsForUser`), the same one the widget and session
+ * lineages call, so an objects primitive and an in-app read of the same row
+ * cannot disagree because one of them resolved the axis differently. It is
+ * called with the ids this frame resolved, never with an id from another
+ * source, so no identity is crossed.
+ *
+ * Imported dynamically: the host module pulls better-auth + the Postgres
+ * bridge, and this registry is loaded by the extension host at boot. Any
+ * failure (no ids, module unavailable, query error) returns `undefined` — the
+ * "not resolved" state both gates read as NO grants, so the failure direction
+ * is a refusal, never a widening.
+ */
+async function resolveFrameProjectGrants(
+  userId: string | null,
+  orgId: string | null,
+): Promise<Array<{ projectId: string }> | undefined> {
+  if (!userId || !orgId) return undefined;
+  try {
+    const { resolveActorGrantsForUserInOrg } = await import("@/lib/auth-session");
+    const { projectGrants } = await resolveActorGrantsForUserInOrg(userId, orgId);
+    return projectGrants;
+  } catch {
+    return undefined;
+  }
+}
 
 export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
   const handlers = {
@@ -152,6 +192,34 @@ export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
         // objects kernel `enforceResourceAccess` consults `actor.oboCeiling` to
         // confine the delegated run to its anchored scope (W2/#1051).
         if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
+        // Forward the canonical PROJECT-GRANT axis, resolved for the SAME
+        // identity pair this frame carries (userId + orgId read above). Two
+        // objects surfaces read `actor.projectGrants` directly and treat an
+        // unresolved axis as "no grants":
+        //   - `assertProjectReadAccess` (@/lib/sealed-room) — the 404-hidden
+        //     gate on an explicit `objects_save` projectId (cinatra#1377) and
+        //     on a project-filtered `objects_list`;
+        //   - `assertProjectWritable` (@/lib/project-writable) — the write-tier
+        //     gate on that same explicit binding.
+        // Without this stamp both refuse EVERY non-platform-admin caller over
+        // this transport, including one holding `write` on the target project.
+        // Sibling registries forward the same axis off their own frame —
+        // packages/projects/src/mcp/registry.ts:202 (session lineage),
+        // packages/agents/src/mcp/registry.ts:67 and src/lib/artifacts/mcp.ts:229
+        // (A2A carrier lineage). This registry has no A2A branch (identity is
+        // the transport-resolved pair only), so it resolves the axis for that
+        // pair through the canonical assembly instead of a carrier.
+        const projectGrants = await resolveFrameProjectGrants(userId, orgId);
+        if (projectGrants) {
+          actorBase.projectGrants = projectGrants;
+          // Single canonical derivation (sorted), never set independently of
+          // the grants — mirrors `buildActorContextFromPrimitive`
+          // (src/lib/authz/build-actor-context.ts:181-187) so a back-compat
+          // consumer reading the binary list cannot disagree with the grants.
+          actorBase.projectIds = projectGrants
+            .map((g) => g.projectId)
+            .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        }
 
         const result = await handler({
           primitiveName: name,

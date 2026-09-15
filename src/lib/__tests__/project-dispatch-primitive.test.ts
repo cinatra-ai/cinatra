@@ -41,6 +41,23 @@ vi.mock("@cinatra-ai/agents", () => ({
   // seat refusal is proven against the store's own set, not a stub.
   TERMINAL_RUN_STATUSES: new Set(["completed", "failed", "stopped"]),
 }));
+// THE ONE CREATOR (cinatra#2928). This primitive no longer names a creator: it
+// calls the coordinator's launch entry, which owns presence, the create-parked
+// ordering and the moment the run states. The mock is a FAITHFUL stand-in for
+// exactly the half this suite is about — it forwards the creation input and the
+// authority to the same `createAgentRun` mock every assertion below already
+// reads, so those assertions keep measuring what the primitive passes, and it
+// answers with the run carrier the real entry answers with.
+vi.mock("@cinatra-ai/agents/lifecycle-coordinator", () => ({
+  launchAgentRun: async (input: {
+    create: { kind: string; input: Record<string, unknown> };
+    authority?: unknown;
+  }) => ({
+    carrier: { kind: "run", run: await mocks.createAgentRun(input.create.input, input.authority) },
+    status: "queued",
+    moment: null,
+  }),
+}));
 vi.mock("@cinatra-ai/agents/project-instance-store", () => ({
   readProjectInstance: mocks.readProjectInstance,
 }));

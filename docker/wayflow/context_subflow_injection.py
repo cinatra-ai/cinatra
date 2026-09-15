@@ -66,6 +66,25 @@ _ALLOWED_SLOT_KEYS = {
     "readableOnly",
 }
 
+#: PARENT-SATISFIED CONTEXT SLOTS (cinatra#3032, plan (C) item 0.29).
+#:
+#:   "a composite agent declares in its manifest which of its own context slots
+#:   satisfy which slots of the agents it embeds, one line per child slot; the
+#:   runtime resolves the parent's pick once and hands it down, and the child's
+#:   pause never fires."
+#:
+#: The declaration lives on the composite agent's OWN metadata, beside its
+#: contextSlots, as ``metadata.cinatra.parentSatisfiedContextSlots``. It names
+#: ids only — never a value, never a reference — so the selection is still made
+#: through the context-selection road and finalized server-side, and the
+#: conformance rule that forbids the inert top-level slot-bindings bypass stays
+#: exactly as it is.
+_ALLOWED_PARENT_SATISFIED_KEYS = {
+    "parentSlotId",
+    "childPackage",
+    "childSlotId",
+}
+
 
 class ContextInjectionError(ValueError):
     """A declared context slot could not be injected — the mount must fail."""
@@ -280,6 +299,62 @@ def _validate_declared_slots(raw: Any, where: str) -> List[Dict[str, Any]]:
             raise ContextInjectionError(f"{loc}: invalid readableOnly")
         slots.append(entry)
     return slots
+
+
+def _validate_parent_satisfied_slots(raw: Any, where: str) -> List[Dict[str, Any]]:
+    """Strictly validate a PRESENT parentSatisfiedContextSlots value.
+
+    Mirrors packages/extensions/src/agent-context-slots-reader.ts
+    (readParentSatisfiedContextSlotsFromOas) field for field, and adds the
+    loader-level duplicate rejection the declaration's own shape implies: ONE
+    LINE PER CHILD SLOT, or a child would be handed two answers to one
+    question. Raises ContextInjectionError on ANY malformation — a present
+    declaration is executable input here, exactly as contextSlots is.
+    """
+    if not isinstance(raw, list):
+        raise ContextInjectionError(
+            f"{where}: metadata.cinatra.parentSatisfiedContextSlots must be an array"
+        )
+    lines: List[Dict[str, Any]] = []
+    seen: set = set()
+    for i, entry in enumerate(raw):
+        loc = f"{where}: parentSatisfiedContextSlots[{i}]"
+        if not isinstance(entry, dict):
+            raise ContextInjectionError(f"{loc} is not an object")
+        unknown = set(entry.keys()) - _ALLOWED_PARENT_SATISFIED_KEYS
+        if unknown:
+            raise ContextInjectionError(
+                f"{loc} has unknown key(s): {sorted(unknown)}"
+            )
+        for key in sorted(_ALLOWED_PARENT_SATISFIED_KEYS):
+            value = entry.get(key)
+            if not isinstance(value, str) or not value:
+                raise ContextInjectionError(
+                    f"{loc}: {key} must be a non-empty string"
+                )
+        key = (entry["childPackage"], entry["childSlotId"])
+        if key in seen:
+            raise ContextInjectionError(
+                f"{loc}: {entry['childPackage']} slot "
+                f"{entry['childSlotId']!r} is satisfied twice — one line per "
+                "child slot"
+            )
+        seen.add(key)
+        lines.append(entry)
+    return lines
+
+
+def _read_parent_satisfied_lines(
+    definition: Dict[str, Any], where: str
+) -> List[Dict[str, Any]]:
+    """The definition's own declared lines, validated. [] when absent/null."""
+    cin = _metadata_cinatra(definition)
+    if cin is None or "parentSatisfiedContextSlots" not in cin:
+        return []
+    raw = cin.get("parentSatisfiedContextSlots")
+    if raw is None:
+        return []
+    return _validate_parent_satisfied_slots(raw, where)
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +592,9 @@ def _consumer_edges_for_slot(
     single_slot: bool,
     injected_ids: set,
     def_label: str,
+    source_node_id: Optional[str] = None,
+    source_output: Optional[str] = None,
+    edge_prefix: str = "context",
 ) -> List[Dict[str, Any]]:
     """DataFlowEdges wiring the injected FlowNode's contextSlotBindings output
     into consumer inputs.
@@ -597,9 +675,15 @@ def _consumer_edges_for_slot(
         edges.append(
             {
                 "component_type": "DataFlowEdge",
-                "name": f"context_{slot_id}_bindings_to_{comp_id}",
-                "source_node": {"$component_ref": f"context_{slot_id}"},
-                "source_output": "contextSlotBindings",
+                "name": f"{edge_prefix}_{slot_id}_bindings_to_{comp_id}",
+                "source_node": {
+                    "$component_ref": source_node_id
+                    if source_node_id is not None
+                    else f"context_{slot_id}"
+                },
+                "source_output": source_output
+                if source_output is not None
+                else "contextSlotBindings",
                 "destination_node": {"$component_ref": comp_id},
                 "destination_input": target_input,
             }
@@ -617,13 +701,231 @@ def _consumer_edges_for_slot(
     return edges
 
 
+def _satisfied_child_slots(
+    doc: Dict[str, Any], label: str
+) -> Dict[int, set]:
+    """Which slots of which definitions a parent already answers.
+
+    Keyed by ``id(definition)`` of the CHILD definition, holding the child slot
+    ids some parent's line satisfies. A child slot in here gets NO injected
+    subflow — that is the whole point of item 0.29: "the runtime resolves the
+    parent's pick once and hands it down, and the child's pause never fires".
+
+    A line that names a package no embedded definition owns, or a slot that
+    package does not declare, is a MOUNT ERROR rather than a silent no-op: the
+    declaration exists to remove a pause, and a line that removes nothing is a
+    promise the composite makes and does not keep. (The same conflicts refuse
+    the install; this is the loader's own fail-closed backstop for a document
+    that reached a mount anyway.)
+    """
+    satisfied: Dict[int, set] = {}
+    carriers = _find_declaration_carriers(doc)
+    # Every carrier's own package + slots, so a line can be resolved to one.
+    owned: List[Tuple[Dict[str, Any], str, set]] = []
+    for definition, raw in carriers:
+        def_id = definition.get("id")
+        def_label = (
+            f"{label}: definition '{def_id}'"
+            if isinstance(def_id, str)
+            else f"{label}: root flow"
+        )
+        slots = _validate_declared_slots(raw, def_label)
+        if not slots:
+            continue
+        cin = _metadata_cinatra(definition) or {}
+        pkg = cin.get("packageName")
+        owned.append(
+            (
+                definition,
+                pkg if isinstance(pkg, str) and pkg else "",
+                {s["slotId"] for s in slots},
+            )
+        )
+
+    own_slot_ids = {id(definition): slot_ids for definition, _pkg, slot_ids in owned}
+
+    for definition, _raw in carriers:
+        def_id = definition.get("id")
+        def_label = (
+            f"{label}: definition '{def_id}'"
+            if isinstance(def_id, str)
+            else f"{label}: root flow"
+        )
+        for line in _read_parent_satisfied_lines(definition, def_label):
+            child_pkg = line["childPackage"]
+            child_slot = line["childSlotId"]
+            # THE PARENT MUST OWN THE SLOT IT SATISFIES WITH. Without this the
+            # line removes the child's pause and then hands down from a node
+            # that was never injected — a child left silently without the value
+            # it declares. A line naming a slot the parent does not declare is
+            # therefore a mount error, exactly as an unresolvable child is.
+            parent_slot = line["parentSlotId"]
+            if parent_slot not in own_slot_ids.get(id(definition), set()):
+                raise ContextInjectionError(
+                    f"{def_label}: parent-satisfied line names parent slot "
+                    f"{parent_slot!r}, which this agent does not declare in "
+                    "its own contextSlots"
+                )
+            target = None
+            for candidate, pkg, slot_ids in owned:
+                if candidate is definition or pkg != child_pkg:
+                    continue
+                if child_slot in slot_ids:
+                    target = candidate
+                    break
+            if target is None:
+                raise ContextInjectionError(
+                    f"{def_label}: parent-satisfied line for {child_pkg} slot "
+                    f"{child_slot!r} names no embedded agent in this document "
+                    "that declares it"
+                )
+            satisfied.setdefault(id(target), set()).add(child_slot)
+    return satisfied
+
+
+def _hand_down_to_child(
+    definition: Dict[str, Any],
+    child_definition: Dict[str, Any],
+    line: Dict[str, Any],
+    def_label: str,
+) -> Dict[str, Any]:
+    """Wire the parent's resolved pick into ONE embedded agent's slot.
+
+    The parent's injected context node already produced the FINALIZED selection
+    for its own slot — the pinned references the context-selection road settled
+    server-side. This threads that exact value, verbatim, into the child's
+    subflow node, and the child's own StartNode feeds it to the child's
+    consumers. Nothing is re-resolved, so nothing can be re-picked, and the
+    child never reaches a pause because no pausing subflow was put in front of
+    it.
+    """
+    child_slot = line["childSlotId"]
+    child_id = child_definition.get("id")
+    refs = definition.get("$referenced_components")
+    nodes = definition.get("nodes")
+    if not isinstance(refs, dict) or not isinstance(nodes, list):
+        raise ContextInjectionError(
+            f"{def_label}: unsupported definition shape (expected "
+            "$referenced_components object + nodes array)"
+        )
+    node_ids = {
+        r for r in (_component_ref(entry) for entry in nodes) if r is not None
+    }
+    holders = [
+        comp_id
+        for comp_id, comp in refs.items()
+        if comp_id in node_ids
+        and isinstance(comp, dict)
+        and _component_ref(comp.get("subflow")) == child_id
+    ]
+    if len(holders) != 1:
+        raise ContextInjectionError(
+            f"{def_label}: parent-satisfied line for {line['childPackage']} "
+            f"slot {child_slot!r} resolves {len(holders)} nodes running that "
+            "agent — exactly one is required to hand a pick down"
+        )
+    destination_input = f"{child_slot}ContextSlotBindings"
+    edge_name = f"parent_satisfied_{child_slot}_to_{holders[0]}"
+    # THE SAME REFUSAL THE CONSUMER EDGES TAKE: an input that already has a
+    # source would end up fed by both the author's own wiring and the finalized
+    # selection, and which one the runtime keeps is not something a mount may
+    # leave open. A duplicate generated edge name is the same fault twice.
+    existing = definition.get("data_flow_connections")
+    if isinstance(existing, list):
+        for edge in existing:
+            if not isinstance(edge, dict):
+                continue
+            if (
+                _component_ref(edge.get("destination_node")) == holders[0]
+                and edge.get("destination_input") == destination_input
+            ):
+                raise ContextInjectionError(
+                    f"{def_label}: input '{destination_input}' on component "
+                    f"'{holders[0]}' already has a data-flow edge — refusing to "
+                    "hand the parent's pick down over existing wiring"
+                )
+            if edge.get("name") == edge_name:
+                raise ContextInjectionError(
+                    f"{def_label}: data-flow edge '{edge_name}' already exists "
+                    "— refusing to hand the same pick down twice"
+                )
+    return {
+        "component_type": "DataFlowEdge",
+        "name": edge_name,
+        "source_node": {"$component_ref": f"context_{line['parentSlotId']}"},
+        "source_output": "contextSlotBindings",
+        "destination_node": {"$component_ref": holders[0]},
+        "destination_input": destination_input,
+    }
+
+
+def _receive_in_child(
+    child_definition: Dict[str, Any],
+    child_slot: str,
+    single_slot: bool,
+    def_label: str,
+) -> None:
+    """Give the embedded agent an input for the pick, and feed its consumers.
+
+    The child declares the slot; it simply no longer resolves it. So its own
+    definition + StartNode gain the input the parent fills, and the edges its
+    injected subflow would have drawn are drawn from the StartNode instead —
+    the consumers are unchanged and never learn where the pick came from.
+    """
+    refs = child_definition.get("$referenced_components")
+    start_ref = _component_ref(child_definition.get("start_node"))
+    if not isinstance(refs, dict) or not isinstance(start_ref, str):
+        raise ContextInjectionError(
+            f"{def_label}: unsupported definition shape for a parent-satisfied "
+            "slot (need $referenced_components/start_node)"
+        )
+    start_def = refs.get(start_ref)
+    if not isinstance(start_def, dict):
+        raise ContextInjectionError(
+            f"{def_label}: start node '{start_ref}' is not defined in "
+            "$referenced_components"
+        )
+    title = f"{child_slot}ContextSlotBindings"
+    _ensure_input(child_definition, start_def, title, None, def_label)
+    dfc = child_definition.setdefault("data_flow_connections", [])
+    if not isinstance(dfc, list):
+        raise ContextInjectionError(
+            f"{def_label}: data_flow_connections is not an array"
+        )
+    dfc.extend(
+        _consumer_edges_for_slot(
+            child_definition,
+            child_slot,
+            single_slot,
+            # The StartNode now DECLARES this input because it is the source of
+            # the hand-down; excluded so it can never be discovered as its own
+            # consumer. A self-edge would satisfy the "has a consumer" check
+            # while no work node received the pick.
+            {start_ref},
+            def_label,
+            source_node_id=start_ref,
+            source_output=title,
+            edge_prefix="parent_satisfied",
+        )
+    )
+
+
 def _inject_into_definition(
     doc: Dict[str, Any],
     definition: Dict[str, Any],
     slots: List[Dict[str, Any]],
     all_ids: set,
+    satisfied_slots: Optional[set] = None,
+    hand_down: Optional[List[Tuple[Dict[str, Any], Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """Inject every not-yet-carried declared slot into one Flow definition.
+
+    ``satisfied_slots`` are this definition's OWN slots a parent already answers
+    (item 0.29): they are skipped here — no subflow, and therefore no pause —
+    and are fed from this definition's StartNode instead, which the parent
+    fills. ``hand_down`` are this definition's own lines, as (line, child
+    definition) pairs, wired from the injected parent node into the node that
+    runs the child.
 
     Returns report entries. Mutates ``definition`` (a deep copy owned by the
     caller) and updates ``all_ids`` with the injected ids.
@@ -631,8 +933,40 @@ def _inject_into_definition(
     def_id = definition.get("id")
     def_label = f"definition '{def_id}'" if isinstance(def_id, str) else "root flow"
 
+    satisfied = satisfied_slots or set()
     marker_slots = _definition_local_marker_slots(definition)
-    pending = [s for s in slots if s["slotId"] not in marker_slots]
+    single_slot = len(slots) == 1
+    # THE CHILD'S PAUSE NEVER FIRES: a slot a parent satisfies is received, not
+    # resolved, so nothing pausing is put in front of it.
+    for slot in slots:
+        if slot["slotId"] in satisfied and slot["slotId"] not in marker_slots:
+            _receive_in_child(definition, slot["slotId"], single_slot, def_label)
+    pending = [
+        s
+        for s in slots
+        if s["slotId"] not in marker_slots and s["slotId"] not in satisfied
+    ]
+    # THE HAND-DOWN'S SOURCE MUST EXIST. `_hand_down_to_child` draws its edge
+    # from `context_<parentSlotId>`, the node injected for that slot below. A
+    # slot that is already carried by the author's own wiring, or that a
+    # grandparent satisfies, is NOT injected — so the edge would name a node
+    # this document does not contain, and the child would lose its pause and
+    # receive nothing. Fail closed instead: the declaration promised the child a
+    # value and this document cannot deliver it.
+    pending_ids = {
+        s["slotId"]
+        for s in slots
+        if s["slotId"] not in marker_slots and s["slotId"] not in satisfied
+    }
+    for line, _child_definition in hand_down or []:
+        if line["parentSlotId"] not in pending_ids:
+            raise ContextInjectionError(
+                f"{def_label}: parent-satisfied line hands down from slot "
+                f"{line['parentSlotId']!r}, which this agent does not resolve "
+                "itself (it is already carried, or is itself satisfied by a "
+                "parent) — there is no resolved pick to hand down"
+            )
+
     if not pending:
         return []
 
@@ -687,7 +1021,6 @@ def _inject_into_definition(
                 )
             injected_ids.add(new_id)
 
-    single_slot = len(slots) == 1
     report: List[Dict[str, Any]] = []
     consumer_edges: List[Dict[str, Any]] = []
     prev_node_id = start_ref
@@ -761,6 +1094,22 @@ def _inject_into_definition(
         edge["from_node"] = {"$component_ref": prev_node_id}
 
     dfc.extend(consumer_edges)
+    # THE PARENT HANDS ITS PICK DOWN (item 0.29). Drawn after the injection, so
+    # the source node it names exists.
+    for line, child_definition in hand_down or []:
+        dfc.append(_hand_down_to_child(definition, child_definition, line, def_label))
+        report.append(
+            {
+                "slot": line["parentSlotId"],
+                "definition": def_id if isinstance(def_id, str) else "<root>",
+                "packageName": owner_package,
+                "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+                "satisfies": {
+                    "childPackage": line["childPackage"],
+                    "childSlotId": line["childSlotId"],
+                },
+            }
+        )
     all_ids.update(injected_ids)
     return report
 
@@ -802,6 +1151,14 @@ def inject_context_subflows(
     if not validated:
         return doc, []
 
+    # THE SATISFACTION MAP (item 0.29), resolved on the ORIGINAL document and
+    # validated there, so a malformed or unkeepable declaration fails the mount
+    # before anything is copied.
+    satisfied_by_definition = _satisfied_child_slots(doc, label)
+    declares_hand_down = any(
+        _read_parent_satisfied_lines(definition, label) for definition, _ in carriers
+    )
+
     # Anything to actually inject? (Definition-local marker check on the
     # ORIGINAL doc so a fully-legacy spec never pays the deepcopy.)
     needs_injection = any(
@@ -811,13 +1168,39 @@ def inject_context_subflows(
         )
         for definition, slots in validated
     )
-    if not needs_injection:
+    if not needs_injection and not declares_hand_down:
         return doc, []
 
     composed = copy.deepcopy(doc)
     # Re-find carriers on the copy (same traversal order — deterministic).
     copy_carriers = _find_declaration_carriers(composed)
+    # The satisfaction map is keyed by identity, so it is re-resolved on the
+    # copy the surgery mutates.
+    copy_satisfied = _satisfied_child_slots(composed, label)
     all_ids = _collect_all_ids(composed)
+    # Which definition each line's child IS, on the copy — resolved once, by the
+    # same rule the map above used.
+    copy_owned = []
+    for definition, raw in copy_carriers:
+        def_id = definition.get("id")
+        def_label = (
+            f"{label}: definition '{def_id}'"
+            if isinstance(def_id, str)
+            else f"{label}: root flow"
+        )
+        slots = _validate_declared_slots(raw, def_label)
+        if not slots:
+            continue
+        cin = _metadata_cinatra(definition) or {}
+        pkg = cin.get("packageName")
+        copy_owned.append(
+            (
+                definition,
+                pkg if isinstance(pkg, str) and pkg else "",
+                {s["slotId"] for s in slots},
+            )
+        )
+
     report: List[Dict[str, Any]] = []
     for definition, raw in copy_carriers:
         def_id = definition.get("id")
@@ -829,5 +1212,22 @@ def inject_context_subflows(
         slots = _validate_declared_slots(raw, def_label)
         if not slots:
             continue
-        report.extend(_inject_into_definition(composed, definition, slots, all_ids))
+        hand_down: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+        for line in _read_parent_satisfied_lines(definition, def_label):
+            for candidate, pkg, slot_ids in copy_owned:
+                if candidate is definition or pkg != line["childPackage"]:
+                    continue
+                if line["childSlotId"] in slot_ids:
+                    hand_down.append((line, candidate))
+                    break
+        report.extend(
+            _inject_into_definition(
+                composed,
+                definition,
+                slots,
+                all_ids,
+                copy_satisfied.get(id(definition), set()),
+                hand_down,
+            )
+        )
     return composed, report

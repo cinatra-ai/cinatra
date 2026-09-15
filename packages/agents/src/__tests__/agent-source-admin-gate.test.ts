@@ -14,6 +14,22 @@ vi.mock("@/lib/auth-session", () => ({
   isPlatformAdmin: vi.fn(() => false),
 }));
 
+// Keep the suite hermetic. The admin arm of `agent_source_compile` /
+// `agent_source_publish` runs past the gate into on-disk path resolution,
+// which asks `readInstanceIdentity()` for the operator vendor segment — a
+// database read. This is a unit suite: it is handed a connection string that
+// points at no database, so that read must never become a real socket
+// attempt. It used to look harmless because a refused connection came back
+// from the query worker as an empty, successful result set; the worker now
+// reports any failure as a failure, so the read raises here exactly as it
+// would anywhere else. The seam is the identity read itself: stub it to
+// "no identity configured" — the default first-party vendor segment — and the
+// gate assertions below are unchanged, positional as they always were.
+vi.mock("@/lib/instance-identity-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/instance-identity-store")>()),
+  readInstanceIdentity: vi.fn(() => null),
+}));
+
 import { createAgentBuilderPrimitiveHandlers } from "../mcp/handlers";
 
 type Handler = (req: {

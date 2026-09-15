@@ -1,11 +1,22 @@
 // @vitest-environment jsdom
 /**
- * THE CHAT RUN CARD'S LINK IS PLATFORM-BUILT (cinatra#2729 defect 1), AND THE
- * CARD KEEPS THE GATE THE RUN API ALREADY HANDED IT (defect 2).
+ * THE CHAT RUN CARD HAS NO LINK OUT ANY MORE (cinatra#2997), AND IT KEEPS THE
+ * STATE THE RUN API HANDED IT (cinatra#2729 defect 2).
  *
- * The card used to drop the run API's `hitlContext` on the floor and render no
- * link at all, so the only run URL in the conversation was whatever the model
- * wrote — `/agents/runs/<runId>`, which has no page and 404s.
+ * THE LINK IS GONE, and this file is where its removal is held. The maintainer's
+ * request for changes on pull request 2890, verbatim: "Also, the 'Open the run
+ * page' link in the top right below the 'Agentic Run Progress' card should be
+ * removed." The whole run lifecycle plays out in the card now — the placeholder
+ * while the agent works, the review screen when the work opens one — so there is
+ * nothing left in the conversation that a trip to the run page would answer.
+ *
+ * WHAT THIS FILE USED TO PIN, and why the pins are inverted rather than deleted.
+ * cinatra#2729 defect 1 was a link the MODEL wrote (`/agents/runs/<runId>` — an
+ * API path with no page behind it, so the one link out of the conversation
+ * 404'd), replaced by a platform-built one. A defect about a wrong link is
+ * closed for good by a card that draws none, so the strongest reading of those
+ * pins is the negative one below: no link, on any seed, including the one whose
+ * package name used to produce the canonical path.
  *
  * `AgenticRunPanel` is stubbed: these pins are about what the WRAPPER derives
  * and forwards, and the panel's own rendering is pinned in the agents package.
@@ -24,8 +35,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
-
-import { buildAgentInstancePath } from "@/lib/agent-url";
 
 const panelProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 
@@ -91,29 +100,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("InlineAgentRunCard — the run link", () => {
-  it("renders the CANONICAL path the shared builder produces", async () => {
+describe("InlineAgentRunCard — the run-page link is gone (cinatra#2997)", () => {
+  it("draws NO link out of the conversation, on a seed that used to produce one", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse()));
 
     render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
-    const link = await screen.findByTestId("inline-run-page-link");
-    expect(link.getAttribute("href")).toBe(buildAgentInstancePath(PACKAGE, RUN_ID));
-    expect(link.getAttribute("href")).toBe(
-      `/agents/cinatra-ai/blog-draft-writer-agent/${RUN_ID}`,
-    );
+    await screen.findByTestId("run-panel-stub");
+    expect(screen.queryByTestId("inline-run-page-link")).toBeNull();
+    expect(screen.queryByText(/Open the run page/i)).toBeNull();
   });
 
-  it("never renders the API-shaped path the model used to guess", async () => {
+  it("draws no anchor at all — nothing links out, by any label", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse()));
 
-    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
+    const { container } = render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
-    const link = await screen.findByTestId("inline-run-page-link");
-    expect(link.getAttribute("href")).not.toBe(`/agents/runs/${RUN_ID}`);
+    await screen.findByTestId("run-panel-stub");
+    expect(container.querySelectorAll("a").length).toBe(0);
   });
 
-  it("renders NO link at all when the run's package is unknown", async () => {
+  it("still draws none when the run's package is unknown", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse({ agentPackageName: null })));
 
     render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
@@ -132,6 +139,35 @@ describe("InlineAgentRunCard — the gate seed", () => {
     await waitFor(() => expect(panelProps.current).not.toBeNull());
     expect(panelProps.current!.initialHitlContext).toEqual(SETUP_GATE);
     expect(panelProps.current!.surface).toBe("chat");
+  });
+
+  it("forwards the run's own REVIEW SLOT to the panel (cinatra#2997)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        seedResponse({ reviewGate: { ref: "lcr-opaque-2997", awaiting: false } }),
+      ),
+    );
+
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
+
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+    // The server-minted ticket for this run's own review gate, so the panel's
+    // first paint can be the review screen rather than a placeholder in front
+    // of it.
+    expect(panelProps.current!.initialReviewGate).toEqual({
+      ref: "lcr-opaque-2997",
+      awaiting: false,
+    });
+  });
+
+  it("forwards null when the run has no review slot at all", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => seedResponse({ reviewGate: undefined })));
+
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
+
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+    expect(panelProps.current!.initialReviewGate).toBeNull();
   });
 
   it("forwards null when the run is not paused on a gate", async () => {

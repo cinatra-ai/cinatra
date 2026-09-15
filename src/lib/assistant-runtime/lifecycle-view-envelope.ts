@@ -108,11 +108,82 @@ export const LIFECYCLE_PRODUCER_TOOLS: Record<
  */
 export const LIFECYCLE_REFUSAL_RESULT = "Not available to you.";
 
-/** The DATA_PART payload minted from a recognized envelope. */
+// ---------------------------------------------------------------------------
+// THE PLATFORM PRODUCER (cinatra#2930, epic #2926 W3)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE SECOND PRODUCER, AND THE FIRST-CLASS ONE.
+ *
+ * Until this wave the only way a lifecycle card could reach a conversation was
+ * a model calling a tool for it, so a run could park at a moment and the person
+ * would see a sentence about a card, a link to another page, or nothing. The
+ * plan makes the platform the producer — "the platform itself writes the card
+ * into the run's own turn, from an outbox the coordinator feeds when a moment
+ * opens" — and keeps the tools: "The 'show me' tools the model can call stay as
+ * a second way to bring a card back into view, recorded as exactly that."
+ *
+ * SO RECOGNITION GAINS A TUPLE, NOT A HOLE — AND THE TUPLE IS NOT ENOUGH ON ITS
+ * OWN (a convergence review, finding 4). These are two public strings, and a tool
+ * result is model-visible and model-influenced: a recognizer that minted
+ * `platform_injected` for whoever presented them would be relying on an MCP
+ * INGRESS rule (a server label may not carry a colon) to protect a property of
+ * THIS boundary. That is an assumption about somebody else's code, and the whole
+ * reason the producer bind exists is not to make assumptions like it.
+ *
+ * So the platform arm is gated on `admitPlatformProducer`, an explicit argument
+ * the caller must pass. The sink — the ONE caller that handles tool results —
+ * never passes it, so no tool result can be recognized as an injection however
+ * it is labelled. The outbox passes it, because the outbox is not a tool result:
+ * it is server code the model cannot reach. The property is now local and total
+ * rather than inherited.
+ *
+ * MIRRORED, NOT IMPORTED, like the viewType list above and for the same reason
+ * (this module is pure by design). Pinned to `@cinatra-ai/agents/lifecycle-part-outbox`
+ * by the drift test in __tests__/lifecycle-view-envelope.test.ts.
+ */
+export const LIFECYCLE_PLATFORM_PRODUCER_LABEL = "cinatra:platform";
+
+/** The platform producer's one act. Deliberately not a tool name. */
+export const LIFECYCLE_PLATFORM_PRODUCER_ACT = "lifecycle_moment_opened";
+
+/**
+ * The viewTypes the PLATFORM may produce.
+ *
+ * Every DATA_PART-represented kind whose truth is the run's own row. The
+ * schedule is here because a CONFIRMED schedule is carried by the run; the held
+ * schedule reaches the assistant's own turn through `schedule_proposal_render`
+ * and never through the outbox — "it never enters the run outbox, because there
+ * is no run".
+ */
+export const LIFECYCLE_PLATFORM_VIEW_TYPES = [
+  "artifact_review_gate",
+  "verification_summary",
+  "trigger_schedule_proposal",
+] as const;
+
+/**
+ * WHO DELIVERED A CARD. Recorded on the recognition, never on the payload.
+ *
+ *   `platform_injected` — the run reached the moment and the platform wrote it.
+ *   `tool_represented`  — a "show me" tool brought it back into view.
+ *
+ * The payload stays the byte-identical strict `{ viewType, schemaVersion, ref }`
+ * a `.strict()` parser accepts on re-read, so provenance rides BESIDE it — the
+ * same separation `dataPartSlots` already makes for the producing slot.
+ */
+export type LifecyclePartProvenance = "platform_injected" | "tool_represented";
+
+/** The DATA_PART payload minted from a recognized envelope, and WHO minted it. */
 export type LifecycleViewDataPart = {
   viewType: LifecycleViewType;
   schemaVersion: number;
   ref: string;
+  /**
+   * NOT PART OF THE PAYLOAD. A caller writes `{ viewType, schemaVersion, ref }`
+   * to the wire and the durable row, and carries this beside it.
+   */
+  provenance: LifecyclePartProvenance;
 };
 
 /**
@@ -137,6 +208,35 @@ export function buildLifecycleViewEnvelope(params: {
   return serialized.length <= LIFECYCLE_ENVELOPE_MAX_LENGTH ? serialized : null;
 }
 
+/**
+ * Which producer minted this, or `null` for one outside every tuple.
+ *
+ * TWO TUPLES, CHECKED THE SAME WAY. The platform's is checked FIRST and its
+ * label can never be an MCP server label, so the two sets cannot overlap and a
+ * tool result can never be read as a platform injection.
+ */
+function producerOf(
+  viewType: LifecycleViewType,
+  serverLabel: unknown,
+  toolName: unknown,
+  admitPlatformProducer: boolean,
+): LifecyclePartProvenance | null {
+  if (typeof serverLabel !== "string" || typeof toolName !== "string") {
+    return null;
+  }
+  if (
+    admitPlatformProducer &&
+    serverLabel === LIFECYCLE_PLATFORM_PRODUCER_LABEL &&
+    toolName === LIFECYCLE_PLATFORM_PRODUCER_ACT &&
+    (LIFECYCLE_PLATFORM_VIEW_TYPES as readonly string[]).includes(viewType)
+  ) {
+    return "platform_injected";
+  }
+  return isAllowedProducer(viewType, serverLabel, toolName)
+    ? "tool_represented"
+    : null;
+}
+
 function isAllowedProducer(
   viewType: LifecycleViewType,
   serverLabel: unknown,
@@ -156,13 +256,24 @@ function isAllowedProducer(
  * Recognize a lifecycle view envelope on a tool result and project the
  * DATA_PART payload. Returns `null` for everything else — a non-envelope
  * result, a refusal, a truncated/oversized result, a malformed envelope, an
- * unknown viewType, or an envelope from a server/tool outside the producer
- * tuple. NEVER throws: an adversarial payload degrades to "no card".
+ * unknown viewType, or an envelope from a server/tool outside BOTH producer
+ * tuples. NEVER throws: an adversarial payload degrades to "no card".
+ *
+ * The answer carries WHICH producer minted it (cinatra#2930): the platform's
+ * injection and a tool's re-presentation are the same card and two different
+ * facts, and the durable row records which one it was.
  */
 export function recognizeLifecycleViewEnvelope(params: {
   serverLabel?: unknown;
   toolName?: unknown;
   result?: unknown;
+  /**
+   * Admit the PLATFORM tuple as well (cinatra#2930). Defaults to `false`, which
+   * is what the sink relies on: a tool result can never be recognized as an
+   * injection, whatever it is labelled. Only server code the model cannot reach
+   * passes `true` — see the platform producer note above.
+   */
+  admitPlatformProducer?: boolean;
 }): LifecycleViewDataPart | null {
   const { serverLabel, toolName, result } = params;
   // A non-string result never reaches the wire as a lifecycle envelope: the
@@ -196,10 +307,17 @@ export function recognizeLifecycleViewEnvelope(params: {
   if (!(LIFECYCLE_VIEW_TYPES as readonly string[]).includes(viewType)) return null;
   if (ref.length === 0 || ref.length > LIFECYCLE_REF_MAX_LENGTH) return null;
   const typed = viewType as LifecycleViewType;
-  if (!isAllowedProducer(typed, serverLabel, toolName)) return null;
+  const provenance = producerOf(
+    typed,
+    serverLabel,
+    toolName,
+    params.admitPlatformProducer === true,
+  );
+  if (provenance === null) return null;
   return {
     viewType: typed,
     schemaVersion: LIFECYCLE_ENVELOPE_VERSION,
     ref,
+    provenance,
   };
 }

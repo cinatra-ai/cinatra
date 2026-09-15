@@ -31,6 +31,8 @@ import { resolve, dirname } from "node:path";
 import { Client } from "pg";
 import { test as setup, expect } from "@playwright/test";
 
+import { openRegistrationForFixtures } from "../open-registration";
+
 function readEnvLocal(): Record<string, string> {
   try {
     const raw = readFileSync(resolve(process.cwd(), ".env.local"), "utf-8");
@@ -105,6 +107,11 @@ async function ensureMemberOrg(c: Client, userId: string): Promise<string> {
 setup("create platform-admin smoke user + save session", async ({ request, baseURL }) => {
   const origin = baseURL ?? "http://localhost:3000";
   const headers = { Origin: origin } as const;
+
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures({ databaseUrl: DATABASE_URL });
 
   // 1. Ensure the user exists (idempotent — 400/422 when already present).
   const signUp = await request.post("/api/auth/sign-up/email", {

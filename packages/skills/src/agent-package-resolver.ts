@@ -164,7 +164,15 @@ export async function resolveCanonicalAgentPackage(
 // Write-side target eligibility: agent-kind, non-assistant.
 // ---------------------------------------------------------------------------
 
-export type AgentWriteTargetRefusal = "not-an-agent" | "assistant" | "eligibility-unreadable";
+// The assistant refusal is GONE (cinatra#2813 S1, epic #2812): the epic makes
+// assistants first-class assignment targets — "assistants take skills only" —
+// so refusing them at the write gate would make the assistant Skills tab
+// unbuildable. What stays fail-closed is everything else: a package whose
+// kind cannot be read, and a kind that is neither agent nor assistant.
+//
+// This widens the WRITE TARGET only. Whether an assistant's assigned skills
+// are DELIVERED at run time is a separate seam, owned by the runtime slice.
+export type AgentWriteTargetRefusal = "not-an-agent" | "eligibility-unreadable";
 
 export type AgentWriteTargetVerdict =
   | { ok: true }
@@ -180,8 +188,12 @@ export type AgentWriteTargetFacts = {
 
 /** PURE write-target gate. Fail-closed on an unknown kind. */
 export function evaluateAgentWriteTarget(facts: AgentWriteTargetFacts): AgentWriteTargetVerdict {
-  if (facts.isAssistant) return { ok: false, reason: "assistant" };
+  // Order matters: an unreadable kind is refused BEFORE the assistant fact is
+  // consulted, so a package whose kind could not be read is never admitted on
+  // the strength of an assistant flag that was resolved from a different source.
   if (facts.kind === null) return { ok: false, reason: "eligibility-unreadable" };
+  // An installed ASSISTANT package is a valid assignment target.
+  if (facts.isAssistant) return { ok: true };
   if (facts.kind !== "agent") return { ok: false, reason: "not-an-agent" };
   return { ok: true };
 }

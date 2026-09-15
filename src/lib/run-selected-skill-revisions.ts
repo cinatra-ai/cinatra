@@ -26,8 +26,11 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
+import { PRE_EXECUTION_RUN_STATUSES } from "@cinatra-ai/agents/run-status";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { runPostgresQueriesAsync } from "@/lib/postgres-async";
+import { RUN_RECOMMENDATION_OFFERED_SET_TABLE } from "@/lib/artifacts/artifact-review-gate-schema";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import type { SelectionSource } from "@cinatra-ai/skills/recommendation";
 
@@ -121,6 +124,148 @@ export function readRunSelectedSkillRevisions(
     selectionSource: String(r.selection_source),
     selectedAt: String(r.selected_at),
   }));
+}
+
+/**
+ * CLEAR the run's selection rows for the named skills — BUT ONLY WHILE THE RUN
+ * HAS NOT STARTED (cinatra#3047).
+ *
+ * WHY IMMUTABILITY IS NOT WEAKENED BY THIS. The rule this module opens with is
+ * "a re-emit on resume can never overwrite the pinned revision a run already
+ * committed to", and the commitment it protects is an EXECUTING run's: the
+ * execution-start snapshot materializes the run's skill ledger from this set, so
+ * from the moment the run is dispatched the set is history and may not move. A
+ * run that has not been dispatched has materialized nothing and has committed to
+ * nothing — its selection is still the reader's answer to a question, and the
+ * Skills step lets them change that answer until the run starts.
+ *
+ * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The status test is a
+ * join inside the DELETE, against `PRE_EXECUTION_RUN_STATUSES` — the platform's
+ * own set of the statuses a run holds BEFORE it has ever run (`pending_input`,
+ * `pending_trigger`, `armed`). So a caller that asks to clear a started run's
+ * rows deletes NOTHING, whatever it believed about the run when it asked, and
+ * there is no window between a status read and the write for the run to be
+ * dispatched in. The first status outside that set is `queued`, which is the
+ * dispatch CAS itself.
+ *
+ * SCOPED TO THE NAMED SKILLS, never to the run. The caller names the skills its
+ * own decision is authoritative for — the hold's offered set — so a selection
+ * written by another path for a skill this decision never asked about is
+ * untouched.
+ *
+ * Returns the number of rows actually removed, so a caller can state what it
+ * did rather than assume it.
+ */
+export function clearRunSelectedSkillRevisionsBeforeStart(input: {
+  runId: string;
+  skillIds: readonly string[];
+}): number {
+  if (input.skillIds.length === 0) return 0;
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema}"."run_selected_skill_revisions" s
+               USING "${schema}"."agent_runs" r
+               WHERE s.run_id = $1
+                 AND r.id = s.run_id
+                 AND s.skill_id = ANY($2::text[])
+                 AND r.status = ANY($3::text[])`,
+        values: [input.runId, [...input.skillIds], [...PRE_EXECUTION_RUN_STATUSES]],
+      },
+    ],
+  });
+  return result?.rowCount ?? 0;
+}
+
+/**
+ * REPLACE the run's recommendation-sourced selection for one hold's offer, in
+ * ONE transaction, and ONLY while the run has not started (cinatra#3047,
+ * convergence finding 3).
+ *
+ * WHY A REPLACE AND NOT A CLEAR FOLLOWED BY A WRITE. The two statements were
+ * separately guarded at first: the DELETE tested the run's status, the INSERT
+ * did not, and nothing held them together. A dispatch landing between them left
+ * two ways to be wrong — execution could materialize its ledger from a
+ * half-deleted set, and the INSERT could then add rows to a run that had already
+ * started. Both statements now test the SAME status inside ONE transaction, so
+ * the write either lands whole on a pre-start run or does not land at all.
+ *
+ * THE STATUS TEST IS IN THE STATEMENTS, NOT IN THE CALLER. A caller that asks to
+ * replace a started run's set writes NOTHING, whatever it believed about the run
+ * when it asked, and it is TOLD so — the answer is `false`, not silence, so the
+ * decision path can refuse rather than report a write that did not happen.
+ *
+ * SCOPED TO THE HOLD'S OWN OFFER. `scopeSkillIds` is the set this decision is
+ * authoritative for; a selection written by another path for a skill this hold
+ * never offered is untouched. Retained ids keep their existing row, which is
+ * what pins them to the revision the reader was shown.
+ */
+export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
+  runId: string;
+  scopeSkillIds: readonly string[];
+  selections: Array<{
+    skillId: string;
+    skillRevisionId: string;
+    selectionSource: SelectionSource | string;
+  }>;
+}): boolean {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const table = `"${schema}"."run_selected_skill_revisions"`;
+  const runs = `"${schema}"."agent_runs"`;
+  const preStart = [...PRE_EXECUTION_RUN_STATUSES];
+  const kept = new Set(input.selections.map((s) => s.skillId));
+  const dropped = input.scopeSkillIds.filter((skillId) => !kept.has(skillId));
+
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    // 1. THE ANSWER THE CALLER GETS. Read inside the same transaction as the two
+    //    writes, so "it applied" is the transaction's own view and not a probe
+    //    taken a moment earlier.
+    {
+      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND status = ANY($2::text[])`,
+      values: [input.runId, preStart],
+    },
+  ];
+  if (dropped.length > 0) {
+    queries.push({
+      text: `DELETE FROM ${table} s
+             USING ${runs} r
+             WHERE s.run_id = $1
+               AND r.id = s.run_id
+               AND s.skill_id = ANY($2::text[])
+               AND r.status = ANY($3::text[])`,
+      values: [input.runId, dropped, preStart],
+    });
+  }
+  if (input.selections.length > 0) {
+    const rows: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
+    for (const s of input.selections) {
+      rows.push(`($${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text, $${p++}::text)`);
+      values.push(randomUUID(), input.runId, s.skillId, s.skillRevisionId, s.selectionSource);
+    }
+    const runIdParam = `$${p++}`;
+    const statusParam = `$${p++}`;
+    values.push(input.runId, preStart);
+    queries.push({
+      text: `INSERT INTO ${table} (id, run_id, skill_id, skill_revision_id, selection_source)
+             SELECT v.id, v.run_id, v.skill_id, v.skill_revision_id, v.selection_source
+             FROM (VALUES ${rows.join(", ")})
+               AS v(id, run_id, skill_id, skill_revision_id, selection_source)
+             WHERE EXISTS (
+               SELECT 1 FROM ${runs} r
+               WHERE r.id = ${runIdParam} AND r.status = ANY(${statusParam}::text[])
+             )
+             ON CONFLICT (run_id, skill_id) DO NOTHING`,
+      values,
+    });
+  }
+  const [probe] = runPostgresQueriesSync({ connectionString, transaction: true, queries });
+  return (probe?.rows?.length ?? 0) > 0;
 }
 
 /**
@@ -501,4 +646,158 @@ export function decidedSkillsFromEvidence(
   return [...marks.entries()]
     .map(([skillId, mark]) => ({ skillId, name: nameOf(skillId), mark }))
     .sort((a, b) => (a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0));
+}
+
+// ---------------------------------------------------------------------------
+// THE OFFERED SET (cinatra#2906) — what a recommendation card actually showed.
+//
+// The accepted half above records what a run RESOLVED. This records what the
+// reader was ASKED, at the moment the card was drawn, so the confirm can resolve
+// against the set on screen instead of asking for the list again and recording
+// against a different answer.
+//
+// KEYED BY THE HOLD, not the run: one run can be parked, decided, and parked
+// again, and each of those holds offered its own set. The hold id is exactly
+// what the row already hands back on confirm.
+//
+// THE OFFER IS IMMUTABLE FOR THE LIFE OF THE HOLD. The FIRST draw claims it and
+// every later draw reads the claim back; nothing replaces it. A replace-on-redraw
+// store would move the offer under a reader who is still looking at the first
+// card — a second tab, or the same tab in another window — and their confirm
+// would then be resolved against revisions they were never shown, which is the
+// very substitution this table exists to prevent. So the claim is atomic: the
+// insert is conditional on the hold owning no rows yet, in one transaction, and
+// two concurrent first draws cannot interleave into a set that is half of each.
+//
+// A reader whose card can no longer be honoured is not stranded by the
+// immutability: the offer's own chips stay operable, so they can leave the
+// unhonourable one out, or skip.
+//
+// ASYNC by construction. Both call sites — the card draw and the confirm — are
+// already `async`, so this store uses `runPostgresQueriesAsync` rather than the
+// synchronous bridge, which would park the whole event loop for a query neither
+// caller needs synchronously.
+// ---------------------------------------------------------------------------
+
+/** One entry of the set a card offered: the four fields that decide an outcome. */
+export type RunRecommendationOfferedSkill = {
+  skillId: string;
+  /** The EXACT revision the chip was drawn at — the pin the confirm honours. */
+  skillRevisionId: string;
+  /** Whether the scorer recommended it AT DRAW TIME. */
+  recommended: boolean;
+  /** Its 1-based rank in the offered ordering at draw time. */
+  rank: number;
+};
+
+function offeredSetTable(): string {
+  return `"${postgresSchema.replaceAll('"', '""')}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}"`;
+}
+
+/**
+ * CLAIM the set a hold's card offers. FIRST DRAW WINS: a hold that already owns
+ * an offer keeps it, byte for byte, so what a reader was shown cannot be moved
+ * under them by a later draw.
+ *
+ * ATOMIC, AND THE LOCK IS WHAT MAKES IT SO. The claim runs in one transaction
+ * that FIRST takes a per-hold `pg_advisory_xact_lock` (the `member-actions.ts` /
+ * `agent-assigned-skills-store.ts` precedent), then inserts under its own
+ * `WHERE NOT EXISTS` on the hold.
+ *
+ * Neither guard is sufficient alone, and the reason is worth stating because the
+ * first attempt at this got it wrong. Under READ COMMITTED two concurrent
+ * statements can BOTH see no rows at `WHERE NOT EXISTS`, and because their skill
+ * ids are disjoint the `(hold_id, skill_id)` conflict rule fires for neither —
+ * so both insert and the hold ends up owning a union nobody drew. The advisory
+ * lock serializes the two draws on the hold, so the loser evaluates its
+ * predicate AFTER the winner has committed and inserts nothing. It is released
+ * with the transaction, so a crashed writer never wedges a hold.
+ *
+ * Throws only on a genuine DB error; the draw wraps it, because an offer that
+ * could not be claimed must cost the FIX, never the card.
+ */
+export async function writeRunRecommendationOfferedSet(input: {
+  runId: string;
+  holdId: string;
+  offered: ReadonlyArray<RunRecommendationOfferedSkill>;
+}): Promise<void> {
+  if (!input.holdId) return;
+  if (input.offered.length === 0) return;
+  const connectionString = getPostgresConnectionString();
+  const table = offeredSetTable();
+  const rowsSql: string[] = [];
+  const params: unknown[] = [input.holdId];
+  let n = 2;
+  for (const o of input.offered) {
+    rowsSql.push(
+      `($${n++}::text, $${n++}::text, $${n++}::text, $${n++}::text, $${n++}::text, $${n++}::boolean, $${n++}::integer)`,
+    );
+    params.push(
+      randomUUID(),
+      input.runId,
+      input.holdId,
+      o.skillId,
+      o.skillRevisionId,
+      o.recommended,
+      o.rank,
+    );
+  }
+  await runPostgresQueriesAsync({
+    connectionString,
+    transaction: true,
+    queries: [
+      {
+        // Serialize the claim on the HOLD — see the atomicity note above.
+        text: `SELECT pg_advisory_xact_lock(hashtext('cinatra-recommendation-offer'), hashtext($1))`,
+        values: [input.holdId],
+      },
+      {
+        text: `INSERT INTO ${table}
+                 (id, run_id, hold_id, skill_id, skill_revision_id, recommended, offered_rank)
+               SELECT * FROM (VALUES ${rowsSql.join(", ")}) AS claim(
+                 id, run_id, hold_id, skill_id, skill_revision_id, recommended, offered_rank
+               )
+               WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE hold_id = $1)
+               ON CONFLICT (hold_id, skill_id) DO NOTHING`,
+        values: params,
+      },
+    ],
+  });
+}
+
+/**
+ * Read back the set a hold offered, in the order it was drawn (offered rank,
+ * then skill id for a stable tie-break).
+ *
+ * An EMPTY answer means the hold OWNS no offer — one parked before this table
+ * existed, or one whose draw could not claim it — and the confirm keeps its
+ * pre-#2906 behaviour rather than refusing every in-flight hold. A FAILED read
+ * is a different fact and this function does not flatten the two: it throws, so
+ * the confirm can refuse rather than mistake "the database did not answer" for
+ * "this hold offered nothing".
+ */
+export async function readRunRecommendationOfferedSet(
+  holdId: string,
+): Promise<RunRecommendationOfferedSkill[]> {
+  if (!holdId) return [];
+  const connectionString = getPostgresConnectionString();
+  const [result] = await runPostgresQueriesAsync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT skill_id, skill_revision_id, recommended, offered_rank
+               FROM ${offeredSetTable()}
+               WHERE hold_id = $1
+               ORDER BY offered_rank ASC, skill_id ASC`,
+        values: [holdId],
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    skillId: String(r.skill_id),
+    skillRevisionId: String(r.skill_revision_id),
+    recommended: r.recommended === true || r.recommended === "t" || r.recommended === "true",
+    rank: Number(r.offered_rank),
+  }));
 }

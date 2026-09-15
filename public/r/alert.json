@@ -7,7 +7,7 @@
     "class-variance-authority"
   ],
   "registryDependencies": [
-    "utils"
+    "@cinatra-ai/utils"
   ],
   "files": [
     {

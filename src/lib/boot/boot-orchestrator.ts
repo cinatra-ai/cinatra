@@ -44,7 +44,9 @@ import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projec
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
 import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-root-guard";
+import { runDataRootGuardPhases } from "@/lib/boot/phases/run-data-root-guard";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
+import { providerConnectionBootstrapPhases } from "@/lib/boot/phases/provider-connection-bootstrap";
 import { executionPlaneHealthPhases } from "@/lib/boot/phases/execution-plane-health";
 import { environmentExecutionServicePhases } from "@/lib/boot/phases/environment-execution-service";
 import { executionBrokerPhases } from "@/lib/boot/phases/execution-broker";
@@ -163,6 +165,10 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   // no orgs/ dir (a mis-pointed root, not data loss). Read-only + retryable —
   // never gates the deploy.
   await run(artifactDataRootGuardPhases());
+  // The THIRD data root (cinatra#3030, item 0.21): the run folder, guarded the
+  // same way — an unwritable root makes every staged file invisible to the
+  // pickup, which reads as an agent that wrote nothing.
+  await run(runDataRootGuardPhases());
 
   await run(requiredExtensionMaterializePhases());
 
@@ -255,6 +261,16 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   // the detached scan keeps the dev-only git-native agent ingest + skill loading
   // + hot-reload watcher.
   if (dev) startDetachedAgentsScan();
+
+  // ── provider connection bootstrap from the environment ───────────────────────
+  // Seals `OPENAI_API_KEY` into the sealed connection row and completes the model
+  // setup step, so a deployment that already carries the credential needs no
+  // operator to re-type it. AFTER extension activation (the connector registers
+  // the provider surface this phase's credential fingerprint reads) and BEFORE
+  // the services and loops below, so the assistant bootstrap and every worker
+  // start against a configured provider. Inert unless the variable is set, and a
+  // sealed row always wins over it. `retryable`: never a reason to fail a deploy.
+  await run(providerConnectionBootstrapPhases());
 
   // ── system services, part 1: assistant bootstrap + otel ──────────────────────
   const services = systemServicesPhases();

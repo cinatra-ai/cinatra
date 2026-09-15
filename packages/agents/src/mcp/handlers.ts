@@ -116,6 +116,8 @@ import {
 // Refuses writes when the creation pin is active and required catalog skills
 // are not synced. No-ops when the pin is inactive.
 import { preflightAgentCreation, type AgentCreationPreflightResult } from "../preflight-agent-creation";
+import { refuseIfCreationPreflightFails } from "../run-start-creation-preflight";
+import { roleHintsFromActorEnvelope, type FrameRoleHintsEnvelope } from "../frame-role-hints";
 import { resolveRequiredCreationSkillIds } from "../resolve-required-creation-skill-ids";
 // packageName alias resolver for agent_run.
 import { aliasPackageNameToCanonicalScope } from "../package-name-alias";
@@ -140,7 +142,7 @@ import {
   isBlockedEnvFile,
 } from "../scan-package-siblings";
 import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio/client";
-import { installAgentFromPackage } from "../install-from-package";
+import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -277,8 +279,9 @@ import {
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
-import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling } from "../auth-policy";
+import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
+import { describeStartedRun } from "../run-status";
 // Removed `getActorContext` / `getActorContextOrThrow` imports.
 // LLM-reachable paths are now fail-closed at the orchestration entry points
 // (requireActorFrame in packages/llm/src/index.ts).
@@ -393,7 +396,13 @@ export function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: st
 // user row?" probe is no longer needed.
 
 // ---------------------------------------------------------------------------
-export async function resolveRoleHintsFromSession(): Promise<ActorRoleHints | undefined> {
+export async function resolveRoleHintsFromSession(
+  /** The primitive actor envelope, when the caller has one. PREFERRED over the
+   *  cookie session — a correctness fix; see `../frame-role-hints`. */
+  actor?: FrameRoleHintsEnvelope | null | undefined,
+): Promise<ActorRoleHints | undefined> {
+  const fromFrame = roleHintsFromActorEnvelope(actor);
+  if (fromFrame) return fromFrame; // the frame placed the caller; no cookie read
   try {
     const session = await getAuthSession();
     if (!session) return undefined;
@@ -894,7 +903,10 @@ async function handleAgentBuilderRun(
   const actor = request.actor as PrimitiveActorContext;
   const notConfigured = await (await import("@/lib/agent-run-readiness")).assertAgentRunReadyByPackage(template.packageName, identifierForError, { userId: actor.userId ?? null });
   if (notConfigured) return notConfigured;
-  const roles = await resolveRoleHintsFromSession();
+  // cinatra#2935 (lifecycle-b W5d): the agent-creation preflight used to run ONLY on the removed chat sentence-matcher; it now guards EVERY start, and the role hints are the FRAME's own standing when it has one (never a cookie that may belong to somebody else).
+  const creationRefusal = await refuseIfCreationPreflightFails(template.packageName, identifierForError);
+  if (creationRefusal) return creationRefusal;
+  const roles = await resolveRoleHintsFromSession(actor);
   const probeRun = {
     id: "probe",
     runBy: actor.userId ?? null,
@@ -1118,10 +1130,9 @@ async function handleAgentBuilderRun(
       runId: run.id,
     });
 
-    return { runId: run.id, status: launched.status };
+    return { runId: run.id, status: launched.status, message: describeStartedRun({ packageName: template.packageName ?? identifierForError, runId: run.id, status: launched.status }) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: `Run failed: ${message}` };
+    return startFailureAnswer(err, identifierForError);
   }
 }
 
@@ -3944,58 +3955,10 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Register agent skills in the skills catalog so they are discoverable via skill_ids.
   const registeredSkillIds: string[] = [];
   try {
-    // Sync packageVersion + compiled approvalPolicy + inputSchema + outputSchema
-    // + prompt (as taskSpec) to the DB template so subsequent runs reflect the
-    // current on-disk OAS Flow.
-    {
-      try {
-        const template = await readAgentTemplateByPackageName(agentPackageName);
-        if (template) {
-          await updateAgentTemplate(template.id, {
-            approvalPolicy: compiled.approvalPolicy as Parameters<typeof updateAgentTemplate>[1]["approvalPolicy"],
-            inputSchema: compiled.inputSchema as Parameters<typeof updateAgentTemplate>[1]["inputSchema"],
-            outputSchema: (compiled.outputSchema ?? undefined) as Parameters<typeof updateAgentTemplate>[1]["outputSchema"] | undefined,
-            taskSpec: compiled.prompt ?? undefined,
-            hitlScreens: compiled.hitlScreens,
-            type: compiled.type,
-            // Persist triggerMode + gatedSteps so the runtime gate and
-            // Trigger tab UI can
-            // read them directly from agent_templates without recompiling.
-            triggerMode: compiled.triggerMode,
-            gatedSteps: compiled.gatedSteps,
-            // cinatra#2498: re-project the locally-persisted binding-presence
-            // authority on every recompile — a source edit that adds/removes
-            // the last binding must flip agent_templates.has_artifact_bindings
-            // so the run-completion materializer's registry short-circuit
-            // stays accurate. Folded into THIS SAME update as packageVersion
-            // (below) — codex round-2 finding: two separate writes left a
-            // window where a run reading mid-write would see the NEW
-            // package_version paired with the OLD has_artifact_bindings (or
-            // vice versa), defeating the version-pin guard that trusts the
-            // flag exactly when it's read alongside its OWN package_version.
-            // One UPDATE statement moves both columns atomically.
-            //
-            // PAIRED, never independent (codex round-3 finding): unlike
-            // every install path, `agentPackageVersion` here is OPTIONAL — a
-            // dev iterating on local source can recompile without bumping
-            // the version string at all. `packageVersion: undefined` means
-            // "leave the column unchanged" (the store's own patch
-            // convention), so an unpaired write would silently re-point
-            // has_artifact_bindings at whatever package_version the row
-            // ALREADY had — a run pinned to that untouched version would then
-            // trust a flag that was never actually computed FOR it. So this
-            // recompile only ever touches has_artifact_bindings together
-            // with the SAME version write it is confirming; with no version
-            // to confirm against, BOTH are omitted and the column is left
-            // exactly as the last version-paired write set it.
-            packageVersion: agentPackageVersion ?? undefined,
-            hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
-          });
-        }
-      } catch (versionSyncErr) {
-        console.warn(`[agent_source_compile] DB sync failed:`, versionSyncErr);
-      }
-    }
+    // Re-project the compiled result onto the agent_templates row. The
+    // version-pairing rule this write encodes lives with it, in
+    // ../install-from-package (cinatra#3208 ratchets: off the route graph).
+    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled);
 
     // skills dir lives next to the agent root (handles both new
     // canonical and legacy layouts via resolveAgentRootDirForRead).

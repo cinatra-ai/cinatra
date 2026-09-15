@@ -6,6 +6,12 @@
  * the STATIC routes, and visits each under a PLATFORM-ADMIN storageState with a
  * no-500 / no-error-boundary FLOOR assertion (NOT a behavioral or pixel claim).
  *
+ * `connector-setup-shape.spec.ts` rides the same admin session and the same
+ * booted server to assert ONE behavioral claim the floor cannot see: a real
+ * schema-config connector setup page draws the drawn two-column body and its
+ * Connection status card (cinatra#3214), on a connector that declares no
+ * status-probe and on one that declares its own.
+ *
  * `CINATRA_E2E_SETUP_BYPASS=true` clears the setup-wizard gate but does NOT
  * authenticate — so the suite runs under the admin session minted by
  * `auth.setup.ts` (saved to .auth/admin-state.json) so that admin-gated routes
@@ -78,7 +84,7 @@ export default defineConfig({
         ...desktopChrome,
         storageState: suitePath("render-smoke", ".auth/admin-state.json"),
       },
-      testMatch: /all-routes\.spec\.ts/,
+      testMatch: /(all-routes|connector-setup-shape)\.spec\.ts/,
       dependencies: ["setup"],
     },
   ],

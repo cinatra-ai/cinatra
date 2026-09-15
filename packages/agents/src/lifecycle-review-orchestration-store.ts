@@ -69,6 +69,12 @@ import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-s
 
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
+  proveReviewBinding,
+  writeProvenanceFromLedgerPaths,
+  type ProducedWriteProvenance,
+  type ReviewBinding,
+} from "@/lib/lifecycle/lifecycle-review-core";
+import {
   producedEventId,
   type ProducedEventKind,
 } from "@/lib/lifecycle/lifecycle-produced-event";
@@ -138,6 +144,20 @@ const objectsRef = appSchema.table("objects", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
 
+// A minimal read-only projection of the artifact-materialization ledger
+// (cinatra#3476): HOW one recorded write was produced. Same posture as
+// `objectsRef` above — a local table over the SAME app schema — so this store can
+// ask a write for its own provenance without depending on the host ledger module
+// (server-only, and on the pooled-db graph).
+const materializationsRef = appSchema.table("artifact_materializations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull(),
+  runId: text("run_id").notNull(),
+  artifactId: text("artifact_id"),
+  representationRevisionId: text("representation_revision_id"),
+  path: text("path").notNull(),
+});
+
 // ---------------------------------------------------------------------------
 // Context resolution — the axes the pure lattice needs that DO NOT live on the
 // event row: the artifact TYPE, the org bound, and the producing agent's
@@ -175,33 +195,187 @@ function parseCompiledManifest(raw: string | null): CompiledManifestLifecycle | 
 /** Resolve the producing agent's compiled manifest lifecycle from the event's
  * `producerRunId` → the run's template → `lifecycle_config`. Best-effort: any
  * missing link yields `undefined` (core-default lattice). */
-async function resolveManifest(
+/**
+ * The producing agent's own declarations: its compiled lifecycle refinements AND
+ * whether it declares an artifact-bound output at all (cinatra#2929).
+ *
+ * ONE READ, ONE SNAPSHOT, for both. They live on the same template row, and one
+ * review decision needs both — the binding proof reads the second, the policy
+ * reads the first. Reading them separately would cost a second round trip AND
+ * open a window in which a concurrent recompile answers the binding from one
+ * template state and the policy from another, so the two halves are resolved
+ * together and threaded through the decision.
+ *
+ * VERSION-PINNED, not template-scoped. `agent_templates` is a MUTABLE row a
+ * reinstall or recompile overwrites in place, while a run is PINNED to the
+ * `package_version` it was created against. Trusting the template's CURRENT
+ * `has_artifact_bindings` unconditionally would let an in-flight run silently
+ * lose its review the moment the template moved on: v1 declares a binding, a run
+ * starts pinned to v1, a reinstall to a v2 without bindings flips the row to
+ * `false`, and the v1 run's own write would be settled with no review at all —
+ * irreversibly, because the event is marked processed. So the flag is trusted
+ * ONLY while the row's current `package_version` still equals the run's; a
+ * moved-on template, or an unpinned run whose floating tag can move under it,
+ * reads as UNKNOWN and keeps its review. The run-completion materializer applies
+ * the identical rule to the identical column, for the identical reason.
+ *
+ * Best-effort in the same sense the manifest read always was: any missing link
+ * yields `undefined` for the manifest and `null` for the declaration, and `null`
+ * is UNKNOWN, never "no bindings" — see `ProducedOutputDeclaration`.
+ */
+type ProducerDeclarations = {
+  manifest: CompiledManifestLifecycle | undefined;
+  hasArtifactBindings: boolean | null;
+};
+
+const NO_DECLARATIONS: ProducerDeclarations = {
+  manifest: undefined,
+  hasArtifactBindings: null,
+};
+
+async function resolveProducerDeclarations(
   producerRunId: string | null,
-): Promise<CompiledManifestLifecycle | undefined> {
-  if (!producerRunId) return undefined;
+): Promise<ProducerDeclarations> {
+  if (!producerRunId) return NO_DECLARATIONS;
   try {
     const [run] = await db
-      .select({ templateId: agentRuns.templateId })
+      .select({ templateId: agentRuns.templateId, packageVersion: agentRuns.packageVersion })
       .from(agentRuns)
       .where(eq(agentRuns.id, producerRunId))
       .limit(1);
-    if (!run?.templateId) return undefined;
+    if (!run?.templateId) return NO_DECLARATIONS;
     const [tmpl] = await db
-      .select({ lifecycleConfig: agentTemplates.lifecycleConfig })
+      .select({
+        lifecycleConfig: agentTemplates.lifecycleConfig,
+        hasArtifactBindings: agentTemplates.hasArtifactBindings,
+        packageVersion: agentTemplates.packageVersion,
+      })
       .from(agentTemplates)
       .where(eq(agentTemplates.id, run.templateId))
       .limit(1);
-    return parseCompiledManifest(tmpl?.lifecycleConfig ?? null);
+    const pinHolds =
+      typeof run.packageVersion === "string" &&
+      run.packageVersion.length > 0 &&
+      typeof tmpl?.packageVersion === "string" &&
+      tmpl.packageVersion === run.packageVersion;
+    // THE MANIFEST IS PINNED TOO, and by a different rule, because the two
+    // declarations fail in different directions.
+    //
+    // `hasArtifactBindings: false` REMOVES a review, so it is trusted only while
+    // the pin HOLDS — an unpinned run's floating tag can move under it, and the
+    // materializer applies the same rule to the same column.
+    //
+    // A manifest `requestedSkips: ["review"]` also removes a review, so a
+    // template PROVABLY on another version must not supply it: a run pinned to a
+    // version that declared no skip would otherwise lose its review to a skip
+    // some later version declared. But an UNPINNED run keeps its manifest, which
+    // is the behaviour it has always had: dropping it there would stop honouring
+    // an agent's declared skip for every run without a pin, which is a change to
+    // when the policy applies and no part of what this slice was asked to do.
+    const pinContradicted =
+      typeof run.packageVersion === "string" &&
+      run.packageVersion.length > 0 &&
+      typeof tmpl?.packageVersion === "string" &&
+      tmpl.packageVersion !== run.packageVersion;
+    return {
+      manifest: pinContradicted
+        ? undefined
+        : parseCompiledManifest(tmpl?.lifecycleConfig ?? null),
+      hasArtifactBindings:
+        pinHolds && typeof tmpl?.hasArtifactBindings === "boolean"
+          ? tmpl.hasArtifactBindings
+          : null,
+    };
   } catch {
-    return undefined;
+    return NO_DECLARATIONS;
   }
+}
+
+/**
+ * Is this recorded write bound to an artifact the agent DECLARED it produces?
+ *
+ * The produced half of the one review core's binding proof (cinatra#2929). Asked
+ * BEFORE the policy on every produced path — the per-event one and the batch one
+ * alike — because an agent whose outputs are bound to no artifact never reaches a
+ * review, and "never" is not something an organization rule should have to say.
+ *
+ * A refusal here is `no-gate`, not `not-classifiable`: the event is perfectly
+ * classifiable and the answer is that no review exists for it.
+ */
+function proveProducedBinding(
+  row: ProducedEventRow,
+  declarations: ProducerDeclarations,
+  writeProvenance: ProducedWriteProvenance,
+): ReviewBinding {
+  return proveReviewBinding({
+    kind: "produced-output",
+    produces: { hasArtifactBindings: declarations.hasArtifactBindings },
+    writeEvent: toAxes(row),
+    writeProvenance,
+  });
+}
+
+/** Nothing recorded how this write was produced. UNKNOWN, never a refusal. */
+const UNKNOWN_WRITE_PROVENANCE: ProducedWriteProvenance = {
+  materializationPath: null,
+};
+
+/** The read-back identity (org, run, artifact, revision) is not the ledger's
+ *  unique key, so it may name more than one row; the reading takes them all and
+ *  is order-independent. A small ceiling keeps one write's read bounded. */
+const LEDGER_PROVENANCE_SCAN = 16;
+
+/**
+ * How the write this event reports was PRODUCED (cinatra#3476).
+ *
+ * The binding proof is asked PER ARTIFACT, and the answer does not live on the
+ * produced-outbox row: the row names the artifact and its revision, never the
+ * output the write came from. The materialization ledger does — one finalized row
+ * per write, carrying the `path` it took (`end_node_binding` for a declared
+ * binding, `default_road` for the pickup that files what no binding named) — and
+ * the write's (org, run, artifact, revision) reads it back.
+ *
+ * A run-less event (a direct upload, which no run ledger names) is UNKNOWN, and
+ * unknown leaves the decision where it was. A FAILED READ is not unknown and is
+ * NOT swallowed: a refusal on this path marks the event processed for good, so a
+ * read that could not be made must never read as "nothing recorded" — it throws,
+ * the sweep leaves the event PENDING (the caller's per-production and per-event
+ * catches say so in as many words), and the next pass asks again.
+ */
+async function resolveWriteProvenance(
+  row: ProducedEventRow,
+): Promise<ProducedWriteProvenance> {
+  if (!row.producerRunId) return UNKNOWN_WRITE_PROVENANCE;
+  const ledgerRows = await db
+    .select({ path: materializationsRef.path })
+    .from(materializationsRef)
+    .where(
+      and(
+        eq(materializationsRef.orgId, row.orgId),
+        eq(materializationsRef.runId, row.producerRunId),
+        eq(materializationsRef.artifactId, row.artifactId),
+        eq(
+          materializationsRef.representationRevisionId,
+          row.representationRevisionId,
+        ),
+      ),
+    )
+    .limit(LEDGER_PROVENANCE_SCAN);
+  return writeProvenanceFromLedgerPaths(
+    ledgerRows.flatMap((ledgerRow) =>
+      typeof ledgerRow.path === "string" ? [ledgerRow.path] : [],
+    ),
+  );
 }
 
 /** Resolve the review-orchestration context for a produced event. Returns a
  * `not-classifiable` reason when the artifact's `objects` row is missing or
  * tombstoned (the artifact was deleted between production and orchestration) —
  * the caller then leaves the artifact ungated. */
-async function resolveReviewContext(event: ProducedEventRow): Promise<ResolveContextResult> {
+async function resolveReviewContext(
+  event: ProducedEventRow,
+  declarations?: ProducerDeclarations,
+): Promise<ResolveContextResult> {
   const [obj] = await db
     .select({ type: objectsRef.type, deletedAt: objectsRef.deletedAt })
     .from(objectsRef)
@@ -218,7 +392,12 @@ async function resolveReviewContext(event: ProducedEventRow): Promise<ResolveCon
     destinationClass,
     originKind,
   });
-  const manifest = await resolveManifest(event.producerRunId);
+  // THE SAME SNAPSHOT the binding was proved against, when the caller has one.
+  // A caller that has not resolved them yet (the expiry re-evaluation paths)
+  // reads them here; a caller mid-decision passes what it already read, so the
+  // binding and the policy can never answer from two template states.
+  const { manifest } =
+    declarations ?? (await resolveProducerDeclarations(event.producerRunId));
 
   return {
     ok: true,
@@ -527,7 +706,21 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     return "no-gate";
   }
 
-  const context = await resolveReviewContext(row);
+  // THE BINDING, PROVED FIRST (cinatra#2929). A review exists only for
+  // artifact-bound work: an agent that declares no artifact-bound output reaches
+  // no review, whatever its writes and whatever the policy would have said.
+  const declarations = await resolveProducerDeclarations(row.producerRunId);
+  const binding = proveProducedBinding(
+    row,
+    declarations,
+    await resolveWriteProvenance(row),
+  );
+  if (!binding.bound) {
+    await markProducedEventProcessed(row.eventId);
+    return "no-gate";
+  }
+
+  const context = await resolveReviewContext(row, declarations);
   if (!context.ok) {
     await markProducedEventProcessed(row.eventId);
     return "not-classifiable";
@@ -564,33 +757,17 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
       await dispatchAutoGateOpen({ runId, reviewTaskId: plan.reviewTaskId });
     }
     // cinatra#2570 (epic #2564 S6a) — the auditor's gate-bound SUGGESTION
-    // producer. This is the choke point the successor store was always missing:
-    // a gate has just frozen its targets, so there is exactly one revision to
-    // propose against and exactly one row to bind to. Only on a genuinely NEW
-    // emit — a re-sweep must never re-derive a snapshot against a gate a
-    // reviewer may already be reading.
-    //
-    // Best-effort in the same sense as the core-analysis lane at the
-    // verification write: dynamically imported so the producer's graph stays off
-    // this module's static surface, and every outcome (including a refusal) is a
-    // value the lane returns rather than an exception this sweep could die on.
+    // producer, now resolving the projector BY KIND (enabler 0.15 of
+    // `PLAN: Agents Lifecycle (C)`, cinatra#3028, closing cinatra#2950). This is
+    // the choke point the successor store was always missing: a gate has just
+    // frozen its targets, so there is exactly one set to propose against and
+    // exactly one row to bind to. Only on a genuinely NEW emit — a re-sweep must
+    // never re-derive a snapshot against a gate a reviewer may already be
+    // reading.
     if (!emitted.idempotent) {
-      try {
-        const { produceSuggestionsForNewGate } = await import(
-          "./lifecycle-suggestion-producer-lane"
-        );
-        await produceSuggestionsForNewGate({
-          gateId: emitted.gateId,
-          orgId: row.orgId,
-          target: {
-            artifactId: row.artifactId,
-            representationRevisionId: row.representationRevisionId,
-          },
-        });
-      } catch {
-        // swallowed — a suggestion is an aid to the reviewer, never a condition
-        // of the gate existing.
-      }
+      await produceSuggestionsForPinnedTargets(emitted.gateId, row.orgId, [
+        { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId },
+      ]);
     }
   } catch (err) {
     // A pin-conflict means a DIFFERENT gate already occupies (run, task) — an
@@ -657,6 +834,58 @@ export interface ReviewOrchestrationSweepSummary {
    * pass (each may fan into several ≤50-target partition gates, counted in
    * `gatesCreated`). Zero when every pending event is a single-artifact production. */
   batchesCoalesced: number;
+}
+
+/**
+ * Run the kind-resolved suggestion producer over a gate's pinned targets
+ * (enabler 0.15 of `PLAN: Agents Lifecycle (C)`, cinatra#3028).
+ *
+ * ONE helper, called from BOTH gate-creation paths, because the plan's sentence
+ * is "on the single-artifact path and the batch path alike" and two call sites
+ * with two shapes is how they drifted apart in the first place (cinatra#2950).
+ *
+ * The KIND is read here — the artifact's own object type — because that is the
+ * only place both paths already hold the organization and the target set. A row
+ * whose type cannot be read yields the empty kind, which resolves to no
+ * projector and is recorded as such rather than guessed at.
+ *
+ * BEST-EFFORT BY CONSTRUCTION, exactly as before: dynamically imported so the
+ * producer's graph stays off this module's static surface, every lane outcome is
+ * a value, and the catch is the backstop — a suggestion is an aid to the
+ * reviewer, never a condition of the gate existing.
+ */
+async function produceSuggestionsForPinnedTargets(
+  gateId: string,
+  orgId: string,
+  targets: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>,
+): Promise<void> {
+  if (targets.length === 0) return;
+  try {
+    const artifactIds = [...new Set(targets.map((t) => t.artifactId))];
+    const rows = await db
+      .select({ id: objectsRef.id, type: objectsRef.type })
+      .from(objectsRef)
+      .where(and(eq(objectsRef.orgId, orgId), inArray(objectsRef.id, artifactIds)));
+    const kindById = new Map(rows.map((r) => [r.id, String(r.type ?? "")]));
+
+    const { produceSuggestionsForGateTargets } = await import(
+      "./lifecycle-suggestion-producer-lane"
+    );
+    await produceSuggestionsForGateTargets({
+      gateId,
+      orgId,
+      targets: targets.map((t) => ({
+        target: {
+          artifactId: t.artifactId,
+          representationRevisionId: t.representationRevisionId,
+        },
+        kind: kindById.get(t.artifactId) ?? "",
+      })),
+    });
+  } catch {
+    // swallowed — a suggestion is an aid to the reviewer, never a condition of
+    // the gate existing.
+  }
 }
 
 function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationSweepSummary): void {
@@ -922,7 +1151,22 @@ async function orchestrateProducedBatch(
       await settleAlreadyLinkedEvent(row);
       continue;
     }
-    const context = await resolveReviewContext(row);
+    // The SAME binding proof the per-event path applies (cinatra#2929). Asked
+    // per member rather than per production: a run may declare an artifact-bound
+    // output and still write an unbound revision, and a member that proves no
+    // binding must not be sealed into a partition gate.
+    const memberDeclarations = await resolveProducerDeclarations(row.producerRunId);
+    const memberBinding = proveProducedBinding(
+      row,
+      memberDeclarations,
+      await resolveWriteProvenance(row),
+    );
+    if (!memberBinding.bound) {
+      await markProducedEventProcessed(row.eventId);
+      summary.noGate += 1;
+      continue;
+    }
+    const context = await resolveReviewContext(row, memberDeclarations);
     if (!context.ok) {
       await markProducedEventProcessed(row.eventId);
       summary.notClassifiable += 1;
@@ -1015,6 +1259,16 @@ async function orchestrateProducedBatch(
     // so the review the notification points at exists.
     if (!gateIdempotent) {
       await dispatchAutoGateOpen({ runId, reviewTaskId });
+      // ENABLER 0.15 — "the host resolves it by kind when it opens a gate — on
+      // the single-artifact path AND THE BATCH PATH ALIKE". cinatra#2950's
+      // measured defect was precisely that this path "does not invoke the
+      // suggestion lane at all", so a run that produced several artifacts at
+      // once opened its gates with no suggestion snapshot at all — and the
+      // producer's single-target snapshot would have made a second target return
+      // `already-bound` even if it had. The snapshot is multi-target, so the
+      // WHOLE partition is offered at once and the batch decision stays one
+      // all-or-nothing boundary.
+      await produceSuggestionsForPinnedTargets(gateId, orgId, partition);
     }
 
     const members = partition

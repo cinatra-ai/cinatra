@@ -42,7 +42,6 @@ import {
   readAgentRunMessages,
   readAgentTemplateByPackageName,
   findSavedConnectionForAgentUrl,
-  createAgentRun,
   updateAgentRunStreamedText,
   type AgentRunRecord,
   type AgentRunMessageRecord,
@@ -50,6 +49,21 @@ import {
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import { publishAgUiEvent } from "@cinatra-ai/agent-ui-protocol/server";
 import { deriveRunHitlContext, type HitlContext } from "./hitl-context";
+// cinatra#2929 (epic #2926 W2b) — THE ADAPTER. Both branches of this action used
+// to create their run directly, which is why the creation fence carried this
+// file as owed. They now launch through the coordinator and keep every contract
+// they had: the external branch keeps the remote task stream (the peer runs the
+// task, so the launch does not enqueue and the SSE proxy is handed the very same
+// iterator), and the in-process branch keeps the executor's own dispatch.
+//
+// NEITHER LAUNCH CLAIMS A PRESENT HUMAN, and that is deliberate rather than an
+// omission. A presence claim makes the coordinator create the run PARKED so a
+// moment can open before it dispatches — which would hold a run whose execution
+// belongs to a remote peer, or to the executor that is about to enqueue it, with
+// no card on any surface able to release it. This slice changes no screen and
+// parks no run that does not park today; the moment these two surfaces are shown
+// their cards is the wave that draws them.
+import { launchAgentRun } from "./lifecycle-coordinator";
 
 // ---------------------------------------------------------------------------
 // Nango-to-external-A2A credential adapter.
@@ -262,22 +276,31 @@ export async function sendAgentBuilderMessage(input: {
     const runId = randomUUID();
     try {
       const authority = await verifySessionAuthority(session.user.id, orgId);
-      await createAgentRun(
-        {
-          id: runId,
-          templateId: template.id,
-          runBy: session.user.id,
-          inputParams,
-          sourceType: "agent_builder",
-          a2aTaskId: externalTaskId,
-          orgId,
-          // External A2A has no parent run on this branch (it is the entry from
-          // an external peer). Resolve from the active MCP request frame if
-          // present, else NULL; when no project chat is active, NULL is expected.
-          projectId: null,
-        },
+      await launchAgentRun({
+        producer: "external_agent_message",
+        frame: null,
         authority,
-      );
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "the remote peer already runs the task; this run records it locally and the SSE proxy carries the peer's own stream",
+        },
+        create: {
+          kind: "full",
+          input: {
+            id: runId,
+            templateId: template.id,
+            runBy: session.user.id,
+            inputParams,
+            sourceType: "agent_builder",
+            a2aTaskId: externalTaskId,
+            orgId,
+            // External A2A has no parent run on this branch (it is the entry from
+            // an external peer). Resolve from the active MCP request frame if
+            // present, else NULL; when no project chat is active, NULL is expected.
+            projectId: null,
+          },
+        },
+      });
     } catch (err) {
       if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
         return {
@@ -409,7 +432,23 @@ export async function sendAgentBuilderMessage(input: {
           // fall through to the installation-principal path. The frame actor
           // was asserted identical to the dispatching session above, so it is
           // the right scope actor for this dispatch.
-          return createAgentRun({ ...runInput, scopeActor: actorContext }, authority);
+          const launched = await launchAgentRun({
+            producer: "agent_builder_in_process",
+            frame: null,
+            authority,
+            dispatch: {
+              kind: "caller_dispatches",
+              why: "the in-process executor enqueues through its own enqueueJob contract",
+            },
+            create: {
+              kind: "full",
+              input: { ...runInput, scopeActor: actorContext },
+            },
+          });
+          if (launched.carrier.kind !== "run") {
+            throw new Error("the in-process A2A launch answered with a carrier that is not a run");
+          }
+          return launched.carrier.run;
         },
       });
       return client.sendMessage({ json: inputParams });

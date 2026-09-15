@@ -47,6 +47,22 @@ const SESSIONLESS_SETUP_STEPS: SetupWizardStep[] = [
 
 export default async function SetupLayout({ children }: { children: React.ReactNode }) {
   const session = await getAuthSession();
+
+  // The registration answer given on the first-account step is held in the
+  // operator's own browser until an admin account exists to own it; this is the
+  // first authenticated screen after that account is created, so it is where
+  // the answer reaches the instance. It is a no-op for everyone else: not an
+  // admin, no held answer, or an instance that already carries an answer of its
+  // own, and it never throws (src/lib/bootstrap-registration-choice.ts). The
+  // module is loaded here, inside the session branch, so the sessionless chrome
+  // still reads nothing at all.
+  if (session) {
+    const { applyPendingBootstrapRegistrationChoice } = await import(
+      "@/lib/bootstrap-registration-choice"
+    );
+    await applyPendingBootstrapRegistrationChoice(session);
+  }
+
   const steps = session ? await getSetupWizardSteps() : SESSIONLESS_SETUP_STEPS;
 
   return (

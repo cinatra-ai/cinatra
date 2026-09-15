@@ -25,7 +25,6 @@
 import { createHash } from "node:crypto";
 
 import {
-  evaluatePolicy,
   isExternalEffectClass,
   type CompiledManifestLifecycle,
   type DestinationClass,
@@ -34,6 +33,7 @@ import {
   type PolicyOutcome,
   type RunElevation,
 } from "./lifecycle-policy";
+import { decideReviewPolicy } from "./lifecycle-review-core";
 import { evaluateThenPark, type EvaluateThenParkOutcome } from "./lifecycle-continuation";
 import type { BatchTarget } from "./lifecycle-batch";
 import type { ContinuationMode } from "./lifecycle-produced-event";
@@ -252,8 +252,11 @@ export function planReviewForEvent(
   event: ProducedEventAxes,
   ctx: ReviewOrchestrationContext,
 ): ReviewOrchestrationPlan {
-  const decision = evaluatePolicy({
-    checkpoint: "review",
+  // THE SHARED POLICY (cinatra#2929). Not a bare lattice call any more: the one
+  // review core owns the review checkpoint's evaluation, and the DECLARED kind
+  // asks the identical question through it. "Both go through the same policy" is
+  // then a property of the code rather than of two call sites that agree today.
+  const decision = decideReviewPolicy({
     artifactType: ctx.artifactType,
     destinationClass: event.destinationClass,
     originKind: event.originKind,

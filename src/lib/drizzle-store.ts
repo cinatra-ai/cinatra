@@ -19,11 +19,12 @@ import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 —
 import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { agentRunCreatedAtSchemaQueries } from "@/lib/agent-run-created-at-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema"; import { agentRunCreatedAtSchemaQueries } from "@/lib/agent-run-created-at-schema"; import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema"; import { memoryPromotionRequestSchemaQueries } from "@/lib/objects/memory-promotion-request-schema"; import { agentRunAssignmentScopeSchemaQueries } from "@/lib/assignment-scope"; import { agentAssignedContextSchemaQueries } from "@/lib/agent-assigned-context-schema"; import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries, skillMatchRunContextDdl } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
+  artifactMaterializationLedgerSchemaQueries,
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
@@ -31,7 +32,7 @@ import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publica
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
-import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries, suggestionDecisionCasSchemaQueries, agentRunHitlGatesSchemaQueries, runRecommendationSkipsSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries, suggestionDecisionCasSchemaQueries, agentRunHitlGatesSchemaQueries, runRecommendationSkipsSchemaQueries, runRecommendationOfferedSetSchemaQueries, artifactReviewFormProvenanceSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1150,7 +1151,7 @@ END $$`,
     ...artifactReviewGateSchemaQueries(schemaName),
     // lifecycle-interceptions S0 (cinatra#2038, epic #2037): policy lattice bounds, ArtifactProduced outbox, continuation park, advisory seam, decided S3/S4/S5 schemas + gate-store extensions. DDL co-located in artifact-review-gate-schema.ts (already route-reachable, so no new route-graph node); migration twin core__0079. Spread AFTER artifactReviewGateSchemaQueries so its additive ALTERs land on the existing gate tables.
     ...lifecycleInterceptionsSchemaQueries(schemaName),
-    ...lifecycleRepairSchemaQueries(schemaName), ...suggestionDecisionCasSchemaQueries(schemaName), ...agentRunHitlGatesSchemaQueries(schemaName), ...runRecommendationSkipsSchemaQueries(schemaName), // Both AFTER the S0 spread, which creates the tables they alter. agent_run_hitl_gates (cinatra#2748): the DURABLE human-approval gate artifact, so a Redis event-log expiry can no longer destroy a paused run's only answerable gate; AFTER agent_runs above, which its FK references; migration twin core__0093. S2 (cinatra#2040): repair loop (durable batch epoch, per-epoch aggregate, repair lineage) + changes_requested CHECK-widen + rejected-efficacy row; migration twin core__0081. chat-hitl S6b (cinatra#2571): the per-item suggestion-decision ledger reshape + the application-intent outbox; migration twin core__0092. run_recommendation_skips (cinatra#2794 S9b): the RUN-LEVEL skip record that replaces the reserved-skill-id marker, keyed by run_id alone; migration twin core__0095. Spread on ONE line deliberately — this module sits at its file-size ceiling, which may only ever shrink.
+    ...lifecycleRepairSchemaQueries(schemaName), ...suggestionDecisionCasSchemaQueries(schemaName), ...agentRunHitlGatesSchemaQueries(schemaName), ...runRecommendationSkipsSchemaQueries(schemaName), ...runRecommendationOfferedSetSchemaQueries(schemaName), ...artifactReviewFormProvenanceSchemaQueries(schemaName), // Both AFTER the S0 spread, which creates the tables they alter. agent_run_hitl_gates (cinatra#2748): the DURABLE human-approval gate artifact, so a Redis event-log expiry can no longer destroy a paused run's only answerable gate; AFTER agent_runs above, which its FK references; migration twin core__0093. S2 (cinatra#2040): repair loop (durable batch epoch, per-epoch aggregate, repair lineage) + changes_requested CHECK-widen + rejected-efficacy row; migration twin core__0081. chat-hitl S6b (cinatra#2571): the per-item suggestion-decision ledger reshape + the application-intent outbox; migration twin core__0092. run_recommendation_skips (cinatra#2794 S9b): the RUN-LEVEL skip record that replaces the reserved-skill-id marker, keyed by run_id alone; migration twin core__0095. run_recommendation_offered_set (cinatra#2906): the set a recommendation card ACTUALLY offered, recorded against the hold it was drawn for, so a confirm pins what the reader saw instead of re-scoring live state; bootstrap-only, because the table's absence degrades the confirm to its pre-#2906 behaviour rather than breaking a decision. Spread on ONE line deliberately — this module sits at its file-size ceiling, which may only ever shrink. artifact_review_audit.renderer_kind CHECK-widen (cinatra#2931 W4): admits 'first-party', the provenance of the host's own renderer for a declared text form, so a markdown draft the reviewer read in full can actually be decided instead of rolling the whole decision back on the audit insert; migration twin core__0097. Spread on ONE line deliberately — this module sits at its file-size ceiling, which may only ever shrink.
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
@@ -1386,7 +1387,7 @@ END $$`,
     // spread keeps them executed core-store DDL, so the schema-migration gate
     // still reads them; cinatra#2648 taught its classifier this exact shape.
     ...triggerSchemaQueries(schemaName),
-    ...triggerScheduleProposalSchemaQueries(schemaName), ...reviewIslandGrantSchemaQueries(schemaName), // cinatra#2754 — one row per minted island address, spent once; rides this line for the same ratchet reason as the import
+    ...triggerScheduleProposalSchemaQueries(schemaName), ...reviewIslandGrantSchemaQueries(schemaName), ...lentActionGrantSchemaQueries(schemaName),...memoryPromotionRequestSchemaQueries(schemaName), // cinatra#1381 — memory row promotion's NET-NEW request ledger, born in its leaf beside its artifact sibling; additive-only, no numbered twin (a new table needs none). Rides this spread-only line for the same ratchet reason as the import: this module sits at its file-size ceiling, which may only ever shrink. // cinatra#2932 (lifecycle-b W5a) — the LENT-ACTION GRANT's NET-NEW single-use ledger: one row per grant the send minted, spent by one atomic DELETE at the tool call, so "consumed by its first use" is a fact about the world rather than a property of a signed string. Born in its leaf, additive-only, no numbered twin (a new table needs none). Rides this line for the same ratchet reason as the import. cinatra#2754 — one row per minted island address, spent once; rides this line for the same ratchet reason as the import
     // project_dispatch_attempts + project_leases: the dynamic-dispatch
     // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
@@ -1529,10 +1530,10 @@ END $$`,
             FOREIGN KEY (granted_by) REFERENCES public."user"(id);
         END IF;
       END $$;` },
-    // trigger_mode + gated_steps on agent_templates (read by execution.ts and the Trigger tab UI). has_artifact_bindings (cinatra#2498) is the locally-persisted binding-presence authority the run-completion materializer consults BEFORE any registry read, so a registry outage only fails a run whose package declares bindings; NULLABLE — null (legacy, no backfill) reads exactly like the pre-#2498 fail-closed posture. Full rationale on the column in packages/agents/src/schema.ts; operator-upgrade twin in migrations/core/core__0091.
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS trigger_mode text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS gated_steps text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS has_artifact_bindings boolean` },
+    // agent_templates run-gate + artifact-binding columns (trigger_mode,
+    // gated_steps, has_artifact_bindings, artifact_bindings) — their own
+    // bootstrap-DDL leaf, spread in at the position they have always held.
+    ...agentTemplateRunGateSchemaQueries(schemaName),
     // external_mcp_servers table for the external MCP server registry
     // scope values: 'global' | 'org' | 'team' | 'user'
     // API keys stored in Nango; nango_connection_id references the Nango connection per row
@@ -1572,7 +1573,7 @@ END $$`,
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."external_mcp_servers" ADD COLUMN IF NOT EXISTS transport text NOT NULL DEFAULT 'unknown'` },
     // agent_runs consolidation: title, created_at, source_type, source_id columns
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS title text` },
-    ...agentRunCreatedAtSchemaQueries(schemaName), // cinatra#2911 — created_at is IMMUTABLE after insert. The unguarded whole-table `SET created_at = COALESCE(started_at, completed_at, created_at)` that stood here rewrote every row on EVERY cold init (the bootstrap list replays once per fresh server process), so a run that had since started reported `started_at` as its creation time and a run that failed before starting reported `completed_at` — its own end time. The leaf adds the column NULLABLE, backfills ONLY `created_at IS NULL`, then restores the default + NOT NULL; it explains the shape in full. Migration twin core__0096.
+    ...agentRunCreatedAtSchemaQueries(schemaName), ...agentRunLifecycleMomentSchemaQueries(schemaName), // cinatra#2928 (lifecycle-b W2a) — the LIFECYCLE MOMENT TRIPLE: three additive nullable agent_runs columns (lifecycle_moment, lifecycle_card_kind, lifecycle_card_ref) plus their partial index, so a waiting run STATES which moment it is at and which card belongs to it instead of a screen re-deriving it from the shape of the pause. Additive-only, bootstrap-only (the human_present / streamed_text precedent); the leaf explains the shape in full. cinatra#2911 — created_at is IMMUTABLE after insert. The unguarded whole-table `SET created_at = COALESCE(started_at, completed_at, created_at)` that stood here rewrote every row on EVERY cold init (the bootstrap list replays once per fresh server process), so a run that had since started reported `started_at` as its creation time and a run that failed before starting reported `completed_at` — its own end time. The leaf adds the column NULLABLE, backfills ONLY `created_at IS NULL`, then restores the default + NOT NULL; it explains the shape in full. Migration twin core__0096.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'agent_builder'` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS source_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_source_lookup_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (source_type, source_id, created_at DESC)` },
@@ -1632,12 +1633,8 @@ END $$`,
     // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a run executes AS, carried onto the run's signed lineage (ActorContext) so the A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` },
-    // Delegated execution-actor snapshot.
-    // Captured at instantiate from the requesting user's ActorContext and
-    // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
-    // text — legacy rows fall back to live-session derivation.
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS delegated_actor_snapshot text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS delegated_actor_snapshot text` }, ...agentRunAssignmentScopeSchemaQueries(schemaName), // delegated_actor_snapshot: the requesting user's ActorContext, captured at instantiate and replayed at run-start re-authz + mid-run authz checks (nullable JSON text; legacy rows fall back to live-session derivation). assignment_scope_snapshot (cinatra#2813 S1, epic #2812): the IMMUTABLE scopes a run was created under, decided ONCE at creation because the scope a run's assignments come from must not be able to move under it; absent / malformed / unknown-version resolves to workspace plus the durable org and nothing else. Its statement moved into src/lib/assignment-scope.ts — the leaf that already owns this slice's SQL and that this composition already reaches — because THIS module is at its file-size ceiling, which may only ever shrink; the spread rides this line for the same reason as the import, and the leaf carries the reasoning in full. Operator-upgrade twin = migrations/core/core__0100.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS launch_scope_anchor jsonb` }, // launch_scope_anchor (cinatra#2809, epic #2806): the IMMUTABLE vantage the run was LAUNCHED from, which decides its ONE canonical address; absent / malformed resolves to unanchored and the flat bare route, with no backfill and no inference from another column. Written INLINE rather than in a shared builder beside the rule: a new leaf module would enter four LOCKED route graphs (every route reaches this DDL owner) whose module counts may only ever shrink. It takes a LINE OF ITS OWN rather than riding the composition line above, because extending a line that already carries an ADD COLUMN reads to the schema-migration gate as a column REMOVED from the idempotent DDL, and this change removes nothing; the file's line ceiling is paid instead by the stray second blank line dropped further down. The parity suite pins this statement against its assistant_threads twin and the migration. Operator-upgrade twin = migrations/core/core__0102.
     // Per-scope role_grant store. Subject
     // is always a user. Scope is one of user/team/organization/
     // workspace/project. Idempotent CREATE TABLE — no legacy rows exist
@@ -1991,41 +1988,13 @@ $body$` },
     // trigger. Existing deployments also converge via migration core__0036.
     ...semanticAssertionSchemaQueries(schemaName),
     // ---- artifact_materializations idempotency ledger (cinatra#923) ----
-
-    // Claim-then-write-then-finalize journal for declarative artifact
-    // materialization (the install-op-journal shape). One row per attempted
-    // materialization; the 4-part unique key is the RETRY-idempotency
-    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
-    // hits the same key, reads the finalized row's refs and returns them
-    // instead of writing a second artifact. `phase` transitions
-    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
-    // artifact write — no window in which a committed artifact is invisible
-    // to the ledger). An unfinalized (crashed) claim is re-used by the next
-    // re-drive.
-    //
-    // `output_id` identity per path: the EndNode output name for
-    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
-    // the authoring step id for `llm_emit` provenance rows (unique per emit,
-    // so legitimately distinct same-byte emits never collide on the key).
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
-  id                          text PRIMARY KEY,
-  org_id                      text NOT NULL,
-  run_id                      text NOT NULL,
-  output_id                   text NOT NULL,
-  node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
-  extension                   text NOT NULL,
-  content_hash                text NOT NULL,
-  artifact_id                 text,
-  representation_revision_id  text,
-  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
-  created_at                  timestamptz NOT NULL DEFAULT now()
-)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
-    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
-    // declarative rows of one run by extension + content hash.
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
-    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
+    // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#3029;
+    // the same extract-leaf pattern as run_context_selections and
+    // object_content_snapshots below -- an EXISTING drizzle-store import, so the
+    // locked route graphs gain no module). The statements are unchanged and are
+    // spread in at the position they were written in; the reasoning, and why the
+    // detection ladder's four columns are what moved it, live in the leaf.
+    ...artifactMaterializationLedgerSchemaQueries(schemaName),
     // ---- run_context_selections audit table ----
     // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#1430
     // vertical slice; extract-leaf pattern — an EXISTING drizzle-store import,
@@ -2292,7 +2261,6 @@ $body$` },
     // zero rows on subsequent runs, and the ALTER is a no-op when the column is already
     // NOT NULL.
 
-
     // Lowercase + slugify the creator_id and id segments so
     // the backfilled package_name matches the strict resolveWayflowUrl regex
     // (`/^@([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/`). Without the
@@ -2542,7 +2510,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     {
       text: `CREATE INDEX IF NOT EXISTS custom_skill_assignments_agent_idx ON "${schemaName.replaceAll('"', '""')}"."custom_skill_assignments" (agent_id)`,
     },
-    ...agentAssignedSkillsSchemaQueries(schemaName), // agent_assigned_skills (cinatra#2346 S1): the ACTOR-INDEPENDENT direct-assignment store — BESIDE custom_skill_assignments above (whose read is actor-gated, so it never reaches an actor-less worker run), never inside it. Fresh-install half; operator-upgrade twin = migrations/core/core__0089; both idempotent, pinned against each other by a DDL-parity suite.
+    ...agentAssignedContextSchemaQueries(schemaName), ...agentAssignedSkillsSchemaQueries(schemaName), // agent_assigned_context (cinatra#2813 S1): the ARTIFACT twin of agent_assigned_skills, same exact-scope tuple rule, artifact FK ON DELETE CASCADE. Fresh-install half; operator-upgrade twin = migrations/core/core__0100. Spread AFTER the resource table its FK references. agent_assigned_skills (cinatra#2346 S1): the ACTOR-INDEPENDENT direct-assignment store — BESIDE custom_skill_assignments above (whose read is actor-gated, so it never reaches an actor-less worker run), never inside it. Fresh-install half; operator-upgrade twin = migrations/core/core__0089; both idempotent, pinned against each other by a DDL-parity suite.
     // Derived-store ownership columns.
     // org_id already exists on objects + graphiti_projection_outbox; add the
     // remaining tuple (owner_type, owner_id, visibility) as nullable for

@@ -149,9 +149,14 @@ function collectComponents(root: unknown): Ref[] {
 
 type ArtifactBinding = {
   extension: string;
+  /** The exact declared type the bound output materializes into (cinatra#1454). */
+  objectTypeId?: string;
   contentFrom: string;
-  titleFrom: string;
+  /** Absent on a fan-out binding: each member titles itself (cinatra#3034). */
+  titleFrom?: string;
   declaredMime: string;
+  /** One artifact per member of the bound list (cinatra#3034, plan item 0.27). */
+  fanOut?: { mode: string; titleFrom: string; titlePrefix: string };
 };
 
 /** A flow / EndNode input or output slot. */
@@ -175,12 +180,16 @@ const PRODUCTS: Product[] = [
   {
     agent: "blog-idea-generator-agent",
     requiredInputs: ["brief"],
-    outputs: ["ideas", "ideaBatchTitle", "ideaBatchDocument", "notes"],
+    // cinatra#3034 re-ratification: the one markdown batch document and its
+    // batch title are retired. The ideas are plain text, filed one artifact per
+    // idea through the fan-out binding, each titled from its own first line.
+    outputs: ["ideas", "notes"],
     artifact: {
       extension: "@cinatra-ai/blog-idea-artifact",
-      contentFrom: "ideaBatchDocument",
-      titleFrom: "ideaBatchTitle",
-      declaredMime: "text/markdown",
+      objectTypeId: "@cinatra-ai/blog-idea-artifact:blog-idea",
+      contentFrom: "ideas",
+      declaredMime: "text/plain",
+      fanOut: { mode: "member", titleFrom: "first-line", titlePrefix: "Title:" },
     },
     legacySkill: "generate-blog-ideas",
   },
@@ -190,17 +199,26 @@ const PRODUCTS: Product[] = [
     outputs: ["title", "excerpt", "content", "sourcesUsed", "notes"],
     artifact: {
       extension: "@cinatra-ai/blog-post-artifact",
+      objectTypeId: "@cinatra-ai/blog-post-artifact:post",
       contentFrom: "content",
-      titleFrom: "title",
       declaredMime: "text/markdown",
+      titleFrom: "title",
     },
     legacySkill: "generate-blog-post-draft",
   },
   {
     agent: "blog-linkedin-writer-agent",
     requiredInputs: ["postTitle", "blogPostUrl"],
-    outputs: ["post", "notes"],
-    artifact: null,
+    // cinatra#3034 re-ratification: the LinkedIn post lands as a LinkedIn post
+    // draft, and the writer emits the title that draft is filed under.
+    outputs: ["post", "title", "notes"],
+    artifact: {
+      extension: "@cinatra-ai/linkedin-artifacts",
+      objectTypeId: "@cinatra-ai/linkedin:post-draft",
+      contentFrom: "post",
+      declaredMime: "text/plain",
+      titleFrom: "title",
+    },
     legacySkill: "generate-linkedin-post",
   },
 ];
@@ -277,7 +295,13 @@ for (const p of PRODUCTS) {
         expect(bound).toHaveLength(1);
         expect(bound[0].cinatra?.artifact).toEqual(p.artifact);
         expect(endTitles).toContain(p.artifact.contentFrom);
-        expect(endTitles).toContain(p.artifact.titleFrom);
+        // A fan-out binding names no run-level title output: each member's own
+        // first line supplies its artifact's title (cinatra#3034).
+        if (p.artifact.fanOut === undefined) {
+          expect(endTitles).toContain(p.artifact.titleFrom as string);
+        } else {
+          expect(p.artifact.titleFrom).toBeUndefined();
+        }
         const produces = (oas.metadata.cinatra.produces ?? []) as { extension: string }[];
         expect(produces.map((x) => x.extension)).toEqual([p.artifact.extension]);
       }

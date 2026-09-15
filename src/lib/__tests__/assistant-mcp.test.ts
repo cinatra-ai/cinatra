@@ -106,7 +106,8 @@ vi.mock("@/lib/assistant-audience-closure", () => ({
   isAssistantInCallerAudience: mocks.isAssistantInCallerAudience,
 }));
 
-import { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { registerAssistantMcpPrimitives } from "@/lib/assistant-mcp";
 
@@ -753,8 +754,8 @@ describe("assistant_thread_get", () => {
 
 describe("delegated-chat tool policy", () => {
   it("DENIES all three assistant tools on the delegated-chat perimeter (intentional; no CarveOut, no rename)", () => {
-    expect(isDelegatedChatMcpToolAllowed("assistant_send")).toBe(false);
-    expect(isDelegatedChatMcpToolAllowed("assistant_thread_list")).toBe(false);
-    expect(isDelegatedChatMcpToolAllowed("assistant_thread_get")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("assistant_send")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("assistant_thread_list")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("assistant_thread_get")).toBe(false);
   });
 });

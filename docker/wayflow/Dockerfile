@@ -50,6 +50,11 @@ WORKDIR /app
 # resolves the exact validated version (wayflowcore 26.1.2 floors it at
 # >=26.1.2; an unpinned resolve could otherwise drift to a future breaking
 # InputMessageNode validation change).
+# fasta2a is the [a2a] extra's own dependency and wayflowcore 26.1.2 only floors
+# it at >=0.6.0, so an unpinned resolve took fasta2a 1.0.0 (2026-09-05), which
+# dropped DataPart from fasta2a.schema and broke the agentserver import at boot.
+# Pin the 0.6 line wayflowcore 26.1.2 was validated against; a deliberate move
+# off it arrives as its own reviewed pull request.
 # pydantic is floored at >=2.12.5 by pyagentspec 26.1.2 (it declares
 # pydantic>=2.12.5,<2.14); wayflowcore 26.1.2 allows pydantic<3.0.0. The pin
 # `>=2.12.5,<2.14` is the intersection and keeps pydantic on the v2 line. (The
@@ -62,6 +67,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     "wayflowcore[a2a]==${WAYFLOWCORE_VERSION}" \
     "pyagentspec==${PYAGENTSPEC_VERSION}" \
+    'fasta2a==0.6.1' \
     'pydantic>=2.12.5,<2.14' \
     'starlette' \
     'uvicorn' \

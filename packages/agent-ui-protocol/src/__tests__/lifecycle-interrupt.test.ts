@@ -58,13 +58,19 @@ function holdInteraction(over: Record<string, unknown> = {}) {
 
 describe("the interrupt-carried kind set is derived, not hand-listed", () => {
   it("is exactly the kinds S1's carriage table marks `interrupt`", () => {
+    // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two axes
+    // now, and `represent` is the wire one this derivation has always read.
     const expected = LIFECYCLE_CARD_KINDS.filter(
-      (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "interrupt",
+      (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "interrupt",
     );
     expect([...LIFECYCLE_INTERRUPT_KINDS]).toEqual(expected);
-    // Today that is the recommendation hold and nothing else — the run WAITS on
-    // it, which is why it cannot be a fire-and-forget DATA_PART.
-    expect([...LIFECYCLE_INTERRUPT_KINDS]).toEqual(["recommendation_hold"]);
+    // Two kinds today, for the one reason: the run WAITS on the answer, which
+    // is why neither can be a fire-and-forget DATA_PART. The hold parks the run
+    // before it starts; the HITL screen parks it mid-flight (cinatra#2928).
+    expect([...LIFECYCLE_INTERRUPT_KINDS].sort()).toEqual([
+      "agent_hitl_screen",
+      "recommendation_hold",
+    ]);
   });
 
   it("every interrupt-carried kind declares a renderer id", () => {

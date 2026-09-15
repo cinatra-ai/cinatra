@@ -1,0 +1,24 @@
+[
+  {
+    "id": 8800000010,
+    "run_id": 9910000002,
+    "name": "detect",
+    "conclusion": "success",
+    "steps": [{ "number": 1, "name": "Set up job", "conclusion": "success" }]
+  },
+  {
+    "id": 8800000011,
+    "run_id": 9910000002,
+    "name": "/agents Playwright smoke",
+    "conclusion": "failure",
+    "steps": [
+      { "number": 1, "name": "Set up job", "conclusion": "success" },
+      { "number": 2, "name": "Guard — detect must have succeeded", "conclusion": "skipped" },
+      { "number": 3, "name": "Skip stub (no dashboard-surface changes)", "conclusion": "skipped" },
+      { "number": 4, "name": "Install deps", "conclusion": "success" },
+      { "number": 5, "name": "Add CI build swap (default-runner only)", "conclusion": "success" },
+      { "number": 6, "name": "Build app (production)", "conclusion": "cancelled" },
+      { "number": 7, "name": "Run dashboard live-verify smoke", "conclusion": "skipped" }
+    ]
+  }
+]

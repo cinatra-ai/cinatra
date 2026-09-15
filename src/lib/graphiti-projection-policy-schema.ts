@@ -30,19 +30,27 @@
 //                                    driver's writes harmlessly.
 //
 // The outbox epoch column (`graphiti_projection_outbox.projection_epoch`) is
-// the LAST entry below (the outbox table itself pre-exists by the time
-// drizzle-store.ts spreads these queries): rebuild-replay items are STAMPED
-// with their target epoch and discarded by the worker when the group's epoch
-// has moved on (stale-epoch fencing); ordinary write-path items stay NULL and
-// always process under the group's live policy.
+// the LAST of the projection-policy entries below (the outbox table itself
+// pre-exists by the time drizzle-store.ts spreads these queries):
+// rebuild-replay items are STAMPED with their target epoch and discarded by
+// the worker when the group's epoch has moved on (stale-epoch fencing);
+// ordinary write-path items stay NULL and always process under the group's
+// live policy.
+//
+// CO-TENANT, NOT PROJECTION POLICY (cinatra#2591): the anchor-node inverse
+// map (`objects.graphiti_anchor_node_uuid` and its partial recall index) is
+// the last block of this builder. It is unrelated to everything above and
+// only shares this leaf's zero-import shape, because drizzle-store.ts sits at
+// a file-size ceiling that may only ever shrink. Its own section comment
+// below carries what the column is and why it is nullable.
 //
 // A pure string builder with ZERO imports — a synchronous leaf, safe for
 // drizzle-store.ts's synchronous require() composition (same contract as
 // artifact-claim-schema.ts / skill-lifecycle-schema.ts). Purely ADDITIVE
-// evolution (new tables + a nullable column), so it ships via the idempotent
-// bootstrap on BOTH fresh and existing deployments — no core migration
-// (migrations/README.md: versioned migrations are for transformational
-// change).
+// evolution (new tables, nullable columns, one partial index), so it ships
+// via the idempotent bootstrap on BOTH fresh and existing deployments, with
+// no core migration (migrations/README.md: versioned migrations are for
+// transformational change).
 //
 // The phase vocabulary below is a schema contract mirrored by
 // REBUILD_JOURNAL_PHASES in @cinatra-ai/objects/graphiti-rebuild; the rebuild
@@ -97,5 +105,29 @@ export function graphitiProjectionPolicySchemaQueries(schemaName: string): { tex
     // live policy); non-NULL = rebuild-replay item, discarded by the worker
     // when the group's epoch has moved past it.
     { text: `ALTER TABLE "${q}"."graphiti_projection_outbox" ADD COLUMN IF NOT EXISTS projection_epoch integer` },
+
+    // ---- anchor-node inverse map (cinatra#2591) ----
+    // Housed here, not in drizzle-store.ts, because that file sits at a
+    // file-size ceiling that may only ever shrink; these statements are
+    // unrelated to the projection policy above and only share this leaf's
+    // zero-import shape. Both are `IF NOT EXISTS` against `objects`, a table
+    // the bootstrap creates long before it spreads this builder, so sitting at
+    // the end of this array costs them nothing. Their order relative to EACH
+    // OTHER does matter: the column statement must stay ahead of its index.
+    //
+    // graphiti_anchor_node_uuid: the DETERMINISTIC entity node a row is
+    // seeded as in the graph. Recall gets ranked node UUIDs back from
+    // `search_nodes`; this column is the inverse map that turns them into
+    // canonical row ids WITHOUT depending on the extraction model incidentally
+    // emitting the row UUID as an entity name. It stores the uuid the SERVER
+    // resolved, not the one proposed: graphiti normally keeps the caller's
+    // uuid, but may merge a new node onto an existing near-duplicate, and
+    // then the resolved uuid is the truth. Additive + nullable, rides this
+    // idempotent bootstrap path like its `graphiti_*` siblings.
+    { text: `ALTER TABLE "${q}"."objects" ADD COLUMN IF NOT EXISTS graphiti_anchor_node_uuid TEXT` },
+    // Partial index (non-null only): the column is null for every row
+    // projected before this change and for every row whose class never
+    // projects; the recall lookup runs on every semantic query.
+    { text: `CREATE INDEX IF NOT EXISTS objects_graphiti_anchor_node_uuid_idx ON "${q}"."objects" (graphiti_anchor_node_uuid) WHERE graphiti_anchor_node_uuid IS NOT NULL` },
   ];
 }

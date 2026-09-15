@@ -75,8 +75,12 @@ describe("the interactive run-start (/agents/<package>/new) applies the same ver
     expect(runActions).toMatch(/assertAgentPackageRunnable/);
     expect(runActions).toMatch(/runtime-install-gate/);
     // Refused BEFORE the create (no orphan run row for a run that cannot start).
+    // The creation call itself moved with cinatra#2928: this surface no longer
+    // names a creator at all, it calls the coordinator's launch entry, which is
+    // the ONE creator now. The ordering this case is about is unchanged — the
+    // gate still stands ahead of the act that makes a row.
     const gateAt = runActions.indexOf("assertAgentPackageRunnable(");
-    const createAt = runActions.indexOf("createAgentRunPendingInput(", gateAt);
+    const createAt = runActions.indexOf("launchAgentRun(", gateAt);
     expect(gateAt).toBeGreaterThan(-1);
     expect(createAt).toBeGreaterThan(gateAt);
   });

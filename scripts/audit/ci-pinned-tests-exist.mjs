@@ -12,6 +12,11 @@
 //      test`, `pnpm -C packages/x exec vitest run`, `pnpm --filter <pkg> run
 //      test`) — or carry a machine-readable exception entry in
 //      scripts/audit/package-suite-runner-exceptions.json.
+//   4. ROOT TIER → RUNNER (cinatra#2936). Every root private proof tier —
+//      a `vitest/integration/<slice>.config.ts` tier config, reached
+//      through a package script — MUST be invoked by a workflow that can turn
+//      a check red, or carry a machine-readable exception entry in
+//      scripts/audit/root-tier-runner-exceptions.json.
 //
 // Why (1) exists: `vitest run a.test.ts b.test.ts` treats positionals as
 // FILTERS. If one positional matches zero files, vitest SILENTLY ignores it as
@@ -19,6 +24,20 @@
 // renamed/lost (e.g. dropped in a rebase) leaves its pin behind and CI stays
 // green while advertising coverage it no longer has. This guard is the
 // secondary tripwire that turns that silent gap into a hard failure.
+//
+// Why (4) exists: the same hole, one door further out. A tier written as a
+// dedicated ROOT config plus a `"test:x": "vitest run --config
+// vitest/integration/N.config.ts"` package script is invisible to (1), (2) and
+// (3) alike: (1) reads file paths PINNED INSIDE a workflow and this tier pins
+// none; (2) governs `scripts/audit/__tests__`; (3) governs `packages/**`. So a
+// tier of this shape joins CI only when somebody adds a step, and — exactly as
+// (3) found for package suites — nothing said when nobody did. Measured on
+// `main` at the time of writing: of eleven such tiers, ONE was invoked by a
+// workflow. The other ten were fixtures whose failure mode was silence, three of
+// them the private proof tiers of the epic this direction was written for. A
+// tier's config is a DELIBERATE artifact — somebody wrote a whole file to say
+// "these suites need a real database and must never pass as skipped" — which is
+// what makes an unrun one worth failing over rather than shrugging at.
 //
 // Why (3) exists: (2)'s inventory sweep found the same hole one level out.
 // ~209 plain package unit suites — the whole of packages/llm, packages/chat,
@@ -885,11 +904,54 @@ export function runKeyIsStep(lines, runIdx, keyIndent) {
   return false;
 }
 
+// The labels a variable-driven `runs-on` expression FALLS BACK TO, or null when
+// it carries no readable default. CI runner routing is set by a repository
+// variable — `runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}`
+// — so the label CI finally resolves is not in the file. What IS in the file is
+// the literal used whenever that variable is UNSET, written right there in the
+// expression as a JSON label string ('"ubuntu-latest"') or a JSON label array
+// ('["self-hosted","linux","x64","cinatra-ci"]').
+//
+// THE RESIDUAL, STATED PLAINLY: that default is the repository's declared
+// routing floor, NOT a proof of what a SET variable resolves to. A
+// `CI_RUNNER_*` pointed at a non-Linux label would run the job under a shell
+// this walk does not model, and no text parser can read repository variables.
+// The surface is therefore held to exactly the documented routing contract and
+// no wider — only `vars.CI_RUNNER_<CLASS>`, only a JSON label string or a
+// non-empty all-string label array — so nothing outside that contract is ever
+// read as a runner. Every other expression stays unreadable and is refused:
+// `${{ inputs.runner }}`, a `fromJSON(vars.X)` with no default, a non-routing
+// variable name, malformed or non-label JSON, and an expression carrying a
+// second expansion beside it all return null.
+// Does ONE runner label name Linux? Read label by label, never as one joined
+// string: a label counts only when it IS `linux`/`ubuntu` or is a variant
+// spelled off one of them (`ubuntu-latest`, `ubuntu-24.04`, `linux-arm64`). A
+// vendor label that merely CONTAINS the word — `windows-linux-tools` — proves
+// nothing about the shell, so it is refused rather than credited.
+export function labelNamesLinux(label) {
+  return /^(?:ubuntu|linux)(?:[-_.]|$)/i.test(String(label).trim());
+}
+
+export function runsOnExpressionDefaultLabels(value) {
+  const m = value.match(/^\$\{\{\s*fromJSON\(\s*vars\.(CI_RUNNER_[A-Z0-9_]+)\s*\|\|\s*'([^']*)'\s*\)\s*\}\}$/);
+  if (!m) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(m[2]);
+  } catch {
+    return null; // not a literal this parser can read — refuse, never guess
+  }
+  if (typeof parsed === "string") return [parsed];
+  if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((l) => typeof l === "string")) return parsed;
+  return null; // `[]`, a mixed-type array, a number, an object — none name a runner
+}
+
 // Does the job holding the `run:` at `runIdx` run on a LINUX runner? Reads the
-// job's `runs-on` (a scalar, a list, or a `${{ vars.X || 'ubuntu-latest' }}`
-// expression). Only a value that clearly names ubuntu/linux counts; an
-// unreadable or absent one is refused, because the runner decides the default
-// shell and with it every failure rule this walk applies.
+// job's `runs-on` (a scalar, a list, or a variable-driven
+// `${{ fromJSON(vars.X || '<default>') }}` expression, classified by its default
+// literal). Only a value that clearly names ubuntu/linux counts; an unreadable
+// or absent one is refused, because the runner decides the default shell and
+// with it every failure rule this walk applies.
 export function jobRunsOnLinux(lines, runIdx) {
   let jobStart = -1;
   for (let k = runIdx; k >= 0; k--) {
@@ -920,8 +982,16 @@ export function jobRunsOnLinux(lines, runIdx) {
       }
       value = rest.join(" ");
     }
-    // `${{ vars.RUNNER || 'ubuntu-latest' }}` can resolve to anything, so an
-    // expansion is not a demonstrable Linux runner.
+    // A variable-driven routing expression carries the labels CI falls back to;
+    // classify THOSE by the same rule a plain scalar or list gets, so the three
+    // spellings of one runner cannot disagree about the shell. What a SET
+    // routing variable resolves to is outside what this file can show — see the
+    // residual on runsOnExpressionDefaultLabels.
+    const defaults = runsOnExpressionDefaultLabels(value);
+    if (defaults) return defaults.some(labelNamesLinux);
+    // Any OTHER `${{ … }}` — `${{ vars.RUNNER || 'ubuntu-latest' }}`,
+    // `${{ inputs.runner }}` — can resolve to anything, so an expansion with no
+    // readable default is not a demonstrable Linux runner.
     if (hasUnquotedExpansion(value)) return false;
     return /ubuntu|linux/i.test(value);
   }
@@ -2413,7 +2483,597 @@ export function auditPackageSuiteRunners(repoRoot = REPO_ROOT, workflowDir = WOR
   return { ungated, exempt, tierExcluded, staleExceptions, redundantExceptions, wholesale, packageFiles };
 }
 
-// Run as a CLI gate — all three directions, all findings reported before
+
+// ── Direction 4 — root integration tiers (cinatra#2936) ─────────────────────
+//
+// GOVERNED SET: every `*.config.ts` FILE under `vitest/integration/` — the tier
+// directory; the repository root carries product files only. The FILE and not
+// the script is the unit, because the file is the
+// durable artifact — a tier whose script was renamed away is exactly as unrun
+// as one whose step was deleted, and keying on the script would make the first
+// case invisible.
+//
+// CREDITED only when a workflow segment that can ACTUALLY TURN A CHECK RED
+// (`enforcingRunnerSegments` — the same definition directions 2 and 3 use, so
+// the four cannot disagree about what a gate is) runs, at the repository root:
+//   a) a root package script whose body is a WHOLESALE `vitest run --config
+//      <that tier>` — `packageScriptIsWholesaleVitest`, so a script rewritten
+//      to `true`, narrowed with a positional, or masked with `;` / `|` / `||`
+//      / `&` stops being a runner; or
+//   b) a direct `pnpm exec vitest run --config <that tier> [safe flags]`; or
+//   c) an AGGREGATE script that reaches (a) — the closure below.
+//
+// The closure walks UPWARD from the tier: a script joins when its body is an
+// unconditional `&&` chain (the one separator under which a failure both stops
+// the chain and becomes the script's status) and one of its segments invokes a
+// script already in the set. npm's implicit `pre*` / `post*` lifecycle edges are
+// NOT modelled, and neither is a tier reached only through them — that direction
+// costs a false RED a human fixes, never a false green.
+//
+// RESIDUALS, named. A step whose invocation carries a forwarded argument
+// (`pnpm test:x --maxWorkers=2`) is NOT credited: `invokesRootSuite` requires
+// the script name to be the last token, because a forwarded positional narrows
+// the run and this walk cannot tell which is which. Again a false RED, fixed by
+// writing the step bare. Everything `enforcingRunnerSegments` already refuses —
+// a manual-only workflow, a `continue-on-error` step, a literal-`false` job, a
+// non-bash shell — is refused here unchanged.
+//
+// And it INHERITS that walk's one residual that leans the other way, stated
+// here rather than left to be rediscovered: a non-literal `if:` reads as
+// EXECUTING (see the file header). So a tier pointed at a job guarded by, say,
+// `if: github.event_name == 'workflow_dispatch'` inside a change-triggered
+// workflow would be credited though that job never fires on a PR. Refusing
+// non-literal `if:` instead would credit nothing at all — every gating job in
+// this repository carries the docs-only skip condition — which is why
+// directions 2 and 3 already read them this way, and why direction 4 does not
+// diverge. The stopping rule the header states applies: teach the parser when
+// the construct actually arrives in a reviewed workflow.
+//
+// THE LEDGER IS THE ONLY OTHER STATE. A tier with no runner must be named in
+// ROOT_TIER_EXCEPTIONS_FILE with the slice that owns it and a written reason.
+// The `slice` may well be a CLOSED issue, and that is precisely the shape this
+// records: the tier shipped and its runner did not. There is no third state —
+// and a ledger entry for a tier that IS run, or for a config that no longer
+// exists, is itself a failure, so the list can only shrink honestly.
+export const ROOT_TIER_EXCEPTIONS_FILE = "scripts/audit/root-tier-runner-exceptions.json";
+
+// The location + naming convention every root tier follows: one
+// `vitest/integration/<slice>.config.ts` per tier. The tiers left the repository
+// root so the root carries product files only; the audit keys on the directory
+// instead, and a tier file anywhere else is not a root tier.
+export const ROOT_TIER_DIR = "vitest/integration";
+export const ROOT_TIER_CONFIG_RE = /^vitest\/integration\/[A-Za-z0-9._-]+\.config\.ts$/;
+
+/** Every root tier config file on disk, sorted. */
+export function rootTierConfigs(repoRoot = REPO_ROOT) {
+  const dir = join(repoRoot, ROOT_TIER_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .map((f) => `${ROOT_TIER_DIR}/${f}`)
+    .filter((f) => ROOT_TIER_CONFIG_RE.test(f))
+    .sort();
+}
+
+/** The root package.json's scripts, or {} when it cannot be read. */
+export function rootPackageScripts(repoRoot = REPO_ROOT) {
+  try {
+    return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))?.scripts ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The `--config` / `-c` values a command line names, unquoted.
+ *
+ * Both spellings and both forms (`--config x`, `--config=x`, `-c x`, `-c=x`) —
+ * the same vocabulary `wholesaleVitestArgv` classifies, read here for the value
+ * rather than for the verdict.
+ */
+export function vitestConfigTokens(cmd) {
+  const toks = shellTokens(cmd);
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = unquoteWord(toks[i]);
+    if (!t.startsWith("-")) continue;
+    const eq = t.match(/^-{1,2}([\w.-]+)=(.*)$/);
+    const name = eq ? eq[1] : t.replace(/^-+/, "");
+    if (!VITEST_CONFIG_FLAGS.has(name)) continue;
+    out.push(unquoteWord(eq ? eq[2] : (toks[i + 1] ?? "")));
+  }
+  return out;
+}
+
+/**
+ * Does this argv name THIS tier's config explicitly?
+ *
+ * `wholesaleVitestArgv(argv, expected)` only checks a `--config` it FINDS: an
+ * argv carrying none is wholesale for the config vitest would pick by default,
+ * which for a repository-root run is `vitest.config.ts` — the root unit tier,
+ * not a private tier. Directions 2 and 3 can leave that implicit because the
+ * config they expect IS the default one; direction 4 cannot, so the flag must
+ * be there and must name this tier. Reading the ARGV and not the segment text
+ * also refuses a decoy — `echo --config <tier> && vitest run`, or an
+ * `X=--config <tier>` env assignment in front of a bare run — where the token
+ * appears beside an invocation that never receives it.
+ */
+export function argvNamesConfig(argv, config) {
+  for (let i = 0; i < argv.length; i++) {
+    const t = unquoteWord(argv[i]);
+    if (!t.startsWith("-")) continue;
+    const eq = t.match(/^-{1,2}([\w.-]+)=(.*)$/);
+    const name = eq ? eq[1] : t.replace(/^-+/, "");
+    if (!VITEST_CONFIG_FLAGS.has(name)) continue;
+    if (unquoteWord(eq ? eq[2] : (argv[i + 1] ?? "")) === config) return true;
+  }
+  return false;
+}
+
+/**
+ * A package script body as an unconditional `&&` chain of segments — or null
+ * when any part of it masks a status or moves execution somewhere this walk
+ * cannot follow. Same grammar as `packageScriptIsWholesaleVitest`, factored out
+ * so the aggregate-script closure and the wholesale check cannot drift apart.
+ */
+export function scriptChainSegments(cmd) {
+  if (typeof cmd !== "string") return null;
+  if (hasUnquotedExpansion(cmd) || /[()]/.test(cmd) || hasTopLevelBackground(cmd)) return null;
+  const commands = splitShellCommands(cmd);
+  if (
+    commands.some(
+      (c) =>
+        /^(exit|return|exec|trap|cd)\b/.test(stripEnvPrefix(c.text)) ||
+        errexitSetting(c.text) !== null ||
+        isShellControlCommand(c.text),
+    )
+  ) {
+    return null;
+  }
+  const segs = [];
+  for (const [i, { text, sep }] of commands.entries()) {
+    const isLast = i === commands.length - 1;
+    if (!(sep === "&&" || (isLast && sep === ""))) return null;
+    const seg = text.trim();
+    if (hasTopLevelRedirect(seg)) return null;
+    if (seg) segs.push(seg);
+  }
+  return segs;
+}
+
+/**
+ * Is THIS script a wholesale run of THIS tier?
+ *
+ * The chain rules are `scriptChainSegments`' (which are
+ * `packageScriptIsWholesaleVitest`'s), and the accepted invocation must itself
+ * name the tier config — see `argvNamesConfig` for why that is not implied.
+ */
+export function scriptRunsTierWholesale(repoRoot = REPO_ROOT, script, config, scripts) {
+  const all = scripts ?? rootPackageScripts(repoRoot);
+  const segs = scriptChainSegments(all[script]);
+  if (segs === null) return false;
+  return segs.some((seg) => {
+    const invocation = runnerArgv(seg);
+    return (
+      invocation?.runner === "vitest" &&
+      argvNamesConfig(invocation.argv, config) &&
+      wholesaleVitestArgv(invocation.argv, config)
+    );
+  });
+}
+
+/**
+ * Grow a set of root package scripts UPWARD through aggregate scripts.
+ *
+ * A script joins when its body is an unconditional `&&` chain — the one
+ * separator under which a failure both stops the chain and becomes the script's
+ * status — and one of its segments invokes a script already in the set. npm's
+ * implicit `pre*` / `post*` lifecycle edges are NOT modelled, so a member
+ * reached only through one is not credited: a false RED, never a false green.
+ *
+ * Shared by directions 4 and 5 so the two cannot disagree about what an
+ * aggregate is. `refuse` lets a caller drop a segment BEFORE it is read as an
+ * invocation; direction 4 passes none (its behaviour is unchanged), direction 5
+ * passes `segmentHasCommandPrefix` — see `auditGateIsEnforced` for why.
+ */
+// The package-manager words that ARE the invocation rather than something in
+// front of it. Everything else this file already steps over as a launcher is a
+// WRAPPER — `env`, `cross-env`, `dotenv`, `nice`, `time`, `timeout`,
+// `command`, `exec` — and every one of those can change which binary runs or
+// what environment it starts in.
+const PACKAGE_MANAGER_WORDS = new Set(["pnpm", "pnpx", "npm", "yarn", "corepack"]);
+
+// The words that run the REST of the line with something changed in front of
+// it. DERIVED from `RUNNER_LAUNCHERS` rather than listed by hand, so a launcher
+// added there later is refused here the same day instead of quietly opening a
+// door; the shell builtins `stripEnvPrefix` steps over are added to it.
+export const COMMAND_PREFIX_WORDS = new Set([
+  ...[...RUNNER_LAUNCHERS].filter((w) => !PACKAGE_MANAGER_WORDS.has(w)),
+  "builtin",
+  "eval",
+  "nohup",
+  "xargs",
+  "sudo",
+]);
+
+/**
+ * Does anything stand between the start of this segment and its command word —
+ * an environment assignment, or one of the wrapper words above?
+ *
+ * Direction 5 refuses every one of them. The prefix is what decides WHICH
+ * binary runs and HOW it starts, so a segment carrying one proves nothing about
+ * whether the gate behind it ever executed.
+ */
+export function segmentHasCommandPrefix(seg) {
+  const toks = shellTokens(stripShellComment(seg).trim());
+  if (toks.length === 0) return false;
+  const head = unquoteWord(toks[0]);
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(head)) return true;
+  return COMMAND_PREFIX_WORDS.has(head);
+}
+
+export function closeOverAggregateScripts(reaching, all, { refuse = () => false } = {}) {
+  for (let grew = reaching.size > 0; grew; ) {
+    grew = false;
+    for (const [name, cmd] of Object.entries(all)) {
+      if (reaching.has(name)) continue;
+      const segs = scriptChainSegments(cmd);
+      if (segs === null) continue;
+      if (segs.some((seg) => !refuse(seg) && [...reaching].some((member) => invokesRootSuite(seg, member)))) {
+        reaching.add(name);
+        grew = true;
+      }
+    }
+  }
+  return reaching;
+}
+
+/** Every root package script that REACHES a tier config, transitively. */
+export function scriptsReachingTier(repoRoot = REPO_ROOT, config, scripts) {
+  const all = scripts ?? rootPackageScripts(repoRoot);
+  const reaching = new Set();
+  for (const name of Object.keys(all)) {
+    if (scriptRunsTierWholesale(repoRoot, name, config, all)) reaching.add(name);
+  }
+  return closeOverAggregateScripts(reaching, all);
+}
+
+/** Does some enforcing workflow segment run this tier? */
+export function rootTierIsEnforced(config, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const workflowDir = opts.workflowDir ?? WORKFLOW_DIR;
+  const reaching = opts.reaching ?? scriptsReachingTier(repoRoot, config, opts.scripts);
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  for (const { seg, cwd } of segments) {
+    // A run inside another package is another package's suite; an UNKNOWN cwd
+    // (`null`) is refused rather than assumed to be the root.
+    if (cwd !== "") continue;
+    for (const script of reaching) {
+      if (invokesRootSuite(seg, script)) return true;
+    }
+    const invocation = runnerArgv(seg);
+    if (
+      invocation?.runner === "vitest" &&
+      argvNamesConfig(invocation.argv, config) &&
+      wholesaleVitestArgv(invocation.argv, config)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Read + VALIDATE the root-tier ledger, on the same terms as direction 3's:
+// every field mandatory and checked, and a malformed ledger THROWS rather than
+// degrading to "no exceptions" (a loud, wrong failure) or to "everything is
+// excepted" (a silent, wrong pass).
+export function readRootTierExceptions(repoRoot = REPO_ROOT, text) {
+  const file = join(repoRoot, ROOT_TIER_EXCEPTIONS_FILE);
+  let raw = text;
+  if (raw === undefined) {
+    if (!existsSync(file)) return [];
+    raw = readFileSync(file, "utf8");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${ROOT_TIER_EXCEPTIONS_FILE}: not valid JSON — ${err.message}`);
+  }
+  if (!parsed || !Array.isArray(parsed.exceptions)) {
+    throw new Error(`${ROOT_TIER_EXCEPTIONS_FILE}: expected an object with an \`exceptions\` array.`);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const [i, entry] of parsed.exceptions.entries()) {
+    const at = `${ROOT_TIER_EXCEPTIONS_FILE}[${i}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${at}: expected an object.`);
+    }
+    const { config, slice, reason } = entry;
+    if (typeof config !== "string" || !ROOT_TIER_CONFIG_RE.test(config)) {
+      throw new Error(`${at}: \`config\` must be a vitest/integration/<slice>.config.ts tier config, got ${JSON.stringify(config)}.`);
+    }
+    if (seen.has(config)) throw new Error(`${at}: duplicate entry for ${config}.`);
+    seen.add(config);
+    // The SLICE, not a follow-up: the issue whose work the tier is, and where
+    // wiring it belongs. It may be closed — that is the state this records.
+    if (typeof slice !== "string" || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(slice)) {
+      throw new Error(`${at}: \`slice\` must be a GitHub issue URL, got ${JSON.stringify(slice)}.`);
+    }
+    if (typeof reason !== "string" || reason.trim().length < 20) {
+      throw new Error(`${at}: \`reason\` must be a written sentence (>= 20 chars).`);
+    }
+    out.push({ config, slice, reason });
+  }
+  return out;
+}
+
+// Direction 4's verdict for every root tier config.
+//
+// `ungated`   — no runner, no ledger entry. HARD FAILURE.
+// `exempt`    — no runner, named in the ledger with its slice and a reason.
+// `stale…`    — a ledger entry whose config file is gone.
+// `redundant…`— a ledger entry for a tier a workflow DOES run: the ledger
+//               describes a state CI is not in.
+export function auditRootIntegrationTiers(repoRoot = REPO_ROOT, workflowDir = WORKFLOW_DIR, opts = {}) {
+  const configs = opts.configs ?? rootTierConfigs(repoRoot);
+  const scripts = opts.scripts ?? rootPackageScripts(repoRoot);
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  const exceptions = opts.exceptions ?? readRootTierExceptions(repoRoot);
+  const byConfig = new Map(exceptions.map((e) => [e.config, e]));
+
+  const enforced = [];
+  const ungated = [];
+  const exempt = [];
+  for (const config of configs) {
+    const reaching = [...scriptsReachingTier(repoRoot, config, scripts)].sort();
+    if (rootTierIsEnforced(config, { repoRoot, workflowDir, scripts, segments, reaching: new Set(reaching) })) {
+      enforced.push({ config, scripts: reaching });
+      continue;
+    }
+    const entry = byConfig.get(config);
+    if (entry) exempt.push(entry);
+    else ungated.push({ config, scripts: reaching });
+  }
+
+  const present = new Set(configs);
+  const enforcedSet = new Set(enforced.map((e) => e.config));
+  return {
+    tiers: configs,
+    enforced,
+    ungated,
+    exempt,
+    staleExceptions: exceptions.filter((e) => !present.has(e.config)),
+    redundantExceptions: exceptions.filter((e) => enforcedSet.has(e.config)),
+  };
+}
+
+// ── Direction 5 — plan (B) §6's own named gates (cinatra#2936) ──────────────
+//
+// THE CLAUSE, verbatim from the plan's Conformance block: "The lifecycle-screens
+// epic's own gates — the one-card gate, the host-parity ratchet, the held-turn
+// card contract — stay green through every wave."
+//
+// "Stay green" presupposes that something RUNS them. Two of the three were run:
+// the host-parity ratchet's suite by its package's wholesale runner, the
+// held-turn card contract's by the wholesale root suite. The third — the
+// one-card gate — is an executable `scripts/audit/*.mjs` and NOT a test file,
+// so it fell outside every direction above: direction 2 watches a gate's
+// __tests__ SUITE, never whether a workflow runs the GATE. The gate could
+// therefore go red and no check would move, which is the same vacuity class
+// direction 4 closed for root tiers, arriving through one more door.
+//
+// GOVERNED SET: exactly the three artifacts the clause names, written out here.
+// A LITERAL list and not a pattern, deliberately — the clause names three gates
+// by hand, so the gate that holds the clause names the same three by hand. A
+// fourth arrives when the plan says so, not when a filename happens to match.
+//
+// CREDITED, per kind, always through a segment that can ACTUALLY TURN A CHECK
+// RED (`enforcingRunnerSegments` — the same definition directions 2, 3 and 4
+// use, so the five cannot disagree about what a gate is):
+//   `audit-gate`     — an enforcing segment at the repository root runs the
+//                      script BARE (`node <path>`, nothing after it), directly
+//                      or through a root package script whose unconditional
+//                      `&&` chain does. Bare because these gates take MODE
+//                      flags: `--audit` asks a weaker question ("no NEW false
+//                      claim") and `--complete` a different one, and a step
+//                      that ran only a mode flag would not hold the clause.
+//   `root-suite`     — the file rides the wholesale root Vitest run and that
+//                      run is really invoked by an enforcing step.
+//   `package-suite`  — direction 3 credits the file: it is in the governed
+//                      packages/** set and is neither ungated, quarantined, nor
+//                      classified as a non-unit tier.
+// And, for every kind, the artifact must EXIST. A gate renamed away is exactly
+// as unrun as one whose step was deleted.
+//
+// NO LEDGER, AND THAT IS THE POINT. Directions 3 and 4 carry an exceptions file
+// because they govern hundreds of files and debt has to be countable. This set
+// has three members, each one named by a ratified plan as a gate that stays
+// green; "recorded as unwired" is not a state the clause allows. The only way
+// out is to wire it — or to change the plan, which changes this list.
+//
+// RESIDUALS, named. The suite arms ask the wholesale question only: a file that
+// is PINNED by an enforcing step but no longer rides its wholesale runner reads
+// as unwired here. That is a false RED a human fixes by looking, never a false
+// green, and it is the same lean directions 3 and 4 already take. A LAUNCHER
+// WRAPPER is not modelled either, and neither is an ENVIRONMENT PREFIX:
+// `nice -n 10 node <gate>`, `timeout 60 pnpm gate:x`, `cross-env X=1 pnpm gate:x`
+// and `CI=1 node <gate>` all read as unwired, so the step is written bare — and
+// the wrapper list is derived from this file's own launcher set rather than
+// written out, so it cannot fall behind it. All of them lean the same way —
+// a false RED a human fixes — and the env-prefix refusal is the one that has to
+// be absolute, because the prefix is what decides which `node` runs at all — it
+// is refused on BOTH doors, the direct run and the package-script invocation,
+// and inside the aggregate walk.
+//
+// WHAT IS STILL NOT MODELLED, said rather than left to be found: a job-level or
+// step-level `env:` block. A syntactically bare `node <gate>` inherits it, so a
+// `NODE_OPTIONS` set there would not be seen here. No direction in this file
+// reads a job's `env:` — they all read segment text — so closing it is a change
+// to the shared reader and not to this direction, and it is left where the rest
+// of the file leaves it. The reachable shapes are refused; this one is named.
+// And this direction inherits the header's one residual in the other direction: a
+// non-literal `if:` reads as EXECUTING, so a step in a job guarded by an
+// expression that never fires would be credited. Refusing those would credit
+// nothing at all — every gating job in this repository carries the docs-only
+// skip — which is why the directions above read them this way and why this one
+// does not diverge.
+export const SECTION_6_GATES = Object.freeze([
+  Object.freeze({
+    clause: "the one-card gate",
+    artifact: "scripts/audit/chat-hitl-one-card-gate.mjs",
+    kind: "audit-gate",
+  }),
+  Object.freeze({
+    clause: "the host-parity ratchet",
+    artifact: "packages/chat/src/__tests__/lifecycle-host-parity-ratchet.test.tsx",
+    kind: "package-suite",
+  }),
+  Object.freeze({
+    clause: "the held-turn card contract",
+    artifact: "src/lib/lifecycle/__tests__/held-turn-card-contract.test.ts",
+    kind: "root-suite",
+  }),
+]);
+
+/**
+ * The path a segment runs BARE under `node`, or null.
+ *
+ * EXACTLY two words, `node <path>`, and nothing else. No argument after the
+ * path (a mode flag makes it a different question), no redirection (whose target
+ * is a file the shell writes, not a gate that ran), no terminal flag.
+ *
+ * AND NO ENVIRONMENT PREFIX — not even a harmless-looking one, which is the
+ * whole reason this does NOT go through `stripEnvPrefix` the way the rest of
+ * this file does. The prefix decides WHICH `node` runs and HOW it starts:
+ * `PATH=./fake-bin node <gate>` runs a `node` that can exit 0 without reading
+ * the gate at all, and `NODE_OPTIONS=--require=./exit-zero.cjs node <gate>`
+ * short-circuits the real one. Neither is distinguishable here from `CI=1`
+ * without modelling the shell's own lookup, so the whole shape is refused: a
+ * credited gate that never ran is exactly the failure this direction exists to
+ * prevent, and `CI=1 node <gate>` reading as unwired is a false RED a human
+ * fixes by writing the step bare. `command` / `eval` / `nohup` wrappers are
+ * refused with it, for the same reason and by the same rule.
+ *
+ * `runnerArgv` is not reused here — it models TEST RUNNERS (`node --test`,
+ * `vitest run`) and returns null for a plain script — so this is the one shape
+ * it does not cover.
+ */
+export function bareNodeScriptRun(seg) {
+  const trimmed = stripShellComment(seg).trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+  if (hasTopLevelRedirect(trimmed)) return null;
+  // RAW words, COUNTED BEFORE anything is unquoted or dropped: `node <gate> ''`
+  // is three shell words and passes an argument, and filtering the empty one
+  // away first would credit it as bare.
+  const raw = shellTokens(trimmed);
+  if (raw.length !== 2) return null;
+  const toks = raw.map((tok) => unquoteWord(tok));
+  if (toks[0] !== "node") return null;
+  if (hasTerminalFlag(toks)) return null;
+  const path = toks[1].replace(/^\.\//, "");
+  return path && !path.startsWith("-") ? path : null;
+}
+
+/** Does some enforcing workflow segment run this audit gate script, bare? */
+export function auditGateIsEnforced(artifact, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const workflowDir = opts.workflowDir ?? WORKFLOW_DIR;
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  const scripts = opts.scripts ?? rootPackageScripts(repoRoot);
+  // The root package scripts whose own `&&` chain runs it bare, then the
+  // aggregates that reach one — direction 4's walk, called and not copied. Same
+  // chain grammar, so a script masked with `;` / `||` / `&` — or rewritten to
+  // `true` — stops being a runner here too.
+  const reaching = closeOverAggregateScripts(
+    new Set(
+      Object.entries(scripts)
+        .filter(([, cmd]) => (scriptChainSegments(cmd) ?? []).some((s) => bareNodeScriptRun(s) === artifact))
+        .map(([name]) => name),
+    ),
+    scripts,
+    { refuse: segmentHasCommandPrefix },
+  );
+  for (const { seg, cwd } of segments) {
+    // A run inside another package is another package's business; an UNKNOWN
+    // cwd (`null`) is refused rather than assumed to be the root.
+    if (cwd !== "") continue;
+    // BOTH DOORS REFUSE A PREFIX. The two-word rule already closes the direct
+    // one, but the package-script door goes through `invokesRootSuite`, which
+    // steps OVER an environment assignment — so `PATH=./fake-bin pnpm gate:x`
+    // would be credited while a `pnpm` that reads nothing exits 0. The same
+    // refusal is threaded into the aggregate walk above, so a prefix cannot be
+    // hidden one script further up either.
+    if (segmentHasCommandPrefix(seg)) continue;
+    if (bareNodeScriptRun(seg) === artifact) return true;
+    for (const script of reaching) {
+      if (invokesRootSuite(seg, script)) return true;
+    }
+  }
+  return false;
+}
+
+/** Direction 5's verdict for every gate the clause names. */
+export function auditSection6Gates(repoRoot = REPO_ROOT, workflowDir = WORKFLOW_DIR, opts = {}) {
+  const gates = opts.gates ?? SECTION_6_GATES;
+  const segments = opts.segments ?? [...enforcingRunnerSegments(workflowDir)];
+  const scripts = opts.scripts ?? rootPackageScripts(repoRoot);
+  // LAZY, each of them: an `audit-gate` verdict must not be made to own a
+  // root vitest config or a packages/** tree it never reads.
+  let globs = opts.globs;
+  let pkgAudit = opts.packageAudit;
+  let rootEnforced = opts.rootEnforced;
+
+  const enforced = [];
+  const unwired = [];
+  for (const gate of gates) {
+    const { artifact, clause, kind } = gate;
+    if (!existsSync(join(repoRoot, artifact))) {
+      unwired.push({ ...gate, why: "the artifact is not on disk" });
+      continue;
+    }
+    if (kind === "audit-gate") {
+      if (auditGateIsEnforced(artifact, { repoRoot, workflowDir, segments, scripts })) {
+        enforced.push({ ...gate, how: "run bare by an enforcing step" });
+      } else {
+        unwired.push({ ...gate, why: "NO enforcing step runs it (a bare `node <path>` run, or a root script that is one)" });
+      }
+      continue;
+    }
+    if (kind === "root-suite") {
+      globs ??= parseRootVitestTestGlobs(repoRoot);
+      rootEnforced ??= rootSuiteIsEnforced(workflowDir, repoRoot);
+      if (ridesRootVitestRun(artifact, globs) && rootEnforced) {
+        enforced.push({ ...gate, how: `covered by the wholesale \`pnpm ${ROOT_SUITE_SCRIPT}\` run` });
+      } else {
+        unwired.push({ ...gate, why: `neither discovered by ${ROOT_VITEST_CONFIG} nor reached by an enforcing \`pnpm ${ROOT_SUITE_SCRIPT}\` step` });
+      }
+      continue;
+    }
+    if (kind === "package-suite") {
+      globs ??= parseRootVitestTestGlobs(repoRoot);
+      pkgAudit ??= auditPackageSuiteRunners(repoRoot, workflowDir, { globs });
+      // The complement of direction 3's own coverage decision, read off its
+      // report rather than recomputed: a file it governs and does not classify
+      // as ungated, quarantined or non-unit-tier is one it credits.
+      const uncovered = new Set([
+        ...pkgAudit.ungated.map((u) => u.file),
+        ...pkgAudit.exempt.map((e) => e.file),
+        ...pkgAudit.tierExcluded,
+      ]);
+      if (pkgAudit.packageFiles.includes(artifact) && !uncovered.has(artifact)) {
+        enforced.push({ ...gate, how: "covered by its package's wholesale runner" });
+      } else {
+        unwired.push({ ...gate, why: `no ${PACKAGE_DIR}/** runner executes it (direction 3 does not credit it)` });
+      }
+      continue;
+    }
+    throw new Error(`SECTION_6_GATES: unknown kind ${JSON.stringify(kind)} for ${clause}.`);
+  }
+  return { gates, enforced, unwired };
+}
+
+// Run as a CLI gate — all five directions, all findings reported before
 // exiting so one run tells the whole truth.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let failed = false;
@@ -2535,6 +3195,88 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       "\nThe entry describes a state CI is not in, so the ledger no longer reads as\n" +
         "the truth it claims to be. Delete the entry (and close its follow-up issue if\n" +
         "the suite is genuinely repaired).",
+    );
+  }
+
+  // ── Direction 4 — root integration tiers (cinatra#2936) ─────────────────
+  // The enforcing-segment scan is shared with direction 3's view of the same
+  // workflows, for the same reason: one definition of "a gate", four
+  // directions reading it.
+  // ONE enforcing-segment scan feeds directions 4 and 5, for the reason
+  // direction 4 gives about directions 2 and 3: one definition of "a gate",
+  // five directions reading it — and the step does not pay for a second parse.
+  const segments = [...enforcingRunnerSegments()];
+  const rootScripts = rootPackageScripts();
+  const tier = auditRootIntegrationTiers(REPO_ROOT, WORKFLOW_DIR, { segments, scripts: rootScripts });
+  if (tier.ungated.length > 0) {
+    failed = true;
+    console.error("\n✗ root integration tiers that NO CI runner executes:");
+    for (const t of tier.ungated) {
+      const how = t.scripts.length > 0 ? `reached by \`pnpm ${t.scripts.join("` / `pnpm ")}\`` : "reached by NO package script";
+      console.error(`  - ${t.config} (${how})`);
+    }
+    console.error(
+      "\nEach tier above is a dedicated tier config — somebody wrote a whole file to\n" +
+        "say these suites need a real database and must never pass as skipped — and\n" +
+        "no workflow runs it, so its suites run NOWHERE. Fix by EITHER adding a step\n" +
+        "to a job with the services that tier needs (`pnpm <its script>`, bare: a\n" +
+        "forwarded argument is not credited, because this gate cannot tell a flag\n" +
+        `from a filter) OR adding an entry to ${ROOT_TIER_EXCEPTIONS_FILE} naming\n` +
+        "the config, the SLICE that owns it, and the reason. Those are the only two\n" +
+        "states; there is no third.",
+    );
+  } else {
+    console.log(
+      `✓ every root integration tier is executed by a CI runner ` +
+        `(${tier.tiers.length} tiers, ${tier.enforced.length} wired, ${tier.exempt.length} recorded as unwired)`,
+    );
+  }
+
+  if (tier.staleExceptions.length > 0) {
+    failed = true;
+    console.error(`\n✗ ${ROOT_TIER_EXCEPTIONS_FILE} names configs that do not exist:`);
+    for (const e of tier.staleExceptions) console.error(`  - ${e.config} (${e.slice})`);
+    console.error("\nRemove the stale entry — it records a gap for a tier that is gone.");
+  }
+  if (tier.redundantExceptions.length > 0) {
+    failed = true;
+    console.error(`\n✗ ${ROOT_TIER_EXCEPTIONS_FILE} records tiers a CI runner DOES execute:`);
+    for (const e of tier.redundantExceptions) console.error(`  - ${e.config} (${e.slice})`);
+    console.error(
+      "\nThe entry describes a state CI is not in, so the ledger no longer reads as\n" +
+        "the truth it claims to be. Delete the entry — the tier is wired.",
+    );
+  }
+
+  // ── Direction 5 — plan (B) §6's own named gates (cinatra#2936) ──────────
+  // Same shared scans again: the workflow segments above, direction 3's report
+  // for the packages/** arm, and the root globs parsed once at the top.
+  const section6 = auditSection6Gates(REPO_ROOT, WORKFLOW_DIR, {
+    globs,
+    segments,
+    scripts: rootScripts,
+    packageAudit: pkg,
+  });
+  if (section6.unwired.length > 0) {
+    failed = true;
+    console.error("\n✗ gates plan (B) §6 names that NO CI runner executes:");
+    for (const g of section6.unwired) console.error(`  - ${g.artifact} — ${g.clause}: ${g.why}`);
+    console.error(
+      "\nThat plan's Conformance clause says these gates \"stay green through every\n" +
+        "wave\". A gate no workflow runs cannot stay anything — it can go red and not\n" +
+        "one check moves. Fix by adding a step to a job that can turn a required\n" +
+        "check red: for an audit gate a BARE `node <path>` run (a mode flag such as\n" +
+        "`--audit` asks a weaker question and is not credited); for a suite, a\n" +
+        "wholesale runner that covers it. There is no ledger here and no third\n" +
+        "state — the clause names these gates, and each one either runs or does not.",
+    );
+  } else {
+    const auditGates = section6.gates.filter((g) => g.kind === "audit-gate").length;
+    const suites = section6.gates.length - auditGates;
+    console.log(
+      `✓ every gate plan (B) §6 names is executed by a CI runner ` +
+        `(${section6.gates.length} gates, ${auditGates} audit gate${auditGates === 1 ? "" : "s"}, ` +
+        `${suites} suite${suites === 1 ? "" : "s"})`,
     );
   }
 

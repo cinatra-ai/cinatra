@@ -37,12 +37,13 @@ import {
   buildInsertUploadGcOutboxQuery,
 } from "@/lib/skill-lifecycle-store";
 import { skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(dbUrl) &&
   !dbUrl.includes("build:build@127.0.0.1:5432/build");
 
 const SCHEMA = "cinatra_test_s5_upload_outbox_2092";

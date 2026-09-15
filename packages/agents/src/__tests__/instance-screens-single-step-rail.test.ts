@@ -32,7 +32,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runDetailPanelKind, screenHostsStepRail } from "../instance-screens";
+import { runDetailPanelKind, screenHostsStepRail,
+  screenDrawsPageRail,
+} from "../instance-screens";
 
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
@@ -104,9 +106,25 @@ describe("screenHostsStepRail — the screen stands down exactly where the panel
 
 describe("the screen's JSX reads the predicate — no second unconditional rail mount", () => {
   it("gates the RunStepRailPanel mount on screenHostsStepRail", () => {
+    // THE PREDICATE IS NOW READ INTO A NAMED LOCAL, not inlined into the JSX
+    // condition (cinatra#2788): the left column also carries the SCHEDULE STEP
+    // above the rail, and the column has to exist when either of them draws —
+    // so the screen computes `railDraws` once and uses it twice. The property
+    // this test is here for is unchanged and is asserted the same way: the
+    // page-level rail draws ONLY where the predicate says so, and it is mounted
+    // exactly once.
+    // The conjunction itself moved into an EXPORTED predicate
+    // (`screenDrawsPageRail`, cinatra#2790) so its whole table can be pinned
+    // without a render; the screen asks it and passes the two run-shaped inputs
+    // it already has. The property is unchanged and is still asserted here: the
+    // page-level rail draws ONLY where the predicate says so.
     expect(SCREEN_SRC).toMatch(
-      /rail\.entries\.length > 0 && screenHostsStepRail\(\{[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\) && \(/,
+      /const railDraws = screenDrawsPageRail\(\{[\s\S]*?railEntryCount: rail\.entries\.length,[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\);/,
     );
+    // The mount is now the value of a named node — the schedule step is handed
+    // the rail as a slot (`rail={railNode}`) rather than the screen drawing a
+    // column of its own — so the gating reads as the node's own conditional.
+    expect(SCREEN_SRC).toMatch(/const railNode = railDraws \? \(\s*<RunStepRailPanel/);
     // Exactly ONE mount of the page-level rail survives in the screen.
     expect(SCREEN_SRC.match(/<RunStepRailPanel\b/g)?.length).toBe(1);
   });
@@ -118,7 +136,21 @@ describe("the screen's JSX reads the predicate — no second unconditional rail 
     expect(SCREEN_SRC).toMatch(/reviewHrefBase=\{reviewHrefBase\}/);
   });
 
-  it("keeps the pre-execution hold: a pending_input run still shows no rail (cinatra#2067)", () => {
-    expect(SCREEN_SRC).toMatch(/run\.status !== "pending_input" && rail\.entries\.length > 0/);
+  it("keeps the pre-execution hold: a pending_input run with no gate step still shows no rail (cinatra#2067)", () => {
+    // Same guard, now a clause of the exported predicate rather than of an
+    // inline JSX condition, and CONDITIONED (cinatra#2790, S9f): a run held at
+    // its skills question is `pending_input` too, and plan (A) §6.2 puts that
+    // gate row "ahead of the work steps it would authorize" — a rail holding
+    // the gate row alone shows nothing for it to be ahead of. So the
+    // suppression survives exactly where #2067 put it, for a run with NO gate
+    // step, and the behavioural table is pinned in
+    // `instance-screens-recommendation-step.test.ts`.
+    expect(screenDrawsPageRail({
+      runStatus: "pending_input",
+      railEntryCount: 3,
+      gateStepCount: 0,
+      panel: "none",
+      stepperStepCount: 0,
+    })).toBe(false);
   });
 });

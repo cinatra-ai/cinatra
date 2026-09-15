@@ -41,12 +41,7 @@
  */
 
 import React from "react";
-import { readFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
 import { act, cleanup, waitFor } from "@testing-library/react";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- the owner cards' server-side graph, stubbed as the sibling suites do ----
@@ -103,6 +98,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
   skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 // A server-only graph: stubbed rather than loaded, carrying every symbol the
 // lazy chat chunk reaches — a missing one fails the chunk and the transcript
 // never mounts, which would read as a passing negative arm.
@@ -158,7 +166,6 @@ import {
 import {
   CHAT_OWNER_MOUNT_OBLIGATIONS,
   CHAT_THREAD_CARRIAGE_CONTRACT,
-  SHELL_OWNED_CHAT_KINDS,
   carriageRowFor,
   carriesChatOwner,
   chatCarriageRootAnchorsFor,
@@ -195,6 +202,31 @@ const REF_BY_KIND: Record<LifecycleCardKind, string> = {
   verification_summary: "verification-ref-2827",
   trigger_schedule_proposal: "proposal-ref-2827",
   recommendation_hold: "hold-ref-2827",
+  // cinatra#2928 — the fifth kind. Carried as an INTERRUPT like the hold, so
+  // this ref is never minted into an envelope; it is here because the table is
+  // keyed by the protocol's closed set and a missing key would be a kind the
+  // matrix silently skips.
+  agent_hitl_screen: "hitl-screen-ref-2928",
+};
+
+/**
+ * The HITL screen's own authorized answer (cinatra#2930, lifecycle-b W3). Its
+ * carriage is an INTERRUPT, so it has no envelope to mint and no ref to post —
+ * the run states the moment and the card reads it, which is what this stands in
+ * for. Answered ONLY on this kind's arm, so the other four keep the transcripts
+ * they were measured on.
+ */
+const HITL_SCREEN_ASKING = {
+  state: "asking",
+  runId: RUN_ID,
+  screenRef: REF_BY_KIND.agent_hitl_screen,
+  gate: {
+    reviewTaskId: "task-2827",
+    xRenderer: "cinatra.schema-field:output",
+    inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+    currentValues: {},
+    fieldName: "answer",
+  },
 };
 
 /** The self-MCP tool the shipped allowlist authorizes to mint this kind. */
@@ -224,12 +256,19 @@ async function driveSink(kind: LifecycleCardKind): Promise<AgUiEvent[]> {
   });
   adapter.start();
   adapter.send("text", { content: PROSE });
-  if (kind === "recommendation_hold") {
+  if (kind === "recommendation_hold" || kind === "agent_hitl_screen") {
+    // Both INTERRUPT kinds run the shape they actually have: an `agent_run`
+    // dispatch that parks, whose own tool call is the slot. The hold parks
+    // BEFORE the run starts (`pending_input`); the HITL screen parks the run
+    // mid-flight while the agent asks (`pending_approval`).
     adapter.send("tool_call", { id: CALL_ID, name: "agent_run" });
     adapter.send("tool_result", {
       id: CALL_ID,
       name: "agent_run",
-      result: JSON.stringify({ runId: RUN_ID, status: "pending_input" }),
+      result: JSON.stringify({
+        runId: RUN_ID,
+        status: kind === "recommendation_hold" ? "pending_input" : "pending_approval",
+      }),
     });
   } else {
     const toolName = producerToolFor(kind);
@@ -451,6 +490,11 @@ async function settleResolves() {
 
 /** Mount the production `/chat` column on one kind's reduced transcript. */
 async function mountKind(kind: LifecycleCardKind) {
+  // The HITL screen answers only on its own arm — the other four kinds keep the
+  // transcript they have always been measured on, with no second card in it.
+  hitlScreenStateMock.mockImplementation(async () =>
+    kind === "agent_hitl_screen" ? HITL_SCREEN_ASKING : { state: "none" },
+  );
   const { messages, producingSlot } = await reducedTurn(kind);
   const mounted = await mountSurface("chat", { messages });
   const root = mounted.container.querySelector<HTMLElement>('[data-parity-surface="chat"]');
@@ -541,7 +585,7 @@ describe("the DATA_PART slot identity, measured on the real sink's own output", 
 // 2. The matrix
 // ---------------------------------------------------------------------------
 
-describe("the four-kind chat_thread carriage matrix, in the REAL view", () => {
+describe("the five-kind chat_thread carriage matrix, in the REAL view", () => {
   it("covers the protocol's closed kind set, once each, with no kind added or dropped", () => {
     expect([...CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind)].sort()).toEqual(
       [...LIFECYCLE_CARD_KINDS].sort(),
@@ -649,41 +693,27 @@ describe("the review row — the one kind whose owner is drawn today", () => {
 // ---------------------------------------------------------------------------
 
 describe("what cannot satisfy a row", () => {
-  it("a SOURCE DECLARATION does not: the registry maps both owed kinds and the rows still fail", async () => {
-    // The registry really does declare an owner for every kind — that is the
-    // claim a source-reading gate would accept, and it is why this suite reads
-    // DOM instead. Both halves are asserted together so the point is executed
-    // rather than described: the declaration is there, and it buys nothing.
-    const registry = readFileSync(
-      resolvePath(__dirname, "../renderable-views/registry.tsx"),
-      "utf8",
-    );
-    for (const kind of SHELL_OWNED_CHAT_KINDS) {
-      expect(registry, `${kind} is not declared in the registry at all`).toContain(`${kind}:`);
-      const row = carriageRowFor(kind);
-      const { mounted, root, producingSlot } = await mountKind(kind);
-      expect(carriesChatOwner(observeChatCarriage(root, row, producingSlot), row)).toBe(false);
-      mounted.unmount();
-    }
-  });
-
-  it("a REGISTRY ROW alone does not: the shell draws for both owed kinds and still fails", async () => {
-    for (const kind of SHELL_OWNED_CHAT_KINDS) {
-      const row = carriageRowFor(kind);
-      const { mounted, root, producingSlot } = await mountKind(kind);
-      // The registry DID dispatch and the shell DID draw — the kind and a
-      // resolved state are on screen. That is exactly the state of main, and it
-      // is not this kind's owner.
-      const shell = root.querySelector<HTMLElement>(`[data-lifecycle-card="${kind}"]`);
-      expect(shell, `${kind} did not dispatch at all — this arm proves nothing`).not.toBeNull();
-      expect(shell!.getAttribute("data-lifecycle-card-state")).not.toBeNull();
-      expect(shell!.getAttribute("data-lifecycle-card-host")).toBeNull();
-      expect(evaluateChatCarriage(observeChatCarriage(root, row, producingSlot), row).map(
-        (v) => v.code,
-      )).toContain("root_declaration_incomplete");
-      mounted.unmount();
-    }
-  });
+  // THE TWO SHELL ARMS ARE RETIRED, and the reason is recorded rather than the
+  // arms silently deleted. Both drove `SHELL_OWNED_CHAT_KINDS` — they mounted a
+  // kind the registry dispatched to the S1 shell and showed that neither the
+  // source declaration nor the drawn shell satisfies a row. That list is EMPTY
+  // as of S9d (cinatra#2788), which struck its last entry (S9e struck the other
+  // in cinatra#2789), so both arms had no subject left: a `for` over an empty
+  // list is a green test that executes nothing, which is worse than no test.
+  //
+  // NEITHER PROPERTY IS DROPPED. The shell's shape is still refused, on a
+  // SYNTHETIC observation that needs no shell-owned kind to exist — see
+  // `src/lib/lifecycle/__tests__/held-turn-card-contract.test.ts`, "refuses the
+  // SHELL's shape — the kind and a state, with no host declared", which builds
+  // exactly the kind+state-without-host root these arms used to mount and
+  // asserts the same `root_declaration_incomplete` code. And the registry
+  // declaration still buys nothing on its own: every row in this file is
+  // decided by reading DOM, and the `OBSERVED unmounted set` arm above is what
+  // makes that a done-check in both directions.
+  //
+  // If a kind is ever added to `SHELL_OWNED_CHAT_KINDS` again, restore these two
+  // arms with it — a shell-owned kind and no executed refusal of the shell in
+  // the REAL view is the hole this file exists to close.
 
   it("a component that RETURNS NULL does not: an absent resolve draws no root", async () => {
     // §IV's `absent` is "no card DOM at all", and the review card honours it.
@@ -715,8 +745,19 @@ describe("what cannot satisfy a row", () => {
   it("a card in the RUN CARD's subtree does not: it is another host's mount", async () => {
     const row = carriageRowFor("recommendation_hold");
     const { root, producingSlot } = await mountKind("recommendation_hold");
-    const runCard = root.querySelector<HTMLElement>("[data-inline-run-card]");
-    expect(runCard, "the inline run card did not mount at the agent_run slot").not.toBeNull();
+    // THE FOREIGN SUBTREE, DECLARED THE WAY THE SHIPPED PANEL DECLARES IT.
+    // A HELD turn draws no run panel at all since cinatra#2790 (the run progress
+    // card waits for the skills decision), so there is no rendered panel to
+    // borrow here — and in this file there never was one either: the run card is
+    // a stand-in that renders exactly these two attributes. The subtree is
+    // therefore planted in the producing container with that same declaration,
+    // which is what the observer keys on.
+    const slot = root.querySelector<HTMLElement>("[data-agent-run-slot]");
+    expect(slot, "the agent_run producing container is not in the transcript").not.toBeNull();
+    const runCard = document.createElement("div");
+    runCard.setAttribute("data-lifecycle-card-host", "run_card");
+    runCard.setAttribute("data-inline-run-card", "");
+    slot!.appendChild(runCard);
     // Plant the row's own anchors INSIDE the run card, as a mislabeled-evidence
     // mount would. The observation must not see them.
     const planted = document.createElement("div");
@@ -742,7 +783,7 @@ describe("what cannot satisfy a row", () => {
     // and their per-chip controls sit inside it.
     const real = root.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
     const before = observeChatCarriage(root, row, producingSlot);
-    runCard!.appendChild(planted);
+    runCard.appendChild(planted);
     const after = observeChatCarriage(root, row, producingSlot);
     expect(after.rootCandidates).toEqual(before.rootCandidates);
     expect(after.rootCandidates.some((c) => c.controls.length === 0)).toBe(false);

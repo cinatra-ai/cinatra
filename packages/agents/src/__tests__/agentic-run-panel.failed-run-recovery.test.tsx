@@ -13,8 +13,11 @@
  *      "WayFlow task failed" case as well as the two previously-special-cased
  *      error classes (OpenAI key / MCP-unreachable), which is the acceptance
  *      criterion's "for all failure types" clause.
- *   2. "Start new run" is absent when the caller has no `agentId` (e.g. a
- *      chat-embedded panel) — it is not mounted broken.
+ *   2. "Start new run" is absent when the caller has no `agentId` — it is not
+ *      mounted broken. That is a statement about the SLUG, not about the
+ *      surface: since cinatra#3002 fix leg 4 the chat mount passes the run's
+ *      own slug, so a failed run in a conversation recovers exactly as it does
+ *      on the run page (case added in the convergence round, 2026-09-05).
  *   3. Neither recovery control renders on success (`completed`) or a live
  *      run (`running`) — the affordance is failed-state only.
  *   4. The generic-fallback guidance copy appears only for the exact
@@ -213,6 +216,27 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
 
     expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeNull();
     expect(screen.queryByTestId("start-new-run-stub")).toBeNull();
+  });
+
+  // THE CHAT MOUNT RECOVERS THE SAME WAY (cinatra#3002, fix leg 4; convergence
+  // round, 2026-09-05). Handing the conversation's panel a slug turns this
+  // control on for a FAILED run there too, not only for the completion card —
+  // a widening the diff made and left unpinned. It is the reading the ratified
+  // host rule asks for ("it never drops a region, a state or an affordance the
+  // card's own section draws"), so it is pinned rather than suppressed.
+  it("draws Retry and Start new run on a failed run in a conversation too", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        {...baseProps({
+          surface: "chat",
+          agentId: "cinatra-ai/blog-draft-writer-agent",
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeNull();
+    expect(screen.queryByTestId("start-new-run-stub")).not.toBeNull();
   });
 
   // cinatra#2482 amended this case. The FAILURE-recovery block is still

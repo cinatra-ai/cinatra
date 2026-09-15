@@ -72,6 +72,12 @@ export interface MemoryBundleConfig {
   name?: string;
   /** Effective caps (config values merged over the defaults). */
   caps: MemoryCaps;
+  /**
+   * Sync-time binding + scope DEFAULTS (cinatra#1378), absent when the bundle
+   * declares no `sync:` block. Defaults only: never a grant, and never a
+   * reason to write anything on its own.
+   */
+  sync?: MemorySyncBinding;
 }
 
 /** One concept document: a Markdown file with YAML frontmatter. */
@@ -178,5 +184,166 @@ export class MemoryCapError extends MemoryError {
   constructor(message: string) {
     super(message);
     this.name = "MemoryCapError";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sync (cinatra#1378, epic #1373) — one-way, local bundle → objects rows.
+// ---------------------------------------------------------------------------
+
+/** Ownership level a bundle/concept may REQUEST for a newly created row. */
+export type MemoryScopeOwnerLevel = "user" | "team" | "organization" | "workspace";
+
+/** Visibility a bundle/concept may REQUEST for a newly created row. */
+export type MemoryScopeVisibility = "private" | "team" | "organization" | "public";
+
+/**
+ * A scope REQUEST — never a grant.
+ *
+ * Both fields are evaluated under the caller's normal authorization at save
+ * time. The server's memory ownership-authority gate resolves the LEVEL against
+ * the authenticated actor and fills the owning principal in from that actor; a
+ * level whose authority is not derivable there (`team`, `workspace`) and a
+ * `public` visibility are REFUSED, not silently downgraded. Widening an
+ * EXISTING row is promotion, not a save.
+ *
+ * `orgId` and `ownerId` are deliberately absent from this type and from every
+ * surface that builds it (cinatra#1378 review item 4). Both name a PRINCIPAL,
+ * and a principal is derived from the authenticated caller on the server — no
+ * objects primitive reads one from a memory bundle. A bundle file or a concept
+ * that names either is refused loudly (see `parseMemorySyncBinding` and
+ * `memoryConceptScopeRefusals`), because dropping it silently would let the
+ * author believe the sync landed somewhere it did not.
+ */
+export interface MemoryScopeRequest {
+  ownerLevel?: MemoryScopeOwnerLevel;
+  visibility?: MemoryScopeVisibility;
+}
+
+/**
+ * The `sync:` block of `bundle.yaml`: the bundle's sync-time DEFAULTS.
+ *
+ * A bundle is a distribution unit and a sync-time default only (epic #1373).
+ * Per-concept frontmatter may request a different scope; the precedence is
+ * `bundle default < per-concept frontmatter`, and the result is still only a
+ * request.
+ */
+export interface MemorySyncBinding {
+  /**
+   * Target project binding for rows this bundle syncs.
+   * - `undefined` — no binding is sent; the server applies its ordinary
+   *   (ambient) rule, which for an external CLI caller resolves to no project.
+   * - `string` — sent as `objects_save.projectId`; the server authorizes it
+   *   against the caller's own project grants and refuses what it cannot.
+   */
+  projectId?: string;
+  /** Default scope requested for rows this bundle CREATES. */
+  defaultScope: MemoryScopeRequest;
+}
+
+/** How a sync run classified one local concept. */
+export type MemorySyncAction =
+  /** No row found in the preflight: `objects_save` will insert. */
+  | "create"
+  /** A row exists and its stored envelope differs from the local file. */
+  | "update"
+  /** A row exists and already carries this exact content: no write at all. */
+  | "skip"
+  /** Refused locally, before any network write (e.g. a secret-scan hit). */
+  | "blocked";
+
+/** One classified concept in a sync plan. */
+export interface MemorySyncItem {
+  /** Bundle-relative POSIX path of the concept file. */
+  path: string;
+  /** Concept id (path minus the `.md` suffix) — the identity basis. */
+  conceptId: string;
+  /** `sha256(UTF-8(bundleId + NUL + conceptId))`, recomputed by the server. */
+  externalId: string;
+  action: MemorySyncAction;
+  /** Human-readable reason, always present for `skip` and `blocked`. */
+  reason: string;
+  /** Object id of the existing row, when the preflight found one. */
+  objectId?: string;
+  /** Diagnostics attached to this concept (secret hits, scope notes). */
+  diagnostics: MemorySyncDiagnostic[];
+}
+
+/** A concept that the ledger knows was synced but whose file is now gone. */
+export interface MemorySyncOrphan {
+  path: string;
+  conceptId: string;
+  objectId?: string;
+}
+
+/** Severity of a sync diagnostic. */
+export type MemorySyncDiagnosticSeverity = "error" | "warning" | "info";
+
+/** Machine-readable sync diagnostic codes. */
+export type MemorySyncDiagnosticCode =
+  /** A credential-shaped literal was found in the concept; never uploaded. */
+  | "secret-detected"
+  /** The local secret scanner could not complete; the concept is not sent. */
+  | "secret-scan-failed"
+  /** The remote row is wider than the bundle default; sync preserved it. */
+  | "scope-preserved"
+  /** The remote row is bound to a different project than the bundle asks for. */
+  | "project-binding-conflict"
+  /** A ledger entry has no local file: sync never deletes remote rows. */
+  | "orphan-retained"
+  /** The ledger says "already synced" but the stored row no longer matches. */
+  | "ledger-stale"
+  /** The server refused this concept; the refusal text is carried verbatim. */
+  | "server-refused"
+  /**
+   * The concept's frontmatter carries a scope key a bundle may not supply
+   * (`ownerId` — cinatra#1378 review item 4). Refused loudly rather than
+   * dropped, so the author is never left believing the sync landed under an
+   * owner it did not.
+   */
+  | "scope-key-refused";
+
+/** A structured diagnostic emitted by a sync run. */
+export interface MemorySyncDiagnostic {
+  severity: MemorySyncDiagnosticSeverity;
+  code: MemorySyncDiagnosticCode;
+  /** Bundle-relative POSIX path of the concept the diagnostic is about. */
+  path: string;
+  message: string;
+}
+
+/** The full classification of a sync run, before any write. */
+export interface MemorySyncPlan {
+  bundleId: string;
+  items: MemorySyncItem[];
+  orphans: MemorySyncOrphan[];
+  diagnostics: MemorySyncDiagnostic[];
+}
+
+/** Outcome of an executed (non-dry-run) sync. */
+export interface MemorySyncResult {
+  plan: MemorySyncPlan;
+  created: number;
+  updated: number;
+  skipped: number;
+  blocked: number;
+  failed: number;
+  /** Diagnostics produced while writing (server refusals). */
+  diagnostics: MemorySyncDiagnostic[];
+}
+
+/** Per-bundle sync ledger: the local content-hash record of what was synced. */
+export interface MemorySyncLedger {
+  ledgerFormat: 1;
+  bundleId: string;
+  /** Concept file path → what the last successful sync pushed. */
+  entries: Record<string, { sha256: string; objectId: string }>;
+}
+
+/** A sync run was refused before it started (bad binding, no transport, …). */
+export class MemorySyncError extends MemoryError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MemorySyncError";
   }
 }

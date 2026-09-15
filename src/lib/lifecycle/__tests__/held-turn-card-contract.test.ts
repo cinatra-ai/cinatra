@@ -269,15 +269,20 @@ describe("the evaluator's four fixtures", () => {
     expect(projectsOwnerCard(projection)).toBe(true);
   });
 
-  it("FAILS a partial mount — the row is there but a decision control is not", () => {
+  it("FAILS a partial mount — a control is there but the OWNER's own anchor is not", () => {
+    // RE-AIMED (cinatra#3047). This drove the four owner anchors this row used
+    // to carry and dropped three of them. The row now names ONE — the chip
+    // row's own conformance id, the only anchor its owner draws on every host,
+    // because the run page's Skills step decides with a checkbox and a Continue
+    // rather than with the three per-chip affordances — so "partial" is a node
+    // that carries a control WITHOUT the owner's anchor, which is exactly the
+    // shape this assertion exists to refuse: something on the page that looks
+    // like a decision but is not this owner's card.
     const projection: TurnProjection = {
       parts: heldParts(CLEAN_DISPATCH_TEXT),
       nodes: [
         cardNode({
-          anchors: [
-            '[data-conformance-id="run-chip-row"]',
-            '[data-skill-action="confirm"]',
-          ],
+          anchors: ['[data-skill-action="confirm"]'],
         }),
       ],
     };
@@ -296,9 +301,16 @@ describe("the per-kind table", () => {
     expect(new Set(kinds).size).toBe(kinds.length);
   });
 
-  it("binds only recommendation_hold to the agent_run result and the held dispatch turn", () => {
+  it("binds the two INTERRUPT kinds to the agent_run result, and nothing else", () => {
+    // The rule is about WHY a kind is an interrupt, not about how many are:
+    // the run is genuinely BLOCKED on the answer, so the slot is the dispatch's
+    // own tool result. `recommendation_hold` parks before the run starts;
+    // `agent_hitl_screen` (cinatra#2928) parks it mid-flight while the agent
+    // asks. Every other kind is a fire-and-forget DATA_PART with no tool of its
+    // own to bind to.
+    const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen"];
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
-      if (row.kind === "recommendation_hold") {
+      if (INTERRUPT_KINDS.includes(row.kind)) {
         expect(row.carriage).toBe("interrupt");
         expect(row.triggerToolName).toBe("agent_run");
       } else {
@@ -364,7 +376,7 @@ describe("the per-kind table", () => {
   });
 });
 
-describe("the four-kind carriage matrix (cinatra#2827)", () => {
+describe("the five-kind carriage matrix (cinatra#2827, cinatra#2928)", () => {
   /** One element carrying every root anchor, at the producing slot, with the
    *  row's controls inside it — the shape a real owner produces. */
   function drawnAt(
@@ -417,6 +429,13 @@ describe("the four-kind carriage matrix (cinatra#2827)", () => {
       ),
       recommendation_hold: readFileSync(
         join(process.cwd(), "packages/agents/src/run-recommendation-chip-row.tsx"),
+        "utf8",
+      ),
+      // Added by S9d (cinatra#2788): §VI's owner is drawn, so its two controls
+      // stop being a named obligation and become a claim about a shipped
+      // component — read off that component, like the two above.
+      trigger_schedule_proposal: readFileSync(
+        join(process.cwd(), "packages/agents/src/schedule-proposal-card.tsx"),
         "utf8",
       ),
     };
@@ -619,12 +638,18 @@ describe("the positive arm is the DEFAULT, and the obligation list is its only e
     ).toContain("card_not_mounted");
   });
 
-  it("has no exemption left to take — the obligation list is empty", () => {
-    // The list is the ONLY ruled reason a held turn may show no card. Empty
-    // means every ruled kind is asserted, so a future kind arriving unmounted
-    // has to add its own row deliberately rather than inherit an exemption.
+  it("exempts NO kind at all — the list is empty and every kind is asserted", () => {
+    // The list is the ONLY ruled reason a held turn may show no card, and it is
+    // EMPTY AGAIN. `recommendation_hold` was struck by S9b (cinatra#2786);
+    // `agent_hitl_screen`, which cinatra#2928 registered without drawing, was
+    // struck by W3 (cinatra#2930) in the change that landed its production
+    // chat_thread mount. A future kind arriving unmounted has to add its OWN
+    // row deliberately rather than inherit an exemption, and this assertion
+    // turns red the day a row is added or a mount is taken away.
     expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual([]);
-    for (const kind of RULED_KINDS) expect(heldTurnMountIsOwed(kind)).toBe(false);
+    for (const kind of RULED_KINDS) {
+      expect(heldTurnMountIsOwed(kind)).toBe(false);
+    }
   });
 
   it("DEMANDS the card for a kind whose row is struck, without anyone passing a flag", () => {

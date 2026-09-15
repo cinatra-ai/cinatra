@@ -178,6 +178,44 @@ export async function readProposalConsume(
   };
 }
 
+/**
+ * Read the proposal a RUN came from (cinatra#2788, epic #2784 S9d).
+ *
+ * The reverse of `readProposalConsume`, and the identity binding §VI's card
+ * needs on the run page and the review page. Those surfaces hold no proposal
+ * token — they arrive by URL and know a RUN — while the plan keys the card
+ * there by (viewer, organization, template). This row is where all three were
+ * recorded, at the one moment they were all true: the confirm transaction.
+ *
+ * `null` for a run that no proposal produced, which is the honest answer for a
+ * schedule armed from the run's own scheduling step. That is a fact about where
+ * the schedule CAME FROM, never about who may read it: since cinatra#3004 such
+ * a run is read under the run's own access control and draws the same card on
+ * the same run-scoped ref, so this row no longer decides whether there is a
+ * card at all.
+ */
+export async function readProposalConsumeByRunId(
+  runId: string,
+  executor: Executor = db,
+): Promise<ProposalConsumeRecord | null> {
+  if (typeof runId !== "string" || runId.length === 0) return null;
+  const rows = await (executor as typeof db)
+    .select()
+    .from(triggerScheduleProposalConsumes)
+    .where(eq(triggerScheduleProposalConsumes.runId, runId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    consumeKey: row.consumeKey,
+    runId: row.runId,
+    orgId: row.orgId,
+    templateId: row.templateId,
+    consumedBy: row.consumedBy,
+    consumedAt: row.consumedAt,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The install outbox
 // ---------------------------------------------------------------------------

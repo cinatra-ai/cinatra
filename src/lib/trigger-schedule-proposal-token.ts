@@ -480,6 +480,36 @@ export function mintTriggerScheduleProposalToken(
 }
 
 /**
+ * What a verify actually learned (cinatra#2836).
+ *
+ * THREE OUTCOMES, AND THE THIRD ONE IS THE WHOLE POINT. `refused` is every
+ * failure that says "this is not a proposal this reader holds": a tampered
+ * ciphertext, a wrong key, a forward version, a stretched lifetime, a
+ * future-dated mint, a malformed field, a binding to somebody else. `expired`
+ * is the ONE case where the token is authentically this server's, minted for
+ * exactly this reader in exactly this org, and only its thirty-minute window
+ * has closed — which is a reading the reader is entitled to (plan (A) §7.2
+ * step 2: an expired card "stays visible", still editable, with Confirm to set
+ * the schedule again), not an absence.
+ *
+ * THE ORDER IS THE SECURITY PROPERTY, not a style choice. Expiry is decided
+ * LAST — after decryption, after every field check, after the lifetime check
+ * and after BOTH bindings. So a token that is expired AND foreign exits at the
+ * binding compare, on the byte-identical path a still-live foreign token takes,
+ * and answers the byte-identical `refused`. There is no input for which
+ * "expired" is reachable without the reader already owning the token, so this
+ * union can never become the oracle the single `null` existed to prevent.
+ */
+export type ProposalTokenVerification =
+  | { outcome: "valid"; proposal: TriggerScheduleProposal }
+  | { outcome: "expired"; proposal: TriggerScheduleProposal }
+  | { outcome: "refused" };
+
+/** The one indistinguishable refusal, as a value — every rejecting branch
+ *  returns THIS object, so no branch can drift into its own shape. */
+const REFUSED: ProposalTokenVerification = { outcome: "refused" };
+
+/**
  * Verify a proposal token and BIND it to the reader confirming it.
  *
  * Returns the proposal, or `null` on ANY failure — a tampered or foreign token,
@@ -487,6 +517,14 @@ export function mintTriggerScheduleProposalToken(
  * a binding that does not match the caller. Fail-closed and NEVER throws: every
  * refusal is one indistinguishable `null`, so a caller cannot use this function
  * to tell "expired" from "not yours" from "never existed".
+ *
+ * UNCHANGED BY cinatra#2836, deliberately. This is the entry point Confirm and
+ * the live-card Adjust take, and for them an expired proposal IS a refusal —
+ * there is nothing left to spend. #2836 needs the finer reading only to DRAW
+ * the expired card and to re-propose from it, so it takes
+ * `verifyTriggerScheduleProposalTokenDetailed` instead and this function stays
+ * the collapsing wrapper. Keeping it means no existing caller can accidentally
+ * start accepting an expired token by inheriting a widened return type.
  *
  * Passing this is NOT authorization. It proves the server minted this proposal
  * for this reader in this org; it says nothing about whether the reader may
@@ -499,19 +537,42 @@ export function verifyTriggerScheduleProposalToken(input: {
   expectedOrgId: string;
   nowSeconds?: number;
 }): TriggerScheduleProposal | null {
+  const verified = verifyTriggerScheduleProposalTokenDetailed(input);
+  // `expired` collapses back into the same `null` this function always gave —
+  // the wrapper is where the distinction is DISCARDED, not where it is hidden.
+  return verified.outcome === "valid" ? verified.proposal : null;
+}
+
+/**
+ * The same verification, reporting whether a token this reader OWNS has merely
+ * expired (cinatra#2836).
+ *
+ * Every refusal is still one indistinguishable value. See
+ * `ProposalTokenVerification` for why the check order — expiry last, after both
+ * bindings — is what makes that true rather than merely claimed.
+ *
+ * Passing this is still NOT authorization, for exactly the reasons the wrapper
+ * gives: it proves provenance and binding, never standing.
+ */
+export function verifyTriggerScheduleProposalTokenDetailed(input: {
+  token: string | null | undefined;
+  expectedUserId: string;
+  expectedOrgId: string;
+  nowSeconds?: number;
+}): ProposalTokenVerification {
   try {
     const { token, expectedUserId, expectedOrgId } = input;
-    if (typeof token !== "string" || token.length === 0) return null;
-    if (token.length > PROPOSAL_REF_MAX_LENGTH) return null;
+    if (typeof token !== "string" || token.length === 0) return REFUSED;
+    if (token.length > PROPOSAL_REF_MAX_LENGTH) return REFUSED;
     // base64url alphabet only — a lenient decode would accept non-canonical
     // re-encodings of the same bytes.
-    if (!/^[A-Za-z0-9_-]+$/.test(token)) return null;
+    if (!/^[A-Za-z0-9_-]+$/.test(token)) return REFUSED;
 
     const key = proposalKey();
-    if (!key) return null;
+    if (!key) return REFUSED;
 
     const raw = Buffer.from(token, "base64url");
-    if (raw.length <= IV_BYTES + TAG_BYTES) return null;
+    if (raw.length <= IV_BYTES + TAG_BYTES) return REFUSED;
     const iv = raw.subarray(0, IV_BYTES);
     const tag = raw.subarray(raw.length - TAG_BYTES);
     const body = raw.subarray(IV_BYTES, raw.length - TAG_BYTES);
@@ -521,37 +582,62 @@ export function verifyTriggerScheduleProposalToken(input: {
       "utf8",
     );
     const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || parsed.length !== 8) return null;
+    if (!Array.isArray(parsed) || parsed.length !== 8) return REFUSED;
     const [version, templateId, userId, orgId, encoded, nonce, iat, exp] = parsed;
-    if (version !== PROPOSAL_VERSION) return null;
-    if (!isBoundedId(templateId)) return null;
-    if (!isBoundedId(userId)) return null;
-    if (!isBoundedId(orgId)) return null;
-    if (!isBoundedId(nonce)) return null;
-    if (typeof iat !== "number" || !Number.isInteger(iat)) return null;
-    if (typeof exp !== "number" || !Number.isInteger(exp)) return null;
+    if (version !== PROPOSAL_VERSION) return REFUSED;
+    if (!isBoundedId(templateId)) return REFUSED;
+    if (!isBoundedId(userId)) return REFUSED;
+    if (!isBoundedId(orgId)) return REFUSED;
+    if (!isBoundedId(nonce)) return REFUSED;
+    if (typeof iat !== "number" || !Number.isInteger(iat)) return REFUSED;
+    if (typeof exp !== "number" || !Number.isInteger(exp)) return REFUSED;
     const schedule = decodeSchedule(encoded);
-    if (!schedule) return null;
+    if (!schedule) return REFUSED;
 
     const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
     // Never accept a future-dated proposal — the minter never emits one.
-    if (iat > now) return null;
+    if (iat > now) return REFUSED;
     // Bind the TTL AT VERIFY rather than trusting the stamped expiry: a token
     // whose lifetime is not exactly the proposal TTL is rejected even under a
     // valid tag. This never rejects a legitimately-minted proposal.
-    if (exp - iat !== PROPOSAL_TTL_SECONDS) return null;
-    // Expired AT or after `exp` (RFC 7519: current time MUST be BEFORE exp).
-    if (exp <= now) return null;
+    //
+    // A STRETCHED LIFETIME IS A FORGERY SIGNAL, NOT AN EXPIRY. It stays a flat
+    // `refused` and is checked BEFORE the expiry reading, so nobody can mint
+    // their way to a drawn "expired" card by claiming a longer window than the
+    // minter ever issues.
+    if (exp - iat !== PROPOSAL_TTL_SECONDS) return REFUSED;
 
     // BINDINGS — this proposal must have been minted for exactly this reader,
     // in this org.
-    if (userId !== expectedUserId) return null;
-    if (orgId !== expectedOrgId) return null;
+    //
+    // BEFORE THE EXPIRY READING, and that ordering is the whole
+    // indistinguishability argument (cinatra#2836). An expired token belonging
+    // to somebody else exits HERE, on the byte-identical path a still-live
+    // foreign token takes, returning the byte-identical `REFUSED`. "Expired" is
+    // therefore unreachable for any token this reader does not own, so the
+    // richer answer discloses nothing the reader was not already holding.
+    if (userId !== expectedUserId) return REFUSED;
+    if (orgId !== expectedOrgId) return REFUSED;
 
-    return { templateId, userId, orgId, schedule, nonce, expiresAt: exp };
+    const proposal: TriggerScheduleProposal = {
+      templateId,
+      userId,
+      orgId,
+      schedule,
+      nonce,
+      expiresAt: exp,
+    };
+
+    // Expired AT or after `exp` (RFC 7519: current time MUST be BEFORE exp).
+    // The proposal is returned WITH this outcome because the expired card draws
+    // the rows the reader last saw — the same projection of the same token the
+    // live card already showed the same reader, so nothing new is disclosed.
+    if (exp <= now) return { outcome: "expired", proposal };
+
+    return { outcome: "valid", proposal };
   } catch {
     // Wrong key, tampered bytes, non-JSON plaintext — all "not one of ours".
-    return null;
+    return REFUSED;
   }
 }
 

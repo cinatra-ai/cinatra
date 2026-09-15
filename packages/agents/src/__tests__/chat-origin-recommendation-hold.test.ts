@@ -198,7 +198,17 @@ vi.mock("@/lib/agent-run-enqueue", () => ({
 // Gates the handler runs before creation — all allow, so the state path is
 // what the assertions see.
 // ---------------------------------------------------------------------------
-vi.mock("../auth-policy", () => ({ enforceRunAccess: vi.fn(async () => undefined) }));
+vi.mock("../auth-policy", () => ({
+  enforceRunAccess: vi.fn(async () => undefined),
+  // cinatra#2935 (lifecycle-b W5d) — `agent_run`'s catch now shapes its own
+  // answer through this module, so the narrow stub has to carry it. Every
+  // failure these cases raise is a FAULT (a dead queue, a lost row), never a
+  // scope refusal, and this is the module's own behaviour for one: the thrown
+  // message, unchanged, which is what the assertions below read.
+  startFailureAnswer: (err: unknown) => ({
+    error: `Run failed: ${err instanceof Error ? err.message : String(err)}`,
+  }),
+}));
 vi.mock("../runtime-install-gate", () => ({ assertAgentPackageRunnable: vi.fn(async () => null) }));
 vi.mock("../wayflow-preflight", () => ({ preflightWayflowAgent: vi.fn(async () => ({ code: "OK" })) }));
 vi.mock("@/lib/agent-run-readiness", () => ({ assertAgentRunReadyByPackage: vi.fn(async () => null) }));
@@ -403,11 +413,16 @@ describe("a chat-pre-router dispatch parks on a recommendation hold", () => {
     // an already-`queued` row could never be let go. The handler's held result
     // is exactly one of the two admitted states.
     const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
-    const runActions = readFileSync(
-      join(import.meta.dirname, "..", "run-actions.ts"),
+    // READ FROM WHERE THE CONSTANT LIVES, which is the dispatch core since
+    // cinatra#2790 (S9f) lifted the run-start dispatch out of `run-actions.ts`
+    // so the widget's API branch could reach it. The assertion is unchanged —
+    // it still reads the release path's own admitted set out of the source
+    // rather than restating it — and it now reads the file that defines it.
+    const dispatchCore = readFileSync(
+      join(import.meta.dirname, "..", "run-dispatch-core.ts"),
       "utf8",
     );
-    const admitted = runActions.match(
+    const admitted = dispatchCore.match(
       /RUN_START_DISPATCH_FROM_STATUSES = \[([^\]]+)\]/,
     );
     expect(admitted).not.toBeNull();

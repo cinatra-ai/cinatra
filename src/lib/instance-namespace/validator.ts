@@ -29,13 +29,26 @@ import { RESERVED_SUBSTRINGS } from "./reserved-patterns";
 // pass it to <Input pattern={NAMESPACE_FORMAT_REGEX_SOURCE} />. Keeping the
 // source string + regex literal next to each other makes drift between
 // them visible at code-review time.
-export const NAMESPACE_FORMAT_REGEX_SOURCE = "^[a-z0-9][a-z0-9-]{1,38}$";
+//
+// THE HYPHEN IS ESCAPED ON PURPOSE (cinatra#3207). A browser compiles the
+// value of a `pattern` attribute as a regular expression with the `v` flag,
+// and under `v` a bare hyphen is a syntax character inside a character
+// class: `[a-z0-9-]` is a SyntaxError there, the element ends up with NO
+// compiled pattern, the constraint is silently not applied, and the browser
+// reports the failure to the console. The escaped class `[a-z0-9\-]`
+// compiles under `v`, under `u` and with no flags, and matches exactly the
+// same set of names, so the frozen format rule is unchanged in meaning —
+// only its spelling. The two forms below spell the same escape differently:
+// a TypeScript string literal needs the doubled backslash, a regex literal a
+// single one.
+// Moving the hyphen to the front of the class does NOT fix it.
+export const NAMESPACE_FORMAT_REGEX_SOURCE = "^[a-z0-9][a-z0-9\\-]{1,38}$";
 
 // Format regex - must match the existing Zod schemas in
 // src/app/setup/name/actions.ts and src/app/configuration/instance/actions.ts
 // character-for-character. 2-39 chars; lowercase alphanumeric + hyphens;
 // must start with alphanumeric.
-const NAMESPACE_FORMAT_REGEX = /^[a-z0-9][a-z0-9-]{1,38}$/;
+const NAMESPACE_FORMAT_REGEX = /^[a-z0-9][a-z0-9\-]{1,38}$/;
 
 // Contact constants for reserved namespace requests.
 const RESERVED_CONTACT = {

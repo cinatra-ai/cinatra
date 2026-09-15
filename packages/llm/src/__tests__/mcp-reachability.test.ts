@@ -129,3 +129,153 @@ describe("checkPublicMcpReachability", () => {
     if (result.status === "reachable") expect(result.url).toBe("https://other.example.test/api/mcp");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3109 - one 2.5s probe with no retry decided the whole turn. A single slow
+// answer (cold name lookup, first connection after an idle period, one dropped
+// packet) refused the turn and then poisoned the next 15 seconds of turns with
+// a cached verdict. These pin the behaviours that fix it: the probe retries a
+// TIMEOUT with a fresh budget, the failure classes are recorded apart, and a
+// timeout verdict does not keep the next turns from asking again.
+// ---------------------------------------------------------------------------
+
+function timeoutError(): Error {
+  const err = new Error("The operation was aborted due to timeout");
+  err.name = "TimeoutError";
+  return err;
+}
+
+function refusedError(detail = "connect ECONNREFUSED mcp.example.test port 443"): Error {
+  const err = new TypeError("fetch failed");
+  (err as { cause?: unknown }).cause = new Error(detail);
+  return err;
+}
+
+describe("checkPublicMcpReachability retries a timeout (#3109)", () => {
+  it("one timeout then a live answer is REACHABLE - a single slow moment does not cost the turn", async () => {
+    fetchMock.mockRejectedValueOnce(timeoutError()).mockResolvedValueOnce(new Response(null, { status: 405 }));
+    const result = await checkPublicMcpReachability();
+    expect(result).toEqual({ status: "reachable", url: "https://mcp.example.test/api/mcp" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the retry a FRESH budget - not the remains of the attempt that timed out", async () => {
+    fetchMock.mockRejectedValueOnce(timeoutError()).mockResolvedValueOnce(new Response(null, { status: 200 }));
+    await checkPublicMcpReachability();
+    const first = fetchMock.mock.calls[0]?.[1] as { signal?: unknown } | undefined;
+    const second = fetchMock.mock.calls[1]?.[1] as { signal?: unknown } | undefined;
+    expect(first?.signal).toBeDefined();
+    expect(second?.signal).toBeDefined();
+    expect(second?.signal).not.toBe(first?.signal);
+  });
+
+  it("repeated timeouts still refuse, loudly, after the whole attempt budget is spent", async () => {
+    fetchMock.mockRejectedValue(timeoutError());
+    const result = await checkPublicMcpReachability();
+    expect(result.status).toBe("unreachable");
+    if (result.status === "unreachable") expect(result.kind).toBe("timeout");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("an immediate connection refusal refuses at once - a retry cannot un-refuse a closed port", async () => {
+    fetchMock.mockRejectedValue(refusedError());
+    const result = await checkPublicMcpReachability();
+    expect(result.status).toBe("unreachable");
+    if (result.status === "unreachable") expect(result.kind).toBe("refused");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a timeout followed by a refusal records the REFUSAL - the conclusive answer wins", async () => {
+    fetchMock.mockRejectedValueOnce(timeoutError()).mockRejectedValueOnce(refusedError());
+    const result = await checkPublicMcpReachability();
+    expect(result.status).toBe("unreachable");
+    if (result.status === "unreachable") {
+      expect(result.kind).toBe("refused");
+      expect(result.reason).toContain("ECONNREFUSED");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a healthy address still costs exactly one probe", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    expect((await checkPublicMcpReachability()).status).toBe("reachable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the failure classes are recorded apart (#3109)", () => {
+  it("records a different kind AND a different reason for a timeout than for a refusal", async () => {
+    fetchMock.mockRejectedValue(timeoutError());
+    const timedOut = await checkPublicMcpReachability();
+
+    _resetPublicMcpReachabilityCacheForTests();
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(refusedError("getaddrinfo ENOTFOUND mcp.example.test"));
+    const refused = await checkPublicMcpReachability();
+
+    expect(timedOut.status).toBe("unreachable");
+    expect(refused.status).toBe("unreachable");
+    if (timedOut.status !== "unreachable" || refused.status !== "unreachable") return;
+    expect(timedOut.kind).toBe("timeout");
+    expect(refused.kind).toBe("refused");
+    expect(timedOut.reason).not.toBe(refused.reason);
+    expect(timedOut.reason).toMatch(/no response within \d+ms/);
+    expect(refused.reason).toContain("ENOTFOUND");
+  });
+
+  it("a transport failure that is NEITHER is not written down as a refusal", async () => {
+    // A TLS failure is not a closed port and not a slow moment. Recording it
+    // as "connection refused or name not resolved" would put a false sentence
+    // in the log an operator reads afterwards.
+    const tls = new TypeError("fetch failed");
+    (tls as { cause?: unknown }).cause = new Error("unable to verify the first certificate");
+    fetchMock.mockRejectedValue(tls);
+
+    const result = await checkPublicMcpReachability();
+    expect(result.status).toBe("unreachable");
+    if (result.status !== "unreachable") return;
+    expect(result.kind).toBe("error");
+    expect(result.reason).toContain("certificate");
+    expect(result.reason).not.toContain("refused");
+    // Not a timeout either, so it is not retried.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a timeout verdict does not poison the next turns (#3109)", () => {
+  it("expires in seconds, where a refusal is still held - the classes do not age alike", async () => {
+    fetchMock.mockRejectedValue(timeoutError());
+    expect((await checkPublicMcpReachability()).status).toBe("unreachable");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Under the old flat 15s negative cache the whole of this window served
+    // the stale verdict; nothing re-checked the address for 15 seconds.
+    vi.advanceTimersByTime(6_000);
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+    expect((await checkPublicMcpReachability()).status).toBe("reachable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("costs a black-holed address ONE probe pair per short window, not one per turn", async () => {
+    fetchMock.mockRejectedValue(timeoutError());
+    expect((await checkPublicMcpReachability()).status).toBe("unreachable");
+    const afterFirstTurn = fetchMock.mock.calls.length;
+
+    // Three more turns arrive back to back inside the short window: they are
+    // answered from the cache rather than each paying the whole attempt budget.
+    vi.advanceTimersByTime(500);
+    await checkPublicMcpReachability();
+    await checkPublicMcpReachability();
+    await checkPublicMcpReachability();
+    expect(fetchMock).toHaveBeenCalledTimes(afterFirstTurn);
+  });
+
+  it("still caches a REFUSED verdict for 15s - a dead port is not re-probed every turn", async () => {
+    fetchMock.mockRejectedValue(refusedError());
+    expect((await checkPublicMcpReachability()).status).toBe("unreachable");
+    vi.advanceTimersByTime(10_000);
+    expect((await checkPublicMcpReachability()).status).toBe("unreachable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

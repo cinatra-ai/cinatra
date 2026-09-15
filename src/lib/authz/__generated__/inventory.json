@@ -5,222 +5,227 @@
     {
       "primitiveName": "agent_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 10
+      "line": 11
     },
     {
       "primitiveName": "agent_creation_request_decide",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 824
+      "line": 828
     },
     {
       "primitiveName": "agent_creation_request_edit",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 794
+      "line": 798
     },
     {
       "primitiveName": "agent_creation_request_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 820
+      "line": 824
     },
     {
       "primitiveName": "agent_creation_request_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 808
+      "line": 812
     },
     {
       "primitiveName": "agent_creation_request_propose",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 772
+      "line": 776
     },
     {
       "primitiveName": "agent_creation_request_retry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 840
+      "line": 844
     },
     {
       "primitiveName": "agent_delete",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 258
+      "line": 262
     },
     {
       "primitiveName": "agent_export",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 294
+      "line": 298
     },
     {
       "primitiveName": "agent_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 51
+      "line": 54
     },
     {
       "primitiveName": "agent_import",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 300
+      "line": 304
     },
     {
       "primitiveName": "agent_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 41
+      "line": 44
+    },
+    {
+      "primitiveName": "agent_named_start",
+      "file": "src/lib/lifecycle/named-agent-start-mcp.ts",
+      "line": 420
     },
     {
       "primitiveName": "agent_registry_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 315
+      "line": 319
     },
     {
       "primitiveName": "agent_registry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 307
+      "line": 311
     },
     {
       "primitiveName": "agent_run",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 32
+      "line": 33
     },
     {
       "primitiveName": "agent_run_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 57
+      "line": 60
     },
     {
       "primitiveName": "agent_run_hitl_prompts_exclude",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 147
+      "line": 151
     },
     {
       "primitiveName": "agent_run_hitl_prompts_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 142
+      "line": 146
     },
     {
       "primitiveName": "agent_run_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 63
+      "line": 67
     },
     {
       "primitiveName": "agent_run_messages_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 135
+      "line": 139
     },
     {
       "primitiveName": "agent_run_move_with_outputs",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 108
+      "line": 112
     },
     {
       "primitiveName": "agent_run_resume",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 127
+      "line": 131
     },
     {
       "primitiveName": "agent_run_stop",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 243
+      "line": 247
     },
     {
       "primitiveName": "agent_run_trigger_delete",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 765
+      "line": 769
     },
     {
       "primitiveName": "agent_run_trigger_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 759
+      "line": 763
     },
     {
       "primitiveName": "agent_run_trigger_set",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 727
+      "line": 731
     },
     {
       "primitiveName": "agent_run_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 84
+      "line": 88
     },
     {
       "primitiveName": "agent_runs_stop",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 249
+      "line": 253
     },
     {
       "primitiveName": "agent_save",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 18
+      "line": 19
     },
     {
       "primitiveName": "agent_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 461
+      "line": 465
     },
     {
       "primitiveName": "agent_source_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 358
+      "line": 362
     },
     {
       "primitiveName": "agent_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 472
+      "line": 476
     },
     {
       "primitiveName": "agent_source_read",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 363
+      "line": 367
     },
     {
       "primitiveName": "agent_source_review",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 692
+      "line": 696
     },
     {
       "primitiveName": "agent_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 443
+      "line": 447
     },
     {
       "primitiveName": "agent_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 374
+      "line": 378
     },
     {
       "primitiveName": "agent_source_write_files",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 406
+      "line": 410
     },
     {
       "primitiveName": "agent_template_duplicate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 264
+      "line": 268
     },
     {
       "primitiveName": "agent_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 271
+      "line": 275
     },
     {
       "primitiveName": "agent_version_diff",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 329
+      "line": 333
     },
     {
       "primitiveName": "agent_version_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 337
+      "line": 341
     },
     {
       "primitiveName": "agent_version_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 343
+      "line": 347
     },
     {
       "primitiveName": "agent_version_rollback",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 351
+      "line": 355
     },
     {
       "primitiveName": "agents_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 853
+      "line": 857
     },
     {
       "primitiveName": "apollo_administration_get",
@@ -248,6 +253,11 @@
       "line": 18
     },
     {
+      "primitiveName": "appointment_schedule_add",
+      "file": "src/lib/appointment-schedule-add-mcp.ts",
+      "line": 67
+    },
+    {
       "primitiveName": "appointment_schedule_list",
       "file": "extensions/cinatra-ai/google-appointment-schedules-connector/src/mcp/registry.ts",
       "line": 8
@@ -270,52 +280,52 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 328
+      "line": 301
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 313
+      "line": 286
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 508
+      "line": 481
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 460
+      "line": 433
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 441
+      "line": 414
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 424
+      "line": 397
     },
     {
       "primitiveName": "artifact_promote_request",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 532
+      "line": 505
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 369
+      "line": 342
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 399
+      "line": 372
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 351
+      "line": 324
     },
     {
       "primitiveName": "artifact_review_gate_render",
@@ -330,37 +340,37 @@
     {
       "primitiveName": "artifact_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 543
+      "line": 547
     },
     {
       "primitiveName": "artifact_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 550
+      "line": 554
     },
     {
       "primitiveName": "artifact_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 535
+      "line": 539
     },
     {
       "primitiveName": "artifact_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 515
+      "line": 519
     },
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 274
+      "line": 247
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 246
+      "line": 218
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 286
+      "line": 259
     },
     {
       "primitiveName": "assistant_send",
@@ -505,22 +515,22 @@
     {
       "primitiveName": "change_set_eligibility_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 65
+      "line": 75
     },
     {
       "primitiveName": "change_set_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 50
+      "line": 60
     },
     {
       "primitiveName": "change_set_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 55
+      "line": 65
     },
     {
       "primitiveName": "change_set_undo",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 40
+      "line": 50
     },
     {
       "primitiveName": "chat_mention_reply",
@@ -535,7 +545,7 @@
     {
       "primitiveName": "connector_inventory_list",
       "file": "src/lib/connector-inventory-mcp.ts",
-      "line": 68
+      "line": 75
     },
     {
       "primitiveName": "context_list_eligible_assertions",
@@ -675,52 +685,52 @@
     {
       "primitiveName": "drupal_content_editor_run",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 53
+      "line": 112
     },
     {
       "primitiveName": "drupal_instances_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 23
+      "line": 82
     },
     {
       "primitiveName": "drupal_node_create_draft_revision",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 38
+      "line": 97
     },
     {
       "primitiveName": "drupal_node_get",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 28
+      "line": 87
     },
     {
       "primitiveName": "drupal_node_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 43
+      "line": 102
     },
     {
       "primitiveName": "drupal_node_publish",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 48
+      "line": 107
     },
     {
       "primitiveName": "drupal_node_update",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 33
+      "line": 92
     },
     {
       "primitiveName": "drupal_status",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 17
+      "line": 76
     },
     {
       "primitiveName": "email_outreach_initial_drafts_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 191
+      "line": 195
     },
     {
       "primitiveName": "email_outreach_recipients_update",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 214
+      "line": 218
     },
     {
       "primitiveName": "email_send",
@@ -730,12 +740,12 @@
     {
       "primitiveName": "email_test_delivery_parse_action",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 180
+      "line": 184
     },
     {
       "primitiveName": "email_test_delivery_run_send",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 160
+      "line": 164
     },
     {
       "primitiveName": "extensions_archive",
@@ -795,7 +805,7 @@
     {
       "primitiveName": "freshness_check_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 75
+      "line": 85
     },
     {
       "primitiveName": "gmail_aliases_list",
@@ -821,6 +831,11 @@
       "primitiveName": "gmail_status",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
       "line": 16
+    },
+    {
+      "primitiveName": "lifecycle_bound_card_decide",
+      "file": "src/lib/lifecycle/lent-action-mcp.ts",
+      "line": 339
     },
     {
       "primitiveName": "linkedin_accounts_list",
@@ -851,6 +866,16 @@
       "primitiveName": "media_feed_youtube_list",
       "file": "extensions/cinatra-ai/media-feeds-connector/src/mcp/registry.ts",
       "line": 16
+    },
+    {
+      "primitiveName": "memory_promote_request",
+      "file": "src/lib/memory/mcp.ts",
+      "line": 51
+    },
+    {
+      "primitiveName": "memory_recall",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 44
     },
     {
       "primitiveName": "metric_cost_budget_get",
@@ -895,12 +920,12 @@
     {
       "primitiveName": "object_history_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 60
+      "line": 70
     },
     {
       "primitiveName": "object_version_restore",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 45
+      "line": 55
     },
     {
       "primitiveName": "objects_classify",
@@ -1065,12 +1090,12 @@
     {
       "primitiveName": "remote_effect_attempt_retry",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 85
+      "line": 95
     },
     {
       "primitiveName": "remote_effect_attempts_list_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 80
+      "line": 90
     },
     {
       "primitiveName": "role_grant_grant",
@@ -1090,27 +1115,27 @@
     {
       "primitiveName": "schedule_proposal_render",
       "file": "src/lib/lifecycle/schedule-proposal-mcp.ts",
-      "line": 216
+      "line": 311
     },
     {
       "primitiveName": "skill_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 608
+      "line": 612
     },
     {
       "primitiveName": "skill_source_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 615
+      "line": 619
     },
     {
       "primitiveName": "skill_source_validate",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 601
+      "line": 605
     },
     {
       "primitiveName": "skill_source_write",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 578
+      "line": 582
     },
     {
       "primitiveName": "skills_catalog_list",

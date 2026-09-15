@@ -59,6 +59,7 @@ import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-ac
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 
 import { setRunWaitNotifier, type RunWaitNotifier } from "../run-wait-notifier";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 /**
  * A one-shot hook that runs INSIDE the repair finalize transaction, immediately
@@ -87,7 +88,7 @@ vi.mock("../artifact-review-gate-store", async (importOriginal) => {
 
 const TEST_SCHEMA = "cinatra_test_gate_notify_2833";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2833-gate-notify";
 

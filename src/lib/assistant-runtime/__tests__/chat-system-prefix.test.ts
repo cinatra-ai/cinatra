@@ -25,9 +25,16 @@ const BASE: ChatSystemPromptFragments = {
   instanceContext: "\n\nINSTANCE",
   extensionConfirmationPolicy: "\n\nPOLICY",
   userContext: "\n\nUser context:\nUC",
+  // cinatra#3016 (lifecycle-b W5b) — the prompt window's run frame. Non-empty
+  // here for the same reason the bound card is: the ordering case locates
+  // fragments by their own text.
+  runFrameContext: "\n\nRUN FRAME",
   instanceFreezeState: "\n\nFROZEN",
   pendingConfirmationContext: "\n\nPENDING",
-  explicitDispatchDirective: "\nDISPATCH\n",
+  // cinatra#2932 (lifecycle-b W5a) — the bound card. Non-empty here like every
+  // other fragment: the ordering case locates fragments by their own text, so an
+  // empty fixture value would index at 0 and make the assertion vacuous.
+  boundCardContext: "\n\nBOUND",
   conversationOnlyNotice: "\n\nNOTICE",
 };
 
@@ -67,11 +74,15 @@ describe("byte-stability", () => {
     }
   });
 
-  it("the explicit-dispatch directive appearing mid-conversation costs only its own bytes", () => {
-    // The regression this replaces: the directive used to be the FIRST
-    // fragment, so a single "@vendor/slug" mention moved the divergence point
-    // to byte 0 and re-billed the entire prompt.
-    const without = composeChatSystemPrompt({ ...BASE, explicitDispatchDirective: "" });
+  it("a volatile-tail fragment appearing mid-conversation costs only its own bytes", () => {
+    // The regression this case was written for: the removed explicit-dispatch
+    // directive used to be the FIRST fragment, so a single "@vendor/slug"
+    // mention moved the divergence point to byte 0 and re-billed the entire
+    // prompt. AMENDED for cinatra#2935 (lifecycle-b W5d): that directive and
+    // its producer are gone, so the case is driven by the fragment that has the
+    // same shape today — the bound card, which likewise appears only on the
+    // turn whose message carries one.
+    const without = composeChatSystemPrompt({ ...BASE, boundCardContext: "" });
     const with_ = composeChatSystemPrompt(BASE);
     const head = chatSystemPromptStableHead(BASE);
     expect(without.startsWith(head)).toBe(true);
@@ -85,13 +96,14 @@ describe("byte-stability", () => {
       instanceContext: "",
       extensionConfirmationPolicy: "",
       userContext: "",
+      runFrameContext: "",
       instanceFreezeState: "",
       pendingConfirmationContext: "",
-      explicitDispatchDirective: "",
+      boundCardContext: "",
       conversationOnlyNotice: "",
     };
     // The policy trailer is the ONE thing that is never absent — that is the
-    // guarantee it carries (codex round-2, finding 1).
+    // guarantee it carries (convergence round 2, finding 1).
     expect(composeChatSystemPrompt(empty)).toBe(
       `PERSONA${CHAT_SYSTEM_POLICY_TRAILER}`,
     );
@@ -110,18 +122,29 @@ describe("ordering", () => {
     expect(lastStable).toBeLessThan(firstVolatile);
   });
 
-  it("the user-controlled fragment leads the volatile tail", () => {
+  it("the user-controlled fragments lead the volatile tail", () => {
     // Precedence, not cost: every policy-bearing volatile fragment must be
-    // read AFTER the section a user can write into.
-    const tail = [...CHAT_SYSTEM_VOLATILE_FRAGMENTS];
-    for (const key of CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS) {
-      expect(tail.indexOf(key)).toBe(0);
-    }
+    // read AFTER every section a user can write into. Stated over the SET
+    // rather than over a single index (cinatra#3016 added a second
+    // user-controlled fragment), which is the same contract the one-fragment
+    // form asserted and stays true as the tail grows.
+    const tail = [...CHAT_SYSTEM_VOLATILE_FRAGMENTS] as string[];
+    const userControlled = new Set<string>(CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS);
+    expect(userControlled.has(tail[0] ?? "")).toBe(true);
+    const lastUserControlled = Math.max(
+      ...[...userControlled].map((key) => tail.indexOf(key)),
+    );
+    const firstPolicyBearing = Math.min(
+      ...tail
+        .map((key, index) => (userControlled.has(key) ? Number.POSITIVE_INFINITY : index))
+        .filter((index) => Number.isFinite(index)),
+    );
+    expect(lastUserControlled).toBeLessThan(firstPolicyBearing);
   });
 });
 
 // ---------------------------------------------------------------------------
-// PRECEDENCE (codex round-2, finding 1)
+// PRECEDENCE (convergence round 2, finding 1)
 //
 // The re-order moved user-controlled text after the system policy. These pin
 // the resolution: a CONSTANT trailer closes the prompt, so instruction-shaped
@@ -207,7 +230,7 @@ function commonPrefixLength(a: string, b: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// THE MUTABLE FREEZE STATE (codex round-2, finding 2)
+// THE MUTABLE FREEZE STATE (convergence round 2, finding 2)
 // ---------------------------------------------------------------------------
 describe("the instance freeze state is classified volatile, not stable", () => {
   it("is in the volatile tail and NOT in the stable head", () => {
