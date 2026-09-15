@@ -20,6 +20,17 @@ describe("authz — platform_admin invariant", () => {
     const RESOURCE_CRUD_VERB =
       /\.(update|delete|share|managePermissions|manageMembers|manageVisibility|execute|editOutput|approveHitl|respondToHitl|cancel|resume|promoteScope|assign)$/;
 
+    // Per-scope assignment authority (cinatra#2813 S1, epic #2812) is covered
+    // EXPLICITLY. `context.assign` already matches the verb regex above by its
+    // suffix; `agent.assignments.manage` does not match any verb in it, so
+    // without this list it could be granted silently. Platform admins configure
+    // assignments only through withPlatformAdminBypass
+    // (workspace_configuration / scope_configuration).
+    const NEVER_GRANTABLE_TO_PLATFORM_ADMIN = [
+      "agent.assignments.manage",
+      "context.assign",
+    ];
+
     // Allow-list — platform-level powers, not resource CRUD on user data:
     //   - registry.{install,update,uninstall} are platform-level powers
     //   - settings.update is platform-level (not user-resource CRUD)
@@ -41,10 +52,27 @@ describe("authz — platform_admin invariant", () => {
       }
     }
 
+    for (const perm of NEVER_GRANTABLE_TO_PLATFORM_ADMIN) {
+      if (EFFECTIVE_GRANTS.platform_admin.includes(perm as never) && !offenders.includes(perm)) {
+        offenders.push(perm);
+      }
+    }
+
     expect(
       offenders,
       `platform_admin DIRECT_GRANTS regressed. Use withPlatformAdminBypass for moderation, GDPR, ownership transfer, etc. Offenders: ${offenders.join(", ")}`,
     ).toEqual([]);
+  });
+
+  it("neither per-scope assignment permission is granted to platform_admin", () => {
+    // The positive statement of the same rule, so a reader of this file sees
+    // the two names rather than having to derive them from a regex.
+    for (const perm of ["agent.assignments.manage", "context.assign"]) {
+      expect(
+        EFFECTIVE_GRANTS.platform_admin.includes(perm as never),
+        `platform_admin must not hold "${perm}" — it acts through the audited bypass`,
+      ).toBe(false);
+    }
   });
 
   it("allow-list members (registry.* and settings.update) are present in platform_admin grants", () => {

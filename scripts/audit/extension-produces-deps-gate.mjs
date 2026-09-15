@@ -180,8 +180,13 @@ const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
  *
  * Sources, both scanned (an agent may declare the edge in either or both, and
  * the #2537 audit found agents that declare it in only one):
- *   - `package.json#cinatra.produces` / `.consumes`
- *   - `cinatra/oas.json` at `metadata.cinatra.produces` / `.consumes`
+ *   - `package.json#cinatra.produces` / `.consumes`  — THE AUTHORITY: publish,
+ *     install and the run-completion materializer read this block and no other.
+ *   - `cinatra/oas.json` at `metadata.cinatra.produces` / `.consumes` — an
+ *     OPTIONAL mirror for readers of the service description. Since cinatra#3095
+ *     the OAS compiler refuses a compile whose mirror is not entry-for-entry
+ *     equal to the manifest's block, so the two sources can no longer state
+ *     different things; the union below is a convenience, never a reconciliation.
  *
  * Returns `{ edges, malformed }`. An edge is `{ field, source, extension,
  * objectTypeId? }`. `malformed` lists human-readable shape problems: a

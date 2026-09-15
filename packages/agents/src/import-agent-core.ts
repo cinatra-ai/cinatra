@@ -36,6 +36,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
+import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
   LicenseDetectionRejectedError,
@@ -319,6 +320,33 @@ export async function importAgentTemplateCore(
           // result on re-import, exactly as installAgentFromPackage's upsert
           // branch does.
           hasArtifactBindings: compiled.hasArtifactBindings,
+          // cinatra#3208: and the DECLARATION that presence flag is about, from
+          // the same compile, in the same patch as packageVersion. The two move
+          // together or the row contradicts itself — claiming bindings exist
+          // while offering no way to read the ones THIS version compiled, which
+          // reads as "unknown" and sends run completion back to the registry
+          // re-read #3208 removes. `null` is a real compile result here (no
+          // readable sibling manifest), not "leave unchanged": it is exactly the
+          // case where `hasArtifactBindings` is false too.
+          //
+          // Written ONLY when this import carries a package VERSION to pair the
+          // declaration with. `packageVersion` above is `effectivePackageVersion
+          // ?? undefined`, so a re-import with no version (package.json absent,
+          // or present without a `version`) deliberately LEAVES the existing
+          // version in place; writing this compile's declaration beside an
+          // unchanged version would pair a NEW declaration with an OLD pin, and
+          // the materializer's guard compares only the version — it would hand a
+          // run pinned to that old version a declaration it never executed,
+          // which is the two-authority defect #3208 removes, reintroduced in
+          // miniature. With no version to confirm against the declaration is
+          // OMITTED and the column keeps whatever the last version-paired write
+          // set, exactly as the MCP recompile writer already does.
+          artifactBindings:
+            effectivePackageVersion === undefined || effectivePackageVersion === null
+              ? undefined
+              : compiled.artifactBindings
+                ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
+                : null,
           // cinatra#2616 — RECORD the claim when adopting an org-less row, so the
           // name does not stay up for grabs.
           orgId: effectiveOrgId,
@@ -419,6 +447,15 @@ export async function importAgentTemplateCore(
       // cinatra#2498: the OAS compiler's own binding-presence result rides
       // the fresh create too, for the same reason.
       hasArtifactBindings: compiled.hasArtifactBindings,
+      // cinatra#3208: the executed declaration rides the fresh create too, so a
+      // first install through the loader / ZIP path (dev-boot git-file scan,
+      // hot-reload watcher, `cinatra setup`, the data/downloads system-agent
+      // path, the UI and MCP ZIP imports) lands the same column value a registry
+      // install does, and run completion resolves the declaration the run
+      // executed instead of re-reading the registry.
+      artifactBindings: compiled.artifactBindings
+        ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
+        : null,
     });
 
     const snapshotObj = {

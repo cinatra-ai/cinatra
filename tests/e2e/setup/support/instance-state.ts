@@ -267,7 +267,7 @@ export async function seedMcpPublicBaseUrl(baseUrl: string): Promise<void> {
 
 /** The DURABLE STATE a successful consented Anthropic key save leaves behind,
  *  seeded out of band — the S6-established precedent (see
- *  evidence/2093-s6-setup/drivers/seed-anthropic-connection.mjs): the
+ *  https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2093-s6-setup/drivers/seed-anthropic-connection.mjs): the
  *  connector's writer has Nango VERIFY the credential against the REAL
  *  Anthropic API from inside Nango's own container — outside the host-process
  *  boundary stub — so with no live Anthropic key available to a lane, the

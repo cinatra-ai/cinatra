@@ -32,9 +32,10 @@ import {
   buildReplayBatchQuery,
   buildOpenRollbackRebuildQuery,
 } from "@cinatra-ai/objects/graphiti-rebuild";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 // The lane-eligible type set (the non-ambient exclusion param, #1436 AC4). For
 // these fixtures the artifact-safe claimed set is empty, so it is just the two

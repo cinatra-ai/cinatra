@@ -717,17 +717,18 @@ export async function publishAgentPackageFromGitDir(
     },
   };
 
-  // Layer 2 (cinatra#924) — publish-time produces-materialization contract.
-  // Phase 1 is ADVISORY: a produces-declaring package with no materialization
-  // edge logs a WARN and still publishes (the compile gate already hard-blocks
-  // a malformed binding; an un-migrated repo is never refused here). The
-  // Phase-2 flip to BLOCK is a one-line owner-gated change of
-  // `ARTIFACT_PRODUCES_ENFORCEMENT` in package-contract.ts, after the fleet
-  // migration completes.
+  // Layer 2 (cinatra#924) — publish-time produces-materialization contract,
+  // the ADOPTION GATE. Phase 2 REFUSES: a produces-declaring package no
+  // materialization road reaches — no terminal binding, no artifact_materialize
+  // node, no required authoring-emit claim — never republishes, because a
+  // declaration that resolves nothing names nothing. The consumed primitives
+  // are passed so the authoring-emit road is visible here exactly as it is to
+  // the catalog-wide read.
   if (producesEntries.length > 0) {
     const contractFindings = evaluateProducesMaterializationContract({
       produces: producesEntries.map((e) => e.extension),
       oasDoc: gitAgentJson,
+      consumes: consumesEntries ?? null,
     });
     if (contractFindings.length > 0) {
       const summary = contractFindings

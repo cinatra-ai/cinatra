@@ -139,7 +139,21 @@ export async function AgentsDashboardPage() {
           </div>
         }
       />
-      <AgentsTabNav activeTab="executions" />
+      {/* cinatra#3228 — the hydrated view ALWAYS mounts a toolbar: the grid inside
+          PageContent renders <CinatraDashboardToolbar> for the "agents"
+          anchor, whose route actions (Run agent, Create agent) plus the
+          "Edit dashboard" control keep its no-controls guard from ever firing
+          here. The drawing (the components reference, Toolbar): "The toolbar
+          sits directly below the page header and replaces the section rule for
+          that view — never stack a toolbar and the etched paired rule." So the
+          strip hands its trailing rule to that toolbar, exactly as the All
+          Agents tab does. While the grid is still hydrating it shows its
+          "Loading dashboard" placeholder and no toolbar is mounted yet, so
+          that transient skeleton draws NEITHER mark — it is a loading state,
+          not a view of this page, and the prohibition it must honour (never a
+          rule and a toolbar at once) holds there too; case 5 of the
+          executions-toolbar-replaces-rule-3228 suite pins it. */}
+      <AgentsTabNav activeTab="executions" toolbarBelow />
       <PageContent className="flex flex-col gap-6 pb-8">
         <EmbeddedDrizzleCubeDashboardGrid
           dashboard={initialConfig}

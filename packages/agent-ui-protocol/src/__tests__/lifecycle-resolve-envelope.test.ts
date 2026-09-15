@@ -62,13 +62,31 @@ const SCHEDULE_SETTLED_BODY: TriggerScheduleProposalViewBody = {
   version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
   agentName: "Weekly digest",
   runId: "run-1",
+  // The ARMED selections the settled card draws its rows from (cinatra#2788).
+  schedule: {
+    kind: "recurring",
+    timezone: "Europe/Berlin",
+    selection: {
+      frequency: "weekly",
+      interval: 1,
+      weekdays: [1, 2, 3, 4, 5],
+      dayOfMonth: 1,
+      monthlyMode: "date",
+      nthWeek: 1,
+      monthlyWeekday: 1,
+      quarterAnchor: "start",
+      yearlyMonth: 1,
+      hour: 9,
+      minute: 0,
+    },
+  },
   triggerType: "recurring",
   scheduleCopy: "Every weekday at 9:00 AM",
   timezone: "Europe/Berlin",
   gatedSteps: [],
   released: false,
+  canSave: true,
   canCancel: true,
-  canRelease: false,
   arming: false,
 };
 
@@ -84,9 +102,10 @@ describe("each kind round-trips the body it is authorized to carry", () => {
       body: null,
     };
     const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", wire);
-    // The answer adds the one field the envelope itself does not carry: the
-    // server-minted island URL (cinatra#2754), `null` when none was sent.
-    expect(parsed).toEqual({ ...wire, islandSrc: null });
+    // The answer adds the two fields the envelope itself does not carry: the
+    // server-minted island URL (cinatra#2754), and the kind's own aside
+    // (cinatra#3193) — `null` on a kind that declares none.
+    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -108,7 +127,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual({ ...wire, islandSrc: null });
+    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
   });
 
   it("verification_summary tells `null` advisory comments apart from none", () => {
@@ -146,7 +165,14 @@ describe("each kind round-trips the body it is authorized to carry", () => {
           "trigger_schedule_proposal",
           JSON.parse(JSON.stringify(wire)),
         ),
-      ).toEqual({ ...wire, islandSrc: null });
+      ).toEqual({
+        ...wire,
+        islandSrc: null,
+        targetHeaders: null,
+        // The schedule kind declares an aside; an answer that carried no
+        // fired signal reads as "not fired" rather than refusing (#3193).
+        aside: { firedOnce: false, durationCopy: null },
+      });
     }
   });
 
@@ -340,6 +366,43 @@ describe("an unknown or undeclared kind fails closed", () => {
 // `absent` privacy
 // ---------------------------------------------------------------------------
 
+describe("a target header belongs to the review gate and to no other kind", () => {
+  const HEADER = {
+    title: "Q3 re-engagement email",
+    typeLabel: "Email",
+    objectType: "@cinatra-ai/email:draft",
+    revisionId: "rev_8f3a1c2d4e5f6a7b",
+    facts: ["team", "private", "text/html", "updated 8 minutes ago"],
+  };
+
+  it("reads it on the REVIEW GATE, which is the one kind that has a target", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true, canComment: true },
+      body: null,
+      targetHeaders: [HEADER],
+    });
+    expect(parsed?.targetHeaders).toEqual([HEADER]);
+  });
+
+  it("REFUSES one on another kind — an answer to a question that kind never asks", () => {
+    // The control first: this exact answer, WITHOUT the header, parses. So the
+    // refusal below is the header's doing and not a body that was wrong anyway.
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "settled" as const },
+      body: VERIFICATION_BODY,
+    };
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", {
+        ...answer,
+        targetHeaders: [HEADER],
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("`absent` reveals nothing about the target", () => {
   it("parses for every kind, and carries no body", () => {
     for (const kind of LIFECYCLE_DATA_PART_VIEW_TYPES) {
@@ -353,12 +416,27 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: null,
         islandSrc: null,
+        // `absent` CARRIES NOTHING BESIDE ITSELF, the target header included
+        // (cinatra#3141 item 7): a header names an artifact, so one arriving
+        // next to the collapse of every denial would be the oracle the collapse
+        // exists to close.
+        targetHeaders: null,
+        // And its kind's own aside with it (cinatra#3193), for the same reason.
+        aside: null,
       });
       // The body key may also be omitted entirely — same answer, byte for byte.
       expect(
         parseLifecycleResolveEnvelope(kind, { kind, state: { state: "absent" } }),
         kind,
-      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null });
+      ).toEqual({
+        kind,
+        state: { state: "absent" },
+        body: null,
+        islandSrc: null,
+        targetHeaders: null,
+        // An absence carries nothing beside itself, on every kind.
+        aside: null,
+      });
     }
   });
 
@@ -387,10 +465,19 @@ describe("`absent` reveals nothing about the target", () => {
 // ---------------------------------------------------------------------------
 
 describe("the recommendation hold stays outside the DATA_PART envelope", () => {
-  it("is the sole typed-interrupt kind, so it never rides this resolve", () => {
-    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
-    expect(LIFECYCLE_INTERRUPT_KINDS).toEqual(["recommendation_hold"]);
+  it("is typed-interrupt carried, so it never rides this resolve", () => {
+    // AMENDED BY cinatra#2930: two axes now — this assertion is about the
+    // wire one, which is unchanged. Its canonical carriage is the run's own
+    // row, which is what makes the mount survive a reload with no envelope.
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent).toBe("interrupt");
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical).toBe("run_state");
+    // cinatra#2928 added a second interrupt kind; what this case is about is
+    // that an INTERRUPT kind has no data-part resolve arm, so it asserts the
+    // membership rather than the size of the set.
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("recommendation_hold");
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("agent_hitl_screen");
     expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("recommendation_hold");
+    expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("agent_hitl_screen");
   });
 
   it("has no envelope arm — asking for it fails closed", () => {
@@ -502,7 +589,14 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
         state,
         body: null,
       }),
-    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state,
+      body: null,
+      islandSrc: null,
+      targetHeaders: null,
+      aside: null,
+    });
   });
 
   it("REFUSES an outcome this build cannot read, rather than dropping it", () => {

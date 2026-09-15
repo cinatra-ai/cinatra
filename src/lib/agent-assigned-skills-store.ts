@@ -23,7 +23,7 @@ import "server-only";
 //      of assignability WHILE HOLDING IT — this is what closes the
 //      assign-vs-uninstall race; the cap lock alone only serializes competing
 //      assignments against each other;
-//   2. the per-agent advisory TRANSACTION lock (here);
+//   2. the per-(agent package, EXACT SCOPE) advisory TRANSACTION lock (here);
 //   3. count → position → insert (here).
 //
 // The order is never inverted: the lifecycle lock is a process-level async lock
@@ -34,22 +34,52 @@ import "server-only";
 
 import { getPooledDb } from "@/lib/db/pooled";
 import { AGENT_ASSIGNED_SKILLS_TABLE } from "@/lib/skill-lifecycle-schema";
+import {
+  WORKSPACE_SCOPE_SENTINEL,
+  assertAssignmentScope,
+  assignmentScopeLockKey,
+  type AssignmentScope,
+  type AssignmentSource,
+} from "@/lib/assignment-scope";
 
 const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 
 /**
- * Maximum directly-assigned skills per agent package (epic: "max 3").
- * The floor is 0 — unlike extension owners, the last assignment may be removed.
+ * Maximum directly-assigned skills per agent package PER EXACT SCOPE
+ * (cinatra#2813 S1, epic #2812: "5 per (agent package, exact scope)").
+ *
+ * The floor is 0 — unlike extension owners, the last assignment may be
+ * removed. The cap counts ONE scope tuple, not the package: five at project
+ * scope and five at organization scope are both legal, and the number that
+ * actually reaches a run is a separate, narrower question the delivery chain
+ * answers under the injection ceiling.
  */
-export const AGENT_ASSIGNED_SKILLS_CAP = 3;
+export const AGENT_ASSIGNED_SKILLS_CAP = 5;
 
-/** The advisory-lock namespace, so the per-agent key cannot collide with any
- *  other subsystem's `hashtextextended` key space. */
+/** The tuple a caller that has no scope of its own writes at.
+ *
+ *  Package-global assignment is what the workspace tier means, so the
+ *  pre-scope callers keep writing exactly the rows they always wrote. */
+export const WORKSPACE_ASSIGNMENT_SCOPE: AssignmentScope = Object.freeze({
+  scopeKind: "workspace",
+  scopeId: WORKSPACE_SCOPE_SENTINEL,
+});
+
+/** The advisory-lock namespace, so the per-(package, scope) key cannot collide
+ *  with any other subsystem's `hashtextextended` key space. The key itself is
+ *  composed by the shared scope module, so this store and the context store
+ *  cannot drift on what "one scope" means. */
 const ADVISORY_LOCK_NAMESPACE = "agent_assigned_skills";
 
 export type AgentAssignedSkillRow = {
   agentPackageName: string;
   skillId: string;
+  scopeKind: AssignmentScope["scopeKind"];
+  scopeId: string;
+  source: AssignmentSource;
+  /** The run an accepted recommendation came from. Forward-looking, and a
+   *  POINTER: deleting the run nulls this and keeps the assignment. */
+  originRunId: string | null;
   position: number;
   createdBy: string;
   createdAt: string;
@@ -133,15 +163,27 @@ function resolveDeps(deps?: AssignedSkillsStoreDeps): {
 type RawRow = {
   agent_package_name: string;
   skill_id: string;
+  scope_kind: string;
+  scope_id: string;
+  source: string;
+  origin_run_id: string | null;
   position: number | string;
   created_by: string;
   created_at: string | Date;
 };
 
+/** The column list, written once so every statement selects the same shape. */
+const COLUMNS =
+  'agent_package_name, skill_id, scope_kind, scope_id, source, origin_run_id, "position", created_by, created_at';
+
 function toRow(raw: RawRow): AgentAssignedSkillRow {
   return {
     agentPackageName: raw.agent_package_name,
     skillId: raw.skill_id,
+    scopeKind: raw.scope_kind as AssignmentScope["scopeKind"],
+    scopeId: raw.scope_id,
+    source: (raw.source === "recommended" ? "recommended" : "manual") as AssignmentSource,
+    originRunId: raw.origin_run_id ?? null,
     position: Number(raw.position),
     createdBy: raw.created_by,
     createdAt:
@@ -163,11 +205,38 @@ export async function readAssignedSkillsForAgentPackage(
   const { query, table } = resolveDeps(deps);
   if (!agentPackageName) return [];
   const rows = await query<RawRow>(
-    `SELECT agent_package_name, skill_id, "position", created_by, created_at
+    `SELECT ${COLUMNS}
        FROM ${table}
       WHERE agent_package_name = $1
-      ORDER BY "position" ASC`,
+      ORDER BY scope_kind ASC, scope_id ASC, "position" ASC`,
     [agentPackageName],
+  );
+  return rows.map(toRow);
+}
+
+/**
+ * The ordered assignment rows for ONE agent package at ONE EXACT scope.
+ *
+ * The narrow read the per-scope surfaces use. It is a separate function rather
+ * than an optional argument on the package-wide read because the two answer
+ * genuinely different questions — "everything this agent carries anywhere" and
+ * "what this scope assigned" — and a caller that passed the wrong argument
+ * would get a plausible, wrong answer instead of a type error.
+ */
+export async function readAssignedSkillsForAgentScope(
+  agentPackageName: string,
+  scope: { scopeKind: string; scopeId: string },
+  deps?: AssignedSkillsStoreDeps,
+): Promise<AgentAssignedSkillRow[]> {
+  const { query, table } = resolveDeps(deps);
+  if (!agentPackageName) return [];
+  const valid = assertAssignmentScope(scope);
+  const rows = await query<RawRow>(
+    `SELECT ${COLUMNS}
+       FROM ${table}
+      WHERE agent_package_name = $1 AND scope_kind = $2 AND scope_id = $3
+      ORDER BY "position" ASC`,
+    [agentPackageName, valid.scopeKind, valid.scopeId],
   );
   return rows.map(toRow);
 }
@@ -191,31 +260,43 @@ export type InsertAssignedSkillResult =
  * knows nothing about skills, only about the cap and the ordering.
  */
 export async function insertAssignedSkill(
-  input: { agentPackageName: string; skillId: string; createdBy: string },
+  input: {
+    agentPackageName: string;
+    skillId: string;
+    createdBy: string;
+    /** The exact scope this assignment applies to. Omitted by the pre-scope
+     *  callers, which wrote package-global rows — exactly the workspace tier. */
+    scope?: { scopeKind: string; scopeId: string };
+    source?: AssignmentSource;
+    originRunId?: string | null;
+  },
   deps?: AssignedSkillsStoreDeps,
 ): Promise<InsertAssignedSkillResult> {
   const { transaction, table } = resolveDeps(deps);
+  const scope = assertAssignmentScope(input.scope ?? WORKSPACE_ASSIGNMENT_SCOPE);
+  const source: AssignmentSource = input.source ?? "manual";
   return transaction(async (tx) => {
     // (1) Serialize the whole section per agent package. Namespaced so the key
     // space cannot collide with another subsystem's advisory locks.
-    await tx(`SELECT pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 0))`, [
-      ADVISORY_LOCK_NAMESPACE,
-      input.agentPackageName,
+    await tx(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      assignmentScopeLockKey(ADVISORY_LOCK_NAMESPACE, input.agentPackageName, scope),
     ]);
 
     // (2) Idempotent re-check under the lock: a duplicate assign is a no-op
     // that must NOT consume (or be refused by) a cap slot.
     const existing = await tx<RawRow>(
-      `SELECT agent_package_name, skill_id, "position", created_by, created_at
-         FROM ${table} WHERE agent_package_name = $1 AND skill_id = $2`,
-      [input.agentPackageName, input.skillId],
+      `SELECT ${COLUMNS}
+         FROM ${table} WHERE agent_package_name = $1 AND skill_id = $2
+          AND scope_kind = $3 AND scope_id = $4`,
+      [input.agentPackageName, input.skillId, scope.scopeKind, scope.scopeId],
     );
     if (existing[0]) return { outcome: "already_assigned", row: toRow(existing[0]) } as const;
 
     // (3) Cap check under the lock.
     const counted = await tx<{ n: number | string }>(
-      `SELECT count(*)::int AS n FROM ${table} WHERE agent_package_name = $1`,
-      [input.agentPackageName],
+      `SELECT count(*)::int AS n FROM ${table}
+        WHERE agent_package_name = $1 AND scope_kind = $2 AND scope_id = $3`,
+      [input.agentPackageName, scope.scopeKind, scope.scopeId],
     );
     const count = Number(counted[0]?.n ?? 0);
     if (count >= AGENT_ASSIGNED_SKILLS_CAP) return { outcome: "cap_exceeded", count } as const;
@@ -225,20 +306,30 @@ export async function insertAssignedSkill(
     // order stable across removals (positions may go sparse; ordering is what
     // matters, not density). The PK arbiter collapses a racer to DO NOTHING.
     const inserted = await tx<RawRow>(
-      `INSERT INTO ${table} (agent_package_name, skill_id, "position", created_by)
-       SELECT $1, $2, COALESCE(MAX("position"), 0) + 1, $3 FROM ${table} WHERE agent_package_name = $1
-       ON CONFLICT (agent_package_name, skill_id) DO NOTHING
-       RETURNING agent_package_name, skill_id, "position", created_by, created_at`,
-      [input.agentPackageName, input.skillId, input.createdBy],
+      `INSERT INTO ${table} (agent_package_name, skill_id, scope_kind, scope_id, source, origin_run_id, "position", created_by)
+       SELECT $1, $2, $3, $4, $5, $6, COALESCE(MAX("position"), 0) + 1, $7 FROM ${table}
+        WHERE agent_package_name = $1 AND scope_kind = $3 AND scope_id = $4
+       ON CONFLICT (agent_package_name, skill_id, scope_kind, scope_id) DO NOTHING
+       RETURNING ${COLUMNS}`,
+      [
+        input.agentPackageName,
+        input.skillId,
+        scope.scopeKind,
+        scope.scopeId,
+        source,
+        input.originRunId ?? null,
+        input.createdBy,
+      ],
     );
     if (inserted[0]) return { outcome: "assigned", row: toRow(inserted[0]) } as const;
 
     // A racer won the PK arbiter while we held the lock (only reachable when a
     // caller bypasses the transaction seam); report the winner, never a lie.
     const winner = await tx<RawRow>(
-      `SELECT agent_package_name, skill_id, "position", created_by, created_at
-         FROM ${table} WHERE agent_package_name = $1 AND skill_id = $2`,
-      [input.agentPackageName, input.skillId],
+      `SELECT ${COLUMNS}
+         FROM ${table} WHERE agent_package_name = $1 AND skill_id = $2
+          AND scope_kind = $3 AND scope_id = $4`,
+      [input.agentPackageName, input.skillId, scope.scopeKind, scope.scopeId],
     );
     if (winner[0]) return { outcome: "already_assigned", row: toRow(winner[0]) } as const;
     throw new Error(
@@ -256,13 +347,24 @@ export async function insertAssignedSkill(
  * extension owners, where one owner must remain).
  */
 export async function deleteAssignedSkill(
-  input: { agentPackageName: string; skillId: string },
+  input: {
+    agentPackageName: string;
+    skillId: string;
+    /** The exact scope the row belongs to; the remove identity carries the FULL
+     *  tuple, so removing a project's assignment cannot take the
+     *  organization's with it. Omitted ⇒ the workspace tier. */
+    scope?: { scopeKind: string; scopeId: string };
+  },
   deps?: AssignedSkillsStoreDeps,
 ): Promise<{ deleted: boolean }> {
   const { query, table } = resolveDeps(deps);
+  const scope = assertAssignmentScope(input.scope ?? WORKSPACE_ASSIGNMENT_SCOPE);
   const rows = await query<{ skill_id: string }>(
-    `DELETE FROM ${table} WHERE agent_package_name = $1 AND skill_id = $2 RETURNING skill_id`,
-    [input.agentPackageName, input.skillId],
+    `DELETE FROM ${table}
+      WHERE agent_package_name = $1 AND skill_id = $2
+        AND scope_kind = $3 AND scope_id = $4
+      RETURNING skill_id`,
+    [input.agentPackageName, input.skillId, scope.scopeKind, scope.scopeId],
   );
   return { deleted: rows.length > 0 };
 }

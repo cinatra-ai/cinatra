@@ -23,6 +23,13 @@
  *   - the broadcast branch (tagged participants, no explicit assistant mention)
  *     is unchanged.
  *
+ * Ruling (cinatra#2935, lifecycle-b W5d): NO message routed through here ends
+ * in silence any more. A scoped ref that misses the assistant registry — the
+ * canonical agent-dispatch form — and an @-token that resolves to nothing at all
+ * both take the host reply, exactly like a message with no mention. The turn
+ * always answers; starting a named agent is something the conversation's
+ * assistant does, so the message has to reach it.
+ *
  * PURE given the classification + a delivery lookup + the pre-resolved Cinatra
  * host principal (all built server-side in `./server-audience-resolver`) — so the
  * whole routing decision is unit-testable without a DB, a session, or the network.
@@ -193,16 +200,37 @@ export function decideMessageRouting(input: RouteDecisionInput): MessageRoutingR
     };
   }
 
-  if (classified.length > 0) {
-    // The message carried @-tokens but NONE resolved to an in-audience assistant
-    // (an unknown/delisted handle like @chatgpt post-ruling, a human tag, or a
-    // scoped agent-dispatch ref) AND there is no tagged broadcast participant:
-    // HONEST NO-RESPONDER — the message posts, nothing streams, nothing hangs
-    // (the #1935 delisted pattern: `{ kind: "none" }` in resolveDispatchPlan).
-    // Distinct from the true no-mention default below, which keeps the @cinatra
-    // host reply (byte-parity L448-450).
-    return { shouldCallLlm: false, isBroadcast: true };
-  }
+  // THE NO-ANSWER RULE IS GONE (cinatra#2935, lifecycle-b W5d).
+  //
+  // From the plan (PLAN: Agents Lifecycle (B), section 4):
+  //
+  //   "The rule that ended a turn with no answer at all when a message named
+  //    only an agent | The turn always answers. You get a reply and the run's
+  //    card, never silence — the naming half is outside this plan."
+  //
+  // What stood here were TWO branches with the same answer available to them and
+  // only one of them taking it (convergence round 1, finding 4). The
+  // `agent-dispatch` arm ALREADY streamed the host reply — it was added so the
+  // canonical `use @cinatra-ai/<slug>` form would at least reach the server-side
+  // pre-router that has now been removed. Beneath it sat the no-assistant
+  // short-circuit, `{ shouldCallLlm: false, isBroadcast: true }`, and THAT is the
+  // rule that ended a turn in silence: the message posted and nothing streamed
+  // at all.
+  //
+  // The short-circuit is gone and the arm above it has nothing left to be an
+  // exception to, so both collapse into the default: the host Cinatra assistant
+  // replies. A person who names an agent gets a reply and the run's
+  // card because the assistant starts the agent itself; a person who names a
+  // delisted handle or tags a human gets an answer rather than a message that
+  // vanishes. Nothing about the CLASSIFIER changes, and nothing here decides
+  // WHO a message is addressed to — that is the addressing work outside this
+  // plan (the plan's own "One boundary"). This branch only stops the page from
+  // answering — or refusing to answer — before the assistant has seen the
+  // message.
+  //
+  // Deliberately NOT `isBroadcast`: nothing was tagged, and one mention token
+  // does not trip `shouldEnterSlackModeOnSend`, so message parts and the
+  // inline run card survive in the default layout.
 
   // Default: no @-mention at all → the host Cinatra assistant replies, attributed
   // to the Cinatra principal (byte-parity with the retired L448-450 default).

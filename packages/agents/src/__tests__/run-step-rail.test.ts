@@ -90,7 +90,7 @@ describe("buildRunStepRail merge contract", () => {
   it("surplus stepResults past the template length become their own trailing entries", () => {
     const rail = buildRunStepRail({
       templateSteps: [tstep(1, 10, "Draft")],
-      stepResults: [{ out: "a" }, { out: "b" }, { out: "c" }],
+      stepResults: [{ out: "a" }, { name: "Refined" }, { name: "Sent sequence" }],
     });
     expect(rail.entries.map((e) => e.key)).toEqual([
       "step:10",
@@ -140,7 +140,7 @@ describe("buildRunStepRail merge contract", () => {
     // surplus stepResult, then a gate — gate must strictly trail everything.
     const rail = buildRunStepRail({
       templateSteps: [{ index: 3, stepNumber: 30, label: "Late" }],
-      stepResults: [{ out: "a" }, { out: "b" }],
+      stepResults: [{ out: "a" }, { name: "Refined" }],
       gates: [gate("tg", "pending", "2026-07-25T12:00:00Z")],
     });
     const ordinals = new Map(rail.entries.map((e) => [e.key, e.ordinal]));

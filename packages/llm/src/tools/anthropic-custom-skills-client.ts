@@ -51,7 +51,7 @@ export const ANTHROPIC_SKILLS_LIST_PAGE_LIMIT = 100;
  * Managed-Agents `page`/`next_page` cursor scheme (`GET /v1/skills` is called
  * out by name as a `page`-scheme endpoint that also returns a `has_more`
  * boolean), and it is what the S7 live acceptance captured on the wire
- * (`evidence/2094-s7-acceptance/live-results.json`, checks C3 + C4).
+ * (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-results.json`, checks C3 + C4).
  *
  * There is **no `last_id`** and no `after_id`: the Message Batches / Files /
  * Models endpoints use that other scheme, the Skills endpoints do not. An
@@ -252,7 +252,7 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
    * with 8 rows present: `limit=1` returned 1 row and `limit=2` returned 2 rows,
    * and EVERY response carried `has_more:false` with `next_page:null`; an
    * unknown `page` value is accepted and silently ignored. See
-   * `evidence/2094-s7-acceptance/live-reverify-results.json`, check R3.
+   * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-reverify-results.json`, check R3.
    *
    * Consequence: this walk can only ever observe the FIRST `pageLimit` rows. In
    * a workspace holding more than {@link ANTHROPIC_SKILLS_LIST_PAGE_LIMIT}

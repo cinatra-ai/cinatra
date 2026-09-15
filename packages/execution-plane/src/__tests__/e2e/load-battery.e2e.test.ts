@@ -126,31 +126,32 @@ let app: BrokerServiceClient;
 const ownedJobs = new Set<string>();
 
 /**
- * REFUSE TO RUN ON TOP OF SOMEBODY ELSE'S STACK.
+ * REFUSE TO RUN ON TOP OF THIS JOB'S OWN LEFTOVER STACK.
  *
- * The exec topology's internal network name and compose project are FIXED by
- * design (the worker is told the exact network string and asserts it really is
- * internal), so two stacks cannot coexist on one host — and `stack.down()`
- * ends in a host-global sweep of everything carrying the execution plane's
- * ownership label. A concurrently running sibling lane would therefore be
- * adopted by `compose up` and then destroyed by this file's teardown.
+ * What this check meant when it was written no longer holds, and saying so is
+ * the point of this comment: the compose project, all three networks and the
+ * broker's published port were FIXED literals then, so the three batteries were
+ * mutually exclusive on one host by construction and this check was the guard
+ * against adopting — and then destroying — a sibling's stack. Every one of
+ * those names is now derived from the job's own identity (cinatra#3320,
+ * cinatra#3327), and teardown sweeps only the artifacts this stack registered
+ * as its own, so a concurrent battery on the same box is neither adopted nor
+ * torn down.
  *
- * So the battery checks FIRST and fails loudly. Somebody else's work is not
- * ours to reclaim, and "the tests passed" is worth nothing if the cost was a
- * sibling's run.
+ * The check stays, with a narrower meaning, and the narrowing is worth stating
+ * exactly rather than rounding up. A DERIVED project name ends in a random
+ * discriminator minted in this process, so no other process can name this
+ * project — not a sibling battery, and not an earlier attempt of this same job
+ * either. Against a derived name the check can therefore never fire, and it is
+ * kept for the one case where it still can: `CINATRA_EXEC_COMPOSE_PROJECT`
+ * pinned in the environment, where an operator has deliberately given two runs
+ * one project and a sibling's stack is exactly what would be found. Running a
+ * second stack on top of that one would measure a host already carrying a fleet
+ * nobody is watching, and this battery's numbers are its product.
  *
- * WHAT THIS CHECK IS NOT, said plainly rather than left to be discovered: it is
- * a guard, not a lock. Two runs that start together can both observe an empty
- * project and proceed — a check-then-act window no single `docker ps` can
- * close. Closing it properly needs a host-level mutex, and it would have to
- * cover the two pre-existing e2e batteries too, since ALL THREE share this
- * compose file, its fixed internal network name and its fixed published broker
- * port and are therefore mutually exclusive on one host by construction. That
- * is a property of the shipped topology, not of this file, so the honest
- * position is: these batteries are run one at a time, this check catches the
- * common case (a stack somebody forgot to tear down), and the residual race is
- * recorded here rather than papered over.
- * (Codex round 2 raised the window; adopted as a documented limit.)
+ * The old check-then-act window survives only in that pinned case, and only
+ * there — the derived name closes it by construction, because there is no other
+ * run that could pass this check at the same instant.
  */
 async function refuseIfAnotherStackIsRunning(): Promise<void> {
   const running = await docker([
@@ -163,8 +164,11 @@ async function refuseIfAnotherStackIsRunning(): Promise<void> {
   if (ids.length > 0) {
     throw new Error(
       `The execution-plane compose project "${COMPOSE_PROJECT}" already has ${ids.length} ` +
-        "running container(s) on this host. That is another run's stack — this battery " +
-        "would adopt it and then destroy it on teardown. Refusing. Stop that stack and re-run.",
+        "running container(s) on this host. A derived project name is unique to this " +
+        "process, so this project was PINNED (CINATRA_EXEC_COMPOSE_PROJECT) and the " +
+        "containers are another run's stack under the pinned name — the load figures " +
+        "would be read off a host already carrying it. Refusing. Stop that stack, or " +
+        "stop pinning the project, and re-run.",
     );
   }
 }
@@ -214,9 +218,18 @@ async function openRun(orgId: string, runId: string): Promise<OpenRun> {
     mintExecutionSession({ orgId, userId: USER, surface: SURFACE, runId }),
     { secret: stack.carrierSecret },
   );
+  // The run key is claimed BEFORE the open: the broker provisions this run's L2
+  // workspace volume before it can refuse for a later reason, and a response
+  // lost after that leaves the volume behind with no job id ever seen. Teardown
+  // removes only what this stack registered as its own, so a job that is not
+  // recorded here is a job whose leftovers stay on the host — the safe half of
+  // the trade, and the reason both lines sit at the one place this battery
+  // opens a job.
+  stack.own(runId, "");
   const opened = await app.openJob(carrier);
   if (!opened.ok) throw new Error(`openJob refused: ${opened.reason} — ${opened.message}`);
   ownedJobs.add(opened.jobId);
+  stack.own(runId, opened.jobId);
   return { jobId: opened.jobId, orgId, runId };
 }
 

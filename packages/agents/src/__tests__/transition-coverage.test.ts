@@ -107,7 +107,7 @@ describe("transition-coverage", () => {
   // cinatra#2523 (owner ruling 2026-08-09, remedy (c)). The setup -> trigger
   // hand-off gave `pending_trigger` its first PRODUCER (execution.ts ends a
   // finished setup there instead of running the agent before the user has
-  // chosen when), and the trigger form's "Run now" its first legal dispatch
+  // chosen when), and the trigger form's "Run right after setup" its first legal dispatch
   // edge. Until then `pending_trigger` was write-only in the table:
   // `pending_trigger->armed` had no reachable source state, and the immediate
   // branch faked a transition out of a terminal status and swallowed the

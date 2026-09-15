@@ -18,7 +18,9 @@ import "server-only";
 //                              DIFFERENT set (never silently overwrite a pin a
 //                              reviewer may already be acting on).
 //   readGatePinnedTargets    — the PREPARATION core's gate port: pending (+ the
-//                              frozen pinned set) | not-pending | not-found.
+//                              frozen pinned set) | resolved (+ the SAME frozen
+//                              set, which the read-only history reading draws) |
+//                              not-found.
 //   readReviewGateState      — the DECISION core's gate port: pending (+ pinned
 //                              set) | resolved (+ resolving fingerprint) |
 //                              unavailable (absent → folded, so existence is not
@@ -59,6 +61,7 @@ import {
   suggestionApplicationOutbox,
   gateAdvisoryComments,
   artifactVerificationRecords,
+  artifactProducedOutbox,
   type PinnedReviewTargetRow,
 } from "./schema";
 import {
@@ -348,6 +351,87 @@ export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRo
   }));
 }
 
+/**
+ * THE RUN'S REVIEW SLOT (cinatra#2997) — what the run card must draw where the
+ * review screen goes.
+ *
+ * The maintainer's reading of the run card is that it is a placeholder for the
+ * review screen while the agent works, and becomes the review screen itself when
+ * the work opens one. That is a question about the RUN, asked on the run's own
+ * surface, so it is answered from the run's own rows rather than from a model
+ * turn or a pull tool:
+ *
+ *   `reviewTaskId` — the run's most recent review gate, PENDING OR RESOLVED. The
+ *     resolved one is deliberately included: a reader who approves in place must
+ *     keep seeing what they decided, and the card's own state ladder draws that
+ *     (§IV settled) from the same ref. Dropping it here would replace the
+ *     reader's own decision with a completion notice the moment it landed.
+ *
+ *   `awaiting` — the run produced something whose review question has not been
+ *     answered yet: an `artifact_produced_outbox` row for this run is still
+ *     `pending`, so the shipped sweeper may still open a gate on it. This is what
+ *     keeps the placeholder up across the seconds between a run reaching
+ *     `completed` and its gate row existing, instead of flashing a completion
+ *     notice that is about to be wrong. It is a fact about a row, never a timer.
+ *
+ * BOTH ARE ALWAYS READ, and the ORDER IS THE OUTBOX FIRST. Two reasons, and both
+ * are defects that a "return as soon as a gate is found" shape actually has:
+ *
+ *   A RUN CAN OWE A SECOND REVIEW. Gate A is decided, the run produces another
+ *   artifact, and its outbox row is pending. Skipping the outbox read because a
+ *   gate exists would answer `awaiting: false` — and the caller, holding a ref
+ *   already, would stop looking and sit on the settled card while gate B opened
+ *   behind it.
+ *
+ *   THE SWEEPER RUNS BETWEEN THE TWO QUERIES. Gate-then-outbox can read no gate,
+ *   then have the sweeper create the gate AND mark the event processed, then read
+ *   no pending row: `{null, false}` — "there is no review here", about a run that
+ *   has one. Outbox-then-gate cannot produce that answer: the outbox read either
+ *   sees the row still pending (`awaiting: true`, so the caller looks again) or
+ *   it was already processed, in which case the gate read that follows it sees
+ *   the gate. The remaining skew is the harmless direction — `awaiting: true`
+ *   beside a ref, which costs one more read.
+ *
+ * Both empty ⇒ this run has no review to show, now or later, and the caller
+ * draws its terminal rendering (the completion notice).
+ *
+ * AUTHORIZATION IS THE CALLER'S JOB — the `listReviewGatesForRun` precedent this
+ * sits beside, and for the same reason: every caller clears its own door first
+ * (the seed route and the run screen both go through the actor-aware
+ * `readAgentRunById`), and this is a plain run-scoped read behind it. It returns
+ * an id and a boolean — never a target, a title or an artifact.
+ *
+ * COST. The gate read is the run-scoped index the emit path anchors on. The
+ * outbox read is `status = 'pending'` first (the `..._status_idx` leading
+ * column, and a set the sweeper keeps drained) narrowed to this run — there is
+ * no per-run index on that table and this deliberately does not add one for a
+ * bounded head scan.
+ */
+export async function readRunReviewSlot(
+  runId: string,
+): Promise<{ reviewTaskId: string | null; awaiting: boolean }> {
+  const [pendingProduced] = await db
+    .select({ eventId: artifactProducedOutbox.eventId })
+    .from(artifactProducedOutbox)
+    .where(
+      and(
+        eq(artifactProducedOutbox.status, "pending"),
+        eq(artifactProducedOutbox.producerRunId, runId),
+      ),
+    )
+    .limit(1);
+  const [gate] = await db
+    .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.runId, runId))
+    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id))
+    .limit(1);
+  return {
+    reviewTaskId: gate?.reviewTaskId ?? null,
+    awaiting: Boolean(pendingProduced),
+  };
+}
+
 /** One advisory-seam comment attached to a gate (zero-authority, decision-free). */
 export interface GateAdvisoryCommentRow {
   id: string;
@@ -425,7 +509,16 @@ export async function readGatePinnedTargets(
 ): Promise<GatePinnedOutcome> {
   const gate = await readReviewGate(runId, reviewTaskId);
   if (!gate) return { status: "not-found" };
-  if (gate.status !== "pending") return { status: "not-pending" };
+  // A DECIDED gate still names its frozen pinned set, because the reviewed work
+  // stays on screen after the decision: "A resolved gate opens read-only: what
+  // was decided, and the reviewed target(s), kept for the run's audit trail."
+  // So this answers `resolved` rather than a bare "not pending" that throws the
+  // set away — and it is the SAME immutable set the gate froze, never the
+  // artifact's latest. Preparing from it is OPT-IN at the core
+  // (`acceptResolvedGate`), so every decision path still fails closed here.
+  if (gate.status !== "pending") {
+    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets) };
+  }
   return { status: "pending", targets: rowsToTargets(gate.pinnedTargets) };
 }
 

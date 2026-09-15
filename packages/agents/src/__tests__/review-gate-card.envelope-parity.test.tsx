@@ -27,6 +27,18 @@
 // pre-envelope capture, byte for byte, which is what keeps this guard honest:
 // the redraw had to move exactly the states that carry suggestions and no
 // others, and that is what the regeneration diff showed.
+//
+// THE SAME FOUR ENTRIES WERE RE-TAKEN AGAIN (cinatra#3107). Raising the dark
+// `--input` boundary to the 3:1 contrast floor changed what `--input` means,
+// so the tinted control FILLS that used to draw from it were moved onto their
+// own `--input-fill` token, pinned at the value `--input` carried before. The
+// shared outline-variant Button therefore renames its dark fill classes
+// `dark:bg-input/30 dark:hover:bg-input/50` to `dark:bg-input-fill/30
+// dark:hover:bg-input-fill/50`, and the review card's suggestion chip IS an
+// outline Button. The four `*/pending-with-suggestions` captures are the only
+// entries that carry a chip, and the ONLY bytes that moved in them are those
+// two class names — the painted colour is unchanged and no other byte of DOM
+// differs. Every other entry is still its earlier capture, byte for byte.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -128,6 +140,15 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
   // pre-envelope capture and do not claim to be — they were recorded against the
   // component on this branch, and what they pin from here on is that the four
   // hosts keep drawing them identically.
+  //
+  // RE-RECORDED for cinatra#2931 W4, deliberately, because what these three
+  // entries pinned had become false: "A resolved gate opens read-only: what was
+  // decided, and the reviewed target(s), kept for the run's audit trail" — and
+  // the captured DOM held the decision line ALONE, with the reviewed target
+  // dropped. The new captures hold the gate header, the target island and the
+  // decision line, and no decision control on any of the four hosts. The
+  // outcome-less `settled` entry above is untouched: that reading draws the
+  // generic panel, as it always did.
   {
     name: "settled-approved",
     state: { state: "settled", outcome: "approved", decidedByName: "Ada Lovelace" },

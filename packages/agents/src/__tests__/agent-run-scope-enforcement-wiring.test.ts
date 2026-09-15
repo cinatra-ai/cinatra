@@ -145,9 +145,10 @@ describe("layer 2: shared dispatch guard", () => {
   });
 
   it("FAILS the run on denial rather than leaving it queued with no job — at the CALLER that holds an authority", () => {
-    // `releaseTriggerNow` transitions armed→queued and THEN enqueues, so a guard
-    // that only throws would strand the run `queued` forever with nothing left to
-    // run it. A denial is terminal (the PR contract), never a park.
+    // A transition-then-enqueue caller moves the run armed→queued and THEN
+    // enqueues, so a guard that only throws would strand the run `queued`
+    // forever with nothing left to run it. A denial is terminal (the PR
+    // contract), never a park.
     //
     // The compensation lives in the CALLER, not in the enqueue chokepoint: the
     // caller already holds a member session authority for this run, whereas the
@@ -163,20 +164,20 @@ describe("layer 2: shared dispatch guard", () => {
     );
     expect(enqueue).not.toMatch(/\bmintAgentRunExecutionAuthority\s*\(/);
 
-    const actions = read("packages/agents/src/run-actions.ts");
-    const body = actions.slice(at(actions, "export async function releaseTriggerNow("));
-    const enqueueAt = at(body, "enqueueAgentRun(");
-    const block = body.slice(enqueueAt);
-    expect(block).toContain("isScopeDenial(err)");
-    expect(block).toMatch(
-      /transitionRunStatus\(\s*args\.runId,\s*"queued",\s*"failed"/,
+    // THE INTERACTIVE SITE THIS HALF PINNED IS GONE (cinatra#2972).
+    // `releaseTriggerNowForActor` — Run now — was the transition-then-enqueue
+    // caller in `trigger-service.ts`, and plan (A) §7.2 as amended 2026-08-25
+    // withdrew the control and its whole action path ("there is no Run now").
+    // The property is NOT dropped: the next test below pins it on the site that
+    // still has this shape, the trigger release job. What is removed here is an
+    // assertion over a function that no longer exists — which `at()` would fail
+    // on loudly, and which must not be re-pointed at a lookalike.
+    expect(read("packages/agents/src/trigger-service.ts")).not.toContain(
+      "releaseTriggerNowForActor",
     );
-    // It compensates with the authority already in hand — no new mint.
-    expect(block).toMatch(/authority,/);
-    // A benign lost CAS (another writer moved the run off `queued`) is not an
-    // error; anything else is loud, because nothing downstream repairs it.
-    expect(block).toContain("stale_from_status");
-    expect(block).toContain("console.error");
+    expect(read("packages/agents/src/run-actions.ts")).not.toContain(
+      "releaseTriggerNow",
+    );
   });
 
   it("compensates on EVERY transition-then-enqueue site, not just the interactive one", () => {
@@ -396,15 +397,32 @@ describe("layer 2: shared dispatch guard", () => {
     expect(src).toContain('AGENT_TEMPLATE_SCOPE_DENIED');
   });
 
-  it("requires the DISPATCHING admin — not just the run owner — on releaseTriggerNow", () => {
-    const src = read("packages/agents/src/run-actions.ts");
-    const body = src.slice(src.indexOf("export async function releaseTriggerNow("));
-    const guardAt = body.indexOf("assertAgentRunDispatchAuthorized");
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(body.slice(guardAt, guardAt + 400)).toContain("actingUserId: userId");
-    // Before markTriggerReleased: the gate flag is monotonic, so a later
-    // refusal could not undo it.
-    expect(guardAt).toBeLessThan(body.indexOf("markTriggerReleased("));
+  // WAS: "requires the DISPATCHING admin — not just the run owner — on
+  // releaseTriggerNow". That guard existed because Run now was the one
+  // interactive dispatch that started SOMEONE ELSE's run early. cinatra#2972
+  // removed the control, the server action and the service function together —
+  // plan (A) §7.2 as amended 2026-08-25, "there is no Run now" — so the
+  // strongest true statement left is that no surface can reach that dispatch at
+  // all. Pinned as an ABSENCE, deliberately: an admin-gated dispatch that is
+  // gone is safer than one that is guarded, and a re-introduction has to face
+  // this test.
+  it("no surface can force a schedule's gate open early — Run now is gone entirely", () => {
+    for (const rel of [
+      "packages/agents/src/trigger-service.ts",
+      "packages/agents/src/run-actions.ts",
+      "packages/agents/src/run-schedule-tab.tsx",
+      "packages/agents/src/schedule-proposal-card.tsx",
+      "src/lib/lifecycle/trigger-schedule-proposal-card.ts",
+    ]) {
+      const src = read(rel);
+      expect(src, `${rel} still reaches the withdrawn Run now`).not.toMatch(
+        /releaseTriggerNow(?:ForActor)?\s*\(/,
+      );
+    }
+    // The decide endpoint no longer even accepts the op.
+    expect(read("src/app/api/lifecycle-views/decide/route.ts")).not.toContain(
+      '"release"',
+    );
   });
 });
 
@@ -551,9 +569,13 @@ describe("paths that carry an explicit actor thread it into the perimeter", () =
 
   it("the non-BullMQ content-editor carrier run is covered by the CREATION layer", () => {
     const src = read("src/lib/host-content-editor-dispatch.ts");
-    // Two createAgentRun call sites; the actorOverride one is never enqueued,
-    // which is exactly why an enqueue-only guard would miss it.
-    expect((src.match(/await createAgentRun\(/g) ?? []).length).toBe(2);
+    // Two carrier-creating call sites; the actorOverride one is never enqueued,
+    // which is exactly why an enqueue-only guard would miss it. Since
+    // cinatra#2929 both reach the creation perimeter THROUGH the coordinator's
+    // launch entry — the guard is unmoved (it lives inside the creator the
+    // coordinator calls), only the road to it is.
+    expect((src.match(/await launchAgentRun\(/g) ?? []).length).toBe(2);
+    expect(src).not.toContain("createAgentRun(");
     expect(src).not.toContain("enqueueAgentRun");
   });
 });
@@ -578,7 +600,12 @@ describe("published-reader audit", () => {
     ["A2A agent resolver", "packages/a2a/src/agent-resolver.ts"],
     ["A2A skill/server card", "packages/a2a/src/server.ts"],
     ["MCP tool registration", "packages/agents/src/mcp/agent-tools-registry.ts"],
-    ["chat explicit-dispatch input extraction", "src/app/api/chat/explicit-dispatch-server.ts"],
+    // cinatra#2935 (lifecycle-b W5d): the chat explicit-dispatch input
+    // extraction was a published reader and is GONE with the sentence-matcher
+    // it served. The row is struck rather than retargeted because its
+    // replacement reads no published templates at all: the widget's one narrow
+    // start hands a package NAME to `agent_run` and lets the primitive resolve
+    // it, which is the stronger property. The audit below pins that.
   ])(
     "%s reads published templates but never creates a run outside the guarded perimeter",
     (_label, file) => {
@@ -590,6 +617,20 @@ describe("published-reader audit", () => {
       expect(src).not.toMatch(/AGENT_BUILDER_EXECUTION/);
     },
   );
+
+  it("the widget's named start reads NO published templates and creates NO run itself", () => {
+    // cinatra#2935 (lifecycle-b W5d) — the replacement for the struck row above,
+    // asserted as the stronger property it actually has. The start resolves
+    // nothing and inserts nothing: it hands a package name to `agent_run`, whose
+    // own resolver, execute gate and coordinator launch do the work. So there is
+    // no published reader to audit here, and the run-creation fence still sees
+    // one producer.
+    const src = read("src/lib/lifecycle/named-agent-start-mcp.ts");
+    expect(src).not.toContain("readPublishedAgentTemplates");
+    expect(src).not.toMatch(/insert\(agentRuns\)/);
+    expect(src).not.toMatch(/AGENT_BUILDER_EXECUTION/);
+    expect(src).toMatch(/primitiveName: "agent_run"/);
+  });
 
   it("built-in assistants are draft + private, so no published reader can reach them", () => {
     const builtin = read("packages/agents/src/builtin-assistant-template.ts");

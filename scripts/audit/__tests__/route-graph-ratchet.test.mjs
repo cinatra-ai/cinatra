@@ -112,6 +112,25 @@ test("baselineGrowth: dropping a tracked route is allowed (route removed from FI
 // ---------------------------------------------------------------------------
 const rec = (from, to, extra = {}) => ({ from, to, reason: "sanctioned growth (#999): test", pr: 999, ...extra });
 
+// `pr: 0` — "there is no pull request yet" (cinatra#2788). A raise measured on a
+// branch before a PR exists still has to be annotated, and the two alternatives
+// are worse than saying so: an invented number sends a reader to somebody else's
+// change, and an unannotated raise is the silent accretion this ratchet exists to
+// stop. Zero is the one value that cannot be mistaken for a real PR.
+test("isStructurallyValidAbsorbRecord: pr 0 is VALID — the raise has no pull request yet", () => {
+  assert.equal(
+    isStructurallyValidAbsorbRecord({ from: 10, to: 12, pr: 0, reason: "measured on a branch with no PR" }),
+    true,
+  );
+});
+
+test("isStructurallyValidAbsorbRecord: a NEGATIVE or fractional pr is still malformed", () => {
+  const base = { from: 10, to: 12, reason: "r" };
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: -1 }), false);
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: 1.5 }), false);
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: "0" }), false);
+});
+
 test("classifyRaises: a raise WITHOUT an absorb record FAILS (silent raise)", () => {
   const base = { routes: { "/a": 100 } };
   const committed = { routes: { "/a": 120 } };
@@ -289,4 +308,54 @@ test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a re
   // unconditionally.
   const errors = validateAbsorbRecords(baseline);
   assert.deepEqual(errors, [], `committed absorb records must validate: ${JSON.stringify(errors)}`);
+});
+
+// --- Reconciliation: a forward merge REGENERATES this baseline by measuring, and
+// a measurement lowers every ceiling to the merged tree own count. That is the
+// right direction for a route the branch narrowed and the wrong one for a route it
+// never touched: committed headroom is a decision, and re-measuring it away
+// tightens an unrelated route budget without authority while deleting the
+// annotation that explains it. The rule pinned here is the one this branch's own
+// /chat record states in this same file: a ceiling is a ceiling, and a forward
+// merge does not ratchet an untouched route down.
+//
+// /sign-in is the route that rule is about. It reaches none of the leaves the
+// appointment-schedule bridge adds, it measures far under its ceiling on both
+// trees, and the ceiling and record it carries were committed by cinatra#2988.
+// Either both survive a forward merge or neither does; a ceiling silently
+// re-measured down, or kept with its record dropped, is a merge editing a decision
+// it did not make. ---
+test("RECONCILIATION: an untouched route keeps the ceiling and the absorb record the base branch committed", () => {
+  const baselinePath = join(HERE, "..", "route-graph-ratchet.baseline.json");
+  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+  assert.equal(
+    baseline.routes["/sign-in"],
+    223,
+    "/sign-in reaches nothing this branch adds, so its ceiling is the base branch committed 223 — a forward merge that re-measures it down to the merged tree own count ratchets an untouched route without authority",
+  );
+  const record = baseline.absorbs?.["/sign-in"];
+  assert.ok(
+    record,
+    "/sign-in keeps its cinatra#2988 absorb record: the ceiling and the annotation that explains it move together or not at all",
+  );
+  assert.deepEqual(
+    { from: record.from, to: record.to, pr: record.pr },
+    { from: 222, to: 223, pr: 2988 },
+    "the carried-forward /sign-in record is the base branch own, unedited",
+  );
+  // The numbers alone do not prove the record is UNEDITED: reason is the part the
+  // gate only checks for non-emptiness, so a rewritten history would slip past a
+  // from/to/pr comparison. Anchor on the two facts the base branch's own record
+  // asserts and that nothing on this branch may restate: the measurement base SHA
+  // it was taken at, and the issue that authorised the raise.
+  assert.match(
+    record.reason,
+    /1fb86826b078b7031c422cfab7c60c0182d9b8f3/,
+    "the /sign-in reason keeps the base branch's own measurement anchor — a rewritten reason is an edited decision even when from/to/pr still match",
+  );
+  assert.match(
+    record.reason,
+    /cinatra#2988/,
+    "the /sign-in reason still names the issue that authorised the raise",
+  );
 });

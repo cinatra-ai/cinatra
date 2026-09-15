@@ -583,9 +583,14 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
 
     // Multi-org mode is a precondition of the whole criterion (the shared
     // lifecycle fence refuses single-org outright, and a sibling spec in this
-    // same suite toggles that row). Set it by READ-MODIFY-WRITE so sibling
-    // keys inside `instance_identity` — closedRegistration and friends —
-    // survive; a blind overwrite would silently reconfigure the instance.
+    // same suite toggles that row). Open registration is a second precondition:
+    // this file signs FOUR identities up through the public road, and only the
+    // first of them gets in on the bootstrap exception while the instance is
+    // closed — which is what a fresh instance is. Both are set by
+    // READ-MODIFY-WRITE so the remaining keys inside `instance_identity`
+    // survive; a blind overwrite would silently reconfigure the instance. The
+    // snapshot above and the teardown below put the row back byte for byte,
+    // registration setting included.
     let identity: Record<string, unknown> = {};
     try {
       const parsed = SNAPSHOT.instanceIdentity ? JSON.parse(SNAPSHOT.instanceIdentity) : null;
@@ -595,7 +600,11 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
     } catch {
       identity = {};
     }
-    await setMetadataValue(INSTANCE_IDENTITY_KEY, { ...identity, singleOrg: false });
+    await setMetadataValue(INSTANCE_IDENTITY_KEY, {
+      ...identity,
+      singleOrg: false,
+      closedRegistration: false,
+    });
     await setArchiveActivationGate(true);
 
     for (const role of Object.keys(ACCOUNTS) as RoleName[]) {

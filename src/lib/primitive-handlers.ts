@@ -27,16 +27,17 @@ import { createSkillsPrimitiveHandlers } from "@cinatra-ai/skills/mcp-handlers";
 // create*PrimitiveHandlers() factory on its `mcp-handlers` subpath) — see
 // loadConnectorPrimitiveHandlers (src/lib/connector-mcp-registration.server.ts).
 import { loadConnectorPrimitiveHandlers } from "@/lib/connector-mcp-registration.server";
-import { loadConnectorModule } from "@/lib/connector-modules.server";
+import { addAppointmentScheduleForUser } from "@/lib/appointment-schedule-add.server";
 import { createPermissionsPrimitiveHandlers } from "@cinatra-ai/permissions/mcp-handlers";
 // Trigger handlers exposed for the deterministic passthrough.
 import { createTriggerHandlers } from "@cinatra-ai/trigger";
 import { createExtensionsPrimitiveHandlers } from "@cinatra-ai/extensions/mcp-handlers";
 
-// Structural data contract for the appointment-schedule surface — resolved by
-// SLUG through the manifest entry-module loader (the host names no connector
-// package). The export shape below is the host↔connector contract, fixed by
-// the connector package and mirrored here (cinatra#2367).
+// The appointment-schedule ADD bridge. Its implementation is SHARED with the
+// MCP registration (`@/lib/appointment-schedule-add-mcp`), because the
+// primitive is reachable on two host surfaces — this deterministic
+// passthrough registry and the MCP registration pass the chat catalog is
+// derived from — and two surfaces must never become two implementations.
 //
 // ONE NAME, ONE OWNER: the connector owns `appointment_schedule_list` (its own
 // MCP tool, spread in below through loadConnectorPrimitiveHandlers). The core
@@ -46,43 +47,6 @@ import { createExtensionsPrimitiveHandlers } from "@cinatra-ai/extensions/mcp-ha
 // bridge: a second registration under an `appointment_schedule_*` name would be
 // silently overwritten by the spread order below
 // (appointment-schedule-primitive-ownership.test.ts pins that).
-type AppointmentScheduleModule = {
-  getStoredGoogleAppointmentSchedules: (userId: string) => unknown;
-  addUserGoogleAppointmentSchedule: (
-    userId: string,
-    url: string,
-    calendarId?: string,
-  ) => Promise<unknown>;
-};
-
-const APPOINTMENT_SCHEDULE_SLUG = "google-appointment-schedules-connector";
-
-const APPOINTMENT_SCHEDULE_EXPORTS = [
-  "getStoredGoogleAppointmentSchedules",
-  "addUserGoogleAppointmentSchedule",
-] as const;
-
-async function loadAppointmentScheduleModule(): Promise<AppointmentScheduleModule> {
-  const mod = await loadConnectorModule<Partial<AppointmentScheduleModule>>(
-    APPOINTMENT_SCHEDULE_SLUG,
-  );
-  if (!mod) {
-    throw new Error(
-      `Appointment-schedule connector module not bundled (slug: ${APPOINTMENT_SCHEDULE_SLUG})`,
-    );
-  }
-  // The generic loader cannot type-check the export shape; validate it at the
-  // boundary so a renamed/removed export fails with a contract error, not an
-  // "is not a function" deep in a handler.
-  for (const member of APPOINTMENT_SCHEDULE_EXPORTS) {
-    if (typeof mod[member] !== "function") {
-      throw new Error(
-        `Appointment-schedule connector module (slug: ${APPOINTMENT_SCHEDULE_SLUG}) is missing the "${member}" export`,
-      );
-    }
-  }
-  return mod as AppointmentScheduleModule;
-}
 
 export async function collectAllPrimitiveHandlers() {
   return {
@@ -134,29 +98,16 @@ export async function collectAllPrimitiveHandlers() {
         input?: Record<string, unknown>;
         actor?: { userId?: string } | null;
       };
-      const url = typeof input?.url === "string" ? input.url : "";
-      if (!url) return { error: "A booking page URL is required." };
       // Schedules are stored PER USER, so the invoking human must be known.
       // `actor` is the TRUSTED host-built context (the run row / session), never
-      // agent-supplied `input` — there is no spoofing surface here.
-      const invokingUserId =
-        typeof actor?.userId === "string" && actor.userId.trim().length > 0
-          ? actor.userId
-          : undefined;
-      if (!invokingUserId) {
-        return {
-          error:
-            "Appointment schedules are saved per user, and this call carries no invoking user.",
-        };
-      }
-      const rawCalendarId = typeof input?.calendarId === "string" ? input.calendarId.trim() : "";
-      const schedules = await loadAppointmentScheduleModule();
-      await schedules.addUserGoogleAppointmentSchedule(
-        invokingUserId,
-        url,
-        rawCalendarId.length > 0 ? rawCalendarId : undefined,
-      );
-      return schedules.getStoredGoogleAppointmentSchedules(invokingUserId);
+      // agent-supplied `input` — there is no spoofing surface here. The MCP
+      // registration resolves the same identity from ITS trusted frame and calls
+      // the same implementation.
+      return addAppointmentScheduleForUser({
+        invokingUserId: actor?.userId,
+        url: input?.url,
+        calendarId: input?.calendarId,
+      });
     },
   };
 }

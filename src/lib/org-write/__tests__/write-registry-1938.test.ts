@@ -165,6 +165,45 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
+  it("cinatra#2928: an agents-package importer allowlisted for a run creator really names it", () => {
+    // THE RATCHET THIS PR TIGHTENS, kept honest in the other direction. Five
+    // producers were struck from the two run-creation allowlists when they moved
+    // onto the coordinator's launch; a sixth stayed listed after its module had
+    // stopped importing the creator, which is an over-broad row in the very
+    // list this slice narrows.
+    //
+    // SCOPED TO `packages/agents/`, on purpose. The `src/` rows on these two
+    // creators are the opaque store/barrel accessors — allowlisted for reaching
+    // the module at all, not for naming this export — so a whole-registry
+    // version of this check would assert something that was never true.
+    const CREATORS = new Set(["createAgentRun", "createAgentRunPendingInput"]);
+    for (const r of ORG_WRITE_REGISTRY) {
+      if (!CREATORS.has(r.exportName)) continue;
+      for (const f of r.allowedImporters ?? []) {
+        if (!f.startsWith("packages/agents/")) continue;
+        // LINES THAT RUN, only. Two of the comments in the MCP handler still
+        // explain the creator it no longer calls, and a scan that could not tell
+        // prose from code would read a module's own documentation as a use.
+        const source = readFileSync(f, "utf-8")
+          .split("\n")
+          .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+          .join("\n");
+        // AND NAMED WHERE IT COUNTS: an import or re-export specifier, or a
+        // call. A bare textual occurrence would let a string literal or a name
+        // that merely appears in code satisfy the row, and what the allowlist
+        // authorizes is reaching the creator, not mentioning it.
+        const name = String.raw`(?<![A-Za-z0-9_])${r.exportName}(?![A-Za-z0-9_])`;
+        const reaches =
+          new RegExp(String.raw`${name}\s*\(`).test(source) ||
+          new RegExp(String.raw`\b(?:import|export)\b[^;]{0,400}?${name}`, "s").test(source);
+        expect(
+          reaches,
+          `${r.exportName} allowlists ${f}, which no longer imports or calls it — a stale row in a list this slice is tightening`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred + edge-family-sweep rows (#1940 P3 flipped the new-run rows out)", () => {
     // COMBINED truth after the #2201 merge:
     // - cinatra#1940 P3 (Decision 2): the two new-run creation rows

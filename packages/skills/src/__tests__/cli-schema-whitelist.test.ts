@@ -6,10 +6,14 @@
 
 import { describe, expect, it } from "vitest";
 
+import { ROOT_SUITE_PLACEHOLDER_DB_URL } from "@/lib/test-support/placeholder-db-url";
+
 import { compileAndRegisterAgentSkillsViaPg } from "../cli.mjs";
 
 describe("compileAndRegisterAgentSkillsViaPg — schemaName whitelist", () => {
-  const VALID_PG_URL = "postgres://unused:unused@localhost:5432/unused";
+  // A syntactically valid connection string that points at no database: the
+  // whitelist rejects the schema name before anything opens a socket.
+  const VALID_PG_URL = ROOT_SUITE_PLACEHOLDER_DB_URL;
 
   it("rejects schemaName containing SQL injection metacharacters", async () => {
     const result = await compileAndRegisterAgentSkillsViaPg({

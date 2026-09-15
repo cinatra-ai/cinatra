@@ -1,0 +1,4 @@
+2026-09-07T16:50:11.4821730Z ##[group]Run pnpm build
+2026-09-07T16:50:11.4824550Z ##[endgroup]
+2026-09-07T16:52:03.1190220Z Type error: Property 'foo' does not exist on type 'Bar'.
+2026-09-07T16:52:03.1191110Z ##[error]Process completed with exit code 1.

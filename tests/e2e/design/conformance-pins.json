@@ -6,38 +6,36 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "06662cd06b4878c8ff30145a0bc2a7baddc5fadea21a13c739e6a341ba6e61f7",
-      "specContentHash": "sha256:105ce0befd2464c6ac32058a6455abdd96c3e375480e2aba46736a114c075bc1"
+      "manifestSha256": "7bd7505f5cb4b60ec77975718ed7759a62b78179bbcaeee6200373c9a780de8b",
+      "specContentHash": "sha256:5e39a2f6b4360194511415a8bcfdbef45e5abcf3009d09ce0c45357ce327c025"
     },
     {
       "id": "app-components",
       "file": "app-components.json",
       "source": "repo",
-      "manifestSha256": "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
-      "specContentHash": "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e"
+      "manifestSha256": "ddfcd50b57cea849063d6bb067c3a710169b5f48282154b6397f3ba1f6de9928",
+      "specContentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "$specCommit": "design@ca118d4e — specs/app-extensions.html version 0.13.2 (epic cinatra#2371 S1, adopted by cinatra#2372). Carries the design#108 detail-modal footer removal ratified by the owner ruling on cinatra#2406, the design#111 copy reconciliation, and the design#114 correction that makes the available-card exemplar an access-target kind (connector) — the platform accepts an install access target only for connector/artifact/workflow, so the previous kind:agent exemplar declared an unsatisfiable `install -> panel-open` action. Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim. The prior staged gap is closed: the spec's extension-install-panel surface now has its in-app counterpart (mkt-install S2, cinatra#2373), so both it and the available-card install action are driveable at this pin.",
-      "manifestSha256": "3a7abe90f988be62252b357e6a1af4c24b4c2c6c28ce7f45298b2450559ad196",
-      "specContentHash": "sha256:797c44f7b2ed706c74aef0cc4a949352cb1625d5eb9e856c42e25460fe4e06fd"
+      "manifestSha256": "c7cd9ef550e35ed57299bcd5c0a3c9819f7fc91e1f1f66632d9389428f05ddff",
+      "specContentHash": "sha256:ee7de0e23e82e89543b00431472fb7978567277006076f692cd7e865880e179a"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
-      "source": "repo",
-      "$specCommit": "design@3d33cc800 — specs/app-connectors.html version 0.7.0 (epic cinatra#2353, adopted by cinatra#2355). Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-connectors.html`; the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth, and the copy under manifests/ is those bytes verbatim.",
-      "manifestSha256": "b0aada80a8209f0a272142786a50c334e3e7b18b891859218ffa56522936a897",
-      "specContentHash": "sha256:9f28d508390afd63dc51c69bc80192e9a33d739726c93bb3ceaeff60b9cf93af"
+      "source": "published",
+      "manifestSha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
+      "specContentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
     },
     {
       "id": "app-notifications",
       "file": "app-notifications.json",
       "source": "repo",
-      "manifestSha256": "542e5051e58f2cb3c0af5b7a31be6d8100f747fd088f0a6f25af67d8b5289756",
-      "specContentHash": "sha256:e2ef9a2f2f8420eff3d8d8978cf6d5289efd8b6e00283dadd28e07e5b8a2bfc3"
+      "manifestSha256": "1538d3091aa1e752730d48d2123d4d58bc1a0d90e181bd4c746c44708ed44e11",
+      "specContentHash": "sha256:e27b22817cac8b427e150739674caa0fa4d96bb9fa46a7b846ff46261cb95790"
     }
   ]
 }

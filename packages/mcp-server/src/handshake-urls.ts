@@ -22,3 +22,29 @@ export function buildMcpHandshakeUrls(handshakeBasePath: string) {
     accountSecurity: `${base}/account/security`,
   };
 }
+
+// Base-path normalizer shared by the auth-plugin factory and the mount builder.
+// Lives in this LEAF module (not in the mount barrel) so the factory can be
+// reached without pulling the barrel's runtime/UI graph: the /sign-in route
+// mounts the auth plugins and nothing else.
+//
+// Strip trailing "/" via a LINEAR char-index scan. The anchored greedy
+// `/\/+$/` is flagged polynomial-ReDoS on slash-heavy input
+// (CodeQL js/polynomial-redos); this mirrors the trim already used in
+// mcp-public-base-url-shape.mjs and is O(n) with no backtracking.
+function trimTrailingSlash(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return value.slice(0, end);
+}
+
+export function normalizeMcpBasePath(path: string | undefined, fallback: string) {
+  const value = (path ?? fallback).trim();
+  if (!value) {
+    return fallback;
+  }
+
+  return value.startsWith("/")
+    ? trimTrailingSlash(value) || "/"
+    : `/${trimTrailingSlash(value)}`;
+}

@@ -34,8 +34,12 @@ import {
 } from "../renderable-views/index";
 
 describe("the registry is one card per interaction kind (§IX)", () => {
-  it("declares exactly the four interaction kinds the spec's matrix rows fix", () => {
+  it("declares exactly the five interaction kinds the vocabulary fixes", () => {
     expect([...LIFECYCLE_CARD_KINDS].sort()).toEqual([
+      // cinatra#2928 — the agent pausing to ask for input. The one lifecycle
+      // moment this vocabulary had no name for, so every surface told it apart
+      // from a review by pattern-matching the shape of the pause.
+      "agent_hitl_screen",
       "artifact_review_gate",
       "recommendation_hold",
       "trigger_schedule_proposal",
@@ -43,14 +47,24 @@ describe("the registry is one card per interaction kind (§IX)", () => {
     ]);
   });
 
-  it("every kind declares how it reaches a surface, and only the hold is an interrupt", () => {
+  it("every kind declares how it reaches a surface, and an interrupt is a BLOCKED run", () => {
     for (const kind of LIFECYCLE_CARD_KINDS) {
-      expect(["data_part", "interrupt"]).toContain(LIFECYCLE_CARD_CARRIAGE[kind]);
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the record is two axes now —
+      // `represent` is the one this assertion has always been about (how the
+      // kind reaches a surface), and `canonical` is the one the wave adds
+      // (which fact decides the card is live). The membership it asserts is
+      // unchanged; only the field it reads it from is named.
+      expect(["data_part", "interrupt"]).toContain(
+        LIFECYCLE_CARD_CARRIAGE[kind].represent,
+      );
     }
     const interrupts = LIFECYCLE_CARD_KINDS.filter(
-      (k) => LIFECYCLE_CARD_CARRIAGE[k] === "interrupt",
+      (k) => LIFECYCLE_CARD_CARRIAGE[k].represent === "interrupt",
     );
-    expect(interrupts).toEqual(["recommendation_hold"]);
+    // The rule is WHY, not how many: the run genuinely waits on the answer, so
+    // a fire-and-forget data part would be the wrong frame. The hold parks the
+    // run before it starts; the HITL screen parks it mid-flight (cinatra#2928).
+    expect([...interrupts].sort()).toEqual(["agent_hitl_screen", "recommendation_hold"]);
   });
 
   it("every DATA_PART kind is registered in the renderable-view schema registry", () => {
@@ -58,9 +72,11 @@ describe("the registry is one card per interaction kind (§IX)", () => {
       expect(KNOWN_RENDERABLE_VIEW_TYPES).toContain(viewType);
       expect(isLifecycleDataPartViewType(viewType)).toBe(true);
     }
-    // The interrupt-carried kind is deliberately NOT a registered view.
-    expect(KNOWN_RENDERABLE_VIEW_TYPES).not.toContain("recommendation_hold");
-    expect(isLifecycleDataPartViewType("recommendation_hold")).toBe(false);
+    // The interrupt-carried kinds are deliberately NOT registered views.
+    for (const kind of ["recommendation_hold", "agent_hitl_screen"] as const) {
+      expect(KNOWN_RENDERABLE_VIEW_TYPES).not.toContain(kind);
+      expect(isLifecycleDataPartViewType(kind)).toBe(false);
+    }
   });
 });
 
@@ -94,7 +110,11 @@ describe("SURFACE PARITY — every host draws every card (owner ruling 2026-08-1
     for (const host of LIFECYCLE_CARD_HOSTS) {
       expect(lifecycleViewTypesForHost(host)).not.toContain("recommendation_hold");
     }
-    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
+    // AMENDED BY cinatra#2930: two axes now — this assertion is about the
+    // wire one, which is unchanged. Its canonical carriage is the run's own
+    // row, which is what makes the mount survive a reload with no envelope.
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent).toBe("interrupt");
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical).toBe("run_state");
   });
 
   it("exports no per-(kind, host) presence table at all", async () => {

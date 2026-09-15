@@ -176,3 +176,443 @@ describe("docker-compose nango-server service — no env_file/environment overla
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// NANGO_SECRET_KEY fill (cinatra#2501 follow-up).
+//
+// The Secrets step of the setup wizard is env-managed the moment .env.local
+// carries NANGO_SECRET_KEY; without it the screen shows a raw psql read the
+// operator must run by hand — which an automated setup cannot do (and must not
+// do by eye, because the value is a live API credential). The generator now
+// performs THAT EXACT read against the bundled dev Nango and writes the value
+// in, once, quietly, and never prints it.
+//
+// These tests pin, with a FAKE executor (no docker, no psql, no real secret):
+//  1. absent/commented/empty key -> the value is written into .env.local;
+//  2. the value NEVER appears in any log line (the whole point);
+//  3. an existing value — in the file OR in the shell env — is KEPT and the
+//     read is not even attempted (idempotent: a second run changes nothing);
+//  4. nango-db unreachable / empty / non-key output -> left unset, message on
+//     STDERR, and the caller keeps going (the wizard then still shows its
+//     manual command);
+//  5. a NON-LOCAL NANGO_SERVER_URL is never served the local container's key;
+//  6. the LAST `NANGO_SECRET_KEY` line is replaced IN PLACE — commented example
+//     line included — because last-stated is the line the app reads;
+//  7. `--quiet` silences the status line on stdout.
+// ---------------------------------------------------------------------------
+
+import * as os from "node:os";
+import {
+  NANGO_SECRET_KEY_QUERY,
+  hasNangoSecretKey,
+  applySecretKeyToEnvLocal,
+  fillNangoSecretKey,
+} from "../gen-nango-env.mjs";
+
+// UUID-v4 shaped, like every key nango-server accepts — and not a real one.
+const FAKE_SECRET = "00000000-0000-4000-8000-000000000000";
+const OTHER_FAKE_SECRET = "11111111-1111-4111-8111-111111111111";
+
+function makeEnvLocal(contents) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gen-nango-env-"));
+  const file = path.join(dir, ".env.local");
+  fs.writeFileSync(file, contents);
+  return file;
+}
+
+function recorder() {
+  const out = [];
+  const err = [];
+  return {
+    out,
+    err,
+    log: (m) => out.push(String(m)),
+    warn: (m) => err.push(String(m)),
+    all: () => out.concat(err).join("\n"),
+  };
+}
+
+// Every call in this file injects an executor and an empty process env: the
+// tests must never reach docker, and must never be steered by the shell that
+// happens to run them.
+function fill(overrides) {
+  return fillNangoSecretKey({ processEnv: {}, log: () => {}, warn: () => {}, ...overrides });
+}
+
+describe("gen-nango-env — NANGO_SECRET_KEY read query", () => {
+  it("is the EXACT read .env.example and the Secrets screen document", () => {
+    expect(NANGO_SECRET_KEY_QUERY).toBe(
+      "SELECT secret_key FROM _nango_environments WHERE name='dev' LIMIT 1;",
+    );
+    const example = fs.readFileSync(path.join(REPO_ROOT, ".env.example"), "utf8");
+    expect(example).toContain(NANGO_SECRET_KEY_QUERY);
+    // The wizard states the same read in JSX: its quotes are entity-escaped and
+    // the statement is wrapped across source lines. Unescape and collapse the
+    // whitespace, then pin the WHOLE command — a screen that changed the
+    // environment name or dropped `LIMIT 1` must fail this test, which pinning
+    // fragments would not catch.
+    const page = fs.readFileSync(
+      path.join(REPO_ROOT, "src/app/setup/secrets/page.tsx"),
+      "utf8",
+    );
+    const pageText = page
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ");
+    expect(pageText).toContain(
+      `docker compose exec -T nango-db psql -U nango -d nango -tAc "${NANGO_SECRET_KEY_QUERY}"`,
+    );
+  });
+});
+
+describe("gen-nango-env — hasNangoSecretKey", () => {
+  it("is false when absent, commented, or empty (dotenv semantics)", () => {
+    expect(hasNangoSecretKey(makeEnvLocal(""))).toBe(false);
+    expect(hasNangoSecretKey(makeEnvLocal("# NANGO_SECRET_KEY=\n"))).toBe(false);
+    expect(hasNangoSecretKey(makeEnvLocal("#NANGO_SECRET_KEY=abc\n"))).toBe(false);
+    expect(hasNangoSecretKey(makeEnvLocal("NANGO_SECRET_KEY=\n"))).toBe(false);
+    expect(hasNangoSecretKey(makeEnvLocal("NANGO_SECRET_KEY=   \n"))).toBe(false);
+    // An inline comment is dotenv syntax, not a value.
+    expect(hasNangoSecretKey(makeEnvLocal("NANGO_SECRET_KEY= # filled by the setup\n"))).toBe(
+      false,
+    );
+    expect(hasNangoSecretKey(makeEnvLocal('NANGO_SECRET_KEY="" # empty\n'))).toBe(false);
+    // LAST stated wins — the reader contract the app itself follows.
+    expect(hasNangoSecretKey(makeEnvLocal("NANGO_SECRET_KEY=old\nNANGO_SECRET_KEY=\n"))).toBe(
+      false,
+    );
+  });
+
+  it("is true for an uncommented, non-empty value — `export ` included", () => {
+    expect(hasNangoSecretKey(makeEnvLocal("NANGO_SECRET_KEY=abc\n"))).toBe(true);
+    expect(hasNangoSecretKey(makeEnvLocal("export NANGO_SECRET_KEY=abc\n"))).toBe(true);
+    expect(hasNangoSecretKey(makeEnvLocal("A=1\nNANGO_SECRET_KEY = abc \nB=2\n"))).toBe(true);
+  });
+});
+
+describe("gen-nango-env — applySecretKeyToEnvLocal", () => {
+  it("replaces the commented example line IN PLACE (never duplicated)", () => {
+    const after = applySecretKeyToEnvLocal("A=1\n# NANGO_SECRET_KEY=\nB=2\n", FAKE_SECRET);
+    expect(after).toBe(`A=1\nNANGO_SECRET_KEY=${FAKE_SECRET}\nB=2\n`);
+    expect(after.match(/NANGO_SECRET_KEY=/g)).toHaveLength(1);
+  });
+
+  it("replaces the LAST key line, because last-stated is what the app reads", () => {
+    expect(
+      applySecretKeyToEnvLocal("# NANGO_SECRET_KEY=\nNANGO_SECRET_KEY=\n", FAKE_SECRET),
+    ).toBe(`# NANGO_SECRET_KEY=\nNANGO_SECRET_KEY=${FAKE_SECRET}\n`);
+    expect(applySecretKeyToEnvLocal("export NANGO_SECRET_KEY=\n", FAKE_SECRET)).toBe(
+      `NANGO_SECRET_KEY=${FAKE_SECRET}\n`,
+    );
+  });
+
+  it("appends with a trailing newline when the key is absent entirely", () => {
+    expect(applySecretKeyToEnvLocal("A=1\n", FAKE_SECRET)).toBe(
+      `A=1\nNANGO_SECRET_KEY=${FAKE_SECRET}\n`,
+    );
+    expect(applySecretKeyToEnvLocal("A=1", FAKE_SECRET)).toBe(
+      `A=1\nNANGO_SECRET_KEY=${FAKE_SECRET}\n`,
+    );
+  });
+});
+
+describe("gen-nango-env — fillNangoSecretKey", () => {
+  it("writes the value read from nango-db and NEVER logs it", () => {
+    const file = makeEnvLocal("A=1\n# NANGO_SECRET_KEY=\n");
+    const rec = recorder();
+    const calls = [];
+    const result = fill({
+      envLocalPath: file,
+      exec: (args) => {
+        calls.push(args);
+        return { ok: true, stdout: `${FAKE_SECRET}\n` };
+      },
+      log: rec.log,
+      warn: rec.warn,
+    });
+
+    expect(result.status).toBe("written");
+    expect(fs.readFileSync(file, "utf8")).toBe(`A=1\nNANGO_SECRET_KEY=${FAKE_SECRET}\n`);
+    expect(rec.all()).not.toContain(FAKE_SECRET);
+    expect(rec.out.join("\n")).toContain("NANGO_SECRET_KEY: written");
+    // The read is the documented one, run through `docker compose … exec -T nango-db psql`.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("compose");
+    expect(calls[0].join(" ")).toContain("exec -T nango-db psql -U nango -d nango -tAc");
+    expect(calls[0].at(-1)).toBe(NANGO_SECRET_KEY_QUERY);
+  });
+
+  it("writes 0600 and never widens an existing .env.local's mode", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    fs.chmodSync(file, 0o600);
+    fill({ envLocalPath: file, exec: () => ({ ok: true, stdout: FAKE_SECRET }) });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("pins the read to the resolved compose project so a lane reads ITS nango-db", () => {
+    for (const line of ["COMPOSE_PROJECT_NAME=lane-x\n", "export COMPOSE_PROJECT_NAME=lane-x # lane\n"]) {
+      const calls = [];
+      fill({
+        envLocalPath: makeEnvLocal(line),
+        exec: (args) => {
+          calls.push(args);
+          return { ok: true, stdout: FAKE_SECRET };
+        },
+      });
+      expect(calls[0].join(" ")).toContain("-p lane-x");
+    }
+  });
+
+  it("refuses a COMPOSE_PROJECT_NAME compose itself would reject (never trims into another project)", () => {
+    for (const stated of [" lane-x ", "Lane-X", "lane x", "-lane"]) {
+      const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+      const rec = recorder();
+      const result = fill({
+        envLocalPath: file,
+        processEnv: { COMPOSE_PROJECT_NAME: stated },
+        exec: () => {
+          throw new Error("must not run");
+        },
+        log: rec.log,
+        warn: rec.warn,
+      });
+      expect(result.status).toBe("not-canonical");
+      expect(fs.readFileSync(file, "utf8")).toBe("# NANGO_SECRET_KEY=\n");
+      expect(rec.err.join("\n")).toContain("left unset");
+    }
+  });
+
+  it("reads the project the LAUNCHER exports for a file-stated name, not the raw text", () => {
+    // scripts/dev-compose-env.mjs resolves .env.local's COMPOSE_PROJECT_NAME
+    // through readEnvFileValue and EXPORTS that value into docker's own env —
+    // docker never reads .env.local itself. So the parsed value is the project
+    // the lane's containers actually run under, and this read must use it.
+    const calls = [];
+    fill({
+      envLocalPath: makeEnvLocal('COMPOSE_PROJECT_NAME=" lane-x "\n# NANGO_SECRET_KEY=\n'),
+      exec: (args) => {
+        calls.push(args);
+        return { ok: true, stdout: FAKE_SECRET };
+      },
+    });
+    expect(calls[0].join(" ")).toContain("-p lane-x");
+
+    // A file value that states nothing leaves the project unpinned — compose
+    // derives it from the directory basename, exactly as the launcher does.
+    const unscoped = [];
+    fill({
+      envLocalPath: makeEnvLocal('COMPOSE_PROJECT_NAME="   "\n# NANGO_SECRET_KEY=\n'),
+      exec: (args) => {
+        unscoped.push(args);
+        return { ok: true, stdout: FAKE_SECRET };
+      },
+    });
+    expect(unscoped[0]).not.toContain("-p");
+  });
+
+  it("reports write-failed — never throws — when .env.local cannot be replaced", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    const dir = path.dirname(file);
+    fs.chmodSync(dir, 0o500); // readable, not writable: the temp create fails
+    const rec = recorder();
+    let result;
+    try {
+      expect(() => {
+        result = fill({
+          envLocalPath: file,
+          exec: () => ({ ok: true, stdout: FAKE_SECRET }),
+          log: rec.log,
+          warn: rec.warn,
+        });
+      }).not.toThrow();
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    expect(result.status).toBe("write-failed");
+    expect(fs.readFileSync(file, "utf8")).toBe("# NANGO_SECRET_KEY=\n");
+    expect(rec.all()).not.toContain(FAKE_SECRET);
+    expect(fs.readdirSync(dir)).toEqual([".env.local"]); // no stray temp file
+  });
+
+  it("leaves no temp file behind on a successful write either", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    fill({ envLocalPath: file, exec: () => ({ ok: true, stdout: FAKE_SECRET }) });
+    expect(fs.readdirSync(path.dirname(file))).toEqual([".env.local"]);
+  });
+
+  it("keeps an existing non-empty value and never attempts the read (idempotent)", () => {
+    const before = "A=1\nNANGO_SECRET_KEY=already-set\n";
+    const file = makeEnvLocal(before);
+    const rec = recorder();
+    let called = false;
+    const result = fill({
+      envLocalPath: file,
+      exec: () => {
+        called = true;
+        return { ok: true, stdout: FAKE_SECRET };
+      },
+      log: rec.log,
+      warn: rec.warn,
+    });
+
+    expect(result.status).toBe("kept");
+    expect(called).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(rec.out.join("\n")).toContain("NANGO_SECRET_KEY: kept");
+  });
+
+  it("keeps a key supplied by the SHELL env (it overrides the file for the app)", () => {
+    const before = "# NANGO_SECRET_KEY=\n";
+    const file = makeEnvLocal(before);
+    const result = fill({
+      envLocalPath: file,
+      processEnv: { NANGO_SECRET_KEY: "from-the-shell" },
+      exec: () => {
+        throw new Error("must not run");
+      },
+    });
+    expect(result.status).toBe("kept");
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("a second run after a write changes nothing", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    expect(
+      fill({ envLocalPath: file, exec: () => ({ ok: true, stdout: FAKE_SECRET }) }).status,
+    ).toBe("written");
+    const afterFirst = fs.readFileSync(file, "utf8");
+    expect(
+      fill({ envLocalPath: file, exec: () => ({ ok: true, stdout: OTHER_FAKE_SECRET }) }).status,
+    ).toBe("kept");
+    expect(fs.readFileSync(file, "utf8")).toBe(afterFirst);
+  });
+
+  it("never serves a NON-LOCAL Nango the bundled container's key", () => {
+    for (const source of [
+      { file: "NANGO_SERVER_URL=https://api.nango.example\n# NANGO_SECRET_KEY=\n", env: {} },
+      { file: "# NANGO_SECRET_KEY=\n", env: { NANGO_SERVER_URL: "https://api.nango.example" } },
+    ]) {
+      const file = makeEnvLocal(source.file);
+      const rec = recorder();
+      const result = fill({
+        envLocalPath: file,
+        processEnv: source.env,
+        exec: () => {
+          throw new Error("must not run");
+        },
+        log: rec.log,
+        warn: rec.warn,
+      });
+      expect(result.status).toBe("not-local");
+      expect(fs.readFileSync(file, "utf8")).toBe(source.file);
+      expect(rec.err.join("\n")).toContain("not a local Nango — left unset");
+    }
+  });
+
+  it("leaves the key unset and says so on STDERR when nango-db is not reachable", () => {
+    const before = "# NANGO_SECRET_KEY=\n";
+    const file = makeEnvLocal(before);
+    const rec = recorder();
+    const result = fill({
+      envLocalPath: file,
+      exec: () => ({ ok: false, stdout: "" }),
+      log: rec.log,
+      warn: rec.warn,
+    });
+
+    expect(result.status).toBe("unreachable");
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(rec.err.join("\n")).toContain("nango-db not reachable — left unset");
+    expect(rec.out.join("\n")).not.toContain("nango-db not reachable");
+  });
+
+  it("treats empty or non-key output as not reachable (psql error text is not a key)", () => {
+    for (const stdout of [
+      "",
+      "   \n",
+      "psql: error: no such container\n",
+      "ERROR:\n",
+      "not-a-uuid\n",
+    ]) {
+      const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+      const result = fill({ envLocalPath: file, exec: () => ({ ok: true, stdout }) });
+      expect(result.status).toBe("unreachable");
+      expect(fs.readFileSync(file, "utf8")).toBe("# NANGO_SECRET_KEY=\n");
+    }
+  });
+
+  it("an executor that throws is contained (the setup is never failed for this)", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    const rec = recorder();
+    expect(() =>
+      fill({
+        envLocalPath: file,
+        exec: () => {
+          throw new Error("docker not on PATH");
+        },
+        log: rec.log,
+        warn: rec.warn,
+      }),
+    ).not.toThrow();
+    expect(fs.readFileSync(file, "utf8")).toBe("# NANGO_SECRET_KEY=\n");
+    expect(rec.err.join("\n")).toContain("nango-db not reachable — left unset");
+  });
+
+  it("does not overwrite a key written WHILE the slow docker read was running", () => {
+    const file = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    const rec = recorder();
+    const result = fill({
+      envLocalPath: file,
+      exec: () => {
+        // The operator finishes the wizard's Secrets step mid-read.
+        fs.writeFileSync(file, "NANGO_SECRET_KEY=entered-by-hand\n");
+        return { ok: true, stdout: FAKE_SECRET };
+      },
+      log: rec.log,
+      warn: rec.warn,
+    });
+    expect(result.status).toBe("kept");
+    expect(fs.readFileSync(file, "utf8")).toBe("NANGO_SECRET_KEY=entered-by-hand\n");
+    expect(rec.all()).not.toContain(FAKE_SECRET);
+  });
+
+  it("does nothing when .env.local does not exist", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gen-nango-env-"));
+    const file = path.join(dir, ".env.local");
+    const result = fill({
+      envLocalPath: file,
+      exec: () => {
+        throw new Error("must not run");
+      },
+    });
+    expect(result.status).toBe("no-env-file");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("--quiet silences the status line on stdout (the stderr warning still speaks)", () => {
+    const written = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    const recA = recorder();
+    fill({
+      envLocalPath: written,
+      exec: () => ({ ok: true, stdout: FAKE_SECRET }),
+      quiet: true,
+      log: recA.log,
+      warn: recA.warn,
+    });
+    expect(recA.out).toEqual([]);
+    expect(fs.readFileSync(written, "utf8")).toContain(`NANGO_SECRET_KEY=${FAKE_SECRET}`);
+
+    const down = makeEnvLocal("# NANGO_SECRET_KEY=\n");
+    const recB = recorder();
+    fill({
+      envLocalPath: down,
+      exec: () => ({ ok: false, stdout: "" }),
+      quiet: true,
+      log: recB.log,
+      warn: recB.warn,
+    });
+    expect(recB.out).toEqual([]);
+    expect(recB.err.join("\n")).toContain("nango-db not reachable — left unset");
+  });
+});

@@ -148,7 +148,7 @@ function ModeTabContent({
         <AlertDescription>{modeDescription}</AlertDescription>
       </Alert>
 
-      <Card className="border-line bg-surface backdrop-blur-none rounded-card">
+      <Card className="border-line bg-surface backdrop-blur-none">
         <CardHeader>
           <CardTitle>Configuration source</CardTitle>
           <CardDescription className="leading-6">

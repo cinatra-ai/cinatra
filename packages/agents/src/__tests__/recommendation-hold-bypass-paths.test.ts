@@ -52,6 +52,24 @@ const markTriggerReleased = vi.fn();
 const syncRunTriggerPmTask = vi.fn(async (input?: unknown) => void input);
 const deleteRunTriggerPmTask = vi.fn(async (input?: unknown) => void input);
 
+// cinatra#2981 — the trigger claim reaches Postgres for its advisory lock, and
+// this tier has no database. The pass-through preserves the CONTRACT the claim
+// gives its callers — the body decides on the row as read at claim time — while
+// the row itself keeps coming from this file's own mocked store.
+vi.mock("../trigger-claim", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../trigger-claim")>();
+  const { readRunTriggerByRunId } = await import("../trigger-store");
+  return {
+    ...actual,
+    withTriggerClaim: async (
+      runId: string,
+      body: (
+        live: Awaited<ReturnType<typeof readRunTriggerByRunId>>,
+      ) => Promise<unknown>,
+    ) => body(await readRunTriggerByRunId(runId)),
+  };
+});
+
 vi.mock("../recommendation-hold", () => ({
   maybeHoldRunForRecommendation: (...a: unknown[]) => maybeHoldRunForRecommendation(...a),
   readRecommendationParkForRun: (...a: unknown[]) => readRecommendationParkForRun(...a),
@@ -151,7 +169,14 @@ beforeEach(() => {
   resolveTemplateVisibilityActor.mockResolvedValue({});
   readAgentTemplateBySlug.mockResolvedValue(TEMPLATE);
   readAgentTemplateById.mockResolvedValue(TEMPLATE);
-  readAgentRunById.mockResolvedValue({ ...CREATED_RUN });
+  // READ AND CAS MUST AGREE (cinatra#3054, second convergence round). The CAS
+  // stub below advances `runStatus`; this read used to answer a FROZEN
+  // `pending_input` regardless, so a second call on the same run saw a status
+  // the row had already left. That is not a state the real store can produce —
+  // a run whose arm landed reads `armed` — and the frozen read made the
+  // scheduled/recurring case below look like an arm decided on a pending run
+  // that never settled. The read now answers the same row the CAS walks.
+  readAgentRunById.mockImplementation(async () => ({ ...CREATED_RUN, status: runStatus }));
   createAgentRunPendingInput.mockResolvedValue({ ...CREATED_RUN });
   // cinatra#2523: CAS-shaped, not always-succeed. The immediate branch now
   // walks a ladder of legal `from` states (pending_trigger → pending_input →

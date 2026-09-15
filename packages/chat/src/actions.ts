@@ -415,7 +415,11 @@ export async function renameChatThread(threadId: string, newTitle: string): Prom
  *     the connector delivers out of band;
  *   - @cinatra / no mention → the host Cinatra reply;
  *   - tagged participants (no explicit assistant mention) → broadcast;
- *   - an @-token that resolves to no in-audience assistant → honest no-responder.
+ *   - a scoped ref that missed the registry (the canonical explicit
+ *     agent-dispatch form) → the host reply streams, so the request reaches the
+ *     server-side explicit-dispatch pre-router (cinatra#2820);
+ *   - an @-token that is neither an assistant nor an agent ref (a delisted
+ *     handle, a human tag) → honest no-responder.
  */
 export async function resolveMessageRouting(
   message: string,

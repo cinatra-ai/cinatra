@@ -43,86 +43,20 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // here for that agent dir, exactly like a connector; the relative-import rewrite
 // keeps the vendored primitives clear of the `@/` import-ban (which is itself
 // kind-agnostic). Nothing below is connector-specific.
+//
+// RETIRED KINDS — DECISION 407 A (2026-09-13, cinatra-ai/cinatra#3471, epic
+// #2926). Connectors render the setup page themselves and artifacts render the
+// artifact view themselves, and the host shares its primitives with extension
+// bundles at RUN TIME (the way React is shared) — so copying primitives INTO
+// those packages is no longer the road, and the copy check is retired for both
+// kinds: every kind:connector and kind:artifact entry is gone from this
+// manifest. The copies those packages still carry are recorded by the
+// shrink-only baseline of
+// scripts/extensions/self-rendering-extensions-border-gate.mjs — the ONLY
+// record of them from now on — so a change to a primitive no longer forces a
+// release of every copying package. Re-adding an entry of either kind fails
+// scripts/extensions/__tests__/vendor-extension-primitives.test.mjs.
 const VENDOR_MANIFEST = [
-  // google-calendar-connector shed its appointment-schedule form with the
-  // extraction (cinatra#2367): field/input-group/label/separator/input/textarea
-  // went with it, leaving `button` as the only design-registry primitive the
-  // retained connection UI (Connect/Disconnect + its confirm dialog) imports
-  // directly. `dialog.tsx` / `link.tsx` are the connector's OWN components, not
-  // registry items, so they are outside this channel.
-  {
-    extensionDir: "extensions/cinatra-ai/google-calendar-connector",
-    uiItems: ["button"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/twenty-connector",
-    uiItems: ["card"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/linkedin-connector",
-    uiItems: ["alert"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/drupal-assistant-connector",
-    uiItems: ["badge", "button", "field", "input"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/tailscale-connector",
-    uiItems: ["alert", "badge", "button", "card", "field", "input-group"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/crm-connector",
-    uiItems: ["field", "input-group"],
-  },
-  // gemini-connector converted its setup/settings UI to the schema-config DSL
-  // (0.1.4, uiSurface "schema-config") — same conversion as openai-connector
-  // below; it no longer ships or imports any design-registry primitives.
-  {
-    extensionDir: "extensions/cinatra-ai/github-connector",
-    uiItems: ["button", "input", "label"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/gmail-connector",
-    uiItems: ["alert", "button"],
-  },
-  // apify-connector converted its setup UI to the schema-config DSL (0.1.4,
-  // uiSurface "schema-config") — no vendored primitives remain.
-  {
-    extensionDir: "extensions/cinatra-ai/mcp-client-connector",
-    uiItems: ["alert", "button"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/wordpress-mcp-connector",
-    uiItems: ["badge", "button", "input-group"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/drupal-mcp-connector",
-    uiItems: ["alert", "badge", "button", "field", "input", "input-group", "label"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/wordpress-assistant-connector",
-    uiItems: ["badge", "button", "field", "input"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/a2a-server-connector",
-    uiItems: ["alert", "button", "field", "input", "input-group"],
-  },
-  {
-    extensionDir: "extensions/cinatra-ai/nango-connector",
-    uiItems: ["alert", "button", "card", "field", "input", "input-group", "label"],
-  },
-  // apollo-connector converted its setup/settings UI to the schema-config DSL
-  // (0.1.4, uiSurface "schema-config"); its remaining vendored primitives are
-  // the people-search widget's table stack (paginated-table closure) + input/label.
-  {
-    extensionDir: "extensions/cinatra-ai/apollo-connector",
-    uiItems: ["input", "label", "paginated-table"],
-  },
-  // openai-connector converted its setup/settings UI to the schema-config DSL
-  // (0.1.6, uiSurface "schema-config"): the host renders from configSchema, so
-  // the connector no longer ships or imports any design-registry primitives.
-  // Its VENDOR_MANIFEST entry (button/input/label/textarea) was removed to
-  // match — the provenance gate would otherwise fail on the now-absent files.
   // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): list-curator-agent
   // relocated its two HITL field-renderer components into its own repo; they
   // import these design-registry primitives, vendored the same kind-agnostic
@@ -148,6 +82,24 @@ const VENDOR_MANIFEST = [
   },
 ];
 
+// registryDependencies are namespaced (`@cinatra-ai/label`) so a consumer's
+// shadcn CLI resolves them in OUR registry instead of its default one; the item
+// names themselves stay bare, so strip the namespace when walking the closure.
+// STRICT on purpose: a bare or foreign-namespaced entry is exactly the defect
+// this fix removes (a bare name resolves against the CONSUMER's default
+// registry, which is how upstream's `utils` item overwrote ours), so it must
+// fail loudly here rather than resolve to a plausible-looking local item.
+export const localItemName = (dep) => {
+  const match = /^@cinatra-ai\/([A-Za-z0-9._-]+)$/.exec(dep);
+  if (!match) {
+    throw new Error(
+      `registryDependencies entry ${dep} is not namespaced as @cinatra-ai/<item>; ` +
+        "a bare or foreign namespace resolves against the consumer's default registry",
+    );
+  }
+  return match[1];
+};
+
 // Resolve the transitive registry:ui closure of `directItems` from
 // registry.json's registryDependencies (excluding the `utils` lib, which is
 // always vendored separately). A vendored field.tsx imports ./label + ./separator
@@ -163,7 +115,7 @@ function resolveUiClosure(directItems) {
     const name = queue.shift();
     if (name === "utils" || seen.has(name)) continue;
     seen.add(name);
-    for (const dep of regDeps.get(name) ?? []) queue.push(dep);
+    for (const dep of regDeps.get(name) ?? []) queue.push(localItemName(dep));
   }
   return [...seen].sort();
 }

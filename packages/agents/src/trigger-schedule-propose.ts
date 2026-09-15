@@ -24,24 +24,67 @@ import "server-only";
 import {
   mintTriggerScheduleProposalToken,
   verifyTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalTokenDetailed,
   type ProposalSchedule,
 } from "@/lib/trigger-schedule-proposal-token";
-import { readAgentTemplateById } from "./store";
+import { readAgentTemplateById, readAgentTemplateByPackageName } from "./store";
+// THE SAME NARROW ALIAS `agent_run` applies to a package name, imported rather
+// than re-implemented so a proposal and a run resolve one name the same way.
+import { aliasPackageNameToCanonicalScope } from "./package-name-alias";
 
 // ---------------------------------------------------------------------------
 // PROPOSE
 // ---------------------------------------------------------------------------
 
 export type ProposeScheduleInput = {
-  templateId: string;
+  /**
+   * THE AGENT, NAMED THE WAY THE CALLER CAN NAME IT (cinatra#3052).
+   *
+   * EXACTLY ONE of these is required, and the XOR is the point rather than a
+   * convenience: accepting both silently risks proposing a schedule for the
+   * wrong agent when the two disagree — the same rule, for the same reason,
+   * `agent_run` applies to its own pair.
+   *
+   * `packageName` exists because a template ID is not a handle every caller
+   * HAS. Inside a third-party application the assistant's closed toolbox holds
+   * no primitive that yields one — the one start it holds takes a package name
+   * and deliberately refuses ids — so a proposal that could only be addressed
+   * by ID was a proposal that surface could never make, and the person stating
+   * a schedule there read the producer's one fixed refusal instead of seeing
+   * their card. Resolution happens HERE, server-side, against the same store
+   * the run start resolves against.
+   */
+  templateId?: string;
+  packageName?: string;
   userId: string;
   orgId: string;
   schedule: ProposalSchedule;
 };
 
+/**
+ * WHY a proposal was not made — for the SERVER's record only.
+ *
+ * The producer answers ONE fixed sentence to the model whatever happened (see
+ * its module header: a refusal that named what was refused would be a durable
+ * enumeration oracle in the transcript). That rule is unchanged. What was
+ * missing is that the SERVER could not tell those cases apart either, which is
+ * why the defect this reason exists for could not be read off a log at all: the
+ * caller logs the stage, the reader still reads the one sentence.
+ */
+export type ProposeRefusalReason =
+  | "no_identity"
+  /** ADJUST / RE-PROPOSE only: the prior ref did not verify for this reader. */
+  | "ref_refused"
+  | "no_agent_named"
+  | "two_agents_named"
+  | "unknown_agent"
+  | "cross_org"
+  | "past_time"
+  | "mint_failed";
+
 export type ProposeScheduleResult =
   | { ok: true; token: string; expiresAt: number }
-  | { ok: false };
+  | { ok: false; reason: ProposeRefusalReason };
 
 /**
  * Mint a proposal. WRITES NOTHING.
@@ -72,13 +115,22 @@ async function mintProposal(
   input: ProposeScheduleInput,
   lineageNonce?: string,
 ): Promise<ProposeScheduleResult> {
-  if (!input.userId || !input.orgId) return { ok: false };
+  if (!input.userId || !input.orgId) return { ok: false, reason: "no_identity" };
 
-  const template = await readAgentTemplateById(input.templateId);
-  if (!template) return { ok: false };
+  const namedId = typeof input.templateId === "string" && input.templateId.length > 0;
+  const namedPackage = typeof input.packageName === "string" && input.packageName.length > 0;
+  if (namedId && namedPackage) return { ok: false, reason: "two_agents_named" };
+  if (!namedId && !namedPackage) return { ok: false, reason: "no_agent_named" };
+
+  const template = namedId
+    ? await readAgentTemplateById(input.templateId as string)
+    : await resolveTemplateByPackageName(input.packageName as string);
+  if (!template) return { ok: false, reason: "unknown_agent" };
   // The org boundary, before anything confirms the template exists to a caller
   // outside it.
-  if (template.orgId && template.orgId !== input.orgId) return { ok: false };
+  if (template.orgId && template.orgId !== input.orgId) {
+    return { ok: false, reason: "cross_org" };
+  }
 
   // A schedule with a past `runAt` would be refused at Confirm by the trigger
   // service's own future check; refusing it HERE instead means the assistant
@@ -86,20 +138,58 @@ async function mintProposal(
   // pressed.
   if (input.schedule.kind === "scheduled") {
     const ms = naiveDatetimeToUtcMs(input.schedule.runAt, input.schedule.timezone);
-    if (Number.isNaN(ms) || ms <= Date.now()) return { ok: false };
+    if (Number.isNaN(ms) || ms <= Date.now()) return { ok: false, reason: "past_time" };
   }
 
   const minted = mintTriggerScheduleProposalToken(
     {
-      templateId: input.templateId,
+      // THE RESOLVED ID, never the caller's string. Everything downstream — the
+      // card, the Confirm transaction, the run — addresses the template by id,
+      // so the name is spent here and travels no further.
+      templateId: template.id,
       userId: input.userId,
       orgId: input.orgId,
       schedule: input.schedule,
     },
     lineageNonce === undefined ? undefined : { nonce: lineageNonce },
   );
-  if (!minted) return { ok: false };
+  if (!minted) return { ok: false, reason: "mint_failed" };
   return { ok: true, token: minted.token, expiresAt: minted.expiresAt };
+}
+
+/**
+ * A PACKAGE NAME to the template it names, with `agent_run`'s own NARROW alias
+ * fallback: an operator-vendor-scoped name that matches this instance's
+ * namespace retries under the canonical scope. Arbitrary third-party scopes are
+ * NOT collapsed, exactly as there — the bridge exists for the publish-time
+ * rescope, not to make any scope mean any other.
+ *
+ * WHAT THIS DOOR CHECKS, AND WHAT IT DELIBERATELY DOES NOT.
+ *
+ * It checks exactly what the `templateId` door beside it checks and has always
+ * checked: the template exists, and it is not another organization's. It does
+ * NOT run the RUN-eligibility gate, and that is this module's design rather
+ * than an omission on this path — "whether the reader may DISPATCH is
+ * re-resolved at render and again at Confirm; a question the reader turns out
+ * not to be allowed to answer is a drawn card with a disabled floor, not a
+ * refusal to draw". Running that gate here would also pull the confirm and
+ * dispatch graph into the PROPOSE leaf, which is the one thing this file was
+ * split out to prevent and which the route-graph ratchet measures.
+ *
+ * SO THE DELTA A NAME ADDS is that the argument is guessable where a uuid is
+ * not: a caller can learn whether a package it can already name is installed in
+ * its OWN organization. That signal is not new to this surface — the widget's
+ * one start primitive takes the same canonical package name and relays the
+ * platform's own answer — and it stops at the org boundary above, which is why
+ * a foreign organization's package answers the same fixed sentence an
+ * uninstalled one does. Both are asserted against a real store.
+ */
+async function resolveTemplateByPackageName(packageName: string) {
+  const direct = await readAgentTemplateByPackageName(packageName);
+  if (direct) return direct;
+  const alias = aliasPackageNameToCanonicalScope(packageName);
+  if (!alias || alias === packageName) return null;
+  return readAgentTemplateByPackageName(alias);
 }
 
 /** What ADJUST needs: the ref the card was drawn with, and the new rows. */
@@ -165,7 +255,67 @@ export async function adjustTriggerSchedule(
   // One answer for a forged ref, a foreign one, and one whose window has
   // closed. An expired proposal is re-proposed through the EXPIRED path, which
   // is the reading Confirm may not act on; this one adjusts a LIVE card.
-  if (!prior) return { ok: false };
+  if (!prior) return { ok: false, reason: "ref_refused" };
+
+  return mintProposal(
+    {
+      templateId: prior.templateId,
+      userId: input.userId,
+      orgId: input.orgId,
+      schedule: input.schedule,
+    },
+    prior.nonce,
+  );
+}
+
+/**
+ * RE-PROPOSE FROM AN EXPIRED CARD — the Confirm press on the expired face
+ * (cinatra#2836; plan (A) §7.2 step 2, "an expired card **stays visible**,
+ * still editable, with **Confirm** to set the schedule again").
+ *
+ * The expired token is unspendable, so that press cannot be a bare Confirm.
+ * It re-proposes first and confirms the replacement — the SAME composite an
+ * EDITED live proposal already performs, which is why the reader sees one
+ * control doing one thing and no new endpoint appears on the wire.
+ *
+ * WHY NOT SIMPLY WIDEN `adjustTriggerSchedule`. That function is the LIVE
+ * card's path and is reached by callers for whom an expired token must stay a
+ * refusal; widening it would have made "adjust" silently start accepting a
+ * proposal whose window closed on every one of them. Two named paths, each
+ * refusing exactly what it should, is the difference between a decision and an
+ * accident.
+ *
+ * IT IS NOT A WEAKER DOOR. `verifyTriggerScheduleProposalTokenDetailed` reports
+ * `expired` only for a token that decrypted under this server's key, carried an
+ * unstretched lifetime, and was minted for EXACTLY this reader in EXACTLY this
+ * org — every other input, an expired-but-foreign one included, is the same
+ * flat `refused` this function turns into the same `{ ok: false }`. So the
+ * authority required here is identical to Adjust's; only the freshness demanded
+ * of the token differs.
+ *
+ * THE LINEAGE RULE IS UNTOUCHED (cinatra#2859). The replacement inherits the
+ * expired proposal's nonce, exactly as Adjust's does, so the expired card and
+ * its re-proposal remain ONE row in the consume table and at most one member of
+ * the family can ever become a run. There is no new double-arm surface: the
+ * member being replaced here could not be spent in the first place.
+ *
+ * A STILL-LIVE TOKEN IS ACCEPTED TOO, deliberately. The caller routes on a
+ * resolve taken a moment earlier, and refusing a token that has not yet expired
+ * would turn that harmless staleness into a spurious refusal. It widens
+ * nothing: re-proposing from a live token is precisely what
+ * `adjustTriggerSchedule` already permits the same reader to do.
+ */
+export async function reproposeExpiredSchedule(
+  input: AdjustScheduleInput,
+): Promise<ProposeScheduleResult> {
+  const verified = verifyTriggerScheduleProposalTokenDetailed({
+    token: input.priorToken,
+    expectedUserId: input.userId,
+    expectedOrgId: input.orgId,
+  });
+  // One answer for a forged ref and a foreign one — expired or not.
+  if (verified.outcome === "refused") return { ok: false, reason: "ref_refused" };
+  const prior = verified.proposal;
 
   return mintProposal(
     {

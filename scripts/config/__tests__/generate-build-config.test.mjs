@@ -5,7 +5,16 @@
 
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +34,41 @@ const GENERATOR = join(REPO_ROOT, "scripts", "config", "generate-build-config.mj
 const MANIFEST_PATH = join(REPO_ROOT, "config", "build-config.manifest.json");
 const TSCONFIG_PATH = join(REPO_ROOT, "tsconfig.json");
 const NEXT_CONFIG_PATH = join(REPO_ROOT, "next.config.ts");
+
+// No suite in this file may mutate REPO_ROOT/tsconfig.json or next.config.ts.
+// This file shares one `vitest run` invocation with
+// scripts/extensions/__tests__/generate-extension-manifest.test.mjs, whose
+// buildManifest() reads REPO_ROOT/tsconfig.json fresh and requires a path alias
+// for every artifact renderer subpath that has no root dependency edge.
+// writeFileSync truncates before it writes, so rewriting the real file here
+// left a window in which that parallel worker read a TORN tsconfig.json and
+// failed with "has no resolution road" — a cross-file race, not a packaging
+// defect. Drift is therefore exercised against a throwaway copy; these mtimes,
+// captured before any suite runs, let the guard suite below hold that line.
+const REPO_MTIMES_AT_LOAD = {
+  "tsconfig.json": statSync(TSCONFIG_PATH).mtimeMs,
+  "next.config.ts": statSync(NEXT_CONFIG_PATH).mtimeMs,
+};
+
+/**
+ * Copy the four files the generator touches into a throwaway root. The
+ * generator resolves its own REPO_ROOT from import.meta.url and imports nothing
+ * repo-local, so the copy is a self-contained generator tree that drift tests
+ * can mutate freely without any parallel worker observing it.
+ */
+function makeIsolatedRoot() {
+  const root = mkdtempSync(join(tmpdir(), "build-config-drift-"));
+  mkdirSync(join(root, "scripts", "config"), { recursive: true });
+  mkdirSync(join(root, "config"), { recursive: true });
+  copyFileSync(GENERATOR, join(root, "scripts", "config", "generate-build-config.mjs"));
+  copyFileSync(MANIFEST_PATH, join(root, "config", "build-config.manifest.json"));
+  copyFileSync(TSCONFIG_PATH, join(root, "tsconfig.json"));
+  copyFileSync(NEXT_CONFIG_PATH, join(root, "next.config.ts"));
+  return root;
+}
+
+const isolatedGenerator = (root) =>
+  join(root, "scripts", "config", "generate-build-config.mjs");
 
 function loadManifest() {
   return JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
@@ -72,20 +116,25 @@ describe("generate == committed (byte-exact)", () => {
 });
 
 describe("--check fails on drift", () => {
-  it("detects a hand-edited tsconfig paths region and restores it", () => {
-    const original = readFileSync(TSCONFIG_PATH, "utf8");
-    // Introduce drift: append a stray alias inside the paths block by mangling
-    // the first generated entry's whitespace (a classic hand-edit).
-    const drifted = original.replace(
-      '"@/*": ["./src/*"],',
-      '"@/*":   ["./src/*"],',
-    );
-    expect(drifted).not.toBe(original);
-    writeFileSync(TSCONFIG_PATH, drifted);
+  it("detects a hand-edited tsconfig paths region", () => {
+    const root = makeIsolatedRoot();
     try {
+      const tsconfigPath = join(root, "tsconfig.json");
+      const original = readFileSync(tsconfigPath, "utf8");
+      // Introduce drift by mangling the first generated entry's whitespace
+      // (a classic hand-edit).
+      const drifted = original.replace(
+        '"@/*": ["./src/*"],',
+        '"@/*":   ["./src/*"],',
+      );
+      expect(drifted).not.toBe(original);
+      writeFileSync(tsconfigPath, drifted);
       let failed = false;
       try {
-        execFileSync("node", [GENERATOR, "--check"], { cwd: REPO_ROOT, stdio: "pipe" });
+        execFileSync("node", [isolatedGenerator(root), "--check"], {
+          cwd: root,
+          stdio: "pipe",
+        });
       } catch (err) {
         failed = true;
         expect(err.status).toBe(1);
@@ -94,19 +143,24 @@ describe("--check fails on drift", () => {
       }
       expect(failed).toBe(true);
     } finally {
-      writeFileSync(TSCONFIG_PATH, original);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("detects a drifted next.config.ts package list and restores it", () => {
-    const original = readFileSync(NEXT_CONFIG_PATH, "utf8");
-    const drifted = original.replace('"openai",', '"openai",\n    "drifted-extra-pkg",');
-    expect(drifted).not.toBe(original);
-    writeFileSync(NEXT_CONFIG_PATH, drifted);
+  it("detects a drifted next.config.ts package list", () => {
+    const root = makeIsolatedRoot();
     try {
+      const nextConfigPath = join(root, "next.config.ts");
+      const original = readFileSync(nextConfigPath, "utf8");
+      const drifted = original.replace('"openai",', '"openai",\n    "drifted-extra-pkg",');
+      expect(drifted).not.toBe(original);
+      writeFileSync(nextConfigPath, drifted);
       let failed = false;
       try {
-        execFileSync("node", [GENERATOR, "--check"], { cwd: REPO_ROOT, stdio: "pipe" });
+        execFileSync("node", [isolatedGenerator(root), "--check"], {
+          cwd: root,
+          stdio: "pipe",
+        });
       } catch (err) {
         failed = true;
         expect(err.status).toBe(1);
@@ -114,9 +168,23 @@ describe("--check fails on drift", () => {
       }
       expect(failed).toBe(true);
     } finally {
-      writeFileSync(NEXT_CONFIG_PATH, original);
+      rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("the suites in this file leave the real repo tree untouched", () => {
+  // Runs after the drift suites (vitest keeps a file's suites in declaration
+  // order), so an in-place write above lands here as a changed mtime. Content
+  // equality is NOT enough: the drift suites restore the bytes in a `finally`,
+  // and it is the truncate window in between -- invisible to a content hash --
+  // that a parallel worker reads.
+  it.each(["tsconfig.json", "next.config.ts"])(
+    "never writes REPO_ROOT/%s (a parallel worker reads it mid-run)",
+    (rel) => {
+      expect(statSync(join(REPO_ROOT, rel)).mtimeMs).toBe(REPO_MTIMES_AT_LOAD[rel]);
+    },
+  );
 });
 
 describe("renderTsconfigPathsBody", () => {

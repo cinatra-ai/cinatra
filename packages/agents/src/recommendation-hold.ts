@@ -62,6 +62,18 @@ import {
   RECOMMENDATION_HOLD_CHECKPOINT,
 } from "./run-wait-notifier";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
+
+/**
+ * The verified caller a hold-core call runs as (cinatra#2790, epic #2784 S9f).
+ * Never a claim — always resolved, by whichever entry verified it: the cookie
+ * session, or the widget's own `cwu_`.
+ */
+export type RecommendationHoldActor = {
+  actor: PrimitiveActorContext;
+  roleHints: ActorRoleHints;
+};
 
 /** The lifecycle checkpoint the run-start chip-row hold parks on. Defined in the
  * notifier leaf (see `RECOMMENDATION_HOLD_CHECKPOINT`) so this module, the fence
@@ -140,6 +152,62 @@ export const RECOMMENDATION_SKIP_NOT_RECORDED =
  * preflight already uses to carry an actionable outcome.
  */
 export const RECOMMENDATION_SKIP_NOT_RECORDED_CODE = "recommendation_skip_not_recorded";
+
+/**
+ * THE STALE-OFFER REFUSAL (cinatra#2906).
+ *
+ * A confirm resolves against the set the card offered. When one of the kept
+ * skills can no longer be honoured — its assignment was withdrawn, or it was
+ * uninstalled, while the card sat waiting — the confirm writes NOTHING and
+ * answers with this. The row draws it exactly where it draws every other
+ * refusal, as its one red line, and keeps its controls operable: nothing has
+ * changed, and the reader can leave the named-as-gone skill out, or skip, and
+ * press again.
+ *
+ * Unlike `RECOMMENDATION_DECISION_REFUSAL` this is NOT a generic denial and
+ * enumerates nothing about anyone else's rows — it describes the CALLER'S OWN
+ * next step, which is the same line the retryable refusals above already draw.
+ */
+export const RECOMMENDATION_OFFER_STALE_REFUSAL =
+  "Some of the skills this card offered are no longer available for this run. Leave them out or skip, then decide again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_OFFER_STALE_CODE = "recommendation_offer_stale";
+
+/**
+ * THE RUN-ALREADY-STARTED REFUSAL (cinatra#3047).
+ *
+ * The Skills step keeps its boxes editable while the run has not begun
+ * executing, and a saved change rides the same decision path the first one did.
+ * Once the run HAS started, its selection set is the ledger execution
+ * materialized from, and the write is refused in the store's own transaction
+ * rather than partially applied. This is the sentence for that — and it is
+ * deliberately NOT a "try again" line, because no retry will make it land: the
+ * reader is told the selection is settled, which is the true and actionable
+ * thing to say. It is reachable at all only from a screen that was open across
+ * the moment the run started.
+ */
+export const RECOMMENDATION_RUN_STARTED_REFUSAL =
+  "This run has already started, so its skill selection is settled. Nothing was changed.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_RUN_STARTED_CODE = "recommendation_run_started";
+
+/**
+ * THE UNREADABLE-OFFER REFUSAL (cinatra#2906).
+ *
+ * A hold that OWNS no offer is decided the pre-#2906 way, so this is NOT that
+ * case: it is a hold whose offer exists and could not be READ. Flattening the
+ * two would let a database that did not answer be treated as a card that
+ * offered nothing, and the confirm would silently re-score live state — the very
+ * seam #2906 closes. So the read failure refuses, writes nothing, keeps the
+ * hold, and says the one thing that is actually true: try again.
+ */
+export const RECOMMENDATION_OFFER_UNREADABLE_REFUSAL =
+  "This run's skill offer could not be read just now. Nothing was recorded — please try again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_OFFER_UNREADABLE_CODE = "recommendation_offer_unreadable";
 
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =

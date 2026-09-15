@@ -73,6 +73,13 @@ export default defineConfig({
       // bridge at import. Route to a no-teams stub so every handler test loads;
       // the recall test vi.mocks it locally to assert the entitled lane set.
       "@/lib/better-auth-db": path.join(__dirname, "src/__tests__/__stubs__/better-auth-db.ts"),
+      // Canonical project-grant assembly (cinatra#1377). `src/mcp/registry.ts`
+      // resolves `actor.projectGrants` for the request frame's identity pair
+      // through `resolveActorGrantsForUserInOrg` (dynamic import); the real
+      // module builds a better-auth + pg bridge at import. Route to a
+      // no-grants stub so every registry test loads; the grant-forwarding test
+      // vi.mocks it locally to supply the caller's real axis.
+      "@/lib/auth-session": path.join(__dirname, "src/__tests__/__stubs__/auth-session.ts"),
       // Alias the authz sub-files used by the objects handlers so vitest can
       // resolve them. The barrel (`@/lib/authz`) is also aliased for tests that
       // vi.mock it.
@@ -117,6 +124,45 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/delegated-chat-tool-policy.ts",
       ),
+      // cinatra#2817 N1/N2 — THE NEW `@cinatra-ai/mcp-server` SUBPATHS.
+      // Every subpath the exports map gains must appear here AND in the root
+      // tsconfig `paths` map, or the three maps disagree and only production
+      // resolves.
+      // The barrel below is aliased to a single-file stub, and vite matches
+      // aliases by PREFIX in order, so ANY subpath that is not listed above it
+      // falls through and resolves to an invalid `mcp-server.ts/<sub>` path (the
+      // same trap the `obo-ceiling` entry documents). Two species, and the
+      // distinction is load-bearing:
+      //
+      //   PURE LEAF  -> alias to REAL source, like obo-ceiling and
+      //                 delegated-chat-tool-policy. No server-only, no host dep,
+      //                 no cross-module shared instance; exercising the real logic
+      //                 is the point. (`core-delegated-chat-surface` does memoize
+      //                 ONE deterministic snapshot of this build's own core
+      //                 records — a pure derivation of a frozen literal, not state
+      //                 a caller can observe or a second resolution can split.)
+      //   SINGLETON  -> alias to THE SAME STUB FILE the barrel resolves to.
+      //                 `request-context` exports a live `AsyncLocalStorage`, so
+      //                 pointing the subpath at real source while the barrel
+      //                 stays stubbed would make them TWO storages: a frame
+      //                 established through a barrel-imported storage would be
+      //                 invisible to a writer that read the subpath one, and the
+      //                 row would be written unscoped instead of failing loudly.
+      //                 `src/lib/__tests__/sealed-room-inheritance.test.ts` mocks
+      //                 both specifiers onto one storage for exactly this reason.
+      "@cinatra-ai/mcp-server/request-context": path.join(__dirname, "src/__tests__/__stubs__/mcp-server.ts"),
+      "@cinatra-ai/mcp-server/capability-plan": path.join(
+        root,
+        "packages/mcp-server/src/capability-plan.ts",
+      ),
+      "@cinatra-ai/mcp-server/delegated-chat-admission": path.join(
+        root,
+        "packages/mcp-server/src/delegated-chat-admission.ts",
+      ),
+      "@cinatra-ai/mcp-server/core-delegated-chat-surface": path.join(
+        root,
+        "packages/mcp-server/src/core-delegated-chat-surface.ts",
+      ),
       // Alias @cinatra-ai/mcp-server to a tiny stub so registry-orgid.test.ts
       // can import `mcpRequestContextStorage` without pulling in the real
       // next/navigation + better-auth entry point.
@@ -135,6 +181,12 @@ export default defineConfig({
     },
   },
   test: {
+    // The wholesale package suite runs on the same constrained self-hosted
+    // runner as the root suite and hits the same starvation under load —
+    // imports and hooks alone can cross vitest's 5s/10s defaults. Give
+    // tests and hooks the same 30s headroom as the root suite.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     environment: "node",
     // The UNIT tier. `src/**/*.test.ts` is the discovery set the whole-package
     // CI runner executes (cinatra#2439); every non-unit tier below is carved

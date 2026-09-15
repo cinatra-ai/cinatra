@@ -29,25 +29,60 @@ const capturedHandlers = new Map<string, unknown>();
 // returns the map THIS FILE built through the real seams, which live alongside
 // the extension registry — a module with no connector/DB graph — so every hop
 // under test is real code.
+// The PINNED DISPATCH (cinatra#2817 slice 3). A delegated-restricted extension
+// call does not run the captured, drift-tolerant wrapper — it runs a dispatch
+// pinned to the identity that was authorized. Recorded here so a case can
+// assert WHICH identity the call was pinned to, not merely that it succeeded.
+let pinnedDispatches: { kind: string; packageName: string; name: string; version?: string }[] = [];
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => capturedHandlers,
+}));
+vi.mock("@/lib/extension-authorized-dispatch", () => ({
+  dispatchAuthorizedExtensionPrimitive: async (target: {
+    kind: string;
+    packageName: string;
+    name: string;
+    version?: string;
+  }) => {
+    pinnedDispatches.push(target);
+    return { structuredContent: { ok: true } };
+  },
 }));
 
 // A delegated-chat request frame. The declaration is only ever consulted inside
 // one, and always AFTER host admission — which stays the REAL policy below.
 let delegatedRestricted = true;
-vi.mock("@cinatra-ai/mcp-server", async () => {
-  const policy = await vi.importActual<
-    typeof import("@cinatra-ai/mcp-server/delegated-chat-tool-policy")
-  >("@cinatra-ai/mcp-server/delegated-chat-tool-policy");
+vi.mock("@cinatra-ai/mcp-server", () => ({
+  mcpRequestContextStorage: {
+    getStore: () => ({ delegatedRestricted }),
+    run: (_ctx: unknown, fn: () => unknown) => fn(),
+  },
+}));
+
+// The REQUEST'S ADMISSION SNAPSHOT (cinatra#2817). Held here so a case can put
+// a REVIEWED admission for the extension under test into it and observe the
+// primitive becoming callable end to end — the extensibility outcome the whole
+// issue is for — without a database.
+let snapshotRecords: unknown[] = [];
+vi.mock("@/lib/delegated-chat-admission-store", async () => {
+  const admission = await vi.importActual<
+    typeof import("@cinatra-ai/mcp-server/delegated-chat-admission")
+  >("@cinatra-ai/mcp-server/delegated-chat-admission");
   return {
-    mcpRequestContextStorage: {
-      getStore: () => ({ delegatedRestricted }),
-      run: (_ctx: unknown, fn: () => unknown) => fn(),
-    },
-    isDelegatedChatMcpToolAllowed: policy.isDelegatedChatMcpToolAllowed,
+    loadDelegatedChatAdmissionSnapshot: async () =>
+      admission.createDelegatedChatAdmissionSnapshot({
+        rawRecords: snapshotRecords,
+        activationGeneration: 0,
+        admissionGeneration: 0,
+      }),
   };
 });
+
+// The caller has no resolved edges, so the self-invoker's caller-bound identity
+// resolution lands on the DEFAULT version — the registration's own.
+vi.mock("@/lib/extension-edge-bound-serving", () => ({
+  resolveEdgeBoundExtensionVersion: async () => ({ kind: "none" }),
+}));
 
 // Not under test here — the deny-by-default boundary has its own suites, and
 // leaving it open is what lets a declaration refusal be observed on its own.
@@ -64,12 +99,11 @@ import {
   type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
-import {
-  interimDelegatedChatClassFor,
-  type DelegatedChatToolClass,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { DelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { admissionRecordFor } from "@cinatra-ai/mcp-server/delegated-chat-admission";
 
 const PKG = "@cinatra-ai/acme";
+const PKG_VERSION = "2.4.0";
 const handler = async () => ({ structuredContent: { ok: true } });
 
 /**
@@ -77,19 +111,33 @@ const handler = async () => ({ structuredContent: { ok: true } });
  * reads, through the real replay and capture seams.
  */
 function roundTrip(name: string, declared?: DelegatedChatToolClass): CapturedHostPrimitive {
-  registerExtensionMcpTool(PKG, {
-    name,
-    handler,
-    ...(declared === undefined ? {} : { delegatedChat: declared }),
-  });
+  registerExtensionMcpTool(
+    PKG,
+    {
+      name,
+      handler,
+      ...(declared === undefined ? {} : { delegatedChat: declared }),
+    },
+    { resolvedVersion: PKG_VERSION },
+  );
   const registration = listExtensionMcpTools().find((t) => t.name === name)!;
 
   const handlers = new Map<string, CapturedHostPrimitive>();
   const recording = createSelfPrimitiveRecordingServer(handlers);
   (recording.registerTool as (...a: unknown[]) => unknown)(
     name,
-    // The REPLAY hop: a config rebuilt from scratch.
-    buildReplayedExtensionToolConfig(name, registration),
+    // The REPLAY hop: a config rebuilt from scratch, carrying the declaration
+    // AND the host-written provenance the choke point plans the identity from.
+    buildReplayedExtensionToolConfig(name, registration, {
+      ownerPackage: PKG,
+      resolvedVersion: registration.resolvedVersion,
+      dispatchTarget: {
+        kind: "extension-default",
+        packageName: PKG,
+        version: PKG_VERSION,
+        name,
+      },
+    }),
     handler,
   );
 
@@ -101,6 +149,8 @@ function roundTrip(name: string, declared?: DelegatedChatToolClass): CapturedHos
 
 beforeEach(() => {
   delegatedRestricted = true;
+  snapshotRecords = [];
+  pinnedDispatches = [];
   _resetExtensionMcpForTests();
   capturedHandlers.clear();
   __resetHostSelfPrimitiveHandlers();
@@ -114,7 +164,7 @@ describe("declaration round trip: register → replay → capture", () => {
   it("the captured entry carries the class the registration declared", () => {
     for (const cls of ["read", "discovery", "dispatch", "none"] as const) {
       _resetExtensionMcpForTests();
-      expect(roundTrip("acme_thing_list", cls).delegatedChat).toBe(cls);
+      expect(roundTrip("acme_thing_list", cls).planned.declaredClass).toBe(cls);
     }
   });
 
@@ -124,65 +174,135 @@ describe("declaration round trip: register → replay → capture", () => {
       // @ts-expect-error — a connector shipping an off-enum value is the case
       "superuser",
     );
-    expect(captured.delegatedChat).toBe("none");
+    expect(captured.planned.declaredClass).toBe("none");
   });
 
   it("preserves ABSENCE as absence, distinct from a declared `none`", () => {
     // Load-bearing: the interim shim fills in for an ABSENT declaration and
     // must not for an explicit `none`. A hop that collapsed the two would make
     // a connector's deliberate opt-out indistinguishable from silence.
-    expect(roundTrip("acme_thing_list").delegatedChat).toBeUndefined();
+    expect(roundTrip("acme_thing_list").planned.declaredClass).toBeUndefined();
   });
 });
 
-describe("declaration round trip: the call-time lookup sees the SAME class", () => {
-  it("refuses a delegated-chat self-invocation of a primitive declaring `none`", async () => {
-    roundTrip("agent_list", "none");
-    await expect(callHostPrimitive("agent_list", {})).rejects.toThrow(
-      /declines the delegated chat surface \(delegatedChat: "none"\)/,
+describe("call time: the SAME shared evaluator, over the SAME planned identity", () => {
+  /** Put a REVIEWED admission for this registration into the request snapshot. */
+  function review(name: string, declaredClass: "read" | "discovery" | "dispatch") {
+    snapshotRecords = [
+      admissionRecordFor({
+        ownerPackage: PKG,
+        resolvedVersion: PKG_VERSION,
+        primitiveName: name,
+        declaredClass,
+      }),
+    ];
+  }
+
+  it("THE EXTENSIBILITY OUTCOME: a REVIEWED connector primitive becomes callable", async () => {
+    // The defect #2817 exists to remove, observed rather than argued: a
+    // hot-installed connector's primitive, declaring `read` and admitted for its
+    // exact package at its exact version, is reachable from a delegated-chat
+    // frame with no core-name edit anywhere.
+    roundTrip("acme_thing_list", "read");
+    review("acme_thing_list", "read");
+    await expect(callHostPrimitive("acme_thing_list", {})).resolves.toEqual({ ok: true });
+    // AND it dispatched at the identity that was ADMITTED — the default
+    // registration of this package — never across a version.
+    expect(pinnedDispatches).toEqual([
+      { kind: "extension-default", packageName: PKG, version: PKG_VERSION, name: "acme_thing_list" },
+    ]);
+  });
+
+  it("refuses the SAME primitive at a DIFFERENT version — an admission does not cross versions", async () => {
+    roundTrip("acme_thing_list", "read");
+    snapshotRecords = [
+      admissionRecordFor({
+        ownerPackage: PKG,
+        resolvedVersion: "9.9.9",
+        primitiveName: "acme_thing_list",
+        declaredClass: "read",
+      }),
+    ];
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(/stale_version/);
+  });
+
+  it("refuses when the SAME name is admitted for a DIFFERENT owner — collisions do not transfer", async () => {
+    roundTrip("acme_thing_list", "read");
+    snapshotRecords = [
+      admissionRecordFor({
+        ownerPackage: "@evil/acme",
+        resolvedVersion: PKG_VERSION,
+        primitiveName: "acme_thing_list",
+        declaredClass: "read",
+      }),
+    ];
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(/collision_lost/);
+  });
+
+  it("refuses a REVOKED admission", async () => {
+    roundTrip("acme_thing_list", "read");
+    review("acme_thing_list", "read");
+    snapshotRecords = snapshotRecords.map((r) => ({
+      ...(r as Record<string, unknown>),
+      revoked: true,
+    }));
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(/revoked/);
+  });
+
+  it("refuses a primitive whose registration declares `none`, even when reviewed", async () => {
+    roundTrip("acme_thing_list", "none");
+    review("acme_thing_list", "read");
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(
+      /declaration_declines_chat/,
     );
   });
 
-  it("refuses one whose declaration was MALFORMED, reporting the normalized class", async () => {
+  it("refuses one whose declaration was MALFORMED", async () => {
     roundTrip(
-      "agent_list",
+      "acme_thing_list",
       // @ts-expect-error — off-enum value
       "superuser",
     );
-    await expect(callHostPrimitive("agent_list", {})).rejects.toThrow(
-      /declines the delegated chat surface \(delegatedChat: "none"\)/,
-    );
-  });
-
-  it("allows one declaring a chat-eligible class", async () => {
-    for (const cls of ["read", "discovery", "dispatch"] as const) {
-      _resetExtensionMcpForTests();
-      roundTrip("agent_list", cls);
-      await expect(callHostPrimitive("agent_list", {})).resolves.toEqual({ ok: true });
-    }
-  });
-
-  it("allows an UNDECLARED primitive the legacy allowlist admits, via the interim class", async () => {
-    // Since the owner's ruling an absent declaration means `none`, so this
-    // only passes because the call-time lookup resolves through the same
-    // interim shim the choke point uses. If it read the captured value raw,
-    // every undeclared primitive would be refused here — which is the failure
-    // the shim exists to prevent, observed end to end rather than argued.
-    expect(interimDelegatedChatClassFor("agent_list")).toBe("discovery");
-    roundTrip("agent_list");
-    await expect(callHostPrimitive("agent_list", {})).resolves.toEqual({ ok: true });
-  });
-
-  it("refuses an UNDECLARED primitive the legacy allowlist does NOT admit", async () => {
-    // The other half, and the reason the previous test is not a fail-open: an
-    // extension's own primitive is not on the interim allowlist, so no class is
-    // in force. It loses at admission first — the declaration check never even
-    // decides it — which is the AND ordering this whole channel rests on.
-    expect(interimDelegatedChatClassFor("acme_thing_list")).toBeUndefined();
-    roundTrip("acme_thing_list");
+    review("acme_thing_list", "read");
     await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(
-      /is not available to delegated chat MCP requests/,
+      /declaration_declines_chat|malformed_declaration/,
     );
+  });
+
+  it("refuses an UNDECLARED primitive, whatever the store holds", async () => {
+    roundTrip("acme_thing_list");
+    review("acme_thing_list", "read");
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(/undeclared/);
+  });
+
+  it("refuses a SELF-CLASSIFIED-ONLY primitive — declaring is not being reviewed", async () => {
+    roundTrip("acme_thing_list", "read");
+    snapshotRecords = [];
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(
+      /self_classified_only/,
+    );
+  });
+
+  it("refuses when the ADMISSION STORE is unavailable", async () => {
+    const admission = await vi.importActual<
+      typeof import("@cinatra-ai/mcp-server/delegated-chat-admission")
+    >("@cinatra-ai/mcp-server/delegated-chat-admission");
+    const store = await import("@/lib/delegated-chat-admission-store");
+    const spy = vi
+      .spyOn(store, "loadDelegatedChatAdmissionSnapshot")
+      .mockResolvedValue(
+        admission.unavailableDelegatedChatAdmissionSnapshot({
+          reason: "simulated",
+          activationGeneration: 0,
+          admissionGeneration: 0,
+        }),
+      );
+    roundTrip("acme_thing_list", "read");
+    review("acme_thing_list", "read");
+    await expect(callHostPrimitive("acme_thing_list", {})).rejects.toThrow(
+      /admission_store_unavailable/,
+    );
+    spy.mockRestore();
   });
 
   it("leaves an UNRESTRICTED (non-chat) frame untouched by any declaration", async () => {
@@ -192,5 +312,36 @@ describe("declaration round trip: the call-time lookup sees the SAME class", () 
     delegatedRestricted = false;
     roundTrip("acme_thing_list", "none");
     await expect(callHostPrimitive("acme_thing_list", {})).resolves.toEqual({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SELF-INVOKER APPLIES THE TRANSPORT'S CANONICAL-NAME RULE (codex
+// whole-diff round #2).
+//
+// The live delegated perimeter refuses a registration whose SERVED name differs
+// from the normalized name the policy reasoned about. The in-process capture
+// keeps mixed-case registrations, and the evaluator case-folds — so without the
+// same rule here, a reviewed `Acme_Thing_List` would be absent from the
+// delegated catalog AND absent from the live server, yet reachable through
+// `callHostPrimitive`. Parity with the transport is this path's entire job.
+// ---------------------------------------------------------------------------
+describe("the self-invoker refuses a non-canonical name, exactly as the transport does", () => {
+  it("a REVIEWED but mixed-case primitive is NOT self-invocable", async () => {
+    roundTrip("Acme_Thing_List", "read");
+    snapshotRecords = [
+      admissionRecordFor({
+        ownerPackage: PKG,
+        resolvedVersion: PKG_VERSION,
+        // Reviewed under the normalized name — the key the evaluator would
+        // build. The refusal must land BEFORE that lookup can match.
+        primitiveName: "acme_thing_list",
+        declaredClass: "read",
+      }),
+    ];
+    await expect(callHostPrimitive("Acme_Thing_List", {})).rejects.toThrow(
+      /non_canonical_primitive_name/,
+    );
+    expect(pinnedDispatches).toEqual([]);
   });
 });

@@ -55,6 +55,32 @@ export type FieldRendererEntry = {
    * and bindings without the flag.
    */
   midRunHitl?: boolean;
+  /**
+   * MAY THIS RENDERER BE MOUNTED WHERE THE READER HAS NO COOKIE SESSION?
+   * (cinatra#2930, lifecycle-b W3; convergence.)
+   *
+   * A lifecycle card can be drawn on a surface whose reader is proven by a
+   * CREDENTIAL rather than by a session — the site widget, whose frame is
+   * same-origin to the Cinatra app. The card's own requests carry that
+   * credential with `credentials: "omit"`. A renderer mounted INSIDE the card
+   * does not: one that calls its own `"use server"` action, or that resolves
+   * further renderers out of this registry, reaches the server on whatever
+   * ambient Cinatra cookie the browser happens to hold — which can belong to a
+   * DIFFERENT person.
+   *
+   * ABSENT MEANS UNSAFE, deliberately, and that is the whole value of putting
+   * the answer HERE rather than in a list of renderer ids. A wire id does not
+   * determine which component is mounted: manifest bindings map an arbitrary id
+   * (`@…/email-drafting-agent:output`) onto a host kind
+   * (`email-drafts-review`), and an extension binding loads a component this
+   * repository has never seen. Any predicate over the id is therefore guessing.
+   * The flag travels with the ENTRY, so every binding of a kind inherits its
+   * kind's answer and anything unrecognized stays unsafe by construction.
+   *
+   * A repository test (`hitl-screen-credential-safety.test.ts`) pins every
+   * `true` against the component's own source.
+   */
+  credentialSafe?: boolean;
 };
 
 class FieldRendererRegistryImpl {

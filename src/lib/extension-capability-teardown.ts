@@ -24,6 +24,11 @@ import "server-only";
 
 import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry";
 import {
+  bumpAdmissionPolicyGeneration,
+  bumpActivationGeneration,
+  nextAdmissionReviewMoment,
+} from "@/lib/extension-activation-generation";
+import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
   clearPackageSignedActivated,
@@ -62,7 +67,6 @@ import {
   invalidateMatcherManifestForPackage,
 } from "@/lib/extension-object-types-teardown";
 import { invalidateArtifactRenderersForPackage } from "@/lib/extension-artifact-renderers-teardown";
-import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 // Runtime dashboard-cube + portlet-kind registries (cinatra#660). These are pure
 // in-memory maps; unregistering is cheap and importing them does NOT build the
 // pg-backed cube platform (that stays lazy). Clearing the platform + MCP bridge
@@ -176,6 +180,63 @@ export function teardownExtensionCapabilities(packageName: string): {
   ) {
     bumpActivationGeneration("teardown", packageName);
   }
+
+  // cinatra#2817 slice 2 — a teardown also WITHDRAWS every delegated-chat
+  // admission the package held.
+  //
+  // OUTSIDE the guarded bump, deliberately. The guard asks "did this process
+  // still hold a live in-memory registration?", and the answer is NO after a
+  // restart, after a partial activation, or after a registry loss — while the
+  // DURABLE approval is unaffected by any of those. Gating the withdrawal on
+  // the guard would leave exactly those uninstalls with their admissions
+  // intact, and a same-version reinstall would inherit a review it never got.
+  //
+  // The generation bump is SYNCHRONOUS and unconditional, so cached
+  // authorization is invalidated in this process before the next request, and
+  // it does not depend on the durable write landing.
+  bumpAdmissionPolicyGeneration("revoke", packageName);
+  // Stamped BEFORE the detached write so a review that lands after this moment
+  // — a same-version reinstall being re-admitted while the write is still in
+  // flight — is not withdrawn by a teardown that predates it.
+  // A MOMENT and not a bare `new Date()`: at millisecond resolution a stamp
+  // cannot separate this teardown from a re-review that lands in the same
+  // millisecond, and the revocation used to resolve that tie by withdrawing the
+  // fresh review. The moment carries this process's review sequence alongside
+  // the instant, which orders that tie correctly for reviews minted here and
+  // leaves it fail-closed for reviews minted anywhere else.
+  const teardownAt = nextAdmissionReviewMoment();
+  // FIRE-AND-FORGET, and only here: the in-memory perimeter is already closed
+  // synchronously above, so this is the durable record catching up. The
+  // teardown chokepoint is a SYNC hook (`setExtensionCapabilityTeardownHook`),
+  // so it cannot await; a failure is therefore reported loudly rather than
+  // swallowed, because an approval the store still holds after an uninstall is
+  // something an operator must see.
+  // The store module is reached LAZILY, at the moment of the detached write.
+  // Teardown is a SYNC hook on a hot path; the store pulls the admission
+  // evaluator + the core declaration table behind it, and none of that is
+  // needed to close the in-memory perimeter above. Only the generation bump
+  // stays a static import: it is a dependency-free leaf and it must run
+  // SYNCHRONOUSLY, before this function returns.
+  void import("@/lib/delegated-chat-admission-store")
+    .then(({ revokeDelegatedChatAdmissionsForPackage }) =>
+      revokeDelegatedChatAdmissionsForPackage(packageName, { reviewedNotAfter: teardownAt }),
+    )
+    .then((ok) => {
+      if (!ok) {
+        console.error(
+          `[extension-teardown] delegated-chat admissions for "${packageName}" were NOT revoked ` +
+            "in the durable store — this process's caches are invalidated, but the reviewed " +
+            "approval is still recorded. Re-run the revocation.",
+        );
+      }
+    })
+    .catch((err) => {
+      console.error(
+        `[extension-teardown] delegated-chat admission revocation FAILED for "${packageName}":`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+
   return {
     removedTools,
     removedTypes,

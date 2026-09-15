@@ -32,6 +32,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { artifactPromotionBackend } from "./artifact-promotion";
+import { memoryPromotionBackend } from "./memory-promotion";
 import { PROMOTION_SOURCE_ID } from "./source-ids";
 import type {
   ApprovalNavSource,
@@ -178,17 +179,22 @@ export interface PromotionSubjectAdapter {
 // ── The registry (compile-time / immutable — DI for tests, no global mutation) ──
 //
 // TWO subject types are registered structurally, proving the discriminator
-// carries ≥2 flows through ONE source. Both ship `backend: null` — the source is
-// DORMANT (availability `not_configured`) until #1381 / #1437 each plug their
-// backend into the descriptor below. Tests exercise the exact seam with a
-// fixture backend via the exported builders (never by mutating this array).
+// carries ≥2 flows through ONE source. BOTH backends are now plugged (#1437
+// artifact, #1381 memory), so the source is READY; the `backend: null` plug
+// point stays part of the descriptor contract for the next flow. Tests exercise
+// the exact seam with a fixture backend via the exported builders (never by
+// mutating this array).
 
-/** Memory row promotion (#1381). Backend lands with that flow. */
+/** Memory row promotion (#1381, epic #1373). Widens one memory concept row's
+ *  ownership/visibility TUPLE through this shared source; the backend owns
+ *  authorization + CAS + the three-move transition matrix + the fail-closed
+ *  #1378 credential scan + the ATOMIC apply (the request transition, the row
+ *  widen, the immutable history append and the Graphiti re-projection enqueue
+ *  are ONE transaction, so there is no claimed-but-unapplied state). */
 export const memoryPromotionAdapter: PromotionSubjectAdapter = {
   subjectType: "memory",
   kindLabel: "Memory",
-  // TODO(cinatra#1381): plug the memory-promotion backend here.
-  backend: null,
+  backend: memoryPromotionBackend,
 };
 
 /** Artifact row-scope promotion (#1437). Widens an individual artifact row's

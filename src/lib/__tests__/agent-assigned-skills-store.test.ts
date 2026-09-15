@@ -43,6 +43,12 @@ function makeQuery(answers: {
 const row = (patch: Record<string, unknown> = {}) => ({
   agent_package_name: "@cinatra-ai/web-scrape-agent",
   skill_id: "@x/y:z",
+  // The scope tuple (cinatra#2813 S1). A caller with no scope of its own writes
+  // the WORKSPACE tier, which is exactly what package-global assignment meant.
+  scope_kind: "workspace",
+  scope_id: "__workspace__",
+  source: "manual",
+  origin_run_id: null,
   position: 1,
   created_by: "admin_1",
   created_at: new Date("2026-08-03T10:00:00.000Z"),
@@ -76,8 +82,13 @@ describe("insertAssignedSkill — lock ordering", () => {
       { agentPackageName: "@cinatra-ai/web-scrape-agent", skillId: "@x/y:z", createdBy: "admin_1" },
       { query },
     );
-    expect(calls[0]!.text).toContain("pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 0))");
-    expect(calls[0]!.values).toEqual(["agent_assigned_skills", "@cinatra-ai/web-scrape-agent"]);
+    // ONE composed key, built by the shared scope module, so the skills store
+    // and the context store cannot drift on what "one scope" means.
+    expect(calls[0]!.text).toContain("pg_advisory_xact_lock(hashtextextended($1, 0))");
+    const key = String(calls[0]!.values[0]);
+    expect(key).toContain("agent_assigned_skills");
+    expect(key).toContain("@cinatra-ai/web-scrape-agent");
+    expect(key).toContain("workspace");
   });
 
   it("runs everything inside ONE transaction (the xact lock is transaction-scoped)", async () => {
@@ -156,7 +167,15 @@ describe("insertAssignedSkill — position + arbiter", () => {
     expect(insert.text).toContain('COALESCE(MAX("position"), 0) + 1');
     // Never a client-computed position: the value cannot drift between the read
     // and the write.
-    expect(insert.values).toEqual(["@a/b", "@x/y:z", "admin_1"]);
+    expect(insert.values).toEqual([
+      "@a/b",
+      "@x/y:z",
+      "workspace",
+      "__workspace__",
+      "manual",
+      null,
+      "admin_1",
+    ]);
   });
 
   it("uses the PK as the conflict arbiter and re-selects the winner on DO NOTHING", async () => {
@@ -170,7 +189,9 @@ describe("insertAssignedSkill — position + arbiter", () => {
       { query },
     );
     expect(calls.find((c) => c.text.trim().startsWith("INSERT"))!.text).toContain(
-      "ON CONFLICT (agent_package_name, skill_id) DO NOTHING",
+      // The arbiter is the FULL tuple key: two scopes assigning the same skill
+      // to the same agent are two rows, not a conflict.
+      "ON CONFLICT (agent_package_name, skill_id, scope_kind, scope_id) DO NOTHING",
     );
     expect(out).toMatchObject({ outcome: "already_assigned" });
     expect(out.outcome === "already_assigned" && out.row.createdBy).toBe("someone_else");
@@ -196,7 +217,9 @@ describe("readAssignedSkillsForAgentPackage", () => {
     };
     const out = await readAssignedSkillsForAgentPackage("@cinatra-ai/web-scrape-agent", { query });
     expect(out.map((r) => r.position)).toEqual([1, 2]);
-    expect(calls[0]!.text).toContain('ORDER BY "position" ASC');
+    // The package-wide read spans every scope, so the order must be total
+    // across scopes as well as within one.
+    expect(calls[0]!.text).toContain('ORDER BY scope_kind ASC, scope_id ASC, "position" ASC');
     expect(calls[0]!.values).toEqual(["@cinatra-ai/web-scrape-agent"]);
     for (const forbidden of ["owner_type", "owner_id", "organization_id", "created_by = "]) {
       expect(calls[0]!.text).not.toContain(forbidden);
@@ -210,6 +233,10 @@ describe("readAssignedSkillsForAgentPackage", () => {
     expect(out).toEqual({
       agentPackageName: "@cinatra-ai/web-scrape-agent",
       skillId: "@x/y:z",
+      scopeKind: "workspace",
+      scopeId: "__workspace__",
+      source: "manual",
+      originRunId: null,
       position: 7,
       createdBy: "admin_1",
       createdAt: "2026-08-03T10:00:00.000Z",
@@ -247,8 +274,11 @@ describe("deleteAssignedSkill", () => {
       return [{ skill_id: "@x/y:z" }] as never;
     };
     await deleteAssignedSkill({ agentPackageName: "@a/b", skillId: "@x/y:z" }, { query });
+    // The remove identity carries the FULL tuple: removing a project's
+    // assignment must not take the organization's with it.
     expect(calls[0]!.text).toContain("WHERE agent_package_name = $1 AND skill_id = $2");
-    expect(calls[0]!.values).toEqual(["@a/b", "@x/y:z"]);
+    expect(calls[0]!.text).toContain("scope_kind = $3 AND scope_id = $4");
+    expect(calls[0]!.values).toEqual(["@a/b", "@x/y:z", "workspace", "__workspace__"]);
   });
 });
 
