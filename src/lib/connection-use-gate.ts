@@ -64,6 +64,7 @@ import {
   readExtensionInstalledBy,
 } from "@cinatra-ai/extensions/permissions-store";
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
+import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import type { ResolvedConnectorAccessDeclaration } from "@cinatra-ai/sdk-extensions/access-config";
 import { isResolvedConnectorAccessDeclaration } from "@cinatra-ai/sdk-extensions/access-config";
 
@@ -92,6 +93,47 @@ export function connectionSubjectUserId(actor: ActorContext): string | undefined
  * semantics; grants govern). */
 export const EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL = "@cinatra-ai/host:external-mcp";
 
+/**
+ * The catalog SLUG of the connector whose own Setup tab registers external MCP
+ * servers ("MCP Servers"). Host vocabulary only — the package id is DERIVED
+ * through the single sanctioned connector-catalog registry, the same true-IoC
+ * road `connection-identity-seam`'s key→slug map takes (no extension-package
+ * literal may live in a core file).
+ */
+const EXTERNAL_MCP_SETUP_CONNECTOR_SLUG = "mcp-server-connector";
+
+/**
+ * The connector PAGE that lists a saved connection (cinatra#3374) — the ONE
+ * named mapping between a stored identity row's `connector_package_id` and the
+ * package id of the setup page whose Sharing tab lists it (and whose access
+ * declaration governs it there).
+ *
+ * Every row maps to its own package, with ONE exception. A server registered
+ * on the MCP Servers connector's OWN Setup tab writes an identity row homed to
+ * the sentinel above (external MCP servers are host rows, not marketplace
+ * packages), yet §II of the ratified drawing says the Sharing tab "lists your
+ * own saved connections for this connector" — and that form IS that
+ * connector's, so the row is one of its saved connections. The function is
+ * TOTAL and single-valued, so a sentinel-homed row resolves to exactly one
+ * page and can never surface on a second connector's tab.
+ *
+ * READ-SIDE ONLY: the stored row is never rewritten, and the use-gate keeps
+ * resolving the sentinel by its own documented semantics (no second sentinel).
+ * An unresolvable catalog slug returns the sentinel unchanged — fail-closed,
+ * i.e. listed nowhere, exactly as before this mapping.
+ */
+export function connectionSharingPagePackageId(
+  identity: Pick<NangoConnectionIdentity, "connectorPackageId">,
+): string {
+  if (identity.connectorPackageId !== EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL) {
+    return identity.connectorPackageId;
+  }
+  return (
+    getConnectorDescriptorBySlug(EXTERNAL_MCP_SETUP_CONNECTOR_SLUG)?.packageId ??
+    EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL
+  );
+}
+
 export type ConnectionDeclarationResolution =
   | { kind: "declaration"; declaration: ResolvedConnectorAccessDeclaration | null }
   | { kind: "package_unresolved" };
@@ -105,11 +147,23 @@ export type ConnectionDeclarationResolution =
  */
 export async function resolveConnectionAccessDeclaration(
   identity: NangoConnectionIdentity,
+  options?: {
+    /**
+     * Resolve the declaration of THIS package instead of the row's own home
+     * package. The one caller is the Sharing tab's read (cinatra#3374), which
+     * passes the page's package id: the declaration that governs a panel is
+     * the declaration of the connector whose page draws it. Omitted
+     * everywhere else — the use-gate resolves the row's own home package
+     * exactly as before.
+     */
+    packageId?: string;
+  },
 ): Promise<ConnectionDeclarationResolution> {
-  if (identity.connectorPackageId === EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL) {
+  const packageId = options?.packageId ?? identity.connectorPackageId;
+  if (packageId === EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL) {
     return { kind: "declaration", declaration: null };
   }
-  const rows = await readInstalledExtensionsByPackageName(identity.connectorPackageId);
+  const rows = await readInstalledExtensionsByPackageName(packageId);
   if (rows.length === 0) return { kind: "package_unresolved" };
   const row =
     rows.find((r) => r.organizationId != null && r.organizationId === identity.organizationId) ??

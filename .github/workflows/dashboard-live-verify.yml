@@ -359,53 +359,126 @@ jobs:
           # route set makes that phase long enough; the knob maps to
           # experimental.cpus in next.config.ts.
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
-
-      - name: Start standalone server on port 3100
-        if: ${{ needs.detect.outputs.run_real == 'true' }}
-        # next.config sets `output: "standalone"`, so run server.js exactly like
-        # the Dockerfile (static/public copied alongside it). Background it; the
-        # next step polls readiness.
+        # THE BUILD IS SAMPLED TOO (cinatra#3382). The runner's shutdown signal
+        # arrived three times INSIDE this step at this head (attempt 1 cancelled
+        # at 01:33:58Z after 7.7 min, attempt 2 at 01:43:23Z after 6.7 min,
+        # attempt 3 at 01:57:18Z after 8.5 min — 53 s after "Compiled
+        # successfully in 7.5min", during "Collecting page data using 1
+        # worker"), so the boot+smoke step below never ran and its sampler
+        # captured nothing. The same ten-line loop therefore runs here as well:
+        # a step's background process dies with the step and its stdout belongs
+        # to the step that started it, so one shared sampler step cannot serve
+        # two steps — the loop is duplicated on purpose. It appends to the same
+        # file in RUNNER_TEMP that the boot+smoke step keeps appending to, and
+        # is killed by pid at the end of this script and on every error path
+        # through the EXIT trap.
         run: |
-          cp -r .next/static .next/standalone/.next/static
-          [ -d public ] && cp -r public .next/standalone/public || true
-          (cd .next/standalone && PORT=3100 HOSTNAME=0.0.0.0 node server.js > /tmp/dashboard-server.log 2>&1) &
-          echo "standalone server launched as PID $!"
+          # set -e: the trailing kill must never mask a failed build; the EXIT
+          # trap stops the sampler on that path.
+          set -eu
+          SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
+          : > "$SAMPLE_FILE"
+          echo "AGENTS_SMOKE_MEMORY_FILE=${SAMPLE_FILE}" >> "$GITHUB_ENV"
+          free -m || true
+          nproc || true
+          (
+            while true; do
+              {
+                date -u +%T
+                free -m | awk '/^Mem:/ { print "  mem_used_mb=" $3 " mem_available_mb=" $7 }'
+                ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ print "  rss_kb=" $1 " " $2 }'
+              } | stdbuf -oL tee -a "$SAMPLE_FILE"
+              sleep 5
+            done
+          ) &
+          SAMPLER_PID=$!
+          trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
+          echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
 
-      - name: Wait for server ready (boot + DB schema provisioning)
-        if: ${{ needs.detect.outputs.run_real == 'true' }}
-        # The instrumentation hook provisions the cinatra_e2e_dashboard schema on
-        # first query; poll /api/auth/get-session (light; proves the server +
-        # Better Auth public schema are alive).
-        run: |
-          for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
-            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
-            sleep 5
-          done
-          echo "::error::server did not become ready in 5 min"
-          tail -200 /tmp/dashboard-server.log
-          exit 1
+          pnpm build
 
-      - name: Run dashboard live-verify smoke
+          kill "$SAMPLER_PID" 2>/dev/null || true
+
+      - name: Boot the app and run the dashboard live-verify smoke (memory sampled)
         if: ${{ needs.detect.outputs.run_real == 'true' }}
         id: e2e
-        # E2E_REUSE_SERVER=1 → tests/e2e/config/dashboards.config.ts disables its own
-        # webServer and reuses the standalone server above. Wrapped in `timeout`
-        # (SIGTERM at 20m — ABOVE the config's 18m globalTimeout so Playwright
-        # writes its report first; SIGKILL 60s later) and forced `exit 0` so the
-        # report-upload steps below always run; the assert step fails the job on
-        # a non-zero Playwright exit.
+        # MEASUREMENT + SMOKE IN ONE STEP (cinatra#3382). The job died three
+        # times at each of two candidate heads with "The runner has received a
+        # shutdown signal" after a green run of the same head — the demand, not
+        # the change, decides, so the VM is sampled every 5s across the boot and
+        # the whole suite.
+        #
+        # The sampler runs INSIDE this step on purpose. Started from a step of
+        # its own it wrote exactly ONE line into the job log (mem_used_mb=1623
+        # mem_available_mb=14366 at 00:47:19Z on run 34546389270): a background
+        # process's stdout belongs to the step that started it and is closed
+        # when that step ends, so every later sample went nowhere and the file
+        # the always() step would have uploaded died with the VM. Launched here,
+        # the loop writes into the log of a step that is still running, so every
+        # sample up to the moment of death survives; the loop is killed by pid at
+        # the end of this script and by the EXIT trap on any error path. The
+        # always() report and the artifact below still serve the runs that
+        # complete.
+        #
+        # The boot is the same one the separate steps ran: next.config sets
+        # `output: "standalone"`, so server.js runs exactly like the Dockerfile
+        # (static/public copied alongside it), and the readiness poll hits
+        # /api/auth/get-session (light; proves the server + Better Auth public
+        # schema are alive, and the instrumentation hook provisions the
+        # cinatra_e2e_dashboard schema on first query).
+        #
+        # E2E_REUSE_SERVER=1 → tests/e2e/config/dashboards.config.ts disables its
+        # own webServer and reuses that standalone server. The suite is wrapped in
+        # `timeout` (SIGTERM at 20m — ABOVE the config's 18m globalTimeout so
+        # Playwright writes its report first; SIGKILL 60s later) and the step
+        # forces `exit 0` so the report-upload steps below always run; the assert
+        # step fails the job on a non-zero Playwright exit.
         env:
           E2E_REUSE_SERVER: "1"
           E2E_BASE_URL: http://localhost:3100
           E2E_PORT: "3100"
         run: |
-          set +e
+          set -u
+          SAMPLE_FILE="${RUNNER_TEMP}/agents-smoke-memory.txt"
+          touch "$SAMPLE_FILE"
+          echo "AGENTS_SMOKE_MEMORY_FILE=${SAMPLE_FILE}" >> "$GITHUB_ENV"
+          (
+            while true; do
+              {
+                date -u +%T
+                free -m | awk '/^Mem:/ { print "  mem_used_mb=" $3 " mem_available_mb=" $7 }'
+                ps -eo rss=,comm= --sort=-rss | head -3 | awk '{ print "  rss_kb=" $1 " " $2 }'
+              } | stdbuf -oL tee -a "$SAMPLE_FILE"
+              sleep 5
+            done
+          ) &
+          SAMPLER_PID=$!
+          echo "AGENTS_SMOKE_MEMORY_SAMPLER_PID=${SAMPLER_PID}" >> "$GITHUB_ENV"
+          trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
+          echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
+
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3100 HOSTNAME=0.0.0.0 node server.js > /tmp/dashboard-server.log 2>&1) &
+          echo "standalone server launched as PID $!"
+
+          ready=""
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; ready=1; break; fi
+            sleep 5
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::server did not become ready in 5 min"
+            tail -200 /tmp/dashboard-server.log
+            exit 1
+          fi
+
           timeout --kill-after=60 1200 pnpm test:e2e:dashboards
           code=$?
           echo "code=${code}" >> "$GITHUB_OUTPUT"
           echo "playwright exited with ${code}"
+          kill "$SAMPLER_PID" 2>/dev/null || true
           exit 0
 
       - name: Upload Playwright report
@@ -439,3 +512,38 @@ jobs:
             echo "::error::dashboard live-verify smoke failed or timed out (exit ${code})"
             exit 1
           fi
+
+      - name: Stop the memory sampler and report the readings
+        # ALWAYS: the readings matter most on the runs that die. Reads the same
+        # AGENTS_SMOKE_MEMORY_SAMPLER_PID the sampler step wrote to $GITHUB_ENV.
+        # On the stub path (no sampler) both variables are empty and the step
+        # says so and exits 0.
+        if: ${{ always() }}
+        run: |
+          set -u
+          pid="${AGENTS_SMOKE_MEMORY_SAMPLER_PID:-}"
+          file="${AGENTS_SMOKE_MEMORY_FILE:-}"
+          if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+          fi
+          if [ -z "$file" ] || [ ! -s "$file" ]; then
+            echo "no memory samples recorded (the real-smoke path did not run)"
+            exit 0
+          fi
+          echo "peak used memory (MB): $(awk -F'mem_used_mb=' '/mem_used_mb=/ { split($2, f, " "); if (f[1] + 0 > p) p = f[1] + 0 } END { print p + 0 }' "$file")"
+          echo "minimum available memory (MB): $(awk -F'mem_available_mb=' '/mem_available_mb=/ { split($2, f, " "); v = f[1] + 0; if (m == "" || v < m) m = v } END { print (m == "" ? 0 : m) }' "$file")"
+          echo "samples recorded: $(grep -c mem_used_mb "$file")"
+          echo "--- last 40 lines of ${file} ---"
+          tail -40 "$file"
+
+      - name: Upload the memory samples
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agents-smoke-memory
+          # Never an empty path input: on the stub path the sampler step
+          # did not run, so the variable is unset — fall back to the name
+          # it would have written and let if-no-files-found: ignore pass.
+          path: ${{ env.AGENTS_SMOKE_MEMORY_FILE || format('{0}/agents-smoke-memory.txt', runner.temp) }}
+          retention-days: 7
+          if-no-files-found: ignore
