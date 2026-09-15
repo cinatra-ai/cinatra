@@ -125,7 +125,7 @@ import { fileURLToPath } from "node:url";
 //             Every field is compared EXACTLY, and an omitted numeric field
 //             reads as 0 — so an entry cannot tolerate more than it wrote down.
 //
-// ALL SIX entries below are the same transient shape: the suite is repaired at
+// EVERY entry below is the same transient shape: the suite is repaired at
 // the companion repo's main, and the committed dev-lock pin still predates the
 // repair. Wiring knowingly-red pins instead would make this gate red on arrival
 // and teach everyone to ignore it — and the brief for this slice says so
@@ -135,26 +135,6 @@ import { fileURLToPath } from "node:url";
 // as bookkeeping (a NOTICE, never a blocked bump).
 // ---------------------------------------------------------------------------
 export const CARVE_OUTS = [
-  {
-    id: "cinatra-ai/a2a-server-connector",
-    sha: "d1e342c7bf1167c1a3e2eab371d48b2c445008a9",
-    expect: {
-      exitCode: 1, totalTests: 63, failedTests: 6, pendingTests: 0,
-      failedTestNames: [
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?error=invalid-url fires an error toast with the static message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?notice=added fires a success toast with the static 'added' message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render ?notice=removed fires a warning toast with the static 'removed' message",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render a crafted/unknown error code is ignored — never toasted (codes-only protocol)",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render fires no toast when the URL carries no flash code",
-        "src/__tests__/a2a-setup-toast.dom.test.tsx › A2A setup — SearchParamToast DOM render renders nothing visible (island is a null-rendering effect component)",
-      ],
-      uncollected: [],
-    },
-    reason:
-      "6 of 63 tests red at the pinned sha: vitest.config.ts aliased its vendored next/navigation + sonner stubs ONLY when the real specifier failed to resolve, so inside the monorepo the real modules won and useRouter() threw outside a mounted App Router.",
-    upstream: "cinatra-ai/a2a-server-connector#52 (merged 2026-07-31) — stubs aliased unconditionally; 63/63 green",
-    retiresWhen: "the dev-lock pin moves to e64d99e0f47e or later",
-  },
   {
     id: "cinatra-ai/email-artifacts",
     sha: "86c3ad126832613a45e8bc36bcabd90fdc6e5a93",
@@ -219,37 +199,6 @@ export const CARVE_OUTS = [
       "7 of 49 tests red at the pinned sha — the same conditional-stub seam defect as a2a-server-connector, plus @cinatra-ai/sdk-ui/marketplace and a missing server-only stub.",
     upstream: "cinatra-ai/linkedin-connector#69 (merged 2026-07-31) — unconditional seams + server-only stub; 59/59 green",
     retiresWhen: "the dev-lock pin moves to e8c48ff840dc or later",
-  },
-  {
-    id: "cinatra-ai/blog-idea-artifact",
-    sha: "79a3f6c137e0035fc2d20b511cfe25aea1caee27",
-    expect: { exitCode: 1, totalTests: 0, failedTests: 0, pendingTests: 0, failedTestNames: [], uncollected: ["tests/object-renderers.test.tsx"] },
-    reason:
-      'ships tests/object-renderers.test.tsx and declares "test": "vitest run", but has no vitest config at the pinned sha — so vitest inherits the HOST ROOT config, whose include matches nothing in the package, and exits 1 with "No test files found". Its declared test script is a no-op in the monorepo layout.',
-    upstream: "cinatra-ai/blog-idea-artifact#40 (merged 2026-07-31) — package-local vitest.config.ts; 4 tests collect and pass",
-    retiresWhen: "the dev-lock pin moves to 68a9dd8cb82f or later",
-  },
-  {
-    id: "cinatra-ai/blog-post-artifact",
-    sha: "3d2094e69a7d2b65815ba67835a1ab5cf0f7580b",
-    expect: { exitCode: 1, totalTests: 0, failedTests: 0, pendingTests: 0, failedTestNames: [], uncollected: ["tests/object-renderers.test.tsx"] },
-    reason:
-      'identical to blog-idea-artifact: a real test file, a declared "vitest run" script, no package-local config at the pinned sha, and therefore "No test files found" under the inherited host-root include.',
-    upstream: "cinatra-ai/blog-post-artifact#41 (merged 2026-07-31) — package-local vitest.config.ts; 5 tests collect and pass",
-    retiresWhen: "the dev-lock pin moves to e779e2baaf0f or later",
-  },
-  {
-    // Found BY THIS GATE, on its first run — not by the cinatra#2288 survey,
-    // which counted packages and never compared per-package file sets. Note the
-    // recorded shape: exitCode 0. The suite is GREEN. Every count-based look at
-    // this package says healthy, which is exactly why it survived.
-    id: "cinatra-ai/wordpress-assistant-connector",
-    sha: "e00830bb26300a0ff71d8b4c9da4720bfedca184",
-    expect: { exitCode: 0, totalTests: 10, failedTests: 0, pendingTests: 0, failedTestNames: [], uncollected: ["tests/contracts/wp-drupal/contract-v1.test.ts"] },
-    reason:
-      "GREEN but INCOMPLETE at the pinned sha: 1 of its 3 test files — the canonical wp-drupal-assistant v1 wire-contract conformance suite (schemas + golden fixtures) — is outside the inherited host-root include and has been collected by NOTHING since it landed in that repo's #4. Its own CI skips tests (host-internal peers), so those 13 assertions have never executed anywhere. Verified: under a package-local config the package runs 3 files / 23 tests, all green, vs 2 files / 10 tests today.",
-    upstream: "cinatra-ai/wordpress-assistant-connector#47 — package-local vitest.config.ts so all three files collect",
-    retiresWhen: "the dev-lock pin moves past that repair",
   },
 ];
 
@@ -603,10 +552,10 @@ export function judge({ packages, results, carveOuts = CARVE_OUTS }) {
   }
 
   // A LOST report is fatal for EVERY package, enforced or carved, and is
-  // checked before any tolerance. Without this the two blog carve-outs — whose
-  // documented shape is "exit 1, 0 failures, sole file uncollected" — would be
-  // satisfied exactly by a vanished report, so a broken reporter would read as
-  // the defect they record.
+  // checked before any tolerance. Without this a carve-out whose documented
+  // shape is "exit 1, 0 failures, sole file uncollected" would be satisfied
+  // exactly by a vanished report, so a broken reporter would read as the
+  // defect the entry records.
   for (const pkg of [...run, ...carved]) {
     const res = results.get(pkg.id);
     if (res && res.reportOk === false) {
