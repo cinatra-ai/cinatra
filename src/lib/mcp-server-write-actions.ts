@@ -258,17 +258,32 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   let newConnectionId: string | undefined;
   if (apiKey) {
     newConnectionId = `external-mcp-${randomUUID()}`;
+    // A user row's credential is owned by the row's owner (preserved on an admin
+    // edit of someone else's row); a global row's is owned by the registering
+    // admin.
+    const credentialOwnerUserId =
+      scope === "user" ? preservedUserId ?? session.user.id : session.user.id;
+    // The ORGANIZATION stored on the connection identity (cinatra#3397). A user
+    // row the signed-in person registers for THEMSELVES carries THAT person's own
+    // organization, read from the session — a person who belongs to none still
+    // creates the connection, without one. Without this the identity was always
+    // null-org, and the Sharing tab's `workspace` share was refused at write time
+    // by the ratified veto (a workspace locus on a null-org identity row is
+    // `invalid_locus` — that rule stands unchanged).
+    //
+    // An admin editing ANOTHER user's row keeps that row's credential org-less:
+    // it is not the admin's connection and must never be re-homed to the acting
+    // admin's organization (cross-org safety). A global row's credential stays
+    // owned by the registering admin and workspace-seeded (org-shared) so the
+    // org-bound InternalWorker use-gate can mint it — an owner-only grant would
+    // deny that mint.
+    const selfRegistered = credentialOwnerUserId === session.user.id;
+    const identityOrganizationId =
+      scope === "user" ? (selfRegistered ? organizationId : null) : organizationId;
     try {
       await importExternalMcpApiKeyConnection(newConnectionId, apiKey, {
-        // A user row's credential is owned by the row's owner (preserved on an
-        // admin edit of someone else's row) and is PERSONAL — bound to NO org so an
-        // admin editing another user's row never re-homes the credential to the
-        // admin's organization (cross-org safety). A global row's credential is
-        // owned by the registering admin and workspace-seeded (org-shared) so the
-        // org-bound InternalWorker use-gate can mint it — an owner-only grant would
-        // deny that mint.
-        ownerUserId: scope === "user" ? preservedUserId ?? session.user.id : session.user.id,
-        organizationId: scope === "user" ? null : organizationId,
+        ownerUserId: credentialOwnerUserId,
+        organizationId: identityOrganizationId,
         seed: scope === "user" ? "owner" : "workspace",
       });
     } catch (err) {
