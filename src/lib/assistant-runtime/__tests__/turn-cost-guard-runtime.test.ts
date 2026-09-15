@@ -50,13 +50,6 @@ const SYSTEM_BODY = "SYSTEM_PROMPT_BODY";
 const CONFIRMATION_POLICY = "\n\nCONFIRMATION_POLICY";
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
-  serverSideExplicitDispatch: vi.fn(),
-}));
 vi.mock("@/app/api/chat/chat-user-context", () => ({
   buildChatUserContextSections: vi.fn(async () => []),
 }));

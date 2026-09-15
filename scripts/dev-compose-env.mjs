@@ -63,6 +63,10 @@ import {
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
 } from "./lib/dev-preflight.mjs";
+// The provider variables the knowledge-graph service declares VALUE-LESS. One
+// definition, imported rather than re-typed, so this strip cannot drift from
+// what the service takes (cinatra#2582).
+import { GRAPHITI_GENERATED_NAMES } from "./gen-graphiti-env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // The cwd's `.env.local` first (a worktree lane launched from its own dir),
@@ -126,6 +130,20 @@ if (process.argv.includes("--json")) {
   for (const line of planMessages(plan.warnings)) {
     process.stderr.write(`[dev-compose-env] ⚠ ${line}\n`);
   }
+
+  // STRIP THE PROVIDER VARIABLES FIRST (cinatra#2582). The graphiti service
+  // declares every provider variable value-less — "take it from the environment
+  // of the compose process" — so a whole-stack `up` run from a shell that has
+  // one (`npm run services` does `set -a && source .env.local` before it gets
+  // here) would hand the knowledge-graph indexer a key the app's own resolver
+  // never approved: the wrong vendor on an Anthropic install, or a key the
+  // operator disconnected in the app. Stripping them here rather than at each
+  // recipe keeps the guarded chain the entry points run — and the one this repo
+  // PRINTS as a remedy — one readable line, and covers every caller of this
+  // step at once. `npm run kg:up` afterwards is what hands the container the key
+  // the app actually stored; it reads its own `.env.local` through node, so the
+  // resolver's documented environment fallback still works.
+  process.stdout.write(`unset ${GRAPHITI_GENERATED_NAMES.join(" ")}\n`);
 
   const lines = [];
   // Docker reads COMPOSE_PROJECT_NAME from its own process env but NOT from

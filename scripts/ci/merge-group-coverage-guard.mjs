@@ -67,6 +67,7 @@ export const REQUIRED_CONTEXTS = [
   "truthful-attribution-gate / truthful-attribution-gate",
   "proof",
   "secrets-required-gate / secrets-required-gate",
+  "design-pin-drift",
 ];
 
 const KEY_RE = /^(\s*)(['"]?)([A-Za-z_][\w-]*)\2:\s*(.*?)\s*$/;

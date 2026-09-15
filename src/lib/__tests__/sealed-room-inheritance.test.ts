@@ -26,7 +26,6 @@
  * is a refinement, and substrate-excluded types stay NULL.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AsyncLocalStorage } from "node:async_hooks";
 
 // ---------------------------------------------------------------------------
 // Mock infra: capture every postgres-sync query for assertions. The mock
@@ -104,15 +103,29 @@ vi.mock("@cinatra-ai/llm", () => ({
 // mcp-server's AsyncLocalStorage carries the projectContext frame. We
 // import the real one via a side-effect-free re-export so test wrappers
 // can establish a frame around the writer call.
-vi.mock("@cinatra-ai/mcp-server", () => {
-  const storage = new AsyncLocalStorage<{
-    projectContext?: { projectId: string | null };
-    [k: string]: unknown;
-  }>();
+//
+// BOTH specifiers are stubbed with the SAME instance: `objects-store` reaches
+// the storage through the `./request-context` SUBPATH (the barrel pulls the MCP
+// runtime graph onto every route that touches auth), while this file reads it
+// through the barrel. In production both resolve to one module; under `vi.mock`
+// they are two interception points, so stubbing only one hands the writer a
+// DIFFERENT AsyncLocalStorage and every frame this file establishes is invisible
+// to it.
+const { projectContextStorage } = await vi.hoisted(async () => {
+  const { AsyncLocalStorage: Storage } = await import("node:async_hooks");
   return {
-    mcpRequestContextStorage: storage,
+    projectContextStorage: new Storage<{
+      projectContext?: { projectId: string | null };
+      [k: string]: unknown;
+    }>(),
   };
 });
+vi.mock("@cinatra-ai/mcp-server", () => ({
+  mcpRequestContextStorage: projectContextStorage,
+}));
+vi.mock("@cinatra-ai/mcp-server/request-context", () => ({
+  mcpRequestContextStorage: projectContextStorage,
+}));
 
 // ---------------------------------------------------------------------------
 // Now import the SUT modules — after the mocks are registered.

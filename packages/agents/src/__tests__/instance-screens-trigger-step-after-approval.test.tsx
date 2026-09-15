@@ -59,7 +59,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import {
   runDetailPanelKind,
   runMayReachTriggerStep,
-  screenHostsRecommendationCard,
   screenHostsStepRail,
 } from "../instance-screens";
 
@@ -165,7 +164,11 @@ describe("plan (A) §7 — where the step opens and what is NOT drawn with it", 
   });
 
   it("leaves the recommendation-hold host with the screen — no panel below claims it", () => {
-    expect(screenHostsRecommendationCard("trigger")).toBe(true);
+    // Read off the SOURCE since cinatra#3047, because there is no host gate left
+    // to ask: the screen mounts the card on every branch and the run panel
+    // mounts none, so this branch keeps the host the way every branch does.
+    expect(SCREEN_SRC).toContain("const recommendationCardNode = (");
+    expect(SCREEN_SRC).not.toContain("screenHostsRecommendationCard");
   });
 });
 

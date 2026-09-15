@@ -34,7 +34,7 @@
  *
  * RUNNER (real DB required — the suite self-skips without one):
  *   SUPABASE_DB_URL=postgres://…@127.0.0.1:5634/postgres SUPABASE_SCHEMA=lane_2691x \
- *     pnpm exec vitest run --config vitest.integration-2691.config.ts
+ *     pnpm exec vitest run --config vitest/integration/2691.config.ts
  * The schema is CREATED in beforeAll and DROPPED in afterAll.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -60,12 +60,12 @@ const SHARED_SCHEMAS = new Set([
 ]);
 const HAS_REAL_DB =
   RAW_DB_URL !== "" &&
-  !RAW_DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(RAW_DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
 /**
- * Set by `vitest.integration-2691.config.ts` and by nothing else. A suite
+ * Set by `vitest/integration/2691.config.ts` and by nothing else. A suite
  * whose only failure mode is "skipped" reports success by doing nothing —
  * this flag turns a missing database from a silent skip into a hard,
  * self-describing failure.
@@ -121,6 +121,7 @@ if (HAS_REAL_DB) {
 import { db } from "../../../packages/metric-cost-api/src/db";
 import { insertUsageEvent, readCostSummary } from "../../../packages/metric-cost-api/src/store";
 import { sql } from "drizzle-orm";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const USAGE_EVENTS_DDL = `
   CREATE TABLE "%SCHEMA%"."usage_events" (

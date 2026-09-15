@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 
 // The root vitest config aliases the heavy `@cinatra-ai/llm` barrel to the
@@ -48,7 +49,7 @@ vi.mock("@cinatra-ai/llm", async () => {
 
 const TEST_SCHEMA = "cinatra_test_skill_bundle_2088";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 

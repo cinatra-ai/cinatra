@@ -96,7 +96,7 @@ concurrency:
 jobs:
   reverify:
     name: attribution record re-verification (dispatch, verification-only)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Matches the engine job's own budget: the gate-arm verification may wait
     # (bounded) for a context to settle, and a job timeout shorter than that
     # window would surface as a cancelled run, i.e. a false verdict.
@@ -150,7 +150,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: cinatra-ai/ci
-          ref: fdc26811b97f435bbf8a754247631db39267a197
+          ref: 416a75707fdcfeb768b41c3a54f944078d1ab8fc
           path: .truthful-attribution-gate
           persist-credentials: false
 

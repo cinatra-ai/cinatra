@@ -49,11 +49,12 @@ describe("org detail carries no legacy management tablist; management lives on /
   });
 
   it("keeps the dashboards seam intact in the extracted surface", () => {
-    expect(DETAIL).toContain("<OrganizationDashboards");
-    expect(DASHBOARDS).toContain('const ORG_DETAIL_ANCHOR = "org-detail" as const');
-    expect(DASHBOARDS).toContain("export function makeRenderOrganizationDashboard");
-    expect(DASHBOARDS).toContain('dashboardModes={["grid", "rows"]}');
-    expect(DASHBOARDS).toContain("<OrganizationOverviewDashboard");
+    // RE-POINTED by cinatra#2807 fix leg 3. The #1734 invariant is that the
+    // landing keeps a dashboards seam while management lives on Settings; the
+    // seam is now the drawn Dashboards tab body, not the per-user canvas the
+    // ratified drawing does not draw on this tab.
+    expect(DETAIL).toContain("<ScopeDashboardsSection");
+    expect(DETAIL).not.toContain("<OrganizationDashboards");
   });
 });
 

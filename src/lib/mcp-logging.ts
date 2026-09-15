@@ -209,9 +209,20 @@ const SENSITIVE_HEADER_NAMES = new Set([
   "x-api-key",
   "x-cinatra-a2a-token",
   "x-cinatra-bridge-token",
+  // The development admin bypass's per-boot local credential. It is written
+  // 0600 so that only this operating-system user can read it; logging it
+  // verbatim would copy it into a world-of-the-log-directory file and undo
+  // that, handing anyone who can read the logs the local admin bypass.
+  "x-cinatra-dev-local-token",
 ]);
 
-function redactMcpLogValue(value: unknown): unknown {
+/**
+ * Replace every auth-bearing header value with a placeholder, at any depth.
+ * Exported so the redaction set is pinned by a test rather than by reading:
+ * a credential added to the product and forgotten here is a secret written to
+ * a log file in plain text.
+ */
+export function redactMcpLogValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactMcpLogValue);
   if (!isPlainObject(value)) return value;
   return Object.fromEntries(

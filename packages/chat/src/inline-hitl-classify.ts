@@ -17,10 +17,6 @@
  */
 
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
-import type {
-  ComposerCommentAction,
-  ComposerTargetResolution,
-} from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 export type ClassifyGate = {
   fields: Array<{ name: string; type: string; title?: string; required: boolean }>;
@@ -301,80 +297,55 @@ export type ComposerRouting =
   /** No gate takes this message — normal chat routing, unchanged. */
   | { kind: "chat" }
   /** A HITL gate the run is blocked on: classify and submit as before. */
-  | { kind: "field-gate"; gate: ChatGateDescriptor }
-  /** The bound review gate takes the message VERBATIM as a comment. */
-  | { kind: "review-comment"; ref: string; comment: ComposerCommentAction }
-  /** Several reviews could take it and none is chosen: ask, never guess. */
-  | { kind: "refuse-ambiguous"; count: number };
+  | { kind: "field-gate"; gate: ChatGateDescriptor };
+
+// ---------------------------------------------------------------------------
+// TWO ARMS ARE GONE (cinatra#2932, lifecycle-b W5a), and the third is NOT.
+//
+// REMOVED — `review-comment` and `refuse-ambiguous`. A sentence typed beside a
+// bound review used to be filed as that review's comment by this page, before
+// the assistant ever saw it, and a page-composed refusal used to answer when
+// several reviews were open. Both are replaced in the SAME change:
+//
+//   · the comment now lands through the card's OWN Comment control, operated by
+//     the conversation's assistant under the person's own credential, with the
+//     person's own words read out of the server-held grant
+//     (src/lib/lifecycle/lent-action-mcp.ts);
+//   · the refusal is now the PLATFORM'S — the open set is re-counted server-side
+//     under the reader's own access and the assistant relays the words back
+//     (src/lib/lifecycle/bound-card-binding.ts).
+//
+// KEPT — `field-gate`, with its classifier and the extraction below it. The plan
+// retires them too, and this slice deliberately does not: their replacement is
+// the screen's own lent fill-and-submit control, which is cinatra#2934's road
+// and is not built yet. Removing the reader here would take away a capability
+// people have — answering a waiting screen by typing in the chat box — and leave
+// nothing in its place until that slice lands. A removal whose replacement has
+// not shipped is a regression, not a cleanup, so this one waits for #2934.
+// ---------------------------------------------------------------------------
 
 /**
- * Where a composer message goes.
+ * Where a composer message goes — and since cinatra#2932 the answer is almost
+ * always "to the assistant".
  *
- * THE ORDER IS THE WHOLE CONTRACT:
- *
- *  1. AN EXPLICITLY FOCUSED REVIEW WINS OUTRIGHT. The reader pressed a card and
- *     said "my messages go here"; a field gate opening elsewhere must not
- *     silently take that back.
- *
- *  2. AN OPEN FIELD GATE OUTRANKS AN *IMPLICIT* REVIEW BINDING. A run blocked on
- *     a field is the binding the composer has always had, and #2566 lets a
- *     single review bind with no press at all. Where the reader has not spoken,
- *     the older behaviour is kept exactly — a field gate keeps the composer.
- *
- *  3. A SINGLE REVIEW BINDS ON ITS OWN (#2566: "exactly one eligible gate is
- *     active OR the user explicitly focused a card").
- *
- *  4. AMBIGUITY IS REFUSED, NOT RESOLVED. Two or more reviews open, none chosen:
- *     the message routes NOWHERE and the reader is told to pick a card. It is
- *     not sent to "the latest" review — that is a decision-module call on a
- *     coin flip — and it is not quietly turned into an LLM turn either, because
- *     with reviews waiting the reader's message is most likely meant for one of
- *     them and losing it into a chat turn is the silent failure this rule
- *     exists to prevent.
- *
- * A resolved TARGET with no reachable comment action (the card unmounted between
- * the resolve and the send) falls back to the field-gate/chat ladder rather than
- * inventing a transport — the comment path belongs to the card, and a card that
- * is gone has none.
+ * ONE ARM REMAINS: a run blocked on a FIELD GATE keeps the composer, exactly as
+ * it always has, because the assistant has no way to answer that screen yet
+ * (cinatra#2934 builds it). Everything else — including every message typed
+ * beside a review, bound or not, and every message typed while several reviews
+ * are open — is ordinary chat routing now, and what may be done to a card is
+ * decided on the server from the bound card the message carries.
  */
 export function resolveComposerRouting(args: {
-  /** The card runtime's focus resolution, read at SEND time. */
-  target: ComposerTargetResolution;
   /** What the chat gate registry holds right now. */
   latestOpenGate: ChatGateDescriptor | undefined;
-  /** The bound card's own comment action, by ref. */
-  commentActionFor: (ref: string) => ComposerCommentAction | undefined;
 }): ComposerRouting {
-  const { target, latestOpenGate, commentActionFor } = args;
+  const { latestOpenGate } = args;
   // A `review_comment` descriptor is NOT a field gate: it carries no fields to
-  // classify and its submit is comment-only. It is read as a review below, by
-  // ref, never fed to the field ladder.
+  // classify and its submit is comment-only. It is never fed to the field
+  // ladder, and since cinatra#2932 nothing on this page reads it at all — a
+  // bound review's message goes to the assistant like every other message.
   const fieldGate =
     latestOpenGate && latestOpenGate.kind !== "review_comment" ? latestOpenGate : undefined;
-
-  if (target.kind === "target") {
-    const comment = commentActionFor(target.ref);
-    if (comment && (target.explicit || fieldGate === undefined)) {
-      return { kind: "review-comment", ref: target.ref, comment };
-    }
-  }
   if (fieldGate) return { kind: "field-gate", gate: fieldGate };
-  if (target.kind === "ambiguous") {
-    return { kind: "refuse-ambiguous", count: target.count };
-  }
   return { kind: "chat" };
-}
-
-/**
- * The line the composer says back when it refuses to guess. Kept beside the
- * rule so the refusal and the reason cannot drift, and identifier-free because
- * it is persisted into an LLM-visible transcript.
- */
-export function ambiguousComposerRefusal(count: number): string {
-  return (
-    `${count} reviews are waiting for you, so this message was not sent anywhere. ` +
-    `Choose the review you want to reply to — press “Reply from the chat box” on its ` +
-    `card — and send it again. To keep chatting normally, press that control twice ` +
-    `on any one of them.`
-  );
 }

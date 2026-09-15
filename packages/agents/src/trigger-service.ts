@@ -19,6 +19,7 @@ import {
   createOrUpdateRunTrigger,
   readRunTriggerByRunId,
   deleteRunTriggerByRunId,
+  stopRunTriggerInDb,
   type TriggerType,
   type TriggerRecord,
 } from "./trigger-store";
@@ -30,7 +31,6 @@ import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import {
   advanceAgentRun,
   clearRunLifecycleMoment,
-  launchAgentRun,
 } from "./lifecycle-coordinator";
 import {
   transitionRunStatus,
@@ -43,15 +43,18 @@ import {
 // principal (e.g. a cross-org platform admin) — the design's deliberate
 // member-session choice for trigger ops (not a §2d′ non-member site).
 import { verifySessionAuthority } from "@/lib/org-write/authority";
-// The two reads `releaseTriggerNowForActor` (extracted below, cinatra#2788)
-// brings with it from `run-actions.ts`: the archived-org pre-check every
-// dispatch makes, and the monotonic gate write that opens the trigger.
-import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { markTriggerReleased } from "./trigger-gate";
 // SAVE CHANGES translates §VI's selections into the scheduler's fields with the
 // SAME `buildCron` the scheduling step and the proposal producer submit with, so
 // a schedule saved from the card and one armed from the form cannot differ.
 import { buildCron, type RecurringConfig } from "./trigger-recurrence";
+// cinatra#2981 — the ONE serialization this service, **Cancel schedule** and the
+// release job's fire decision all take. See trigger-claim.ts for what a claim
+// guarantees and where the BullMQ/Redis boundary limits it.
+import {
+  withTriggerClaim,
+  TriggerClaimUnavailableError,
+} from "./trigger-claim";
 
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
@@ -75,8 +78,8 @@ import {
 // cinatra#2523: the immediate trigger must put a JOB on the queue, not only
 // write a status. `enqueueAgentRun` is the single sanctioned dispatch
 // chokepoint (scripts/audit/agent-builder-enqueue-gate.mjs) and re-asserts the
-// install-scope guard — the same call `releaseTriggerNow` and the trigger
-// release job make, with the same compensation shape.
+// install-scope guard — the same call the trigger release job makes, with the
+// same compensation shape.
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { asActionablePreflightError } from "./actionable-preflight-error";
 
@@ -90,6 +93,57 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
   "stopped",
+]);
+
+/**
+ * The run statuses a scheduled or recurring schedule INSTALLED BY THIS CALL is
+ * legitimately live on once the arm has settled (cinatra#3054).
+ *
+ * `armed` is the schedule's own state: the run is waiting for exactly this
+ * schedule to release it, whether this call's compare-and-set moved it there or
+ * it was already there (a **Save changes** on a live schedule re-writes the row
+ * of a run that is armed already).
+ *
+ * `waiting_trigger` is an IN-FLIGHT run paused at a trigger step inside its own
+ * flow, which the release job resumes THROUGH THIS ROW — the same fact the
+ * immediate gate above refuses on. Tearing its schedule down would strand a
+ * live run, so it is named here rather than left to fall through the default.
+ *
+ * NARROWED AT CONVERGENCE, and worth saying plainly: the refusal below only
+ * fires for an arm that was DECIDED on `pending_input`/`pending_trigger`, and
+ * neither of those has a legal edge to `waiting_trigger` (see LEGAL_TRANSITIONS
+ * in run-status.ts). So this member is defence rather than a live branch — it
+ * cannot be reached by an ordinary arm, and if the transition table ever grows
+ * that edge, the safe answer is already written down here.
+ *
+ * Every other status — the raced `stopped` this set exists for, and every
+ * terminal or in-flight one beside it — cannot be released by this schedule, so
+ * a schedule left standing on it is residue: a scheduler that fires into a
+ * refusal for ever. The arm refuses instead, and takes its scheduler with it.
+ */
+const SCHEDULE_LIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "armed",
+  "waiting_trigger",
+]);
+
+/**
+ * The run statuses an arm is DECIDED ON — the two rungs the compare-and-set
+ * ladder targets (cinatra#3054, narrowed at convergence).
+ *
+ * A run standing on one of these when the call was decided is a run this arm
+ * expects to move to `armed`; if it did not, it moved out from under the arm and
+ * the schedule installed for it is residue. A run standing on ANYTHING ELSE was
+ * never going to be flipped by this call at all — a recurring **Save changes**
+ * on a run that is `queued`, `running` or long finished is the ordinary case,
+ * its row is a future-fire schedule that is meaningful independently of this
+ * run's own outcome (cinatra#2482 item 4) — so its ordinary progress
+ * (`queued → running`, `running → completed`) is NOT a race and must never take
+ * a schedule down. The settlement below therefore only refuses when the arm was
+ * decided on one of these two and did not land.
+ */
+const ARMING_SNAPSHOT_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "pending_input",
+  "pending_trigger",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -106,7 +160,8 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
  *   handler somehow forwards an empty actor, the service still rejects).
  * - `role === "admin"` enables ownership bypass for read/cancel paths
  *   (operations support). For setRunTrigger this is a no-op — admins
- *   use the separate `releaseTriggerNow` admin-only override.
+ *   there is no override: plan (A) §7.2 as amended 2026-08-25 withdrew Run now
+ *   from every surface (cinatra#2972).
  * - `source` is for audit logging only and is not interpreted by this
  *   layer ("ui" | "mcp" | "worker" | "scheduler" | etc).
  */
@@ -159,8 +214,17 @@ export type SetTriggerReplaceStrictness = {
    * half: a caller that checked released/fired state against an EARLIER read
    * has an open window between its check and this write, and re-asking here
    * closes it against the read that actually matters.
+   *
+   * IT MAY ANSWER ASYNCHRONOUSLY (cinatra#3044). Some guards are about the row
+   * this function reads and some are about the RUN it belongs to — a run that
+   * has been stopped since the caller looked. The second kind needs a read of
+   * its own, and it has to happen HERE, inside the claim, or it is another
+   * snapshot with a window after it. A synchronous guard is unchanged and still
+   * satisfies this type.
    */
-  reverify?: (existing: TriggerRecord | null) => string | null;
+  reverify?: (
+    existing: TriggerRecord | null,
+  ) => string | null | Promise<string | null>;
 };
 
 export type GetTriggerForActorResult =
@@ -400,7 +464,7 @@ async function dispatchImmediateNow(
       // `isOwnerOrAdmin` admits `role === "admin"`, i.e. an actor who is NOT the
       // run's owner; without this the guard would evaluate only `run_by` and let
       // an admin outside the agent's team/project fire an in-scope owner's run.
-      // Same rule as `releaseTriggerNow` and the two HITL gates: both the ACTOR
+      // Same rule as the trigger release job and the two HITL gates: both the ACTOR
       // and the run OWNER must be inside scope.
       await transitionRunStatus(runId, from, "queued", undefined, authority, {
         actingUserId: actor.userId,
@@ -443,7 +507,7 @@ async function dispatchImmediateNow(
   }
 
   // Enqueue the execution job now that the run is queued and the gate is open.
-  // Idempotent on jobId, and identical in shape to `releaseTriggerNow`'s enqueue.
+  // Idempotent on jobId, and identical in shape to the release job's enqueue.
   try {
     await enqueueAgentRun({ runId }, { jobId: `agent-builder-${runId}` });
   } catch (err) {
@@ -532,6 +596,12 @@ async function dispatchImmediateNow(
  * prior schedule BEFORE upserting (no orphan jobs); flips run status
  * pending_input → armed (with pending_trigger → armed fallback) for
  * scheduled/recurring trigger types.
+ *
+ * THE ARM IS ONE DECISION WITH THE SCHEDULE IT INSTALLS (cinatra#3054): the
+ * status flip happens inside the trigger claim, before the row can name the
+ * scheduler, and a run that MOVED under the arm — a Stop landing mid-call —
+ * takes the scheduler back down with it and is answered with a refusal. A stale
+ * status is never reported as an armed schedule.
  *
  * Same code path is used by server actions and MCP handlers — the actor
  * envelope is the only auth input.
@@ -702,12 +772,55 @@ export async function setRunTriggerForActor(
   // A RECURRING schedule is deliberately NOT refused: its future ticks are still
   // ahead of it, and a change applies to them. Ticks already fired are separate
   // runs of their own and no change here reaches back into them.
+  //
+  // BOTH ONE-OFFS, NOT ONE OF THEM (cinatra#2980). **Run right after setup** is
+  // a one-off as much as **Schedule for later** is: its row is `immediate`, and
+  // the immediate path stamps `releasedAt` through `markTriggerReleased` when it
+  // opens the gate, exactly as a `scheduled` fire does. Naming `scheduled` alone
+  // left a fired immediate row changeable, and the run page's standalone form
+  // took that route — a finished run's own trigger row could be replaced with a
+  // recurring schedule. The condition therefore reads the way the save guard
+  // already reads it (`saveScheduleGuardRefusal` below): everything that is not
+  // recurring is a one-off, so a one-off kind added later is refused by default
+  // rather than let through by omission, which is precisely how `immediate` was
+  // let through.
+  //
+  // AND A REPLAY OF THE SAME IMMEDIATE ARM IS NOT A CHANGE. `scheduleTrigger`
+  // stamps `releasedAt` for an `immediate` trigger BEFORE this function
+  // dispatches it (`markTriggerReleased`, then the recommendation hold, then
+  // `dispatchImmediateNow`), and the installation path that arms an immediate
+  // trigger is an at-least-once worker: a crash in that window leaves a stamped
+  // row whose retry must still be able to finish. Refusing it would turn a
+  // recoverable retry into a terminal park with "this schedule has already
+  // fired" on a run that may never have been dispatched. An immediate request
+  // against an immediate row rewrites no WHEN — it is the same instruction
+  // arriving twice — so the ladder ABOVE this guard owns it: the terminal-run
+  // gate refuses it on a finished run, the in-flight gate on a paused one, and
+  // the recommendation hold answers a retry with the existing park. A fired
+  // `scheduled` row asked for an immediate arm is NOT this case and stays
+  // refused, exactly as cinatra#2928 shipped it.
   const beforeChange = await readRunTriggerByRunId(args.runId);
+  const replaysTheSameImmediateArm =
+    args.triggerType === "immediate" &&
+    beforeChange?.triggerType === "immediate" &&
+    // AND IT CARRIES NO SCHEDULE. `scheduledAt` and `cronExpression` are the two
+    // fields that make a request a schedule, and the upsert below persists them
+    // onto the row whatever the type says. An "immediate" request carrying one
+    // is not the replay this exemption is for, so it is refused with the rest —
+    // the exemption stays exactly "run now, again", which names no moment and
+    // rewrites nothing (`timezone` is only ever read to interpret those two).
+    !args.scheduledAt &&
+    !args.cronExpression &&
+    args.enabled !== false;
   if (
     beforeChange &&
-    beforeChange.triggerType === "scheduled" &&
-    beforeChange.releasedAt !== null
+    beforeChange.triggerType !== "recurring" &&
+    beforeChange.releasedAt &&
+    !replaysTheSameImmediateArm
   ) {
+    // ONE SENTENCE FOR BOTH KINDS. The reader is told the same thing whichever
+    // one-off they set, because it is the same fact about the same moment — and
+    // the sentence names the next action that does work.
     return {
       ok: false,
       error:
@@ -715,144 +828,318 @@ export async function setRunTriggerForActor(
     };
   }
 
-  // Read existing row first → cancel old schedule → upsert (no orphan jobs).
+  // A STOPPED RECURRING SCHEDULE CANNOT BE CHANGED EITHER (cinatra#2972).
   //
-  // Deliberately its OWN read, immediately before the cancel, NOT the gate's
-  // snapshot from the top of this function: the cron/scheduledAt validation
-  // between them is asynchronous, so a concurrent reconfiguration could install
-  // a scheduler after that earlier snapshot and this call would then fail to
-  // cancel it, orphaning the job (codex round-2 finding). The extra round-trip
-  // is the price of the no-orphan guarantee.
-  const existing = await readRunTriggerByRunId(args.runId);
+  // Plan (A) §7.2 as amended 2026-08-25: **Cancel schedule** "stops the
+  // recurring schedule and then makes the scheduler non-editable". The card
+  // withholds the floor for exactly this state; this is the server saying the
+  // same thing, so a request that reaches the service another way is refused
+  // rather than quietly re-arming a schedule the person stopped.
+  if (beforeChange && beforeChange.stoppedAt) {
+    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.stopped };
+  }
 
-  // RE-ASK THE CALLER'S GUARD ON *THIS* READ (cinatra#2788).
+  // THE REPLACEMENT RUNS UNDER THE CLAIM (cinatra#2981).
   //
-  // A caller that refused on released/fired state did so against an earlier
-  // snapshot, and everything between that read and this one is asynchronous —
-  // so a concurrent release can land in the gap and the caller's refusal never
-  // runs again. Re-asking here binds the decision to the row the cancel and the
-  // upsert are about to act on. Nothing has been written yet at this point, so
-  // a refusal here leaves the reader's existing schedule untouched.
-  if (strictness?.reverify) {
-    const refusal = strictness.reverify(existing);
-    if (refusal) return { ok: false, error: refusal };
-  }
+  // Read existing row first → cancel old schedule → upsert (no orphan jobs) —
+  // and all three under one claim, because the re-ask below could only ever be
+  // as good as the interval after it. A **Cancel schedule** landing between the
+  // re-ask and the upsert used to be accepted: the upsert writes `enabled` back
+  // to true while `stopped_at` (deliberately absent from the store's SET clause)
+  // survives, so the row came out of the race stopped AND enabled. For a
+  // recurring→recurring save that self-healed on the next tick; for a
+  // recurring→scheduled save it did not, because it also rewrote `trigger_type`
+  // and the one-off fire path had no `stopped_at` check to save it.
+  //
+  // Under the claim there is no such interval. The row handed in below is read
+  // while the claim is held, the cancel and both upserts happen before it is
+  // released, and a stop waits and lands after — where it is the last word.
+  //
+  // THE READ IS STILL ITS OWN, not the gate's snapshot from the top of this
+  // function: the cron/scheduledAt validation between them is asynchronous, so a
+  // concurrent reconfiguration could install a scheduler after that earlier
+  // snapshot and this call would then fail to cancel it, orphaning the job
+  // (cinatra#2788).
+  // Declared out here because the answer below still reports the installed
+  // scheduler id; the claim body assigns it.
 
-  const oldJobSchedulerId = existing?.jobSchedulerId ?? null;
-  const oldTriggerType = existing?.triggerType ?? null;
-  if (oldJobSchedulerId && oldTriggerType) {
-    try {
-      await cancelTriggerSchedule({
-        jobSchedulerId: oldJobSchedulerId,
-        triggerType: oldTriggerType,
-      });
-    } catch (err) {
-      // FAIL CLOSED FOR A REPLACEMENT (cinatra#2788). Continuing here installs
-      // the new scheduler while the old one is still live: two schedulers on
-      // one run, both able to fire it, and a reader who was shown exactly one
-      // schedule. The replace path refuses instead — before the upsert, so
-      // nothing is half-written and the prior schedule stands unchanged.
-      if (strictness?.failClosedOnCancelFailure) {
-        console.error(
-          "[setRunTriggerForActor] cancel of prior schedule failed — refusing the replacement (nothing written)",
-          args.runId,
-          err,
-        );
-        return { ok: false, error: SAVE_SCHEDULE_REFUSALS.cancelFailed };
-      }
-      console.warn(
-        "[setRunTriggerForActor] cancel of prior schedule failed (continuing)",
-        args.runId,
-        err,
-      );
-    }
-  }
-
-  // Upsert (no jobSchedulerId yet — set after scheduling).
-  // NOTE: do NOT pass `releasedAt` — the store omits it from the SET clause
-  // when undefined, preserving any prior value (matches the immediate-trigger
-  // double-upsert path that calls markTriggerReleased between upserts).
-  await createOrUpdateRunTrigger({
-    runId: args.runId,
-    triggerType: args.triggerType,
-    scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : null,
-    cronExpression: args.cronExpression ?? null,
-    timezone: tz,
-    enabled: args.enabled ?? true,
-    jobSchedulerId: null,
-  });
-
-  // Register the new schedule (compensate on failure).
-  let scheduleResult: { jobSchedulerId: string | null };
-  try {
-    scheduleResult = await scheduleTrigger({
-      runId: args.runId,
-      triggerType: args.triggerType,
-      scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : undefined,
-      cronExpression: args.cronExpression,
-      timezone: tz,
-    });
-  } catch (err) {
-    await deleteRunTriggerByRunId(args.runId).catch((cleanupErr) => {
-      console.error(
-        "[setRunTriggerForActor] cleanup after schedule failure failed",
-        args.runId,
-        cleanupErr,
-      );
-    });
-    return {
-      ok: false,
-      error: `schedule failed: ${(err as Error).message}`,
-    };
-  }
-
-  // Persist final form (jobSchedulerId set). Same releasedAt-preservation note.
-  await createOrUpdateRunTrigger({
-    runId: args.runId,
-    triggerType: args.triggerType,
-    scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : null,
-    cronExpression: args.cronExpression ?? null,
-    timezone: tz,
-    enabled: args.enabled ?? true,
-    jobSchedulerId: scheduleResult.jobSchedulerId,
-  });
-
-  // Owner/org-admin member session grounds the status flips (§2a).
+  // Owner/org-admin member session grounds the status flips (§2a). Minted
+  // BEFORE the claim (cinatra#3054): the scheduled/recurring status settlement
+  // now happens INSIDE it, and a mint that fail-closes for a non-member does so
+  // before anything is written rather than after the row exists.
   const authority = await verifySessionAuthority(actor.userId, run.orgId);
+  let scheduleResult: { jobSchedulerId: string | null } = { jobSchedulerId: null };
+  let refusal: SetTriggerForActorResult | null;
+  try {
+    refusal = await withTriggerClaim(
+      args.runId,
+      async (existing): Promise<SetTriggerForActorResult | null> => {
+
+        // RE-ASK THE CALLER'S GUARD ON *THIS* READ (cinatra#2788).
+        //
+        // A caller that refused on released/fired state did so against an earlier
+        // snapshot, and everything between that read and this one is asynchronous —
+        // so a concurrent release can land in the gap and the caller's refusal never
+        // runs again. Re-asking here binds the decision to the row the cancel and the
+        // upsert are about to act on. Nothing has been written yet at this point, so
+        // a refusal here leaves the reader's existing schedule untouched.
+        if (strictness?.reverify) {
+          const refusal = await strictness.reverify(existing);
+          if (refusal) return { ok: false, error: refusal };
+        }
+        // THE STOP STAMP WINS ON EVERY KIND SWITCH (cinatra#2981), and it is
+        // asked HERE, unconditionally, rather than only through a caller's
+        // `reverify` hook. Save changes passes that hook and would be refused
+        // by it; the MCP `trigger_config_set` path and the run page's own form
+        // do not, and a stopped schedule must not be re-armed from any of them.
+        // Asked against the CLAIMED read, so this is the authoritative answer
+        // rather than another snapshot with an interval after it.
+        if (existing?.stoppedAt) {
+          return { ok: false, error: SAVE_SCHEDULE_REFUSALS.stopped };
+        }
+
+
+        const oldJobSchedulerId = existing?.jobSchedulerId ?? null;
+        const oldTriggerType = existing?.triggerType ?? null;
+        if (oldJobSchedulerId && oldTriggerType) {
+          try {
+            await cancelTriggerSchedule({
+              jobSchedulerId: oldJobSchedulerId,
+              triggerType: oldTriggerType,
+            });
+          } catch (err) {
+            // FAIL CLOSED FOR A REPLACEMENT (cinatra#2788). Continuing here installs
+            // the new scheduler while the old one is still live: two schedulers on
+            // one run, both able to fire it, and a reader who was shown exactly one
+            // schedule. The replace path refuses instead — before the upsert, so
+            // nothing is half-written and the prior schedule stands unchanged.
+            if (strictness?.failClosedOnCancelFailure) {
+              console.error(
+                "[setRunTriggerForActor] cancel of prior schedule failed — refusing the replacement (nothing written)",
+                args.runId,
+                err,
+              );
+              return { ok: false, error: SAVE_SCHEDULE_REFUSALS.cancelFailed };
+            }
+            console.warn(
+              "[setRunTriggerForActor] cancel of prior schedule failed (continuing)",
+              args.runId,
+              err,
+            );
+          }
+        }
+
+        // Upsert (no jobSchedulerId yet — set after scheduling).
+        // NOTE: do NOT pass `releasedAt` — the store omits it from the SET clause
+        // when undefined, preserving any prior value (matches the immediate-trigger
+        // double-upsert path that calls markTriggerReleased between upserts).
+        await createOrUpdateRunTrigger({
+          runId: args.runId,
+          triggerType: args.triggerType,
+          scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : null,
+          cronExpression: args.cronExpression ?? null,
+          timezone: tz,
+          enabled: args.enabled ?? true,
+          jobSchedulerId: null,
+        });
+
+        // Register the new schedule (compensate on failure).
+          try {
+          scheduleResult = await scheduleTrigger({
+            runId: args.runId,
+            triggerType: args.triggerType,
+            scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : undefined,
+            cronExpression: args.cronExpression,
+            timezone: tz,
+          });
+        } catch (err) {
+          // THE COMPENSATION MUST NOT DELETE A SCHEDULE SOMEBODY STOPPED
+          // (cinatra#2972). A **Cancel schedule** landing between this
+          // save's re-verification and this failure leaves a STOPPED row — and the
+          // cleanup below would delete it, taking away the schedule the person is
+          // owed a reading of ("it never deletes the schedule"). A stopped row also
+          // needs no cleanup: it names no live scheduler this call installed, because
+          // this call is the one that just failed to install one.
+          const stoppedMeanwhile = await readRunTriggerByRunId(args.runId).catch(() => null);
+          if (stoppedMeanwhile?.stoppedAt) {
+            console.warn(
+              "[setRunTriggerForActor] schedule failed on a run stopped meanwhile — leaving the stopped row intact",
+              args.runId,
+            );
+            return { ok: false, error: SAVE_SCHEDULE_REFUSALS.stopped };
+          }
+          await deleteRunTriggerByRunId(args.runId).catch((cleanupErr) => {
+            console.error(
+              "[setRunTriggerForActor] cleanup after schedule failure failed",
+              args.runId,
+              cleanupErr,
+            );
+          });
+          return {
+            ok: false,
+            error: `schedule failed: ${(err as Error).message}`,
+          };
+        }
+
+        // THE STATUS SETTLES BEFORE THE ROW CAN NAME THE SCHEDULER (cinatra#3054).
+        //
+        // A scheduler may legitimately exist for a MOMENT before the status
+        // transition; what may not survive the settled operation is one on a run
+        // that did not end up armed. So the compare-and-set moves inside the
+        // claim, ahead of the write that makes the row name the scheduler, and a
+        // run that moved meanwhile takes the scheduler down with it and refuses.
+        //
+        // WHY NOT SETTLE BEFORE THE SCHEDULER IS REGISTERED, which would leave
+        // nothing to take down: registering can fail, and its compensation would
+        // then have to move the run OFF `armed` again. The only legal way back is
+        // `armed → pending_input` (`armed → pending_trigger` is not in the table
+        // at all), so the compensation could not restore a run that arrived here
+        // on `pending_trigger` — it would either strand it armed with no schedule
+        // to release it, or silently move it to a state its own screen is not on.
+        // Compensating the SCHEDULER is the failure this shape can actually
+        // carry, and it is a cancel rather than a status rewrite.
+        if (args.triggerType === "scheduled" || args.triggerType === "recurring") {
+          // A SETTLEMENT THAT THROWS MUST NOT LEAVE AN UNNAMEABLE SCHEDULER
+          // (cinatra#3054, second convergence round). `stale_from_status` is
+          // handled inside the helper; anything else — a database timeout, an
+          // authority rejection, an illegal edge — propagates. Before the
+          // settlement moved in here the row already named the scheduler by
+          // this point, so an orphan left by a throw was at least removable by
+          // the release job. It is not any more: the id is persisted only
+          // BELOW, so a throw here would leave a live scheduler and a row
+          // naming `null`, and the release job tears a scheduler down only
+          // through the id on the row. So the scheduler is cancelled before the
+          // error is rethrown, and the caller still gets the original failure.
+          let settled: string | null;
+          try {
+            settled = await settledRunStatusForSchedule(args.runId, authority);
+          } catch (err) {
+            if (scheduleResult.jobSchedulerId) {
+              await cancelTriggerSchedule({
+                jobSchedulerId: scheduleResult.jobSchedulerId,
+                triggerType: args.triggerType,
+              }).catch((cancelErr) => {
+                console.error(
+                  "[setRunTriggerForActor] the arm settlement failed AND the scheduler it never named would not cancel — a live scheduler no row can name survives this failure, for run",
+                  args.runId,
+                  cancelErr,
+                );
+              });
+            }
+            throw err;
+          }
+          const scheduleIsLive =
+            settled !== null && SCHEDULE_LIVE_RUN_STATUSES.has(settled);
+          const armWasDecidedOnAPendingRun = ARMING_SNAPSHOT_RUN_STATUSES.has(run.status);
+          // NO EQUALITY CONJUNCT HERE, and the reason is a real interleaving
+          // (cinatra#3054, second convergence round). An earlier form also
+          // required `settled !== run.status`, reading an unchanged status as
+          // "nothing raced the arm". It is not: a SUCCESSFUL compare-and-set
+          // above answers `armed`, so reaching a pending answer at all means
+          // neither rung landed. A run can leave and return — `pending_input →
+          // pending_trigger` (the person opens the trigger form) and
+          // `pending_trigger → pending_input` (they navigate away) are both in
+          // LEGAL_TRANSITIONS — and land back on the status the arm was decided
+          // on with both rungs stale. The equality then suppressed the rollback
+          // and the call reported an armed schedule over a run that is not
+          // armed and that nothing will ever release. Decided on a pending rung
+          // and not settled live is the whole test.
+          if (!scheduleIsLive && armWasDecidedOnAPendingRun) {
+            // THE RUN MOVED OUT FROM UNDER ITS OWN ARM — the defect, exactly.
+            // runId + status are discrete ARGUMENTS, never interpolated into the
+            // format string (CodeQL js/tainted-format-string).
+            console.warn(
+              "[setRunTriggerForActor] the run moved while its schedule was being armed — it read",
+              run.status,
+              "when this call was decided and reads",
+              settled ?? "absent",
+              "now, so the schedule is taken back down and the arm refused, for run",
+              args.runId,
+            );
+            return await rollBackScheduleThatDidNotArm(
+              args,
+              scheduleResult.jobSchedulerId,
+              tz,
+            );
+          }
+          if (!scheduleIsLive) {
+            // NOTHING RACED THE ARM. Either the run stands exactly where it
+            // stood when the call was decided, or it was never on a rung this
+            // ladder flips and its own progress moved it (`queued → running`,
+            // `running → completed`). Both are the deliberately ungated case —
+            // "scheduled / recurring are never gated; their row is a future-fire
+            // schedule, meaningful independently of this run's own outcome"
+            // (cinatra#2482 item 4, and a recurring schedule's ticks are new
+            // runs of their own). The status is left as-is, exactly as it always
+            // was, and the schedule stands.
+            console.log(
+              "[setRunTriggerForActor] run",
+              args.runId,
+              "was not in pending_input/pending_trigger when its schedule was armed and did not move — leaving status as-is",
+            );
+          }
+        }
+
+        // Persist final form (jobSchedulerId set). Same releasedAt-preservation note.
+        //
+        // AND IT CAN FAIL, WITH THE RUN ALREADY ARMED (convergence finding).
+        // Because the settlement now happens above this write rather than after
+        // the claim, a throw here would leave an armed run, a live scheduler and
+        // a row naming neither — and a caller told the call failed while the
+        // schedule went on to fire it. `armed → pending_trigger` is not a legal
+        // edge, so the run cannot be un-armed; what CAN be taken back is the
+        // scheduler, and taking it back is what stops anything from happening
+        // behind a reported failure. The row is left as it stands (enabled,
+        // naming no scheduler) rather than stamped stopped, so the person can
+        // simply save the schedule again. The original error is rethrown.
+        try {
+          await createOrUpdateRunTrigger({
+            runId: args.runId,
+            triggerType: args.triggerType,
+            scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : null,
+            cronExpression: args.cronExpression ?? null,
+            timezone: tz,
+            enabled: args.enabled ?? true,
+            jobSchedulerId: scheduleResult.jobSchedulerId,
+          });
+        } catch (err) {
+          if (scheduleResult.jobSchedulerId) {
+            await cancelTriggerSchedule({
+              jobSchedulerId: scheduleResult.jobSchedulerId,
+              triggerType: args.triggerType,
+            }).catch((cancelErr) => {
+              console.error(
+                "[setRunTriggerForActor] the final row write failed AND the scheduler it could not name would not cancel — a live scheduler outlives a reported failure, for run",
+                args.runId,
+                cancelErr,
+              );
+            });
+          }
+          throw err;
+        }
+
+        return null;
+      },
+    );
+  } catch (err) {
+    if (err instanceof TriggerClaimUnavailableError) {
+      // NOTHING WAS WRITTEN. The prior scheduler was never cancelled — the
+      // cancel lives inside the claim — so the schedule the reader is looking at
+      // is still the live one, which is exactly what `busy` tells them.
+      return { ok: false, error: SAVE_SCHEDULE_REFUSALS.busy };
+    }
+    throw err;
+  }
+  if (refusal) return refusal;
 
   // Flip status based on trigger type:
-  //   scheduled / recurring → pending_input (or pending_trigger) → armed
-  //                           (gate will be opened later by the release job)
+  //   scheduled / recurring → settled INSIDE the claim above (cinatra#3054),
+  //                           because a schedule that is exposed and a run that
+  //                           is armed have to be one decision.
   //   immediate             → gate already opened by scheduleTrigger above;
   //                           transition directly to queued so the dispatcher
   //                           can pick up the run.
-  if (args.triggerType === "scheduled" || args.triggerType === "recurring") {
-    try {
-      await transitionRunStatus(args.runId, "pending_input", "armed", undefined, authority);
-    } catch (err) {
-      if (
-        err instanceof RunTransitionError &&
-        err.code === "stale_from_status"
-      ) {
-        try {
-          await transitionRunStatus(args.runId, "pending_trigger", "armed", undefined, authority);
-        } catch (err2) {
-          if (
-            err2 instanceof RunTransitionError &&
-            err2.code === "stale_from_status"
-          ) {
-            console.log(
-              `[setRunTriggerForActor] run ${args.runId} not in pending_input/pending_trigger — leaving status as-is`,
-            );
-          } else {
-            throw err2;
-          }
-        }
-      } else {
-        throw err;
-      }
-    }
-  } else if (args.triggerType === "immediate") {
+  if (args.triggerType === "immediate") {
     // Run-start recommendation HOLD (cinatra#2148 finding 3). An immediate
     // trigger IS a run-start dispatch, so it must consult the same hold every
     // other interactive run-start does; before this it transitioned
@@ -972,6 +1259,173 @@ export async function getRunTriggerForActor(
 }
 
 // ---------------------------------------------------------------------------
+// The arming postcondition (cinatra#3054)
+// ---------------------------------------------------------------------------
+//
+// THE TRIGGER CLAIM SERIALIZES WRITERS OF THE TRIGGER ROW. It does not lock the
+// RUN's status column, which several writers legitimately move — a Stop most of
+// all. So the run can move UNDER an arm that is already in flight, and the two
+// helpers below are what that costs the arm: the status is settled as part of
+// the arm rather than after it, and a run that did not end up on a status this
+// schedule can be released from takes the schedule down with it.
+//
+// A STALE COMPARE-AND-SET IS NOT EVIDENCE OF SUCCESS, and it is not evidence of
+// "already armed" either — the same finding the schedule-proposal installer
+// already acts on ("a cancelled, stopped, queued, running or finished run also
+// fails it"). Both roads therefore ask the same question in the same way: what
+// does the run actually READ now?
+
+/**
+ * Settle the run's status for a scheduled/recurring schedule this call has just
+ * installed, and ANSWER THE STATUS THE RUN STANDS ON — `null` when it cannot be
+ * read at all.
+ *
+ * The two compare-and-sets are the ladder this function has always walked
+ * (`pending_input → armed`, then `pending_trigger → armed`); what is new is the
+ * answer when BOTH are stale, which used to be a log line and a reported
+ * success. The caller decides what that answer means, because only the caller
+ * knows the state the whole call was decided on.
+ */
+async function settledRunStatusForSchedule(
+  runId: string,
+  authority: Parameters<typeof transitionRunStatus>[4],
+): Promise<string | null> {
+  try {
+    await transitionRunStatus(runId, "pending_input", "armed", undefined, authority);
+    return "armed";
+  } catch (err) {
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+  }
+  try {
+    await transitionRunStatus(runId, "pending_trigger", "armed", undefined, authority);
+    return "armed";
+  } catch (err) {
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+  }
+  // BOTH RUNGS ARE STALE — so ask the run. A read that cannot answer is `null`,
+  // which the caller treats as a run it can no longer vouch for: not arming is
+  // recoverable (the person presses again), and leaving a live scheduler on a
+  // run nobody can name is not.
+  const live = await readAgentRunById(runId).catch(() => null);
+  return live?.status ?? null;
+}
+
+/**
+ * Take the schedule back down after an arm that did not settle on a status the
+ * schedule is live on, and answer the refusal the caller reports.
+ *
+ * TWO OUTCOMES, AND BOTH ARE SAFE.
+ *  · The scheduler cancels — the ordinary case. Nothing live remains, so the
+ *    preliminary row (which does not name the scheduler yet: the id is persisted
+ *    only after this settlement) is removed with it. A row somebody STOPPED
+ *    meanwhile is left standing, exactly as the schedule-failure compensation
+ *    above leaves it: it names no live scheduler and it is the reading they are
+ *    owed.
+ *  · The cancel FAILS — Redis is the other side of that call and the claim does
+ *    not reach it. The orphan is then made NAMEABLE and DEAD: the row is written
+ *    with the scheduler id and stamped stopped, which is the same shape the stop
+ *    path already relies on — the row reads stopped, nothing reports the
+ *    schedule as armed, and the first tick to arrive reads the stamp, refuses to
+ *    fire and tears the scheduler down.
+ *
+ * THAT SECOND REPAIR IS BEST-EFFORT, AND SAYING SO IS PART OF IT (convergence
+ * finding). Both of its writes reach the same database, and a database that is
+ * unreachable takes both: the preliminary row then stands enabled and naming no
+ * scheduler while the scheduler itself is still live. That state is not made
+ * safe by this function and is not claimed to be — it is logged as the unsafe
+ * state it is, loudly and on its own line, so it is legible in the record rather
+ * than hidden behind a refusal. WHAT HOLDS EVEN THERE: the call still refuses,
+ * nothing anywhere reports the schedule as armed, and the run is not `armed`, so
+ * the release job's own re-read enqueues nothing when a tick arrives.
+ */
+async function rollBackScheduleThatDidNotArm(
+  args: SetTriggerForActorArgs,
+  jobSchedulerId: string | null,
+  tz: string,
+): Promise<SetTriggerForActorResult> {
+  let schedulerTornDown = true;
+  if (jobSchedulerId) {
+    try {
+      await cancelTriggerSchedule({ jobSchedulerId, triggerType: args.triggerType });
+    } catch (err) {
+      schedulerTornDown = false;
+      console.error(
+        "[setRunTriggerForActor] could not cancel the scheduler of a schedule that did not arm — stamping the row stopped so the orphan is nameable and the next tick tears it down, for run",
+        args.runId,
+        err,
+      );
+    }
+  }
+  if (schedulerTornDown) {
+    const stoppedMeanwhile = await readRunTriggerByRunId(args.runId).catch(() => null);
+    if (stoppedMeanwhile?.stoppedAt) {
+      console.warn(
+        "[setRunTriggerForActor] the arm was refused on a schedule stopped meanwhile — leaving the stopped row intact",
+        args.runId,
+      );
+    } else {
+      await deleteRunTriggerByRunId(args.runId).catch((cleanupErr) => {
+        console.error(
+          "[setRunTriggerForActor] cleanup after an arm that did not settle failed",
+          args.runId,
+          cleanupErr,
+        );
+      });
+    }
+  } else {
+    let named = true;
+    let stamped = true;
+    await createOrUpdateRunTrigger({
+      runId: args.runId,
+      triggerType: args.triggerType,
+      scheduledAt: args.scheduledAt ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)) : null,
+      cronExpression: args.cronExpression ?? null,
+      timezone: tz,
+      enabled: false,
+      jobSchedulerId,
+    }).catch((err) => {
+      named = false;
+      console.error(
+        "[setRunTriggerForActor] could not name the orphaned scheduler on the row (it is stamped stopped below either way)",
+        args.runId,
+        err,
+      );
+    });
+    await stopRunTriggerInDb(args.runId).catch((err) => {
+      stamped = false;
+      console.error(
+        "[setRunTriggerForActor] could not stamp the row of an orphaned scheduler stopped",
+        args.runId,
+        err,
+      );
+    });
+    if (!named) {
+      // NEITHER REPAIR LANDED. The scheduler is live, the row is enabled and
+      // names nothing, and no further write from here can change that — so the
+      // state is named for what it is rather than left to be inferred from two
+      // earlier lines. The refusal below still stands and still reports no
+      // armed schedule.
+      // NAMING IS THE HALF THAT MATTERS (convergence round). A stamped row that
+      // does not carry the scheduler id cannot be used by the release job to
+      // tear the orphan down — the job cancels through the id ON THE ROW — so a
+      // failed name is an unresolved live scheduler whether or not the stamp
+      // landed, and it is reported as one rather than only when both writes fail.
+      console.error(
+        "[setRunTriggerForActor] an orphaned scheduler could not be recorded on its row — a live scheduler no row can name survives this refusal (row stamped stopped:",
+        stamped,
+        ") for run",
+        args.runId,
+      );
+    }
+  }
+  return { ok: false, error: ARM_SCHEDULE_REFUSALS.movedOn };
+}
+
+// ---------------------------------------------------------------------------
 // deleteRunTriggerForActor — cancel a run's trigger on behalf of `actor`.
 // ---------------------------------------------------------------------------
 /**
@@ -981,7 +1435,72 @@ export async function getRunTriggerForActor(
  * status armed → stopped for scheduled/recurring trigger types.
  *
  * Idempotent: if there is no trigger row, returns ok without side effects.
+ *
+ * A SCHEDULE THAT WAS STOPPED IS NOT DELETED FROM HERE (cinatra#3004).
+ *
+ * The plan: "A recurring schedule that ran at least once and was then cancelled
+ * is over … the run is over and nothing in that run can be configured anymore."
+ * **Cancel schedule** ends it by STAMPING the row (`stopRecurringTriggerForActor`)
+ * rather than removing it, and every refusal that keeps the ending — the save
+ * guard, and `setRunTriggerForActor`'s own stopped gate — reads that row. So a
+ * delete would not merely tidy: it would take the ending away and hand the
+ * finished run back to the arm path, which sees no row and refuses nothing.
+ *
+ * Refused HERE rather than guarded at each caller, because the callers are the
+ * point: this function is reached from a server action and from two MCP
+ * handlers, and "no surface can walk around the ending" is only true if the one
+ * function they share says no.
+ *
+ * WHAT "OVER" MEANS is `scheduleIsOver` below, in the plan's own two clauses.
+ * Everything else is deleted exactly as before: a live schedule, and a one-off
+ * whose run is still going.
+ *
+ * THE READ HAPPENS UNDER THE TRIGGER CLAIM (cinatra#2981), like every other
+ * writer on this row. Without it a delete could read `stopped_at IS NULL`, wait,
+ * and then remove the row a **Cancel schedule** stamped in the meantime — the
+ * exact ending this refusal exists to keep.
  */
+/**
+ * IS THIS RUN'S SCHEDULE OVER? (cinatra#3004)
+ *
+ * The plan's sentence has two clauses and this predicate is both of them:
+ *
+ *   · "a recurring schedule that ran at least once and was then cancelled" —
+ *     `stoppedAt`, which `stopRecurringTriggerForActor` only ever stamps AFTER a
+ *     first fire (it refuses a schedule that has not fired), so there is no
+ *     stopped-before-first-fire row for this to catch by accident;
+ *   · "a run set to run once that already ran: the run is over" — a ONE-OFF that
+ *     has FIRED, on a run that has reached a terminal status.
+ *
+ * BOTH HALVES OF THE SECOND CLAUSE ARE NEEDED. The fired stamp alone would also
+ * refuse the ordinary tidy-up of a run dispatched a moment ago and still going —
+ * **Run right after setup** stamps `releasedAt` the instant it arms. The
+ * terminal status alone would refuse clearing a schedule that never fired at
+ * all, which is not an ending, only a run that ended some other way.
+ *
+ * EVERYTHING THAT IS NOT RECURRING IS A ONE-OFF, written that way round so a
+ * kind added later is protected by default rather than slipping through unnamed
+ * — the same reading `setRunTriggerForActor`'s fired-one-off guard takes.
+ *
+ * Exported for the regression test, which reads the rule rather than inferring
+ * it from a delete's side effects.
+ */
+export function scheduleIsOver(
+  trigger: {
+    triggerType: string;
+    releasedAt: Date | null;
+    stoppedAt: Date | null;
+  },
+  runStatus: string | null | undefined,
+): boolean {
+  if (trigger.stoppedAt) return true;
+  return (
+    trigger.triggerType !== "recurring" &&
+    trigger.releasedAt !== null &&
+    TERMINAL_RUN_STATUSES.has(runStatus ?? "")
+  );
+}
+
 export async function deleteRunTriggerForActor(
   actor: TriggerActorContext,
   args: { runId: string },
@@ -994,44 +1513,89 @@ export async function deleteRunTriggerForActor(
     return { ok: false, error: "forbidden" };
   }
 
-  const trigger = await readRunTriggerByRunId(args.runId);
-  if (!trigger) return { ok: true };
+  // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
+  // Minted BEFORE the claim (cinatra#3054, convergence): the teardown now
+  // happens INSIDE it, and a mint that fail-closes for a non-member does so
+  // before anything is removed rather than after the row is gone.
+  const authority = await verifySessionAuthority(actor.userId, run.orgId);
 
+  let outcome: { refusal?: string; deleted?: string | null };
   try {
-    await cancelTriggerSchedule({
-      jobSchedulerId: trigger.jobSchedulerId,
-      triggerType: trigger.triggerType,
+    outcome = await withTriggerClaim(args.runId, async (trigger) => {
+      if (!trigger) return { deleted: null };
+      // THE RUN'S STATUS IS READ AT THE SERIALIZATION POINT, not before it.
+      // Half of `scheduleIsOver` is the RUN's own outcome, and the read above
+      // happened before this call queued for the claim: a released one-off that
+      // was still running then can have finished while this delete waited, and
+      // deciding on that stale status would remove the very ending this refusal
+      // exists to keep. A run that has vanished under us keeps the status the
+      // authorization was taken on.
+      const live = await readAgentRunById(args.runId);
+      if (scheduleIsOver(trigger, live?.status ?? run.status)) {
+        return { refusal: SAVE_SCHEDULE_REFUSALS.overCannotRemove };
+      }
+      try {
+        await cancelTriggerSchedule({
+          jobSchedulerId: trigger.jobSchedulerId,
+          triggerType: trigger.triggerType,
+        });
+      } catch (err) {
+        console.warn(
+          "[deleteRunTriggerForActor] cancel of BullMQ job failed (continuing with DB delete)",
+          args.runId,
+          err,
+        );
+      }
+      await deleteRunTriggerByRunId(args.runId);
+      // THE STATUS FLIP BELONGS INSIDE THE CLAIM (cinatra#3054, convergence
+      // round). It used to run after the claim was released, which left the arm
+      // path a window it cannot see: an arm that had already settled the run
+      // `armed` inside its own claim could have this `armed → stopped` land
+      // between that settlement and the arm's final row write, and the arm would
+      // then publish an enabled row and a live scheduler over a stopped run. The
+      // claim is this module's serialization point for exactly that reason, so
+      // the stop is decided and written entirely within it and the arm's
+      // compare-and-set can only find the run before or after this whole stop,
+      // never halfway through it.
+      if (
+        trigger.triggerType === "scheduled" ||
+        trigger.triggerType === "recurring"
+      ) {
+        try {
+          await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
+        } catch (err) {
+          if (
+            err instanceof RunTransitionError &&
+            err.code === "stale_from_status"
+          ) {
+            // runId passed as an ARGUMENT (js/tainted-format-string).
+            console.log(
+              "[deleteRunTriggerForActor] run",
+              args.runId,
+              "not in armed state — leaving status as-is",
+            );
+          } else {
+            throw err;
+          }
+        }
+      }
+      return { deleted: trigger.triggerType };
     });
   } catch (err) {
-    console.warn(
-      "[deleteRunTriggerForActor] cancel of BullMQ job failed (continuing with DB delete)",
-      args.runId,
-      err,
-    );
-  }
-  await deleteRunTriggerByRunId(args.runId);
-
-  if (
-    trigger.triggerType === "scheduled" ||
-    trigger.triggerType === "recurring"
-  ) {
-    // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
-    const authority = await verifySessionAuthority(actor.userId, run.orgId);
-    try {
-      await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
-    } catch (err) {
-      if (
-        err instanceof RunTransitionError &&
-        err.code === "stale_from_status"
-      ) {
-        console.log(
-          `[deleteRunTriggerForActor] run ${args.runId} not in armed state — leaving status as-is`,
-        );
-      } else {
-        throw err;
-      }
+    if (err instanceof TriggerClaimUnavailableError) {
+      // Another writer held the claim longer than this call would wait. NOTHING
+      // was removed, so the schedule is exactly as the reader last saw it.
+      console.warn(
+        "[deleteRunTriggerForActor] the trigger claim was not available — the schedule is unchanged",
+        args.runId,
+      );
+      return { ok: false, error: SAVE_SCHEDULE_REFUSALS.busy };
     }
+    throw err;
   }
+  if (outcome.refusal) return { ok: false, error: outcome.refusal };
+  // Idempotent: no row to remove, and nothing else to undo either.
+  if (outcome.deleted == null) return { ok: true };
 
   // HOOK POINT B (cinatra#317) — unschedule/delete the mirrored PM work item
   // AFTER the local trigger row is deleted and the armed→stopped transition has
@@ -1052,242 +1616,175 @@ export async function deleteRunTriggerForActor(
 }
 
 // ---------------------------------------------------------------------------
-// releaseTriggerNow — the ACTOR-AWARE half (cinatra#2788, epic #2784 S9d).
+// STOP A RECURRING SCHEDULE — what **Cancel schedule** does now (cinatra#2972).
 //
-// EXTRACTED, NOT REIMPLEMENTED. The body below is `run-actions.ts`'s
-// `releaseTriggerNow` verbatim, with its session read replaced by the actor
-// envelope every other trigger operation in this module already takes — and
-// with the recurring branch cinatra#2928 added to that body while this
-// extraction was in flight, moved here whole rather than left behind in the
-// action, so both surfaces release a recurring schedule the same way.
-// `releaseTriggerNow` stays exactly where it was and becomes the same thin
-// session wrapper `deleteRunTrigger` has always been — so the run page's
-// transport is unchanged to the byte, and §VI's settled card can reach the
-// SAME path from a surface whose identity does not travel by cookie.
+// THE PLAN'S WORDS (PLAN: Agents Lifecycle (A) §7.2, amended 2026-08-25): the
+// schedule step's "one control is **Cancel schedule**, shown only for a
+// recurring schedule that has fired once — it stops the recurring schedule and
+// then makes the scheduler non-editable; there is no Run now." §7.4's
+// as-designed step 6 says the same: "**Cancel schedule** → **End state:
+// stopped** (the scheduler then non-editable)".
 //
-// WHY THE EXTRACTION HAD TO HAPPEN AT ALL. A `"use server"` module may export
-// nothing but server actions, so an actor-parameterised function could not live
-// beside it: exporting one there would publish an endpoint whose acting user is
-// a client-supplied argument. The actor seam therefore belongs in the service,
-// next to `deleteRunTriggerForActor`, where it is reachable only by a caller
-// that has already proved who it is.
+// STOPPED IS NOT DELETED AND NOT PAUSED, and that is the whole difference from
+// `deleteRunTriggerForActor`, which this operation replaced on the card:
+//
+//   · THE ROW STAYS. The person who stopped a schedule can still read the
+//     schedule they stopped — the rows are still drawn, read-only. Deleting it
+//     would blank the step and take the record with it.
+//   · THE RUN IS NOT TOUCHED. `deleteRunTriggerForActor` flips an armed run to
+//     `stopped`; this does not, because the plan withdrew that: "It never
+//     deletes the schedule or pauses the run" (cinatra#2972).
+//   · THE SCHEDULER IS CANCELLED. `enabled: false` is also re-read by the fire
+//     path at fire time, so a job that outlives the cancel still refuses to
+//     fire. Two independent stops, neither trusting the other.
+//
+// NO SURFACE OFFERS THE DELETE ANY MORE (cinatra#3004). The run's schedule tab
+// used to carry a **Cancel trigger** that called `deleteRunTriggerForActor`, and
+// that was the hole: with the row gone, every refusal that keeps a schedule's
+// ending — this module's stopped gate and the save guard — reads nothing and
+// refuses nothing. The tab now draws the schedule form, whose ending is this
+// operation, and the delete refuses a stopped row outright.
 // ---------------------------------------------------------------------------
 
-export type ReleaseTriggerNowArgs = { runId: string };
-export type ReleaseTriggerNowResult =
+export type StopRecurringTriggerResult =
   | { ok: true }
   | { ok: false; error: string };
 
-export async function releaseTriggerNowForActor(
+export async function stopRecurringTriggerForActor(
   actor: TriggerActorContext,
-  args: ReleaseTriggerNowArgs,
-): Promise<ReleaseTriggerNowResult> {
-  const userId = actor.userId;
-  if (!userId) return { ok: false, error: "unauthorized" };
-  // ADMIN, RE-CHECKED HERE. The surface hides the control for a non-admin and
-  // the resolved card answers `canRelease: false`; this is the check that
-  // actually decides, and it is on the ACTOR the caller resolved from a real
-  // credential — never on a claim the caller passed in.
-  if (actor.role !== "admin") return { ok: false, error: "forbidden — admin only" };
+  args: { runId: string },
+): Promise<StopRecurringTriggerResult> {
+  if (!actor.userId) return { ok: false, error: "unauthorized" };
 
   const run = await readAgentRunById(args.runId);
   if (!run) return { ok: false, error: "run not found" };
+  // The run's owner or an administrator — the same standing every other
+  // operation on this run's schedule takes. Stopping a schedule is not an
+  // admin-only act: it takes something away rather than starting work, which is
+  // what the withdrawn Run now needed admin standing for.
+  if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
+    return { ok: false, error: "forbidden" };
+  }
 
   const trigger = await readRunTriggerByRunId(args.runId);
   if (!trigger) return { ok: false, error: "no trigger configured for this run" };
-
-  // cinatra#1940 P3 (Decision 1): refuse BEFORE any side-effect (the gate
-  // flag, the transition) when the org is archived. Fail-open on `null`
-  // (unknown) — this is a pre-check, not the enforcement point; the guarded
-  // transition below refuses regardless.
-  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
+  // ONLY A RECURRING SCHEDULE, AND ONLY AFTER ITS FIRST FIRE — the server's own
+  // reading of the same sentence the card reads to decide whether to draw the
+  // control, so a hand-made request cannot reach an operation the plan does not
+  // define for that schedule.
+  if (trigger.triggerType !== "recurring") {
+    return { ok: false, error: "Only a recurring schedule can be stopped." };
+  }
+  if (!trigger.lastFiredAt) {
     return {
       ok: false,
-      error: "This organization is archived — agents cannot start new work.",
+      error: "This schedule has not fired yet, so there is nothing to stop.",
     };
   }
+  // Idempotent: a second press on an already-stopped schedule is a no-op rather
+  // than a refusal, so a double-click cannot produce an error the reader has to
+  // interpret.
+  if (trigger.stoppedAt) return { ok: true };
 
-  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
-  // ELSE's run, so the shared dispatch guard's default (authorize the run's
-  // owner) is not enough — the releasing admin must ALSO be inside the agent's
-  // install scope. Admin standing counts at ORG scope only; an org admin who is
-  // not in the owning team/project cannot force-start work that scope reserves
-  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
-  // monotonic gate write that no later refusal can undo.
+  // THE STAMP GOES DOWN FIRST, AND THAT ORDER IS THE PROTOCOL (cinatra#2972,
+  // codex round 2). Cancelling the scheduler first and then writing would leave,
+  // on a failed write, a row that still reads ARMED and EDITABLE with no
+  // scheduler behind it — a schedule the person is told is live and that can
+  // never fire. Stamping first inverts the failure: what survives a crash is a
+  // row that reads STOPPED with a scheduler that may still tick, and the fire
+  // path refuses a stopped row and unschedules the orphan on that tick. One
+  // order strands a lie, the other strands something that repairs itself.
+  //
+  // A FAILED STAMP IS A REFUSAL, NOT A THROW — this function answers with a
+  // result like every other operation in this module. Nothing has been written
+  // and the scheduler is untouched, so the schedule is exactly as the reader
+  // last saw it and pressing again is safe.
+  // BOTH STEPS UNDER THE CLAIM (cinatra#2981) — the stamp AND the cancel.
+  //
+  // WHAT THE CLAIM CHANGES HERE is not the stamp (a single UPDATE was always
+  // atomic) but its RELATION to everything else: while it is held, no save can
+  // be mid-replacement and no tick can be mid-fire, so the stamp cannot land in
+  // the middle of another writer's decision and be overwritten by the rest of
+  // it. It also means the cancel names the scheduler that is live NOW — a save
+  // that won the claim just before this one installed a new `job_scheduler_id`,
+  // and cancelling the id from the pre-claim snapshot would have left that one
+  // ticking.
+  //
+  // ELIGIBILITY IS STILL THE PRE-CLAIM SNAPSHOT'S, DELIBERATELY. The recurring
+  // and has-fired-once rulings above belong to the schedule the person was
+  // looking at when they pressed the control. A save that switches the kind to
+  // one-off while this stop waits for the claim must not turn their stop into a
+  // refusal — that is precisely the shape that used to leave a stopped-and-armed
+  // one-off behind. What the claimed read decides is only what cannot be decided
+  // earlier: whether somebody already stopped it, and which scheduler to cancel.
+  //
+  // THE STAMP STILL GOES DOWN BEFORE THE CANCEL, and that order is still the
+  // protocol (cinatra#2972). Cancelling first and then writing
+  // would leave, on a failed write, a row that reads ARMED and EDITABLE with no
+  // scheduler behind it — a schedule the person is told is live and that can
+  // never fire. Stamping first inverts the failure: what survives is a row that
+  // reads STOPPED with a scheduler that may still tick, and the fire path
+  // refuses a stopped row and unschedules the orphan on that tick.
+  //
+  // A FAILED STAMP IS A REFUSAL, NOT A THROW — this function answers with a
+  // result like every other operation in this module. Nothing has been written
+  // and the scheduler is untouched, so the schedule is exactly as the reader
+  // last saw it and pressing again is safe.
   try {
-    const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-run-serde"
-    );
-    await assertAgentRunDispatchAuthorized({
-      runId: args.runId,
-      stage: "dispatch",
-      actingUserId: userId,
-    });
-  } catch (err) {
-    if (isScopeDenial(err)) {
-      return { ok: false, error: "forbidden — this agent's scope does not include you" };
-    }
-    throw err;
-  }
-
-  // Admin (org-role admin, checked above) acts as a member of the run's org.
-  const authority = await verifySessionAuthority(userId, run.orgId);
-
-  // RELEASE NOW ON A RECURRING SCHEDULE STARTS ONE COPY, AND LEAVES THE
-  // SCHEDULE RUNNING (cinatra#2928).
-  //
-  // It used to start the schedule-DEFINING run: the gate was opened on it and it
-  // moved off `armed`, so the schedule the person set up stopped reading as
-  // armed and the run that represents it was spent. Release now means "run it
-  // once, now" — never "and stop the schedule". A recurring tick already knows
-  // how to make a fresh copy; this is the same act, asked for by a person
-  // instead of by the clock, so it goes through the same launch entry, and the
-  // defining run is left exactly as it was.
-  //
-  // The one-off and immediate cases are unchanged: their trigger names a single
-  // firing, and releasing it IS that firing.
-  //
-  // IT LIVES HERE, not in the server action, because cinatra#2788 moved this
-  // whole body out of `run-actions.ts` so a surface whose identity does not
-  // travel by cookie reaches the SAME path. A copy of this branch left behind in
-  // the action would be a second road: the card's Run now would release a
-  // recurring schedule's defining run while the run page's would not.
-  if (trigger.triggerType === "recurring") {
-    let launched;
-    try {
-      launched = await launchAgentRun({
-        producer: "release_now_recurring_copy",
-        // A person pressed Release now, and the caller already resolved them
-        // from a real credential — but the COPY is a run of a schedule, exactly
-        // like a tick, so it is started the way a tick starts one.
-        frame: null,
-        authority,
-        create: {
-          kind: "pre_dispatch",
-          input: {
-            templateId: run.templateId,
-            runBy: run.runBy,
-            orgId: run.orgId,
-            inputParams: run.inputParams ?? {},
-            projectId: run.projectId,
-          },
-        },
-        dispatch: {
-          kind: "await_trigger",
-          why: "the copy's own immediate trigger is armed and its gate opened below",
-        },
-      });
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    if (launched.carrier.kind !== "run") {
-      return { ok: false, error: "the release answered with a carrier that is not a run" };
-    }
-    const copy = launched.carrier.run;
-    await createOrUpdateRunTrigger({
-      runId: copy.id,
-      triggerType: "immediate",
-      timezone: trigger.timezone,
-      enabled: true,
-      jobSchedulerId: null,
-    });
-    await markTriggerReleased(copy.id);
-    try {
-      await advanceAgentRun({
-        run: copy,
-        release: {
-          reason: "trigger_fired",
-          from: "pending_input",
-          to: "queued",
-          dispatch: {
-            kind: "enqueue",
-            options: { jobId: `agent-builder-${copy.id}` },
-          },
-        },
-        authority,
-      });
-    } catch (err) {
-      if (isScopeDenial(err)) {
-        return { ok: false, error: "forbidden — this agent's scope does not include you" };
-      }
-      // Every other dispatch failure has already been compensated by the release
-      // ladder — the copy is back at its wait, or failed, or the throw names it
-      // as stranded. What is left to do here is not swallow it.
-      throw err;
-    }
-    // The defining run keeps its `armed` status and its schedule keeps its
-    // scheduler, so the next tick fires as it would have.
-    return { ok: true };
-  }
-
-  await markTriggerReleased(args.runId);
-
-  // Transition armed → queued so the dispatcher can pick up the run.
-  // Swallow stale_from_status: the run may already be queued (race with the
-  // scheduled release job) or in a terminal state.
-  try {
-    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
-  } catch (err) {
-    if (
-      !(err instanceof RunTransitionError && err.code === "stale_from_status")
-    ) {
-      throw err;
-    }
-  }
-
-  // Enqueue an execution job now that the gate is open. Idempotent on jobId.
-  //
-  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
-  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
-  // agent's scope changed in the window between the transition's own guard and
-  // this one, the enqueue throws and the run would otherwise sit `queued`
-  // forever with no job to run it and no operator signal.
-  //
-  // The failure is landed HERE rather than inside the enqueue chokepoint because
-  // this frame already holds a member session `authority` for the run, whereas
-  // the chokepoint would have to mint an org-wide run authority it is
-  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
-  //
-  // `stale_from_status` is swallowed for the same reason as the transition
-  // above: another writer already moved the run off `queued`.
-  try {
-    await enqueueAgentRun(
-      { runId: args.runId },
-      { jobId: `agent-builder-${args.runId}` },
-    );
-  } catch (err) {
-    if (!isScopeDenial(err)) throw err;
-    try {
-      await transitionRunStatus(
-        args.runId,
-        "queued",
-        "failed",
-        {
-          error:
-            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
-        },
-        authority,
-      );
-    } catch (compErr) {
-      if (
-        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
-      ) {
+    await withTriggerClaim(args.runId, async (live) => {
+      // Idempotent, re-asked on the claimed read: a second press that queued
+      // behind the first is a no-op rather than a second stamp and a second
+      // cancel.
+      if (live?.stoppedAt) return;
+      await stopRunTriggerInDb(args.runId);
+      try {
+        await cancelTriggerSchedule({
+          jobSchedulerId: live?.jobSchedulerId ?? trigger.jobSchedulerId,
+          triggerType: live?.triggerType ?? trigger.triggerType,
+        });
+      } catch (err) {
+        // NOT FATAL, because the durable answer is already written. The
+        // schedule reads stopped, `setRunTriggerForActor` refuses to change it,
+        // and the next tick of the surviving scheduler reads the stamp, refuses
+        // to fire and removes itself. Logged loudly so an operator can see the
+        // orphan before its next tick does.
         console.error(
-          "[releaseTriggerNowForActor] run",
+          "[stopRecurringTriggerForActor] the schedule is marked stopped but its scheduler would not cancel — the next tick will refuse and unschedule it",
           args.runId,
-          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
-          compErr instanceof Error ? compErr.message : String(compErr),
+          err,
         );
       }
+    });
+  } catch (err) {
+    if (err instanceof TriggerClaimUnavailableError) {
+      // Another writer held the claim longer than this call would wait. NOTHING
+      // was written and the scheduler is untouched, so the schedule is exactly
+      // as the reader last saw it and pressing again is safe.
+      console.warn(
+        "[stopRecurringTriggerForActor] the trigger claim was not available — the schedule is unchanged",
+        args.runId,
+      );
+      return { ok: false, error: SAVE_SCHEDULE_REFUSALS.busy };
     }
-    return { ok: false, error: "forbidden — this agent's scope does not include you" };
+    console.error(
+      "[stopRecurringTriggerForActor] the stop could not be recorded — the schedule is unchanged",
+      args.runId,
+      err,
+    );
+    return { ok: false, error: "That didn\u2019t go through. Try again." };
   }
 
-  // DISPATCHED — the schedule moment this run was waiting at is over
-  // (cinatra#2928). The recurring branch above never reaches here: it releases a
-  // COPY and deliberately leaves the defining run exactly as it was, moment
-  // included, because that run is still the schedule.
-  await clearRunLifecycleMoment(args.runId, authority);
+  // The mirrored PM work item is unscheduled for the same reason the delete
+  // path unschedules it: no further run will start from this schedule. Fail-open
+  // — the local schedule is already stopped, so a PM outage must never fail
+  // this call.
+  await deleteRunTriggerPmTask({ runId: args.runId }).catch((err) => {
+    console.warn(
+      "[stopRecurringTriggerForActor] PM unschedule failed (the schedule is already stopped) for run",
+      args.runId,
+      err,
+    );
+  });
 
   return { ok: true };
 }
@@ -1360,11 +1857,23 @@ export const SAVE_SCHEDULE_REFUSALS = {
   firedOneOff:
     "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
   immediate:
-    "\u201cRun right after setup\u201d starts the run now rather than scheduling it. Use Run now on the run page\u2019s schedule step to start an armed run early.",
+    "\u201cRun right after setup\u201d starts the run now rather than scheduling it, so it is not a change you can save here. Set a time or a recurrence instead.",
+  /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
+  stopped:
+    "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
+  /** cinatra#3004 — a schedule that is OVER, asked to be REMOVED rather than
+   *  changed. The row is the record of the ending, so it stays. */
+  overCannotRemove:
+    "This run's schedule is over, so it can't be changed or removed. Start a new run to schedule it again.",
   /** The prior scheduler would not cancel, so the replacement was NOT installed
    *  — the schedule the reader is looking at is still the live one. */
   cancelFailed:
     "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
+  /** cinatra#2981 — another writer (a **Cancel schedule**, or another save)
+   *  held the trigger claim for longer than this call would wait. Nothing was
+   *  written, so the reader's schedule is exactly as they left it. */
+  busy:
+    "Something else is changing this schedule right now. Nothing was changed — please try again in a moment.",
 } as const;
 
 /**
@@ -1378,7 +1887,28 @@ export const SAVE_SCHEDULE_REFUSALS = {
  */
 function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null {
   if (!trigger) return SAVE_SCHEDULE_REFUSALS.noTrigger;
-  if (trigger.releasedAt) return SAVE_SCHEDULE_REFUSALS.released;
+  // A STOPPED SCHEDULE IS OVER (cinatra#2972). Plan (A) §7.2 as amended
+  // 2026-08-25: **Cancel schedule** "stops the recurring schedule and then
+  // makes the scheduler non-editable".
+  //
+  // ASKED HERE RATHER THAN ONLY IN THE PRE-CHECK, and that placement is the
+  // point: this function is also the setter's `reverify` hook, run against the
+  // row the cancel and the upsert are about to act on. A Save that starts
+  // before a Cancel lands would otherwise re-arm the schedule the person had
+  // just stopped — the config upsert writes `enabled` back to true — and the
+  // pre-check alone could not see it.
+  if (trigger.stoppedAt) return SAVE_SCHEDULE_REFUSALS.stopped;
+  // A RELEASED trigger's gate is open — but only a ONE-OFF or an IMMEDIATE
+  // trigger can be released in the sense that ends its schedule. A recurring
+  // tick opens the COPY's gate, never this run's, so a recurring row's
+  // `releasedAt` says nothing about whether the schedule is still live:
+  // refusing on it here would contradict `canSaveInstalled`, which plan (A)
+  // §7.2 as amended 2026-08-25 requires to stay TRUE for a fired recurring
+  // schedule ("keeps its scheduler editable … a change applies to its future
+  // runs"). The card and the server read one rule (cinatra#2972).
+  if (trigger.triggerType !== "recurring" && trigger.releasedAt) {
+    return SAVE_SCHEDULE_REFUSALS.released;
+  }
   // A one-off whose moment has passed has fired (or is firing).
   if (
     trigger.triggerType === "scheduled" &&
@@ -1387,6 +1917,184 @@ function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null 
     return SAVE_SCHEDULE_REFUSALS.firedOneOff;
   }
   return null;
+}
+
+/** The status a run waits for its schedule CHOICE in (cinatra#3044) — the one
+ *  state the conversation's pending card is ever drawn for. */
+const SCHEDULE_PENDING_STATUS = "pending_trigger";
+
+// ---------------------------------------------------------------------------
+// armRunScheduleForActor — the schedule a WAITING run is given (cinatra#3044)
+// ---------------------------------------------------------------------------
+//
+// NOT A SECOND ARMING PATH, and the difference from its neighbour above is the
+// whole of it. `updateRunTriggerScheduleForActor` REPLACES a schedule the reader
+// is already looking at, so it carries the save guard and refuses "Run right
+// after setup". This one is the FIRST answer to "When should this run?" for a
+// run that is parked at its schedule step with nothing armed — the same question
+// the run page's own scheduling step submits, and every row it offers is a legal
+// answer, `immediate` included.
+//
+// IT MAPS AND DELEGATES, AND NOTHING ELSE. §VI's closed selections become the
+// arguments `setRunTriggerForActor` already takes, and that one call keeps every
+// refusal it speaks: ownership, the terminal-run gate, the in-flight-wait gate,
+// the configuration-needs gate, cron validation, and the transition ladder that
+// dispatches an immediate row or arms a future one. There is no second ladder
+// here to drift from it.
+//
+// WHY THE MAPPING LIVES HERE rather than at the card: `buildCron` is this
+// package's, the argument shape is this module's, and the card's whole rule is
+// that it "implements none of them — each op is handed to the canonical path
+// that already owns it".
+export const ARM_SCHEDULE_REFUSALS = {
+  /** The run is no longer waiting to be given a schedule. Reader-facing: it
+   *  names the state and leaves them somewhere real. */
+  movedOn:
+    "This run is no longer waiting for a schedule — it has already moved on. Start a new run to schedule it again.",
+} as const;
+
+/**
+ * THE SENTINEL FOR "THE QUESTION WAS ALREADY ANSWERED", which never reaches a
+ * reader: this call turns it into a SUCCESS, because a second press on the same
+ * question has the same true answer as the first. It is a namespaced token
+ * rather than a sentence so it can never be mistaken for reader copy, and it
+ * travels back out of `setRunTriggerForActor` through the caller's own
+ * `reverify` hook — i.e. through the trigger CLAIM, which is what makes the
+ * answer serialized rather than a snapshot.
+ */
+const ALREADY_ANSWERED = "cinatra:schedule-already-answered";
+
+export type ArmRunScheduleResult =
+  | {
+      ok: true;
+      runId: string;
+      /** The schedule was already set — this call wrote nothing. */
+      alreadyArmed: boolean;
+    }
+  | { ok: false; error: string };
+
+export async function armRunScheduleForActor(
+  actor: TriggerActorContext,
+  args: UpdateTriggerScheduleArgs,
+): Promise<ArmRunScheduleResult> {
+  if (!actor.userId) return { ok: false, error: "unauthorized" };
+
+  // THE RUN MUST STILL BE WAITING (a convergence finding). The card resolved the
+  // run as waiting some time ago and everything since is asynchronous, so a Stop
+  // — or a schedule the run page's own step armed — can land in the gap. Without
+  // this read a `scheduled` request would sail past `setRunTriggerForActor`'s
+  // terminal-run gate, which applies to `immediate` alone, and install a live
+  // future scheduler on a run that is over.
+  //
+  // THIS READ IS THE CHEAP REFUSAL, NOT THE BOUNDARY. It answers before any
+  // write for the ordinary case — the reader pressed Confirm on a card that had
+  // gone stale minutes ago — and it is where ownership is decided. The BOUNDARY
+  // is the same question re-asked inside the trigger claim below, against the
+  // read the cancel and the upsert act on.
+  const run = await readAgentRunById(args.runId);
+  if (!run) return { ok: false, error: "run not found" };
+  if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
+    return { ok: false, error: "forbidden" };
+  }
+  if (run.status !== SCHEDULE_PENDING_STATUS) {
+    return { ok: false, error: ARM_SCHEDULE_REFUSALS.movedOn };
+  }
+
+  // BOTH REMAINING QUESTIONS ARE ASKED INSIDE THE CLAIM, AND NOWHERE ELSE
+  // (a second convergence round).
+  //
+  // THE QUESTION IS ASKED ONCE. A second press — a retry, a double click, a
+  // second tab — must not REPLACE the schedule the first press set: this call is
+  // the FIRST answer, and a replacement is what
+  // `updateRunTriggerScheduleForActor` is for. Without this the second press
+  // cancelled the live scheduler and installed its own, reporting a plain
+  // success, so two presses on two different rows silently kept the last one.
+  //
+  // AND IT IS ASKED ON THE CLAIMED READ ONLY. A cheap snapshot outside the claim
+  // read better and was wrong: the arming body writes a PRELIMINARY trigger row
+  // before it registers the scheduler and DELETES that row again if the
+  // registration fails, so a snapshot taken in that window would tell a second
+  // press "already armed" about a schedule that was then rolled away — leaving a
+  // reader told Confirm succeeded with nothing armed. The claim serializes the
+  // two presses, so the second one reads what the first actually left.
+  //
+  // THE RUN MUST STILL BE WAITING, asked here for the same reason. The read at
+  // the top of this function is a courtesy that refuses early and cheaply; a Stop
+  // landing after it would otherwise sail past `setRunTriggerForActor`'s
+  // terminal-run gate, which applies to `immediate` alone, and install a live
+  // future scheduler on a run that is over.
+  //
+  // ONE INTERLEAVING SURVIVES, AND IT IS NAMED RATHER THAN CLAIMED AWAY. The
+  // trigger claim serializes writers of the TRIGGER ROW; it does not lock the
+  // RUN's status row, which several writers legitimately move. A stop that lands
+  // between this re-ask and the arm's own `pending_trigger -> armed` compare-and-
+  // set therefore still leaves a trigger row and a scheduler behind, because that
+  // compare-and-set's failure is swallowed one screen up.
+  //
+  // WHAT IT COSTS IS BOUNDED: a scheduler that can never start the run. The
+  // release job re-reads the run at its instant and refuses everything that is
+  // not `armed` — "the run reads ANYTHING ELSE … enqueues nothing" — so the stop
+  // holds and the residue is a dangling schedule entry, not a stopped run that
+  // executes.
+  //
+  // AND IT IS NOT THIS ROAD'S TO CLOSE. Every caller of `setRunTriggerForActor`
+  // has it — the run page's own scheduling step, the trigger MCP handler, the
+  // proposal install — because closing it needs an atomic run-status reservation
+  // shared by every writer of that column, coordinated with scheduler exposure
+  // and its compensation. That is a change to the shared trigger ladder, owed on
+  // its own; what this call does is narrow the window from the whole request to
+  // the interval between one claimed read and one compare-and-set.
+  const strictness: SetTriggerReplaceStrictness = {
+    // Nothing is being replaced, so a cancel failure can only mean a scheduler
+    // appeared under this call — fail closed rather than install a second one.
+    failClosedOnCancelFailure: true,
+    reverify: async (existing) => {
+      if (existing) return ALREADY_ANSWERED;
+      const live = await readAgentRunById(args.runId).catch(() => null);
+      // A read that cannot answer refuses: not arming is recoverable — the
+      // person presses again — and arming a run that is over is not.
+      if (!live || live.status !== SCHEDULE_PENDING_STATUS) {
+        return ARM_SCHEDULE_REFUSALS.movedOn;
+      }
+      return null;
+    },
+  };
+
+  const result =
+    args.schedule.kind === "immediate"
+      ? await setRunTriggerForActor(
+          actor,
+          { runId: args.runId, triggerType: "immediate" },
+          strictness,
+        )
+      : args.schedule.kind === "scheduled"
+        ? await setRunTriggerForActor(
+            actor,
+            {
+              runId: args.runId,
+              triggerType: "scheduled",
+              scheduledAt: args.schedule.runAt,
+              timezone: args.schedule.timezone,
+            },
+            strictness,
+          )
+        : await setRunTriggerForActor(
+            actor,
+            {
+              runId: args.runId,
+              triggerType: "recurring",
+              cronExpression: buildCron(args.schedule.selection),
+              timezone: args.schedule.timezone,
+            },
+            strictness,
+          );
+  if (result.ok) return { ok: true, runId: args.runId, alreadyArmed: false };
+  // The claim answered what the snapshot could not: somebody else got there
+  // first. That is the same true answer as the first press's, not a failure.
+  if (result.error === ALREADY_ANSWERED) {
+    return { ok: true, runId: args.runId, alreadyArmed: true };
+  }
+  return { ok: false, error: result.error };
 }
 
 export async function updateRunTriggerScheduleForActor(

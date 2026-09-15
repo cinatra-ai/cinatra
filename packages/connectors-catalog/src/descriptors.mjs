@@ -29,6 +29,13 @@
  * @property {string} displayName - user-facing label on the /connectors card
  * @property {string[]} mcpPrimitivePrefixes - prefix list used by the connectorDependencies backfill (e.g. `["apollo_"]`)
  * @property {string} setupSubroute - dispatch sub-route segment (always `"setup"`; reserved for future use)
+ * @property {string} [consumesConnectionFrom] - the SLUG of the connector whose
+ *   connection gates this one, for a connector that holds NO connection of its
+ *   own (cinatra#3108). Omitted — the normal case — means the connector is
+ *   judged on its own connection. A connector that can never own a connection
+ *   row is otherwise unconnected for every person forever, so this declaration
+ *   is what lets the host judge it on the connection it actually uses. The host
+ *   reads the declaration generically: no connector is named in host code.
  */
 
 // The single org-scope lexeme for first-party connector packages. Named in ONE
@@ -91,9 +98,18 @@ const RAW_DESCRIPTORS = [
     // (one owner per primitive name). This connector declares a REQUIRED
     // runtime dependency on google-calendar-connector, so installing it pulls
     // the calendar connector in dependency-first.
+    //
+    // IT HOLDS NO CONNECTION OF ITS OWN (cinatra#3108). It books against the
+    // calendar connector's Google connection (its runtime resolves the
+    // `googleCalendar` connection slot) and writes no connection row under its
+    // own package id, and it publishes no connect field either — so judged on a
+    // row it can never own it was unconnected for every person, forever. It
+    // therefore declares the connection it consumes, and the host judges it on
+    // THAT connection.
     slug: "google-appointment-schedules-connector",
     displayName: "Google Appointment Schedules",
     mcpPrimitivePrefixes: ["appointment_schedule_"],
+    consumesConnectionFrom: "google-calendar-connector",
     setupSubroute: "setup",
   },
   {

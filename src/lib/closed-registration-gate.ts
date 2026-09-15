@@ -53,7 +53,9 @@ export function isAdminCreateContext(path: unknown): boolean {
  * Inputs:
  *   - userType:   the candidate user's userType (assistant → always allow, D3)
  *   - path:       ctx.path of the creating endpoint (admin path → allow, D1)
- *   - closed:     the resolved closed-registration flag (false → allow, D5)
+ *   - closed:     the resolved closed-registration flag (false → allow, D5).
+ *                 The reader defaults it to TRUE — closed unless the instance
+ *                 explicitly says otherwise.
  *   - humanCount: definitive human-user count (0 → allow first-human bootstrap, D4)
  *
  * NOTE: the orchestrator handles the count-read FAILURE separately (it FAILS
@@ -84,10 +86,11 @@ export type RegistrationDecision = "allow" | "block";
  * steps via injected deps (so this module never imports betterAuthDb /
  * instance-mode and stays testable):
  *
- *   - `isClosed()`   — reads the DB-backed toggle. MUST fail OPEN on its own
- *                      read error (D5): `isRegistrationClosed` already swallows
- *                      read errors to `false`, so an unavailable metadata store
- *                      does not reach the block path.
+ *   - `isClosed()`   — reads the stored registration setting. It fails CLOSED
+ *                      on its own read error (`isRegistrationClosed` answers
+ *                      `true` when it cannot read), so an unavailable metadata
+ *                      store never opens the door. The first human is still
+ *                      admitted through the D4 bootstrap exception below.
  *   - `countHumans()`— definitive human-user count (D3/D4). MUST THROW on
  *                      inspection failure; this orchestrator catches that throw
  *                      and FAILS CLOSED (returns "block") while the flag is
@@ -119,8 +122,8 @@ export async function resolveRegistrationDecision(deps: {
   // context) is treated as public.
   if (isAdminCreateContext(deps.ctx?.path)) return "allow";
 
-  // D5 — config-read failure fails OPEN inside isClosed(); a `false` here means
-  // open and we allow.
+  // D5 — a `false` here means the instance was explicitly opened, and we
+  // allow. Anything else, a read failure included, means closed.
   if (!(await deps.isClosed())) return "allow";
 
   // Flag is closed → resolve the human count for the first-human bootstrap

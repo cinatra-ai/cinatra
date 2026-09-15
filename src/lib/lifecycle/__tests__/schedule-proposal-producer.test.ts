@@ -19,7 +19,7 @@ import {
   buildLifecycleViewEnvelope,
   recognizeLifecycleViewEnvelope,
 } from "@/lib/assistant-runtime/lifecycle-view-envelope";
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import { isDelegatedWidgetMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-widget-tool-policy";
 import { SCHEDULE_PROPOSAL_TOOL_NAME } from "../schedule-proposal-mcp";
 import inventory from "@/lib/authz/__generated__/inventory.json";
@@ -49,10 +49,15 @@ describe("S1's named producer seam is filled — and only by this tool", () => {
         toolName: SCHEDULE_PROPOSAL_TOOL_NAME,
         result: envelope,
       }),
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the answer records the
+      // producer. The held schedule is the ONE card that arrives through the
+      // assistant's own turn rather than from a run's state, and this tool is
+      // how — so `tool_represented` is exactly right for it.
     ).toEqual({
       viewType: "trigger_schedule_proposal",
       schemaVersion: 1,
       ref: REF,
+      provenance: "tool_represented",
     });
   });
 
@@ -142,7 +147,7 @@ describe("the tool NAME is discoverable, classified, and pinned", () => {
 
 describe("the tool NAME keeps the decision-verb backstop intact", () => {
   it("is chat-reachable", () => {
-    expect(isDelegatedChatMcpToolAllowed(SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(true);
+    expect(isCoreDelegatedChatAdmitted(SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(true);
   });
 
   it("carries none of the denied verb tokens — so it needs no override entry", () => {
@@ -234,7 +239,7 @@ describe("the tool NAME keeps the decision-verb backstop intact", () => {
       "schedule_proposal_arm",
       "trigger_schedule_create",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 });

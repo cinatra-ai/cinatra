@@ -179,6 +179,105 @@ apply_mcp_tools_patches() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# Module-enable helpers (cinatra#3196).
+#
+# `drupal/mcp_tools` pulls `drupal/tool` and core's `update` module in as
+# dependencies, so `drush en mcp_tools ...` installs `update` too. When
+# `update.settings` is ALREADY present in active configuration while the
+# `update` module itself is not enabled, Drupal's ConfigInstaller refuses the
+# install with a PreExistingConfigException — and under `set -e` that aborted
+# the whole background bootstrap before activate_widget_module() ever ran, so
+# the readiness poll (which watches for the `cinatra` module) timed out with a
+# bare "not ready" on pull requests that touch none of this.
+#
+# The rules below keep `set -e` untouched and make that state deterministic:
+# the conflicting configuration objects are deleted in a defined order and the
+# enable is retried exactly once, and every drush failure is echoed through
+# this script's own log stream so the container stdout — and therefore the
+# job's own step log — always carries the real cause.
+# -----------------------------------------------------------------------------
+
+module_is_enabled() {
+  drush --root="$WEB_ROOT" pm:list --status=enabled --field=name 2>/dev/null | grep -qx "$1"
+}
+
+# Read the config object names out of a PreExistingConfigException message:
+#   Configuration objects (update.settings, foo.bar) provided by update
+#   already exist in active configuration
+# The message wraps across lines, so flatten it first. Prints one name per
+# line, sorted (a defined, deterministic order); prints nothing when the
+# message is not that exception.
+preexisting_config_objects() {
+  printf '%s\n' "$1" \
+    | tr '\n' ' ' \
+    | grep -o 'Configuration objects ([^)]*)' \
+    | sed -e 's/^Configuration objects (//' -e 's/)$//' \
+    | tr ',' '\n' \
+    | tr -d ' ' \
+    | grep -E '^[A-Za-z0-9_.]+$' \
+    | sort -u \
+    || true
+}
+
+# Enable modules, tolerating exactly the pre-existing-configuration class.
+# On any failure the drush output is re-printed on THIS script's stdout next to
+# a marked ERROR line, so a bootstrap death is loud in the job's own step log
+# and never recoverable only from an uploaded compose-log artifact.
+drush_en() {
+  local out="" status=0 objects="" obj=""
+  log "Enabling module(s): $*"
+  out="$(drush --root="$WEB_ROOT" en "$@" -y 2>&1)" && status=0 || status=$?
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  fi
+  if [ "$status" -eq 0 ]; then
+    return 0
+  fi
+  log "ERROR: drush en $* failed (exit $status)"
+  objects="$(preexisting_config_objects "$out")"
+  if [ -z "$objects" ]; then
+    return "$status"
+  fi
+  log "Pre-existing configuration blocked the install; deleting the stray object(s) and retrying once"
+  for obj in $objects; do
+    log "Deleting stray configuration object (its module is not enabled): $obj"
+    out="$(drush --root="$WEB_ROOT" config:delete "$obj" -y 2>&1)" && status=0 || status=$?
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out"
+    fi
+    if [ "$status" -ne 0 ]; then
+      log "ERROR: could not delete stray configuration object $obj (exit $status)"
+      return "$status"
+    fi
+  done
+  out="$(drush --root="$WEB_ROOT" en "$@" -y 2>&1)" && status=0 || status=$?
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  fi
+  if [ "$status" -ne 0 ]; then
+    log "ERROR: drush en $* still failed after reconciling pre-existing configuration (exit $status)"
+    return "$status"
+  fi
+  log "Enabled after reconciling pre-existing configuration: $*"
+  return 0
+}
+
+# Enable core's `update` module on its own, ahead of anything that depends on
+# it. Idempotent: on a site where the install profile already enabled `update`
+# (the common case, and the one a successful bring-up shows) this does nothing
+# at all. Running it FIRST is what makes the dependent install deterministic:
+# the conflicting state is reconciled here, by a call whose only job is that
+# module, instead of surfacing halfway through a five-module install.
+ensure_update_module() {
+  if module_is_enabled update; then
+    log "update module already enabled — nothing to reconcile"
+    return 0
+  fi
+  log "Enabling the update module first (mcp_tools depends on it transitively)..."
+  drush_en update
+}
+
 install_mcp_tools() {
   cd "$DRUPAL_PATH"
   # Check file presence AND DB state — module files can be absent even if the DB thinks
@@ -189,7 +288,11 @@ install_mcp_tools() {
     composer config minimum-stability dev --no-interaction
     composer config prefer-stable true --no-interaction
     composer require drupal/tool drupal/mcp_tools:^1.0 --no-interaction
-    drush --root="$WEB_ROOT" en mcp_tools mcp_tools_remote mcp_tools_content -y
+    # cinatra#3196: `update` is enabled explicitly and idempotently BEFORE the
+    # dependent install, so a pre-existing update.settings can no longer abort
+    # the bootstrap from inside the mcp_tools enable.
+    ensure_update_module
+    drush_en mcp_tools mcp_tools_remote mcp_tools_content
     # TODO: upstream issue — drupal/mcp_tools ships with remote endpoint disabled
     # (enabled=false, uid=0) by default. No setup wizard exists; these three config:set
     # calls are required to activate the MCP HTTP endpoint. Filed/tracked at:

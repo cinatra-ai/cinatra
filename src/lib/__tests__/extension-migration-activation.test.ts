@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { join } from "node:path";
 import {
   applyExtensionMigrationsFromStore,
+  buildExtensionRoleQueries,
   applyMigrationsForTrustedRecords,
   preflightExtensionMigrationsFromStore,
 } from "@/lib/extension-migration-host";
@@ -31,6 +32,20 @@ function makeRunRecorder(ranNames: string[] = [MODULE_NAME]) {
     return { ranNames, direction: "up" as const, faked: false };
   });
   return { run, calls };
+}
+
+/**
+ * The host-credential step that creates the extension's role + declared tables
+ * before any extension statement runs (cinatra#3031, plan (C) 0.23). Recorded
+ * here so the ORDER — role first, runner second — is asserted without a
+ * database.
+ */
+function makeEnsureRecorder() {
+  const calls: Array<Record<string, unknown>> = [];
+  const ensureDatabaseObjects = vi.fn(async (input: Record<string, unknown>) => {
+    calls.push(input);
+  });
+  return { ensureDatabaseObjects, calls };
 }
 
 const prevDbUrl = process.env.SUPABASE_DB_URL;
@@ -98,9 +113,10 @@ describe("extension migration activation — applyExtensionMigrationsFromStore (
   it("runs the consumer fixture UP through the shared runner with the derived namespace + containment-checked dir", async () => {
     process.env.SUPABASE_DB_URL = "postgres://unused:0/fake";
     const rec = makeRunRecorder();
+    const ens = makeEnsureRecorder();
     const result = await applyExtensionMigrationsFromStore(
       { storeDir: CONSUMER_DIR, schema: "cinatra" },
-      { run: rec.run as never },
+      { run: rec.run as never, ensureDatabaseObjects: ens.ensureDatabaseObjects as never },
     );
     expect(result.applied).toEqual([MODULE_NAME]);
     expect(rec.calls).toHaveLength(1);
@@ -110,11 +126,36 @@ describe("extension migration activation — applyExtensionMigrationsFromStore (
     expect(String(rec.calls[0].dirAbs).endsWith(join("cinatra", "migrations"))).toBe(true);
   });
 
+  // cinatra#3031 (epic #3023 W7, plan (C) 0.23): "they run under a database
+  // role of the extension's own". The host puts that role in place FIRST, and
+  // the runner is told which role to assume — a runner call carrying no role
+  // would be the old single-credential road wearing the new name.
+  it("creates the extension's role BEFORE the runner, and hands the runner that role", async () => {
+    process.env.SUPABASE_DB_URL = "postgres://unused:0/fake";
+    const rec = makeRunRecorder();
+    const ens = makeEnsureRecorder();
+    await applyExtensionMigrationsFromStore(
+      { storeDir: CONSUMER_DIR, schema: "cinatra" },
+      { run: rec.run as never, ensureDatabaseObjects: ens.ensureDatabaseObjects as never },
+    );
+    expect(ens.calls).toHaveLength(1);
+    expect(ens.calls[0].roleName).toBe("ext_cinatra_ai_notes_connector");
+    expect(ens.ensureDatabaseObjects.mock.invocationCallOrder[0]).toBeLessThan(
+      rec.run.mock.invocationCallOrder[0] as number,
+    );
+    expect(rec.calls[0].roleName).toBe("ext_cinatra_ai_notes_connector");
+  });
+
   it("is a clean no-op for a package that declares no migrations (runner never invoked)", async () => {
     const rec = makeRunRecorder();
-    const result = await applyExtensionMigrationsFromStore({ storeDir: NO_MIGRATIONS_DIR }, { run: rec.run as never });
+    const ens = makeEnsureRecorder();
+    const result = await applyExtensionMigrationsFromStore(
+      { storeDir: NO_MIGRATIONS_DIR },
+      { run: rec.run as never, ensureDatabaseObjects: ens.ensureDatabaseObjects as never },
+    );
     expect(result).toEqual({ applied: [] });
     expect(rec.run).not.toHaveBeenCalled();
+    expect(ens.ensureDatabaseObjects).not.toHaveBeenCalled();
   });
 
   it("fails closed without SUPABASE_DB_URL when migrations ARE declared", async () => {
@@ -305,6 +346,24 @@ describe("extension migration activation — trusted-record pass (loader-gated)"
     expect(out.refused[0].error).toMatch(/retired/);
   });
 
+  it("hands the collision refusal the pass's OWN inventory — an unfed check refuses nothing", async () => {
+    // Enabler 0.23: "the install also refuses an extension whose derived prefix
+    // collides with an installed extension's, since two names can normalise to
+    // one". The rule is only a rule if the caller supplies what to compare
+    // against; defaulted to empty it is a no-op in production.
+    const applyOne = vi.fn(async () => ({ applied: [] }));
+    await applyMigrationsForTrustedRecords(
+      [trustedRec, { packageName: "@cinatra-ai/other", storeDir: NO_MIGRATIONS_DIR, migrationsDir: "cinatra/migrations" }],
+      { applyOne: applyOne as never },
+    );
+    for (const call of applyOne.mock.calls as unknown as Array<[{ installedPackageNames?: string[] }]>) {
+      expect(call[0].installedPackageNames).toEqual([
+        "@cinatra-ai/notes-connector",
+        "@cinatra-ai/other",
+      ]);
+    }
+  });
+
   it("skips a record that declares no migrations", async () => {
     const applyOne = vi.fn(async () => ({ applied: [] }));
     const out = await applyMigrationsForTrustedRecords([{ packageName: "@x/none", storeDir: NO_MIGRATIONS_DIR }], {
@@ -312,5 +371,23 @@ describe("extension migration activation — trusted-record pass (loader-gated)"
     });
     expect(applyOne).not.toHaveBeenCalled();
     expect(out.applied).toEqual([]);
+  });
+});
+
+describe("the extension role starts from nothing on every pass (cinatra#3031)", () => {
+  it("revokes the TABLE grants, not only the schema's, before granting usage", () => {
+    // Declared tables are RETAINED (enabler 0.23), so a version that declared
+    // `a` and `b` and then declares only `a` leaves `b` behind. A table ACL the
+    // host never withdrew would leave the role reaching a table its current
+    // declaration does not name — the grant, not the declaration, would be the
+    // perimeter.
+    const sqls = buildExtensionRoleQueries({ schemaName: "cinatra", roleName: "ext_acme_thing" });
+    expect(sqls[0]).toBe(
+      'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "cinatra" FROM "ext_acme_thing"',
+    );
+    expect(sqls.some((s) => /REVOKE ALL PRIVILEGES ON ALL SEQUENCES/.test(s))).toBe(true);
+    // The revokes come first; the only grant it ends with is schema USAGE.
+    expect(sqls[sqls.length - 1]).toBe('GRANT USAGE ON SCHEMA "cinatra" TO "ext_acme_thing"');
+    expect(sqls.filter((s) => s.startsWith("GRANT"))).toHaveLength(1);
   });
 });

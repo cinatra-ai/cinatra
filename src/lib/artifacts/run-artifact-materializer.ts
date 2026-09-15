@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
   collectArtifactBindingsFromOasDocument,
+  parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
   type CollectedArtifactBinding,
+  type PersistedArtifactBindingDeclaration,
   type SemanticArtifactProducesRef,
 } from "@cinatra-ai/agents/artifact-binding";
 import {
@@ -30,6 +32,7 @@ import {
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  type MaterializationDetection,
 } from "./materialization-ledger";
 
 // ---------------------------------------------------------------------------
@@ -77,6 +80,23 @@ import {
 // external-A2A run whose pinned template provably owes nothing now completes
 // cleanly during an outage instead of failing on `unavailable`, and every path
 // the flag cannot prove keeps #2497's classification untouched.
+//
+// Executed-declaration authority (cinatra#3208): the two paragraphs above
+// describe a module that re-derived a run's bindings by re-reading the PACKAGE
+// REGISTRY for the run's (packageName, packageVersion) pair — while execution
+// itself was bound to the immutable template-version snapshot on
+// `agent_templates`. Two authorities, nothing binding them together: a registry
+// copy that had drifted from the copy the template was compiled from failed the
+// run on a binding it never declared, after all of the model work was done (the
+// measured symptom named a RETIRED scalar `titleFrom` output on a run whose
+// executed declaration is the fan-out one). The compile that produces a template
+// version now PERSISTS the declaration it found, in `agent_templates
+// .artifact_bindings`, and this module reads that instead — under the same
+// version-pin guard `has_artifact_bindings` already uses. When it resolves, the
+// registry is not called at all. The registry read survives ONLY as the fallback
+// for a row whose declaration reads as unknown (compiled before the column, or
+// by a compile with no readable sibling manifest), where everything the two
+// paragraphs above describe still applies unchanged.
 //
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
@@ -164,6 +184,74 @@ async function classifyBindingResolutionFailure(
   } catch (probeErr) {
     return isRegistryNotFound(probeErr) ? "package-not-found" : "unavailable";
   }
+}
+
+/**
+ * Resolve a binding's MIME from `declaredMime` or the named `mimeFrom` output,
+ * then gate it on the text-authorable universe. Shared by the scalar and the
+ * fan-out roads so both report the same sentence.
+ */
+function resolveBindingMime(
+  binding: CollectedArtifactBinding["binding"],
+  outputs: Record<string, unknown>,
+): { ok: true; mime: string } | { ok: false; error: string } {
+  let mime: string;
+  if (binding.declaredMime !== undefined) {
+    mime = binding.declaredMime;
+  } else {
+    const mimeRaw = outputs[binding.mimeFrom as string];
+    if (typeof mimeRaw !== "string" || mimeRaw.length === 0) {
+      return {
+        ok: false,
+        error: `mimeFrom output "${binding.mimeFrom}" did not resolve to a non-empty string`,
+      };
+    }
+    mime = mimeRaw;
+  }
+  if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(mime)) {
+    return {
+      ok: false,
+      error: `resolved MIME "${mime}" is not text-authorable — declarative bindings are v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
+    };
+  }
+  return { ok: true, mime };
+}
+
+/**
+ * Fan-out write-amplification caps (cinatra#3034). The scalar path writes ONE
+ * row per binding; a fan-out writes one per MEMBER and the member list arrives
+ * from a model's answer, so the list itself is bounded BEFORE any member is
+ * written. Both caps are fail-closed on the whole binding: an over-long list is
+ * refused, never silently trimmed to the cap.
+ */
+export const MAX_FAN_OUT_MEMBERS = 50;
+export const MAX_FAN_OUT_TOTAL_BYTES = MAX_AUTHORED_CONTENT_BYTES;
+
+/**
+ * Read a fanned-out member's own title: its FIRST line, behind the declared
+ * prefix. Fail-closed on both counts — an unmarked first line and an empty
+ * title are refused rather than invented, and the member's bytes are written
+ * verbatim (the marker line stays part of the artifact's text).
+ */
+function readFanOutMemberTitle(
+  member: string,
+  titlePrefix: string,
+): { ok: true; title: string } | { ok: false; error: string } {
+  const firstLine = member.split("\n", 1)[0] ?? "";
+  if (!firstLine.startsWith(titlePrefix)) {
+    return {
+      ok: false,
+      error: `its first line does not open with the declared title prefix "${titlePrefix}"`,
+    };
+  }
+  const title = firstLine.slice(titlePrefix.length).trim();
+  if (title.length === 0) {
+    return {
+      ok: false,
+      error: `its first line carries no non-empty title behind "${titlePrefix}"`,
+    };
+  }
+  return { ok: true, title };
 }
 
 function pool(): Pool {
@@ -270,14 +358,43 @@ export function __resetRunPackageBindingsCacheForTests(): void {
 export async function loadRunDerivationContext(input: {
   templateId: string;
   packageVersion: string | null;
-}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; hasBindings: boolean }> {
-  const packageName = await resolveTemplatePackageName(input.templateId);
-  if (packageName === null) return { producesRefs: [], hasBindings: false };
+}): Promise<{
+  producesRefs: SemanticArtifactProducesRef[];
+  hasBindings: boolean;
+  /** The package's collected bindings (cinatra#3030). The FILE-sourced ones are
+   *  resolved by the pickup, which is the only process that can see the run
+   *  folder; the caller filters. Additive — every earlier caller reads the two
+   *  fields above and is untouched. */
+  bindings: CollectedArtifactBinding[];
+}> {
+  // cinatra#3208, applied here in the cinatra#3030 convergence round: when the
+  // template version this run is pinned to persisted the declaration its own
+  // compile found, THAT is the declaration the run executed and the one the
+  // file pickup resolves against — the registry is not read at all. Reading the
+  // registry instead would let a drifted (or unreachable) copy decide which
+  // files this run promised, which is exactly the two-authorities defect #3208
+  // removed from the materializer.
+  const { packageName, executedDeclaration } = await resolveTemplatePackageAndBindingsFlag(
+    input.templateId,
+    input.packageVersion,
+  );
+  if (packageName === null) return { producesRefs: [], hasBindings: false, bindings: [] };
+  if (executedDeclaration !== null) {
+    return {
+      producesRefs: executedDeclaration.producesRefs,
+      hasBindings: executedDeclaration.bindings.length > 0,
+      bindings: executedDeclaration.bindings,
+    };
+  }
   const loaded = await loadRunPackageBindings({
     packageName,
     packageVersion: input.packageVersion,
   });
-  return { producesRefs: loaded.producesRefs, hasBindings: loaded.bindings.length > 0 };
+  return {
+    producesRefs: loaded.producesRefs,
+    hasBindings: loaded.bindings.length > 0,
+    bindings: loaded.bindings,
+  };
 }
 
 async function resolveTemplatePackageName(
@@ -331,11 +448,12 @@ async function resolveTemplatePackageAndBindingsFlag(
 ): Promise<{
   packageName: string | null;
   hasArtifactBindings: boolean | null;
+  executedDeclaration: PersistedArtifactBindingDeclaration | null;
 }> {
   ensurePostgresSchema();
   const s = postgresSchema.replaceAll('"', '""');
   const res = await pool().query(
-    `SELECT package_name, package_version, has_artifact_bindings FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
+    `SELECT package_name, package_version, has_artifact_bindings, artifact_bindings FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
     [templateId],
   );
   const row = res.rows[0] as
@@ -343,6 +461,7 @@ async function resolveTemplatePackageAndBindingsFlag(
         package_name?: string | null;
         package_version?: string | null;
         has_artifact_bindings?: boolean | null;
+        artifact_bindings?: string | null;
       }
     | undefined;
   const versionPinMatches =
@@ -358,6 +477,18 @@ async function resolveTemplatePackageAndBindingsFlag(
       versionPinMatches && typeof row?.has_artifact_bindings === "boolean"
         ? row.has_artifact_bindings
         : null,
+    // cinatra#3208 — the declaration the run ACTUALLY executed, read back from
+    // the immutable template-version snapshot it is bound to. Guarded by the
+    // SAME version pin as the presence flag and for the same reason: a template
+    // row is mutable and a concurrent reinstall can move it to another version
+    // while this run is still in flight, so a declaration that no longer
+    // describes this run's pin is treated as unknown (null), never as the
+    // executed one. `parseArtifactBindingDeclaration` is fail-closed: anything
+    // that is not a well-formed declaration of the current grammar also reads
+    // as unknown, and the caller keeps the pre-#3208 registry read.
+    executedDeclaration: versionPinMatches
+      ? parseArtifactBindingDeclaration(row?.artifact_bindings ?? null)
+      : null,
   };
 }
 
@@ -434,9 +565,14 @@ export async function writeClaimedArtifact(input: {
   /** Ledger identity: the EndNode output name (bindings), the node id (tool), or
    *  the reserved `derived_output` sentinel (cinatra#1893 unbound-output job). */
   outputId: string;
-  /** The calling node id, or null on the `derived_output` path (no node). */
+  /** The calling node id, or null on the `derived_output` / `default_road`
+   *  paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output";
+  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
+  /** The detection ladder's recorded verdict (cinatra#3029, the `default_road`
+   *  path only) — journalled on the ledger row this write claims, so the
+   *  DECIDING RUNG of every default-road artifact is auditable. */
+  detection?: MaterializationDetection | null;
   extension: string;
   title: string;
   mime: string;
@@ -497,6 +633,7 @@ export async function writeClaimedArtifact(input: {
     path: input.path,
     extension: input.extension,
     contentHash,
+    detection: input.detection ?? null,
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -619,6 +756,11 @@ export async function writeClaimedArtifact(input: {
  * failed outcome per binding-collection error). Empty array when the run's
  * package declares no bindings.
  *
+ * cinatra#3208 — FIRST this function reads the executed declaration persisted
+ * on the run's pinned template version and, when it resolves, materializes
+ * against THAT and never touches the registry. Everything below describes the
+ * fallback the unknown case still takes.
+ *
  * cinatra#2498 — the registry read below (`loadRunPackageBindings`) is the
  * ONLY way a registry outage can reach this function; its wholesale-failure
  * catch turns that outage into a synthetic `(binding-resolution)` failure
@@ -661,37 +803,72 @@ export async function materializeRunArtifacts(input: {
   // itself failed) — evidence-free by construction.
   let resolvedPackageName: string | null = null;
   try {
-    const { packageName, hasArtifactBindings } = await resolveTemplatePackageAndBindingsFlag(
-      input.templateId,
-      input.packageVersion,
-    );
+    const { packageName, hasArtifactBindings, executedDeclaration } =
+      await resolveTemplatePackageAndBindingsFlag(input.templateId, input.packageVersion);
     if (packageName === null) return [];
-    // Locally-provable "no bindings" — skip the registry entirely. This is
-    // the ONLY branch that short-circuits; `true` and `null` both still need
-    // the registry (to resolve the actual binding grammar, or because we
-    // cannot prove the run owes nothing) and keep the existing posture below.
-    // Deliberately BEFORE the `resolvedPackageName` hoist: this branch can
-    // never reach the catch's classifier (cinatra#2497), because it never
-    // performs a read that can fail. Ordering it first is the whole point of
-    // cinatra#2498 — a template provably owing no binding at THIS run's pin
-    // must not touch the registry at all, so no outage, 404 or probe can even
-    // be observed for it. Every other path keeps #2497's classification.
-    if (hasArtifactBindings === false) return [];
-    resolvedPackageName = packageName;
-    const loaded = await loadRunPackageBindings({
-      packageName,
-      packageVersion: input.packageVersion,
-    });
-    bindings = loaded.bindings;
-    producesRefs = loaded.producesRefs;
-    for (const error of loaded.errors) {
-      outcomes.push({
-        ok: false,
-        outputId: "(binding-validation)",
-        nodeId: null,
-        extension: null,
-        error,
+    // cinatra#3208 — THE AUTHORITY. When the template version this run is
+    // pinned to persisted the declaration its own compile found, that IS the
+    // declaration the run executed, and materialization resolves against it
+    // without touching the package registry at all. Before #3208 this function
+    // re-derived the bindings by re-reading the registry for the same
+    // (packageName, packageVersion) pair; execution and materialization
+    // therefore answered to two different authorities, and a registry copy that
+    // had drifted from the copy the template was compiled from failed the run
+    // on a binding it never declared, after all the model work was done.
+    //
+    // Chosen enforcement rule (issue acceptance item 4, first branch): the
+    // registry read is REMOVED from every run that carries a persisted
+    // declaration — no digest comparison is built, because with one authority
+    // there is nothing left to compare. The registry read survives ONLY as the
+    // fallback below for a row that predates the column, or whose compile could
+    // not see its sibling manifest, where the declaration reads as unknown.
+    //
+    // The fail-closed posture is untouched: these bindings run through the SAME
+    // loop, and a run that owed an artifact and produced none still returns an
+    // `ok:false` outcome and still lands `failed` with the same sentence. Only
+    // WHICH declaration is resolved changes.
+    if (executedDeclaration !== null) {
+      bindings = executedDeclaration.bindings;
+      producesRefs = executedDeclaration.producesRefs;
+      if (bindings.length === 0) return [];
+      // Binding <-> `produces` parity was enforced at compile time against this
+      // same manifest (the compile refuses to persist a declaration otherwise),
+      // so it is not re-derived here — the persisted pair is parity-checked by
+      // construction, which is precisely what the registry re-read could not
+      // promise.
+    } else if (hasArtifactBindings === false) {
+      // Locally-provable "no bindings" (cinatra#2498) — skip the registry
+      // entirely. Kept below the persisted declaration because a declaration
+      // that resolved is strictly more specific than its presence flag.
+      return [];
+    } else {
+      // The pre-#3208 fallback, byte for byte: a template row with no
+      // persisted declaration (compiled before the column existed, or by a
+      // compile without a readable sibling manifest) still re-derives its
+      // bindings from the registry, and `hasArtifactBindings === null` still
+      // cannot be locally proven safe, so #2497's wholesale classification and
+      // #2486's fail-closed posture below are preserved exactly.
+      //
+      // The `resolvedPackageName` hoist is deliberately INSIDE this branch: the
+      // two short-circuits above can never reach the catch's classifier because
+      // neither performs a read that can fail, so no outage, 404 or probe is
+      // even observable for them.
+      resolvedPackageName = packageName;
+      const loaded = await loadRunPackageBindings({
+        packageName,
+        packageVersion: input.packageVersion,
       });
+      bindings = loaded.bindings;
+      producesRefs = loaded.producesRefs;
+      for (const error of loaded.errors) {
+        outcomes.push({
+          ok: false,
+          outputId: "(binding-validation)",
+          nodeId: null,
+          extension: null,
+          error,
+        });
+      }
     }
   } catch (err) {
     // Package/binding resolution failed wholesale (registry unreachable,
@@ -729,6 +906,26 @@ export async function materializeRunArtifacts(input: {
   });
 
   for (const { nodeId, outputId, binding } of bindings) {
+    // A FILE-SOURCED BINDING IS NOT THIS ROAD'S WORK (cinatra#3030, item 0.22).
+    // Its content is a file in the run's outputs folder, which only the process
+    // the folder lives with can see, so the PICKUP resolves it (the file half of
+    // `default-road-pickup`). Skipping it here is deliberate and load-bearing:
+    // failing it would make a declared file binding a broken promise under the
+    // #2486 materialization-honesty gate and fail an otherwise-good run.
+    if (binding.fileFrom !== undefined || binding.filePattern !== undefined) continue;
+    const contentFrom = binding.contentFrom;
+    if (contentFrom === undefined) {
+      // Unreachable through the grammar (exactly one content source, and the
+      // file sources left above). Refused rather than assumed.
+      outcomes.push({
+        ok: false,
+        outputId,
+        nodeId,
+        extension: binding.extension,
+        error: "the binding names no output content source",
+      });
+      continue;
+    }
     const fail = (error: string): void => {
       outcomes.push({
         ok: false,
@@ -749,36 +946,149 @@ export async function materializeRunArtifacts(input: {
         );
         continue;
       }
-      const titleRaw = outputs[binding.titleFrom];
+      // ------------------------------------------------------------------
+      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list of
+      // plain-text members and each member becomes ITS OWN artifact, titled
+      // from its own first line behind the declared prefix. One ledger
+      // identity, one outcome and one row per member — never a batch.
+      // ------------------------------------------------------------------
+      if (binding.fanOut !== undefined) {
+        const fanMime = resolveBindingMime(binding, outputs);
+        if (!fanMime.ok) {
+          fail(fanMime.error);
+          continue;
+        }
+        const members = outputs[contentFrom];
+        if (!Array.isArray(members)) {
+          fail(
+            `fan-out output "${contentFrom}" did not resolve to an array` +
+              (members === undefined || members === null
+                ? " (output missing from the run's declared outputs)"
+                : ` (got ${typeof members})`),
+          );
+          continue;
+        }
+        if (members.length === 0) {
+          fail(
+            `fan-out output "${contentFrom}" resolved to an empty array — ` +
+              "the run declared a produced artifact per member and produced none",
+          );
+          continue;
+        }
+        if (members.length > MAX_FAN_OUT_MEMBERS) {
+          fail(
+            `fan-out output "${contentFrom}" carries ${members.length} members, ` +
+              `over the ${MAX_FAN_OUT_MEMBERS}-member cap — the whole list is refused, never trimmed`,
+          );
+          continue;
+        }
+        let fanOutTotalBytes = 0;
+        for (const candidate of members) {
+          if (typeof candidate === "string") {
+            fanOutTotalBytes += new TextEncoder().encode(candidate).byteLength;
+          }
+        }
+        if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
+          fail(
+            `fan-out output "${contentFrom}" carries ${fanOutTotalBytes} bytes across ` +
+              `${members.length} members, over the ${MAX_FAN_OUT_TOTAL_BYTES}-byte list cap`,
+          );
+          continue;
+        }
+        const resolvedFan = await resolveBoundArtifactTarget({
+          orgId: input.orgId,
+          extension: binding.extension,
+          bindingObjectTypeId: binding.objectTypeId,
+          producesObjectTypeId:
+            producesObjectTypeIdForExtension(producesRefs, binding.extension) ?? undefined,
+        });
+        if (!resolvedFan.ok) {
+          fail(resolvedFan.error);
+          continue;
+        }
+        for (let index = 0; index < members.length; index += 1) {
+          const memberOutputId = `${outputId}[${index}]`;
+          const failMember = (error: string): void => {
+            outcomes.push({
+              ok: false,
+              outputId: memberOutputId,
+              nodeId,
+              extension: binding.extension,
+              error,
+            });
+          };
+          const member = members[index];
+          if (typeof member !== "string") {
+            failMember(
+              `member ${index} of "${contentFrom}" is not a plain string ` +
+                `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
+            );
+            continue;
+          }
+          const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
+          if (!memberTitle.ok) {
+            failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
+            continue;
+          }
+          const memberBytes = new TextEncoder().encode(member).byteLength;
+          if (memberBytes > MAX_AUTHORED_CONTENT_BYTES) {
+            failMember(
+              `member ${index} of "${contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+            );
+            continue;
+          }
+          const memberResult = await writeClaimedArtifact({
+            runId: input.runId,
+            orgId: input.orgId,
+            createdBy: input.createdBy,
+            outputId: memberOutputId,
+            nodeId,
+            path: "end_node_binding",
+            extension: binding.extension,
+            title: memberTitle.title,
+            mime: fanMime.mime,
+            content: member,
+            ownership,
+            resolvedTarget: resolvedFan.target,
+            mimeDescription: "the binding resolved MIME",
+          });
+          if (!memberResult.ok) {
+            failMember(memberResult.error);
+            continue;
+          }
+          outcomes.push({
+            ok: true,
+            outputId: memberOutputId,
+            nodeId,
+            extension: binding.extension,
+            artifactId: memberResult.artifactId,
+            representationRevisionId: memberResult.representationRevisionId,
+            deduped: memberResult.deduped,
+          });
+        }
+        continue;
+      }
+
+      // The grammar (artifact-binding) guarantees titleFrom XOR fanOut, so a
+      // binding that reaches here names a run-level title output.
+      const titleFromOutput = binding.titleFrom as string;
+      const titleRaw = outputs[titleFromOutput];
       if (typeof titleRaw !== "string" || titleRaw.trim().length === 0) {
         fail(
-          `titleFrom output "${binding.titleFrom}" did not resolve to a non-empty string`,
+          `titleFrom output "${titleFromOutput}" did not resolve to a non-empty string`,
         );
         continue;
       }
       const title = titleRaw.trim();
 
-      let mime: string;
-      if (binding.declaredMime !== undefined) {
-        mime = binding.declaredMime;
-      } else {
-        const mimeRaw = outputs[binding.mimeFrom as string];
-        if (typeof mimeRaw !== "string" || mimeRaw.length === 0) {
-          fail(
-            `mimeFrom output "${binding.mimeFrom}" did not resolve to a non-empty string`,
-          );
-          continue;
-        }
-        mime = mimeRaw;
-      }
-      if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(mime)) {
-        fail(
-          `resolved MIME "${mime}" is not text-authorable — declarative bindings are v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
-        );
+      const scalarMime = resolveBindingMime(binding, outputs);
+      if (!scalarMime.ok) {
+        fail(scalarMime.error);
         continue;
       }
+      const mime = scalarMime.mime;
 
-      const contentRaw = outputs[binding.contentFrom];
+      const contentRaw = outputs[contentFrom];
       let content: string;
       if (typeof contentRaw === "string") {
         content = contentRaw;
@@ -793,7 +1103,7 @@ export async function materializeRunArtifacts(input: {
         content = JSON.stringify(contentRaw);
       } else {
         fail(
-          `contentFrom output "${binding.contentFrom}" did not resolve to a string` +
+          `contentFrom output "${contentFrom}" did not resolve to a string` +
             (contentRaw === undefined || contentRaw === null
               ? " (output missing from the run's declared outputs)"
               : ` (got ${Array.isArray(contentRaw) ? "array" : typeof contentRaw}; structured values are only accepted for application/json bindings)`),
@@ -897,6 +1207,79 @@ export type ToolArtifactMaterialization =
  * rejects. Never throws — every failure is a returned error the route
  * surfaces as an HTTP error to the calling node.
  */
+/** The target `resolveBoundArtifactTarget` resolves — the authorization's
+ *  answer to "which declared type do these bytes become". */
+type ResolvedBoundTarget = Extract<
+  Awaited<ReturnType<typeof resolveBoundArtifactTarget>>,
+  { ok: true }
+>["target"];
+
+/**
+ * THE `artifact_materialize` WRITE AUTHORIZATION (extracted in the cinatra#3030
+ * convergence round so the APPEND path answers to it too).
+ *
+ * Everything a tool call must satisfy before any byte is staged: the extension
+ * is one the run's package DECLARED it produces, the form is text-authorable,
+ * the content is under the cap, and the call resolves to exactly one declared
+ * object type. The create path ran these inline; the same-artifact revision
+ * (item 0.30) reached the store without them, which made "which extension may
+ * this run write" a question only the create path asked.
+ */
+export async function authorizeToolMaterializeWrite(input: {
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  extension: string;
+  objectTypeId?: string;
+  mime: string;
+  content: string;
+}): Promise<{ ok: true; target: ResolvedBoundTarget } | { ok: false; error: string }> {
+  const packageName = await resolveTemplatePackageName(input.templateId);
+  if (packageName === null) {
+    return {
+      ok: false,
+      error: `run template ${input.templateId} has no package name — cannot resolve cinatra.produces`,
+    };
+  }
+  const loaded = await loadRunPackageBindings({
+    packageName,
+    packageVersion: input.packageVersion,
+  });
+  if (!loaded.produces.includes(input.extension)) {
+    return {
+      ok: false,
+      error:
+        `extension "${input.extension}" is not declared in ${packageName}'s ` +
+        `cinatra.produces ([${loaded.produces.join(", ")}]) — declared ` +
+        "production and materialization must agree",
+    };
+  }
+  if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(input.mime)) {
+    return {
+      ok: false,
+      error: `declaredMime "${input.mime}" is not text-authorable — artifact_materialize is v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
+    };
+  }
+  const contentBytes = new TextEncoder().encode(input.content).byteLength;
+  if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
+    return {
+      ok: false,
+      error: `content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+    };
+  }
+  // Warm the registry so declared-type resolution sees every installed type.
+  registerAllObjectTypes();
+  const resolved = await resolveBoundArtifactTarget({
+    orgId: input.orgId,
+    extension: input.extension,
+    bindingObjectTypeId: input.objectTypeId,
+    producesObjectTypeId:
+      producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
+  });
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  return { ok: true, target: resolved.target };
+}
+
 export async function materializeToolArtifact(input: {
   runId: string;
   orgId: string;
@@ -915,57 +1298,23 @@ export async function materializeToolArtifact(input: {
   content: string;
 }): Promise<ToolArtifactMaterialization> {
   try {
-    const packageName = await resolveTemplatePackageName(input.templateId);
-    if (packageName === null) {
-      return {
-        ok: false,
-        error: `run template ${input.templateId} has no package name — cannot resolve cinatra.produces`,
-      };
-    }
-    const loaded = await loadRunPackageBindings({
-      packageName,
-      packageVersion: input.packageVersion,
-    });
-    if (!loaded.produces.includes(input.extension)) {
-      return {
-        ok: false,
-        error:
-          `extension "${input.extension}" is not declared in ${packageName}'s ` +
-          `cinatra.produces ([${loaded.produces.join(", ")}]) — declared ` +
-          "production and materialization must agree",
-      };
-    }
-
-    if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(input.mime)) {
-      return {
-        ok: false,
-        error: `declaredMime "${input.mime}" is not text-authorable — artifact_materialize is v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
-      };
-    }
+    // The SHARED write authorization (produces, text-authorable form, the cap
+    // and the declared target type) — the same one the append path takes.
     const title = input.title.trim();
     if (title.length === 0) {
       return { ok: false, error: "title must be a non-empty string" };
     }
-    const contentBytes = new TextEncoder().encode(input.content).byteLength;
-    if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
-      return {
-        ok: false,
-        error: `content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
-      };
-    }
-
-    // Warm the registry so declared-type resolution sees every installed type.
-    registerAllObjectTypes();
-
-    // Resolve the tool call to its DECLARED object type (cinatra#1454).
-    const resolved = await resolveBoundArtifactTarget({
+    const authorized = await authorizeToolMaterializeWrite({
       orgId: input.orgId,
+      templateId: input.templateId,
+      packageVersion: input.packageVersion,
       extension: input.extension,
-      bindingObjectTypeId: input.objectTypeId,
-      producesObjectTypeId:
-        producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
+      objectTypeId: input.objectTypeId,
+      mime: input.mime,
+      content: input.content,
     });
-    if (!resolved.ok) return { ok: false, error: resolved.error };
+    if (!authorized.ok) return { ok: false, error: authorized.error };
+    const resolved = authorized;
 
     // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple.
     const ownership = await resolveRunScopeOwnership({
@@ -996,3 +1345,7 @@ export async function materializeToolArtifact(input: {
     };
   }
 }
+
+// The default road's PURE pickup (cinatra#3029) types its ownership seam on
+// the same shape this module writes with.
+export type { ScopeDerivedOwnership };

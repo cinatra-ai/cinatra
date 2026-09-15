@@ -63,7 +63,7 @@ const readiness = {
 };
 const readinessInputs = { satisfied: false as boolean };
 vi.mock("@/lib/setup-readiness-saga", () => ({
-  readSetupReadinessState: () => ({ ready: readiness.ready, receipt: readiness.receipt }),
+  readSetupReadinessState: async () => ({ ready: readiness.ready, receipt: readiness.receipt }),
   readSetupReadinessReceipt: () => readiness.receipt,
   areProviderReadinessInputsSatisfied: () => readinessInputs.satisfied,
 }));

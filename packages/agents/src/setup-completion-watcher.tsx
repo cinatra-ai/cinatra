@@ -57,6 +57,29 @@ type SetupCompletionWatcherProps = {
    * external run's output renders even after its AG-UI event log expired
    * (parity with RunScreen). Empty/undefined for internal runs.
    */
+  /**
+   * May this person type in the run's prompt window (cinatra#2933)? Resolved on
+   * the server from the RUN's access and forwarded to the panel unchanged.
+   */
+  canRespondInWindow?: boolean;
+  /**
+   * The run's template id (cinatra#2933, lifecycle-b W5b).
+   *
+   * This watcher is the run page's ONLY production mount of AgenticRunPanel
+   * outside the chat, and the panel draws the run's prompt window only for a
+   * caller that names the template: the window's turns POST to
+   * /api/agents/builder/[templateId]/hitl-assist, and that route asks the RUN
+   * whether this person may answer (`canRespondInRunWindow(runId, templateId)`).
+   * Without the id there is no bound run to ask about, so the panel draws no
+   * box at all -- which is what the run page did.
+   *
+   * The screen that mounts this watcher already holds the run's template row
+   * and hands `template.id` to each of the other windows it mounts. It is
+   * forwarded here unchanged, exactly like `canRespondInWindow`: no fallback,
+   * no id invented on the client. Absent still means no window, which keeps
+   * every caller that has no template byte-identical.
+   */
+  templateId?: string;
   initialStreamedText?: string;
   /**
    * Server-derived gate context for the first paint (see AgenticRunPanel's
@@ -66,6 +89,31 @@ type SetupCompletionWatcherProps = {
    * whichever entry path brought them here.
    */
   initialHitlContext?: HitlGateContext | null;
+  /** cinatra#2997 — the run's review slot, read server-side by the screen that
+   *  mounts this watcher and threaded straight through to the panel, so the run
+   *  page's FIRST paint of a run that already has a review draws that review. */
+  initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  /**
+   * WAS THIS RUN'S SKILL SET DECIDED ON THE RECOMMENDATION CARD?
+   *
+   * Forwarded to the panel unchanged, exactly like `canRespondInWindow` and
+   * `initialReviewGate`: no fallback and no second read. The panel draws no
+   * recommendation card of its own any more (cinatra#3047) — the run page's rail
+   * step is the row's one place — so the screen that owns that step answers this
+   * for it, from the run's own park row.
+   */
+  recommendationDecided?: boolean;
+  /** cinatra#3068 — the page's rail carries the run's input step, so the panel
+   *  draws no "Agentic Run Progress" heading over the form. Forwarded through
+   *  unchanged; see `AgenticRunPanel`'s own prop. */
+  inputStepInRail?: boolean;
+  /**
+   * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
+   * the run page's two-column frame is drawn beside this column, so the gate's
+   * own card is the whole page and no section plate is stacked around it
+   * (cinatra#3047 fix leg 8).
+   */
+  railDrawsTheFrame?: boolean;
 };
 
 export function SetupCompletionWatcher({
@@ -85,7 +133,13 @@ export function SetupCompletionWatcher({
   runHasExecuted = false,
   triggerConfigured = false,
   initialStreamedText,
+  inputStepInRail = false,
+  railDrawsTheFrame = false,
+  canRespondInWindow,
+  templateId,
   initialHitlContext,
+  initialReviewGate,
+  recommendationDecided,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -212,6 +266,8 @@ export function SetupCompletionWatcher({
 
   return (
     <AgenticRunPanel
+      canRespondInWindow={canRespondInWindow}
+      templateId={templateId}
       runId={runId}
       initialStatus={initialStatus}
       initialError={initialError}
@@ -224,6 +280,10 @@ export function SetupCompletionWatcher({
       inputParams={initialInputParams ?? undefined}
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
+      initialReviewGate={initialReviewGate}
+      recommendationDecided={recommendationDecided}
+      inputStepInRail={inputStepInRail}
+      railDrawsTheFrame={railDrawsTheFrame}
     />
   );
 }

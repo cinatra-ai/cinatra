@@ -620,7 +620,7 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
         orgId: ORG,
         schedule: WEEKDAYS_8AM,
       });
-      expect(out).toEqual({ ok: false });
+      expect(out).toEqual({ ok: false, reason: "ref_refused" });
     }
     // The refusal lands before the template store is ever reached.
     expect(readAgentTemplateById).not.toHaveBeenCalled();
@@ -641,7 +641,7 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
       orgId: ORG,
       schedule: WEEKDAYS_8AM,
     });
-    expect(out).toEqual({ ok: false });
+    expect(out).toEqual({ ok: false, reason: "ref_refused" });
   });
 
   it("cannot be re-pointed at an agent the reader was never proposed", async () => {
@@ -681,10 +681,19 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
 // winner's run id. Sharing the consume identity is what makes that reachable,
 // so it is this PR's to close, not a pre-existing one.
 
-/** A one-off in another zone — an adjust that moves the DURABLE fields too. */
+/**
+ * A one-off in another zone — an adjust that moves the DURABLE fields too.
+ *
+ * The instant is far ahead on purpose. `mintProposal` refuses a `scheduled`
+ * proposal whose `runAt` has already passed, so a fixture dated near the day it
+ * was written stops testing the adjust the moment real time overtakes it and
+ * silently starts testing the past-time guard instead. Nothing here reads the
+ * date — only the KIND and the ZONE are asserted — so it carries no meaning
+ * beyond "still ahead", exactly as `RUN_AT` does further down this file.
+ */
 const ONCE_NEW_YORK: ProposalSchedule = {
   kind: "scheduled",
-  runAt: "2026-09-01T08:00",
+  runAt: "2099-09-01T08:00",
   timezone: "America/New_York",
 };
 
@@ -808,6 +817,13 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
     // out of the comparison, which is the whole point of a whole-object check:
     // the winning member's rows are the ones it was adjusted TO (08:00), and it
     // cannot be saved yet because the install is still arming.
+    //
+    // TWO MORE JOINED IT IN cinatra#2972, and they are the readings plan (A)
+    // §7.2 as amended 2026-08-25 added: `firedOnce` — has this schedule
+    // produced a run yet, which is what **Cancel schedule** is "shown only for
+    // a recurring schedule that has fired once" means — and `stopped`, the
+    // state that control leaves behind. Neither is true here: this schedule is
+    // still installing, so it has fired nothing and been stopped by nobody.
     expect(resolved).toEqual({
       phase: "settled",
       runId: "run_1",
@@ -822,6 +838,14 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
       timezone: "Europe/Berlin",
       released: false,
       arming: true,
+      firedOnce: false,
+      // ONE MORE JOINED IT IN cinatra#3174 fix leg 1: `durationCopy`, the
+      // estimated-duration line the settled card draws. `null` here because a
+      // template with no completed runs has no history to estimate from, and
+      // the drawing gives no wording for a missing estimate — so the card draws
+      // no line at all rather than inventing one.
+      durationCopy: null,
+      stopped: false,
       canSave: false,
       superseded: false,
     });

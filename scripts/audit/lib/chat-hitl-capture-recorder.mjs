@@ -64,8 +64,8 @@
  * hand-writing a record with the recorder's id, a real screenshot's real hash,
  * and fabricated counts of one. Binding pixels to assertions would need an
  * attested capture run, which this repo does not have for ANY committed
- * evidence file — the same trust boundary already applies to every screenshot in
- * `evidence/`.
+ * evidence file — the same trust boundary already applies to every screenshot a
+ * capture run mints.
  *
  * So be exact about what IS closed. This gate catches the mislabel and the
  * omission: a capture whose recorded URL contradicts its declared host, a
@@ -79,8 +79,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 
 // THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
 // ratified and on main; a second hand-written copy of the same hosts, kinds,
@@ -91,13 +91,36 @@ import { join } from "node:path";
 // selectors. Zero runtime dependencies on both sides, so the audit tier stays
 // installable-free.
 import {
+  CANONICAL_CAPTURE_STATES,
   CAPTURE_HOSTS as CANONICAL_CAPTURE_HOSTS,
   CAPTURE_INDEX_PATH,
   CARD_KINDS,
+  captureStatesFor,
   DECIDED_SUMMARY_SELECTOR,
+  parseCellName,
   RECORDER_ID,
+  absenceInstanceViolations,
+  captureHostAdmissibility,
+  CAPTURE_OUTPUT_ROOT,
+  isHistoricalPermalink,
+  PINNED_ARTIFACT_ROOT,
+  repoPathOf,
+  captureImageFormat,
+  createCaptureTempFile,
+  prepareCaptureTarget,
+  recheckCaptureParent,
   requiredAssertionsFor,
+  tempFileViolation,
+  resolveLiveCapture,
+  settledIsAbsence,
+  sha256File,
+  sha256Pinned,
 } from "../../ci/lib/capture-record-contract.mjs";
+
+// Re-exported so the anchor contract reads the canonical answers through the
+// same door every other requirement comes through, rather than reaching past
+// this tier into the contract for two of them.
+export { absenceInstanceViolations, captureHostAdmissibility, settledIsAbsence };
 
 /**
  * The recorder's identity, stamped on every record it writes and named by the
@@ -174,7 +197,20 @@ export function classifyUrl(finalUrl) {
  */
 export const HOST_URL_CLASSES = Object.freeze({
   chat_thread: Object.freeze(["chat"]),
-  run_card: Object.freeze(["run_detail"]),
+  // TWO CLASSES, AND THE SECOND IS THE CONVERSATION (cinatra#2997). The
+  // `run_card` host is the RUN'S OWN CARD, and that card is drawn on two
+  // surfaces: the run page, and inside a conversation, where it is the inline
+  // run panel. It has always been drawn in both — what changed is that it now
+  // draws a LIFECYCLE CARD in the conversation too, because the maintainer ruled
+  // the run card IS the review screen once the work opens one: "Once the agent
+  // is done and the output generated, that 'Agentic Run Progress' card is being
+  // automatically replaced with the 'Review requested' screen. On the run page,
+  // the same is true." (the request for changes on pull request 2890; PLAN:
+  // Agents Lifecycle (A) section 4.2 carries the same sentence). The canonical
+  // half of this contract (`scripts/ci/lib/capture-record-contract.mjs`,
+  // `HOST_URL_CLASS`) carries the identical pair, so the two halves still
+  // classify identically.
+  run_card: Object.freeze(["run_detail", "chat"]),
   page_gate_region: Object.freeze(["review_page"]),
   site_widget: null,
 });
@@ -230,8 +266,24 @@ export const LIFECYCLE_KINDS = Object.freeze(Object.keys(CARD_KINDS));
  * and its own decided summary. Requiring the controls on every capture would
  * make an honest decided screenshot unindexable, and requiring nothing would let
  * a placeholder pass as either.
+ *
+ * IT IS NOW THE CANONICAL LIST ITSELF, not a second copy of it -- and it is NOT
+ * "the states every kind resolves". It is the pair a card that asks for a
+ * decision resolves, and the default for a kind the canonical contract's
+ * `KIND_CAPTURE_STATES` does not name. The arms below read
+ * `captureStatesFor(kind)`, which is exact per kind: the audit card resolves
+ * `advisory` and nothing else, on every host it draws on. Two of its advisory
+ * records stand in the index; the third was refused HERE, on `chat_thread`
+ * alone, by an arm that enumerated this list for all four kinds (the driven
+ * refusal is recorded in `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2791-s9g-conformance/capture-results.json`).
+ *
+ * THIS LIST STAYS THE TWO, deliberately. The anchor contract builds one ratified
+ * anchor set per (host, kind, state) from it, so moving it would move the
+ * digest; the per-kind vocabulary adds no anchor at all -- an advisory capture
+ * owes exactly the set both ratified sets are built from -- so the digest stands
+ * where it was ratified.
  */
-export const CAPTURE_STATES = Object.freeze(["pending", "decided"]);
+export const CAPTURE_STATES = CANONICAL_CAPTURE_STATES;
 
 /** The scopes an observation can be counted in, per the canonical contract. */
 export const CAPTURE_SCOPES = Object.freeze(["page", "frame", "root"]);
@@ -276,7 +328,11 @@ export function captureRequirementsFor(host, kind = null, state = null) {
     return out;
   };
   const specs = required.map((r) => spec(r, "present"));
-  if (root) {
+  // A kind whose settled reading draws nothing has no root to count the host
+  // declaration inside — the canonical set has already turned this cell's claim
+  // into an ABSENCE, and this tier's addition cannot ask for a presence inside
+  // it.
+  if (root && !(settledIsAbsence(kind) && state === "decided")) {
     specs.push({
       frame: frameOf("root"),
       scope: "root",
@@ -351,6 +407,73 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
+ * WHERE A CAPTURE RUN WRITES.
+ *
+ * `test-results/` is the repo's existing run-artifact root: it is the Playwright
+ * config's `outputDir`, it is already gitignored, other suites already mint into
+ * it (`tests/e2e/setup/support/instance-state.ts`), and the CI job that runs the
+ * held-turn flow already uploads it. So a run leaves the tree clean by
+ * construction and nothing has to be pruned afterwards.
+ *
+ * It replaces the tracked proof-artifact tree that used to hold these files:
+ * minting proof pictures into the repository is what this root exists to stop.
+ * The path stays
+ * repo-relative because a record's `screenshot` field must be one -- an OS temp
+ * dir would need the record contract's path rule widened to absolute paths,
+ * which is a bigger change than this one and would weaken it for every record.
+ *
+ * RE-EXPORTED, NEVER REDECLARED. The ratified contract owns this string because
+ * BOTH tiers have to refuse the same paths, and a second copy here is exactly
+ * how the two tiers came to disagree about it: the canonical tier never had the
+ * rule at all, so a record naming any tracked file passed the required gate.
+ */
+export { CAPTURE_OUTPUT_ROOT };
+
+/**
+ * THE ROOT A COMMITTED WALK PLAN WAS WRITTEN AGAINST.
+ *
+ * Plans older than the tree cleanup name their output paths under the proof
+ * tree that captures were minted into at the time. That tree is gone.
+ */
+export const HISTORICAL_OUTPUT_ROOT = PINNED_ARTIFACT_ROOT;
+
+/**
+ * Move a walk plan's OUTPUT paths onto the live capture root.
+ *
+ * A walk plan is a document: it says which cells to shoot and where to put the
+ * pictures. The "where" is the only part that has moved, so it is the only part
+ * rewritten here -- every cell id, host, kind, state, viewport, action and
+ * assertion is left exactly as committed. A plan already written against
+ * `CAPTURE_OUTPUT_ROOT` is returned unchanged; this is a no-op for anything
+ * authored since the cleanup.
+ *
+ * IT IS SHIPPED CODE, not test scaffolding, because THE DRIVER LOADS PLANS
+ * THROUGH IT. When only the suites re-rooted, the suites graded a plan the real
+ * CLI never saw: `--walk <the committed fixture>` -- the command the capture
+ * index documents -- died in preflight with ten output-root violations while
+ * the tests were green. One loader, one plan, both halves.
+ *
+ * @returns {object} a deep copy; the caller may mutate it freely
+ */
+export function rerootWalkPlanOutputs(plan) {
+  const out = structuredClone(plan);
+  for (const step of out?.steps ?? []) {
+    for (const cell of step?.cells ?? []) {
+      if (typeof cell.screenshot === "string" && cell.screenshot.startsWith(HISTORICAL_OUTPUT_ROOT)) {
+        cell.screenshot =
+          CAPTURE_OUTPUT_ROOT + cell.screenshot.slice(HISTORICAL_OUTPUT_ROOT.length);
+      }
+    }
+  }
+  return out;
+}
+
+/** Read a walk plan from disk the ONE way — the driver's path and the suites'. */
+export function readWalkPlan(path, readImpl = readFileSync) {
+  return rerootWalkPlanOutputs(JSON.parse(readImpl(path, "utf8")));
+}
+
+/**
  * The path rules a screenshot must satisfy, as a reusable check.
  *
  * Shared by the observer and the validator so a path the record would be
@@ -358,13 +481,33 @@ export function collectAssertions(specs, queryCount) {
  * validated afterwards, which left a file on disk for every capture the gate
  * then rejected — including paths that escape the tree entirely.
  */
-export function screenshotPathViolation(screenshot) {
+export function screenshotPathViolation(screenshot, { allowPinned = false } = {}) {
   if (!isNonEmptyString(screenshot)) return "no screenshot path";
+  // A PINNED record names a picture that has left the working tree. It is
+  // graded, not written, so only the READER may accept one: an observer about
+  // to fire the shutter and a walk plan describing what a run will write are
+  // both declaring an output path, and a URL is not one.
+  //
+  // A PIN IS STILL ROOT-CHECKED. A permalink can name any path in the
+  // repository, so accepting one unconditionally would let a record claim
+  // `src/app/icon.png` as its capture and pass on a matching hash. A pinned
+  // picture must come from the HISTORICAL proof-artifact root, exactly as a
+  // live one must be written under the CURRENT capture root.
+  if (allowPinned && isHistoricalPermalink(screenshot)) {
+    const pinnedPath = repoPathOf(screenshot);
+    if (!pinnedPath.startsWith(PINNED_ARTIFACT_ROOT)) {
+      return (
+        `a pinned screenshot must name a picture under ${PINNED_ARTIFACT_ROOT} — ` +
+        `this one pins ${pinnedPath}`
+      );
+    }
+    return null;
+  }
   if (screenshot.startsWith("/") || screenshot.includes("..")) {
     return "screenshot must be a repo-relative path inside the tree";
   }
-  if (!screenshot.startsWith("evidence/")) {
-    return `screenshot must live under evidence/ — it is ${screenshot}`;
+  if (!screenshot.startsWith(CAPTURE_OUTPUT_ROOT)) {
+    return `screenshot must live under ${CAPTURE_OUTPUT_ROOT} — it is ${screenshot}`;
   }
   return null;
 }
@@ -468,6 +611,128 @@ export async function resolveCardInstance(page, selector, declaredInstance = nul
 }
 
 /**
+ * THE PRE-SHUTTER SETTLE — how many times the screen is measured before the
+ * shutter is allowed to fire, and how long apart. ONE PLACE, because these two
+ * numbers are a claim about how long a healthy screen may still be arriving,
+ * and a claim stated twice is a claim nobody can change.
+ *
+ * WHY A SETTLE AT ALL. Step 4 below measures again after the shutter and
+ * refuses the capture when a number moved, which is right: a record whose
+ * numbers describe one screen while its image shows another is worse than none.
+ * But the FIRST measurement used to be trusted the instant it came back, so a
+ * list that finished appearing a few hundred milliseconds later — hydration
+ * finishing, a poll landing — failed the capture while nothing on the screen
+ * was wrong. The held-turn job read exactly that: `[data-conversation-list]
+ * counted 1/0 visible then 1/1 visible`, on a branch that changes nothing under
+ * the chat surface.
+ *
+ * FIVE TRIES, 400 ms APART. Two agreeing measurements is the cheapest evidence
+ * that the screen has stopped moving, and the bound is what keeps a screen that
+ * never stops from being waited out: it fails, with the try count in the
+ * message, so a real oscillation stays a finding. A screen that is already
+ * still pays ONE interval (400 ms); a screen still arriving pays one interval
+ * per try it takes to agree, and the bound caps the waiting at four of them —
+ * 1600 ms, plus the measurements themselves — which is nothing against this
+ * suite's per-test budget.
+ */
+export const MEASUREMENT_SETTLE_TRIES = 5;
+export const MEASUREMENT_SETTLE_INTERVAL_MS = 400;
+
+/**
+ * WHAT MOVED between two measurements — the one comparison both the settle and
+ * the post-shutter refusal are made of, so neither can drift from the other in
+ * what it counts as a change.
+ */
+function measurementDrift(before, after) {
+  return before
+    .map((a, i) => ({ a, b: after[i] }))
+    .filter(({ a, b }) => !b || a.count !== b.count || a.visible !== b.visible);
+}
+
+/** ...and how it is said, in the one wording the job's readers already know. */
+function describeMeasurementDrift(drifted) {
+  return drifted
+    .map(
+      ({ a, b }) =>
+        `${a.selector} counted ${a.count}/${a.visible} visible then ` +
+        `${b?.count ?? "n/a"}/${b?.visible ?? "n/a"} visible`,
+    )
+    .join("; ");
+}
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * THE SETTLE'S OWN comparison. The post-shutter refusal compares two readings
+ * of the SAME spec list, so it walks the first and is right to; the settle is
+ * an exported loop that any caller can hand a `measure` to, and two readings of
+ * DIFFERENT length are the one way a drift can hide behind that walk — an empty
+ * reading followed by a full one would otherwise read as agreement. So the
+ * settle always walks the LONGER of the two, and a shape change is a change.
+ */
+function settleDrift(before, after) {
+  return after.length > before.length
+    ? measurementDrift(after, before)
+    : measurementDrift(before, after);
+}
+
+/**
+ * MEASURE UNTIL THE SCREEN AGREES WITH ITSELF, then hand the shutter the LAST
+ * of the two agreeing measurements — the one the picture is taken next to, so
+ * the post-shutter comparison is made against the reading that describes the
+ * moment photographed rather than against a stale first glance.
+ *
+ * It takes its `measure` and its `sleep`, so the loop is testable as the
+ * arithmetic it is: no page, no timers.
+ *
+ * A screen that never settles within the bound fails with the message the
+ * post-shutter refusal prints PLUS the number of tries, because "still moving
+ * after five tries 400 ms apart" is a fact about the screen and reads nothing
+ * like the timing class this settle exists to remove.
+ */
+export async function settleMeasurement({
+  cell,
+  measure,
+  tries = MEASUREMENT_SETTLE_TRIES,
+  intervalMs = MEASUREMENT_SETTLE_INTERVAL_MS,
+  sleep = waitMs,
+}) {
+  // THE BOUND HAS TO BE A BOUND. Agreement needs two measurements, so fewer
+  // than two tries cannot be satisfied by any screen, and a non-integer or
+  // infinite bound is not a bound at all — an `Infinity` would wait out an
+  // oscillating screen forever, which is exactly what this loop exists to
+  // refuse. A caller that asks for one of those has a bug, and it says so here
+  // rather than arriving as a capture that never returns.
+  if (!Number.isInteger(tries) || tries < 2) {
+    throw new Error(
+      `settleMeasurement needs at least 2 tries to see agreement, got ${tries}.`,
+    );
+  }
+  if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+    throw new Error(
+      `settleMeasurement needs a finite interval in ms, got ${intervalMs}.`,
+    );
+  }
+  let previous = await measure();
+  let attempts = 1;
+  let drifted = [];
+  while (attempts < tries) {
+    await sleep(intervalMs);
+    const next = await measure();
+    attempts += 1;
+    drifted = settleDrift(previous, next);
+    if (drifted.length === 0) return next;
+    previous = next;
+  }
+  throw new Error(
+    `capture "${cell}" is not stable: ` +
+      describeMeasurementDrift(drifted) +
+      ". The screen changed between the measurement and the screenshot. It was still moving " +
+      `after ${attempts} tries ${intervalMs} ms apart.`,
+  );
+}
+
+/**
  * OBSERVE one capture cell and write the record from what was seen.
  *
  * `page` is the CapturePage port:
@@ -534,9 +799,36 @@ export async function observeCapture({
   //    path afterwards, so every capture the gate went on to reject had already
   //    put a file on disk -- including one named by a path that escapes the
   //    tree. A path the record would be refused for is refused here instead.
+  //
+  //    LEXICALLY FIRST, for the clear message, and then RESOLVED. The lexical
+  //    rule cannot see the filesystem, and a shutter is a WRITE: a symlinked
+  //    capture root, a symlinked intermediate directory or an existing
+  //    symlinked target each redirect the write out of the root, and refusing
+  //    the record afterwards does not un-write the bytes -- which may have
+  //    landed on top of something. `resolveCaptureTarget` answers all three.
   const pathViolation = screenshotPathViolation(screenshot);
   if (pathViolation) {
     throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
+  }
+  //    THE FORMAT, BEFORE ANY DIRECTORY EXISTS. The shutter is an image writer
+  //    and the temp file has to name the same image the destination does, so an
+  //    extension outside the closed set is refused HERE -- ahead of the run
+  //    directory being created for a capture that was never going to be taken.
+  const imageFormat = captureImageFormat(screenshot);
+  if (!imageFormat.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${imageFormat.detail}`);
+  }
+  //    PREPARING, not merely resolving. A run's FIRST capture names a run
+  //    directory that does not exist yet, and in a fresh checkout the capture
+  //    root does not either -- it is gitignored. Playwright used to create both
+  //    silently on its way to the file; resolving before the shutter took that
+  //    away and broke the first capture of every run. `prepareCaptureTarget`
+  //    creates the root and the parent INSIDE the resolved root and then
+  //    re-resolves them, so what a run needs exists and every redirect is still
+  //    refused.
+  const target = prepareCaptureTarget(screenshot, { repoRoot });
+  if (!target.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${target.detail}`);
   }
 
   // 1. The frames the host requires: resolve, COUNT, enter, read the URL there.
@@ -655,32 +947,119 @@ export async function observeCapture({
     return out;
   };
 
-  const assertions = await measure();
+  // 2c. SETTLE, then trust. Everything above resolved the frames and pinned the
+  //     card; what the numbers are is answered only once two consecutive
+  //     measurements agree, within the bound stated at the top of this file. The
+  //     measurement handed on is the LAST of the two.
+  const assertions = await settleMeasurement({ cell, measure });
 
-  // 3. The image, written and then hashed from disk.
-  const abs = join(repoRoot, screenshot);
-  await page.screenshot(abs, { framing: framing ?? "page" });
+  // 3. The image, written ATOMICALLY into the resolved directory and then
+  //    hashed from disk.
+  //
+  //    THE SHUTTER FIRES AT A NAME NOTHING ELSE HOLDS. Writing straight to the
+  //    final path would follow whatever sits there at that instant; the temp
+  //    name is fresh, is created inside the PARENT THAT WAS RESOLVED, and is
+  //    renamed into place. `rename` replaces the destination entry itself
+  //    rather than writing through it, so an entry that appeared in the
+  //    meantime is overwritten as a NAME and never followed as a link.
+  //    THE LAST-MOMENT RE-CHECK. Everything above — the frames, the counts, the
+  //    DOM walk — takes real time, and the destination was resolved before all
+  //    of it. Node has no `openat`, so a path resolved once and used later is a
+  //    time-of-check/time-of-use gap that cannot be closed from here; what can
+  //    be done is to shrink it and fail closed. The parent is re-verified
+  //    immediately before the shutter and again immediately before the rename,
+  //    and the temp file is created EXCLUSIVELY under an unguessable name so no
+  //    one can be holding it as a symlink when the shutter writes.
+  const abs = target.absReal;
+  const beforeShutter = recheckCaptureParent(target);
+  if (beforeShutter) {
+    throw new Error(`capture "${cell}" cannot be written: ${beforeShutter.detail}`);
+  }
+  // The temp file keeps the FINAL extension: the shutter is an image writer and
+  // infers its format from the name, so an extensionless temp path made it
+  // refuse outright. The rename target keeps its real name.
+  const temp = createCaptureTempFile(target.parentReal, { extension: imageFormat.extension });
+  if (!temp.ok) {
+    throw new Error(`capture "${cell}" cannot be written: ${temp.detail}`);
+  }
+  const tmp = temp.path;
+  try {
+    // ...and the format is stated EXPLICITLY as well, so it never depends on
+    // the name at all.
+    await page.screenshot(tmp, {
+      framing: framing ?? "page",
+      type: imageFormat.type,
+    });
+    const beforeRename = recheckCaptureParent(target);
+    if (beforeRename) {
+      throw new Error(`capture "${cell}" cannot be written: ${beforeRename.detail}`);
+    }
+    const tempViolation = tempFileViolation(tmp);
+    if (tempViolation) {
+      throw new Error(`capture "${cell}" cannot be written: ${tempViolation.detail}`);
+    }
+    renameSync(tmp, abs);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // the temp file may already be gone; the original error wins
+    }
+    throw err;
+  }
 
-  // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
+  // 4. MEASURE AGAIN, against the LAST pre-shutter measurement (the settled
+  //    one from 2c). A page can move between the counts and the shutter —
   //    hydration, a poll, a streamed state change — and a record whose numbers
   //    describe one screen while its image shows another is worse than none.
   //    Anything that shifted fails the capture instead of being written down.
   const after = await measure();
-  const drifted = assertions
-    .map((a, i) => ({ a, b: after[i] }))
-    .filter(({ a, b }) => !b || a.count !== b.count || a.visible !== b.visible);
+  const drifted = measurementDrift(assertions, after);
   if (drifted.length > 0) {
     throw new Error(
       `capture "${cell}" is not stable: ` +
-        drifted
-          .map(
-            ({ a, b }) =>
-              `${a.selector} counted ${a.count}/${a.visible} visible then ` +
-              `${b?.count ?? "n/a"}/${b?.visible ?? "n/a"} visible`,
-          )
-          .join("; ") +
+        describeMeasurementDrift(drifted) +
         ". The screen changed between the measurement and the screenshot.",
     );
+  }
+
+  // THE ABSENCE INSTANCE — what a `decided` capture of a settled-absence kind
+  // pins, and the reason a record of one used to be unwritable at all.
+  //
+  // A kind whose settled reading draws nothing owes its root ABSENT, so there is
+  // no root-scoped requirement, so the pin above never ran and the record went
+  // out with no `instance` — which the audit tier refuses of any record whose
+  // kind has a card root. The absence is the claim, so the absence is what gets
+  // pinned: the root that was owed, and the count that was read for it. That
+  // count is NOT taken again here — it is the frame-scoped number this capture
+  // already measured TWICE, before and after the shutter, and the drift check
+  // above has already refused the capture if the two disagreed.
+  if (instance === null && settledIsAbsence(kind) && state === "decided") {
+    const absentRoot = cardRootFor(kind);
+    const measured = absentRoot
+      ? assertions.find(
+          (a) =>
+            a.selector === absentRoot &&
+            (a.scope ?? "frame") === "frame" &&
+            a.expect === "absent",
+        )
+      : null;
+    if (measured) {
+      instance = {
+        selector: absentRoot,
+        // MEASURED, never assumed. A root that is still on the screen is
+        // written down as such and the validators refuse the record for it.
+        matched: measured.count,
+        // There is no card to be the nth of, and none to read an identity off.
+        index: null,
+        id: null,
+        attributes: {},
+        // THE CLAIM, in as many words — a record that pins a card it failed to
+        // find is a different and still-refused thing from one that pins the
+        // card's absence on purpose.
+        absent: true,
+      };
+    }
   }
 
   const record = {
@@ -704,17 +1083,17 @@ export async function observeCapture({
   // called `__decided` silently answers for a capture photographed pending, and
   // the two halves disagree about what the record even claims.
   //
-  // THE ASYMMETRY, DISCLOSED HERE RATHER THAN DISCOVERED. What is DECLARED for
-  // four hosts is OBSERVED for one. `captureRequirementsFor` derives anchors
-  // from the state for chat_thread ONLY: a pending chat capture owes its
-  // decision controls and a decided one owes their measured absence, and no
-  // other host has a requirement set that reads `state` at all. So a run_card
-  // record declaring `decided` is checked for AGREEMENT with its cell name by
-  // both halves — a contradiction is caught — and for nothing else. The
-  // declaration is a claim under a name, not a claim under a measurement, and
-  // the difference is worth naming at the line that writes it. It closes when
-  // those hosts get a state-derived requirement set of their own, which is the
-  // slice that produces their records, not this one.
+  // THE ASYMMETRY, DISCLOSED HERE RATHER THAN DISCOVERED — and it is smaller
+  // than this comment used to say. What is OBLIGATORY for one host is OPTIONAL
+  // for four: only a chat_thread record MUST carry a `declaredState`. What is
+  // derived from it is NOT chat-only — `captureRequirementsFor(host, kind,
+  // state)` is called with the declared state on every host (see
+  // `hostRequirements` in `validateCaptureRecord`), so a run_card record
+  // declaring `decided` owes the ABSENCE of its decision controls exactly as a
+  // chat one does. The earlier text said the anchors were derived for
+  // chat_thread alone; that stopped being true when the observer was widened to
+  // read a kind's anchors on whatever host it declares, and it is corrected here
+  // rather than left to be discovered by someone trusting it.
   if (state) record.declaredState = state;
   // ADDITIVE, and declined by every record written before the field existed.
   if (framing) record.framing = framing;
@@ -753,6 +1132,11 @@ export function hostTokenInCell(cell) {
  * that DOES claim one must agree with the record.
  */
 const CELL_KIND_LABELS = Object.freeze({
+  // THE HAND-WRITTEN ALIASES, FIRST. These are spellings this tier has always
+  // read and some of them (`schedule-proposal`) are not cell tokens of the
+  // canonical contract at all, so they are kept rather than derived — and they
+  // are kept FIRST, so no cell name that already resolved can change kind when
+  // the derived set below grows.
   "review-card": "artifact_review_gate",
   "recommendation-hold": "recommendation_hold",
   "recommendation-card": "recommendation_hold",
@@ -760,6 +1144,17 @@ const CELL_KIND_LABELS = Object.freeze({
   "schedule-card": "trigger_schedule_proposal",
   "verification-card": "verification_summary",
   "verification-summary": "verification_summary",
+  // …AND THEN THE CANONICAL CONTRACT'S OWN CELL TOKENS, derived rather than
+  // copied. A hand-kept copy of a list the contract already owns is how
+  // `agent_hitl_screen` came to be unreadable HERE while the contract knew it
+  // perfectly well: the kind was admitted and its cell names still parsed to
+  // nothing, so a rule keyed on the kind never fired. Longest token first, so a
+  // broad token can never answer for a name a specific one describes.
+  ...Object.fromEntries(
+    Object.entries(CARD_KINDS)
+      .flatMap(([kind, spec]) => (spec.cellTokens ?? []).map((token) => [token, kind]))
+      .sort((a, b) => b[0].length - a[0].length),
+  ),
 });
 
 /**
@@ -769,9 +1164,37 @@ const CELL_KIND_LABELS = Object.freeze({
  * The binding uses this so a record cannot answer a cell that says `decided`
  * with pending evidence, where the decision controls are REQUIRED rather than
  * required-absent and the bar is therefore lower.
+ *
+ * IT GRADES. Two callers read it: `validateWalkPlan`, where it refuses a plan
+ * whose cell name contradicts what the plan says it will photograph, and
+ * `chatThreadCellClaims` in `scripts/audit/chat-hitl-acceptance-gate.mjs`, whose
+ * `claimedState` the gate compares against the record that answers the cell. A
+ * wrong answer here is a wrong grade there, which is why it defers to the
+ * canonical parser below rather than keeping its own opinion.
  */
 export function stateTokenInCell(cell) {
   if (typeof cell !== "string") return null;
+  // THE CANONICAL READING FIRST, and it wins whenever it reads anything.
+  //
+  // This matters because the two readers scan differently: `parseCellName`
+  // splits on `__` and takes the first mapped token AFTER the host token, while
+  // the arms below scan `[-_]` boundaries anywhere with a fixed precedence.
+  // Those two rules answer `X__review-card__chat_thread__advisory__pending`
+  // differently — `advisory` canonically, `pending` here — and a name the two
+  // halves read differently is exactly what lets a walk's preflight admit a
+  // cell the record validator then refuses. Deferring to the canonical parser
+  // closes that class rather than describing it.
+  //
+  // It is NOT a no-op and it is NOT total. The arms below still answer the
+  // names the canonical parser declines: names with no host token at all, and
+  // names whose state is buried in a hyphenated phrase
+  // (`…__held-at-recommendation-checkpoint`) — five committed names read that
+  // way, and their readings are unchanged. This tier also keeps two spellings
+  // the canonical map does not carry (`confirmed`, `skipped`). Where the two
+  // still differ, this reader claims a state the canonical one does not, which
+  // adds a check rather than dropping one.
+  const claim = parseCellName(cell);
+  if (claim?.state) return claim.state;
   const lower = cell.toLowerCase();
   // Normalized to the CANONICAL spelling: the ratified contract maps a cell's
   // `settled` token to `decided`, so returning "settled" here made every record
@@ -780,7 +1203,27 @@ export function stateTokenInCell(cell) {
     return "decided";
   }
   if (/(^|[-_])(pending|held|open)([-_]|$)/.test(lower)) return "pending";
+  if (/(^|[-_])advisory([-_]|$)/.test(lower)) return "advisory";
   return null;
+}
+
+/**
+ * THE STATE A WALK CELL WILL PHOTOGRAPH, derived ONCE.
+ *
+ * The plan is judged before the browser opens and the record is written after
+ * it closes, and the two must be judging the same claim. They were not: the
+ * preflight read `cell.state ?? <the name>` while `observeWalkCell` forwarded
+ * `cell.state` alone, and `observeCapture` defaults an omitted state to
+ * `pending`. So a cell named `…__advisory` with no declared state passed the
+ * preflight and was then stamped `pending` — a walk the preflight admits and
+ * the record validator cannot accept, which is the preflight promising
+ * something it does not keep.
+ *
+ * `undefined` is a real answer: a cell that claims no state either way keeps
+ * `observeCapture`'s own default, exactly as before.
+ */
+export function walkCellState(cell) {
+  return cell?.state ?? stateTokenInCell(cell?.cell) ?? undefined;
 }
 
 export function kindTokenInCell(cell) {
@@ -828,9 +1271,28 @@ export const RECORD_TIERS = Object.freeze(["graded", "audit"]);
  *
  * `hashOf(relPath)` returns the file's sha256, or throws when the file is
  * missing — injected so the pinned tests drive the same validator CI runs.
+ * `hashPinnedOf(url, io)` does the same job for a record whose picture is
+ * pinned in history rather than on disk; it defaults to the ratified contract's
+ * `sha256Pinned`, which reads the blob back with `git cat-file`.
  * `tier` selects the grading above; it defaults to `graded`.
  */
-export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) {
+export function validateCaptureRecord(
+  record,
+  {
+    hashOf,
+    hashPinnedOf,
+    repoRoot = process.cwd(),
+    tier = "graded",
+    virtualFilesystem: virtualFs = false,
+  } = {},
+) {
+  // WHETHER THE CALLER BROUGHT ITS OWN FILESYSTEM — an EXPLICIT option, never
+  // inferred from "it also passed a hasher". Inferring it is what let three
+  // real-disk callers (the walk observer, the capture driver and the held-turn
+  // producer) skip path resolution simply by supplying a reader. A hasher is
+  // now just a hasher; only `virtualFilesystem: true` replaces the filesystem,
+  // and only suites pass it.
+  const virtualFilesystem = virtualFs === true;
   const v = [];
   // A record is judged at the AUDIT tier when it is asked for (the driver, on
   // its own output) or when it SPEAKS that tier: a pinned `instance` is this
@@ -849,6 +1311,27 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
     return v; // Everything below is host-relative.
   }
   const host = record.declaredHost;
+
+  // --- the cell has a reachable subject -------------------------------------
+  // Refused BEFORE the frame and anchor arms, because a cell nothing can reach
+  // is not a badly-taken picture — it is a picture that should never have been
+  // asked for, and the frame violations that follow would bury the reason.
+  {
+    // THE EFFECTIVE KIND, never only the declared one (convergence). A record
+    // may leave `declaredKind` off — every host but chat_thread is allowed to —
+    // and reading the declaration alone would let a cell with no reachable
+    // subject walk straight past this rule by saying nothing. The cell NAME
+    // carries the same claim and is what the canonical half reads.
+    const effectiveKind = record?.declaredKind ?? kindTokenInCell(record?.cell);
+    const admission = captureHostAdmissibility(effectiveKind, host);
+    if (!admission.capturable) {
+      v.push(
+        `${where}: "${effectiveKind}" is recorded as composition-only on "${host}" — ` +
+          admission.reason,
+      );
+      return v;
+    }
+  }
 
   // GRADED. `build` is this tier's own field; the canonical driver records the
   // runtime in prose (`runtime`) instead. A record that names a build must name
@@ -897,18 +1380,64 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
 
   // --- the screenshot and its hash ---
   // The SAME check the observer runs before the shutter, so the two cannot
-  // disagree about which paths are writable.
-  const pathViolation = screenshotPathViolation(record?.screenshot);
+  // disagree about which paths are writable -- widened here, and ONLY here, to
+  // also take a record whose picture is pinned in history rather than on disk.
+  const pathViolation = screenshotPathViolation(record?.screenshot, { allowPinned: true });
   if (pathViolation) {
     v.push(`${where}: ${pathViolation}`);
   } else if (!SHA256_RE.test(record?.sha256 ?? "")) {
     v.push(`${where}: sha256 must be 64 lowercase hex characters`);
-  } else if (typeof hashOf === "function") {
+  } else if (isHistoricalPermalink(record.screenshot)) {
+    // PINNED: the picture is read back out of history at the commit the
+    // permalink names, and the digest is re-derived from those bytes -- the
+    // same binding a live record gets, off `git cat-file` instead of the tree.
+    // GATED LIKE EVERY OTHER SEAM: an injected pinned reader is honoured only
+    // when the caller asked for a virtual filesystem. A real record is read
+    // back out of git history by the shipped reader.
+    const got = (virtualFilesystem && hashPinnedOf ? hashPinnedOf : sha256Pinned)(
+      record.screenshot,
+      { repoRoot },
+    );
+    if (!got.ok) {
+      v.push(`${where}: the pinned screenshot could not be read — ${got.reason}`);
+    } else if (got.sha256 !== record.sha256) {
+      v.push(
+        `${where}: the screenshot at ${record.screenshot} hashes to ${got.sha256}, not the recorded ` +
+          `${record.sha256} — the image and the record are not the same capture`,
+      );
+    }
+  } else {
+    // THE SAME RESOLUTION THIS TIER'S SIBLING DOES. A live path is only a
+    // capture if it resolves to a regular, singly-linked file inside the real
+    // capture root: a `test-results -> .` symlink, a symlinked parent, or a
+    // hard link otherwise makes any file in the filesystem hash correctly under
+    // a capture-looking name.
     let actual;
-    try {
-      actual = hashOf(record.screenshot);
-    } catch {
-      v.push(`${where}: screenshot not found at ${record.screenshot}`);
+    if (virtualFilesystem) {
+      try {
+        actual = hashOf(record.screenshot);
+      } catch {
+        v.push(`${where}: screenshot not found at ${record.screenshot}`);
+      }
+    } else {
+      const resolved = resolveLiveCapture(record.screenshot, { repoRoot });
+      if (!resolved.ok) {
+        v.push(`${where}: ${resolved.detail}`);
+      } else {
+        // HASHED AT THE RESOLVED PATH. Hashing the lexical path again would
+        // re-walk every symlink in it, so a parent retargeted between the
+        // resolution and the read would hand back different bytes than the ones
+        // just proved to be a capture. The canonical tier does the same.
+        // An injected hasher is consulted ONLY in virtual mode. On real disk
+        // the bytes that count are the ones at the path just resolved, and
+        // letting a caller substitute a reader here would reopen the seam this
+        // option was split out to close.
+        try {
+          actual = sha256File(resolved.realPath);
+        } catch {
+          v.push(`${where}: screenshot not found at ${record.screenshot}`);
+        }
+      }
     }
     if (actual !== undefined && actual !== record.sha256) {
       v.push(
@@ -1034,16 +1563,37 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // --- a chat_thread record names the KIND it photographed ---
   // Without it the record proves a transcript was on screen, not that a card
   // was in it, which is the whole distance between a capture and evidence.
-  // …AND IT IS ENFORCED, as a requirement set, for chat_thread ALONE. Every host
-  // writes `declaredState` (see `observeCapture`); this arm is where the
-  // asymmetry lives — only chat_thread must carry one that is a valid state, and
-  // only chat_thread's anchors are derived from it. For the other three the
-  // declaration is checked against the cell name and no further.
+  //
+  // WHAT IS ACTUALLY CHAT-ONLY, stated after this change made the old sentence
+  // wrong twice over: the OBLIGATION to declare a kind and a state at all. It is
+  // not the vocabulary — the arm above reads that on every host — and it is not
+  // the anchors: `hostRequirements` below derives a kind's requirement set from
+  // `record.declaredState` on whatever host the record declares, and has since
+  // the observer was widened. The earlier sentence claimed both, and both were
+  // untrue.
+  // THE VOCABULARY IS THE KIND'S, AND IT IS READ ON EVERY HOST. A kind that
+  // resolves a state resolves it wherever it draws, and a kind that does not
+  // resolve one does not acquire it by being photographed on a page instead of
+  // in a thread. This arm used to live inside the chat_thread block below,
+  // which is exactly how the audit card became recordable on two hosts and
+  // unrecordable on a third. What stays chat-only is the obligation to DECLARE
+  // a state at all — that asymmetry is real and is documented below.
+  {
+    const statesHere = captureStatesFor(record?.declaredKind);
+    const declared = record?.declaredState;
+    if (declared !== undefined && declared !== null && !statesHere.includes(declared)) {
+      v.push(
+        `${where}: \`declaredState\` "${declared}" is not one "${record?.declaredKind}" resolves ` +
+          `(${statesHere.join("/")}) — the vocabulary is the KIND's, on every host it draws on`,
+      );
+    }
+  }
   if (host === "chat_thread") {
-    if (!CAPTURE_STATES.includes(record?.declaredState)) {
+    const statesHere = captureStatesFor(record?.declaredKind);
+    if (record?.declaredState === undefined || record?.declaredState === null) {
       v.push(
         `${where}: a chat_thread record must declare the \`declaredState\` it photographed ` +
-          `(${CAPTURE_STATES.join("/")}) — a decided card owes the ABSENCE of its controls, ` +
+          `(${statesHere.join("/")}) — a decided card owes the ABSENCE of its controls, ` +
           `not their presence; it declares "${record?.declaredState}"`,
       );
     }
@@ -1066,7 +1616,21 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // GRADED. The pin is this tier's own. A record that carries one must be able
   // to stand behind it, in every particular below; a record that carries none
   // simply does not pin a card, and is judged on what it does assert.
-  if (cardRoot !== null && (strict || record?.instance !== undefined)) {
+  // A KIND THAT SETTLES TO NO DOM PINS THE ABSENCE, and the rule for it is the
+  // canonical contract's own — one function, called by both halves, so this tier
+  // cannot refuse a record the other half writes.
+  const pinsAnAbsence =
+    (settledIsAbsence(record?.declaredKind) && record?.declaredState === "decided") ||
+    record?.instance?.absent === true;
+  if (pinsAnAbsence) {
+    for (const detail of absenceInstanceViolations({
+      instance: record?.instance ?? null,
+      kind: record?.declaredKind,
+      state: record?.declaredState,
+    })) {
+      v.push(`${where}: ${detail}`);
+    }
+  } else if (cardRoot !== null && (strict || record?.instance !== undefined)) {
     const inst = record?.instance;
     if (inst === null || typeof inst !== "object") {
       v.push(
@@ -1202,7 +1766,14 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
  * ratified contract's own `validateCaptureIndex` beside this one, so every
  * record is judged by that half whatever this half grades.
  */
-export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
+export function validateCaptureIndex({
+  index,
+  hashOf,
+  hashPinnedOf,
+  repoRoot = process.cwd(),
+  tier = "graded",
+  virtualFilesystem = false,
+} = {}) {
   const v = [];
   if (index === null || typeof index !== "object") {
     return ["the capture index is not an object"];
@@ -1233,13 +1804,20 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
     }
     const cell = record?.cell ?? "(unnamed)";
     if (isNonEmptyString(record?.screenshot)) {
-      const first = byPath.get(record.screenshot);
+      // KEYED ON THE REPOSITORY PATH. Two records pinning one path at two
+      // different commits are two claims about one picture, and keying on the
+      // whole citation let that pair through as if they were unrelated files.
+      const shotPath = repoPathOf(record.screenshot);
+      const first = byPath.get(shotPath);
       if (first !== undefined) {
         v.push(
-          `"${cell}" reuses the screenshot ${record.screenshot} already claimed by "${first}" — ` +
-            "one image cannot be the evidence for two cells",
+          `"${cell}" reuses the screenshot ${shotPath} already claimed by "${first.cell}" — ` +
+            "one image cannot be the evidence for two cells" +
+            (first.citation !== record.screenshot
+              ? " (and the two pin it at different commits)"
+              : ""),
         );
-      } else byPath.set(record.screenshot, cell);
+      } else byPath.set(shotPath, { cell, citation: record.screenshot });
     }
     if (SHA256_RE.test(record?.sha256 ?? "")) {
       const first = byHash.get(record.sha256);
@@ -1250,7 +1828,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
         );
       } else byHash.set(record.sha256, cell);
     }
-    v.push(...validateCaptureRecord(record, { hashOf, tier }));
+    v.push(...validateCaptureRecord(record, { hashOf, hashPinnedOf, repoRoot, tier, virtualFilesystem }));
   }
   return v;
 }
@@ -1283,7 +1861,7 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
 //
 // THE PLAN IS CHECKED BEFORE THE BROWSER LAUNCHES. A walk is long, expensive and
 // in S9d's case gated on a real 30-minute TTL; a cell name that contradicts its
-// own declaration, a screenshot path outside `evidence/`, two cells writing one
+// own declaration, a screenshot path outside the capture output root, two cells writing one
 // file — each is a refusal the index would issue at the END, and each is worth
 // issuing before the first click instead. Same reason the shutter check moved
 // ahead of the shutter.
@@ -1457,8 +2035,34 @@ export function validateWalkPlan(plan) {
     if (cell.kind !== undefined && !LIFECYCLE_KINDS.includes(cell.kind)) {
       v.push(`${at}: kind "${cell.kind}" is not one of ${LIFECYCLE_KINDS.join("/")}`);
     }
-    if (cell.state !== undefined && !CAPTURE_STATES.includes(cell.state)) {
-      v.push(`${at}: state "${cell.state}" is not one of ${CAPTURE_STATES.join("/")}`);
+    {
+      // A CELL WITH NO REACHABLE SUBJECT costs a parse rather than a walk. The
+      // reason travels with the refusal, because "this cannot be photographed"
+      // is a recorded fact about the shipped code and a reader is owed it.
+      //
+      // READ OFF THE EFFECTIVE KIND (convergence): `kind` is optional on a plan
+      // cell, so a rule that only fired on a declared one could be stepped
+      // around by leaving it off while the cell NAME still names the kind.
+      const effectiveKind = cell.kind ?? kindTokenInCell(cell.cell);
+      const admission = captureHostAdmissibility(effectiveKind, cell.declaredHost);
+      if (!admission.capturable) {
+        v.push(
+          `${at}: "${effectiveKind}" is recorded as composition-only on "${cell.declaredHost}" — ` +
+            admission.reason,
+        );
+      }
+    }
+    // The same per-kind vocabulary the RECORD is judged by, applied to the plan
+    // that will produce it, so a state this tier would refuse costs a parse
+    // rather than a walk. The state judged is `walkCellState`'s — the SAME
+    // derivation the walk itself uses, so a preflight cannot admit a cell the
+    // walk will then photograph under a different state, and the vocabulary is
+    // read off the EFFECTIVE kind for the same reason the arm above is: a plan
+    // cell may leave `kind` off while its NAME still names one.
+    const plannedStates = captureStatesFor(cell.kind ?? kindTokenInCell(cell.cell));
+    const plannedState = walkCellState(cell);
+    if (plannedState !== undefined && !plannedStates.includes(plannedState)) {
+      v.push(`${at}: state "${plannedState}" is not one of ${plannedStates.join("/")}`);
     }
     if (cell.build !== undefined && !CAPTURE_BUILDS.includes(cell.build)) {
       v.push(`${at}: build "${cell.build}" is not one of ${CAPTURE_BUILDS.join("/")}`);
@@ -1509,13 +2113,15 @@ export async function observeWalkCell({
   repoRoot = process.cwd(),
   readImpl = readFileSync,
   now = () => new Date().toISOString(),
+  // TEST-ONLY, and named so it reads as one. A real walk never passes it.
+  virtualFilesystem = false,
 }) {
   const record = await observeCapture({
     page,
     cell: cell.cell,
     declaredHost: cell.declaredHost,
     kind: cell.kind,
-    state: cell.state,
+    state: walkCellState(cell),
     instance: cell.instance ?? null,
     screenshot: cell.screenshot,
     build: cell.build ?? "development",
@@ -1524,9 +2130,19 @@ export async function observeWalkCell({
     readImpl,
     now,
   });
+  // THE VIRTUAL FILESYSTEM IS AN EXPLICIT REQUEST, NEVER AN INFERENCE. This
+  // used to read `readImpl !== readFileSync` and treat any non-default reader
+  // as "the caller brought its own filesystem" -- so the implicit bypass simply
+  // moved up a layer, and any wrapped or instrumented reader silently skipped
+  // the final on-disk resolution. A walk driven for real ALWAYS validates its
+  // own output from disk; only a suite that says `virtualFilesystem: true` is
+  // answered from its own bytes.
   const violations = validateCaptureRecord(record, {
-    hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl),
+    repoRoot,
     tier: "audit",
+    ...(virtualFilesystem
+      ? { virtualFilesystem: true, hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl) }
+      : {}),
   });
   if (violations.length > 0) {
     throw new Error(

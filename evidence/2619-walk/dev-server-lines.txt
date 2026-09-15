@@ -1,4 +1,0 @@
-18:[agents/org-reconcile] healed 4 template(s) onto org=d199d18e-93c4-4e56-a425-34695654a44d (level stamped on 3; scanned 4)
-1436:[wayflow] dispatch failed for run 65941801-0a0a-4333-9b82-f5e4c29f24bf targeting http://localhost:3110/agents/cinatra-ai/blog-draft-writer-agent/: Error: Failed to fetch Agent Card from http://localhost:3110/agents/cinatra-ai/blog-draft-writer-agent/.well-known/agent-card.json: 404
-17:[agents/org-reconcile] healed 3 template(s) onto org=d199d18e-93c4-4e56-a425-34695654a44d (level stamped on 3; scanned 3)
-302:[agents/org-reconcile] (org bootstrap) healed 3 template(s) onto org=d199d18e-93c4-4e56-a425-34695654a44d (level stamped on 3; scanned 3)

@@ -49,10 +49,17 @@ describe("the registry is one card per interaction kind (§IX)", () => {
 
   it("every kind declares how it reaches a surface, and an interrupt is a BLOCKED run", () => {
     for (const kind of LIFECYCLE_CARD_KINDS) {
-      expect(["data_part", "interrupt"]).toContain(LIFECYCLE_CARD_CARRIAGE[kind]);
+      // AMENDED BY cinatra#2930 (lifecycle-b W3): the record is two axes now —
+      // `represent` is the one this assertion has always been about (how the
+      // kind reaches a surface), and `canonical` is the one the wave adds
+      // (which fact decides the card is live). The membership it asserts is
+      // unchanged; only the field it reads it from is named.
+      expect(["data_part", "interrupt"]).toContain(
+        LIFECYCLE_CARD_CARRIAGE[kind].represent,
+      );
     }
     const interrupts = LIFECYCLE_CARD_KINDS.filter(
-      (k) => LIFECYCLE_CARD_CARRIAGE[k] === "interrupt",
+      (k) => LIFECYCLE_CARD_CARRIAGE[k].represent === "interrupt",
     );
     // The rule is WHY, not how many: the run genuinely waits on the answer, so
     // a fire-and-forget data part would be the wrong frame. The hold parks the
@@ -103,7 +110,11 @@ describe("SURFACE PARITY — every host draws every card (owner ruling 2026-08-1
     for (const host of LIFECYCLE_CARD_HOSTS) {
       expect(lifecycleViewTypesForHost(host)).not.toContain("recommendation_hold");
     }
-    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
+    // AMENDED BY cinatra#2930: two axes now — this assertion is about the
+    // wire one, which is unchanged. Its canonical carriage is the run's own
+    // row, which is what makes the mount survive a reload with no envelope.
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.represent).toBe("interrupt");
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold.canonical).toBe("run_state");
   });
 
   it("exports no per-(kind, host) presence table at all", async () => {

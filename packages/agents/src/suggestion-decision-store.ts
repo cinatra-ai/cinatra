@@ -64,6 +64,10 @@ import {
   suggestionDecisionLedger,
 } from "./schema";
 import { readVerifiedSuggestionSnapshotForGate } from "./gate-suggestion-snapshot-store";
+// The snapshot carries either shape (enabler 0.15's multi-target payload beside
+// the single-target one every stored row still has). Reading it through the
+// accessor is what keeps "accepted ⊆ surfaced" ONE statement over both.
+import { snapshotSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-producer";
 import type { ProducedSuggestion } from "@/lib/lifecycle/lifecycle-suggestion-producer";
 
 // ---------------------------------------------------------------------------
@@ -104,7 +108,7 @@ export async function readSurfacedSuggestionsForGate(
   if (!snapshot) return null;
   return {
     snapshotId: snapshot.id,
-    suggestionIds: snapshot.payload.suggestions.map((s) => s.id),
+    suggestionIds: snapshotSuggestions(snapshot.payload).map((s) => s.id),
   };
 }
 
@@ -182,7 +186,7 @@ export async function readGateSuggestionSurface(
   return {
     gateId,
     snapshotId: snapshot.id,
-    suggestions: snapshot.payload.suggestions,
+    suggestions: snapshotSuggestions(snapshot.payload),
     marks,
   };
 }
@@ -694,5 +698,5 @@ export async function resolveAcceptedSuggestions(
   const snapshot = await readVerifiedSuggestionSnapshotForGate(intent.gateId);
   if (!snapshot || snapshot.id !== intent.snapshotId) return [];
   const wanted = new Set(intent.acceptedIds);
-  return snapshot.payload.suggestions.filter((s) => wanted.has(s.id));
+  return snapshotSuggestions(snapshot.payload).filter((s) => wanted.has(s.id));
 }

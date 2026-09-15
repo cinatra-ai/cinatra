@@ -820,28 +820,21 @@ import {
   DataScreen as InstanceDataScreen,
   PermissionsScreen as InstancePermissionsScreen,
   TriggerScreen as InstanceTriggerScreen,
+  type ScreenProps as InstanceScreenProps,
 } from "./instance-screens";
+import { resolveAgentScreenProps, type AgentScreenProps } from "./screen-props";
 
-type AgentScreenProps = {
-  agentId: string;
-  instanceId: string;
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-};
-
+/**
+ * THE ONE PROP BOUNDARY (cinatra#2809). The registry's job on the way in is to
+ * await the search params and to hand the screen everything else UNTOUCHED —
+ * see `./screen-props` for why this is a spread over the screen's own prop type
+ * rather than a hand-copied list of names.
+ */
 async function withResolvedProps<T>(
-  render: (resolved: {
-    agentId: string;
-    instanceId: string;
-    searchParams?: Record<string, string | string[] | undefined>;
-  }) => Promise<T> | T,
+  render: (resolved: InstanceScreenProps) => Promise<T> | T,
   props: AgentScreenProps,
 ) {
-  const searchParams = props.searchParams ? await props.searchParams : undefined;
-  return render({
-    agentId: props.agentId,
-    instanceId: props.instanceId,
-    searchParams,
-  });
+  return render(await resolveAgentScreenProps(props));
 }
 
 // ---------------------------------------------------------------------------

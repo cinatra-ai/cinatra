@@ -33,7 +33,7 @@
 //      S9d rework) then DREW the schedule card — packages/chat/src/renderable-
 //      views/registry.tsx now maps `trigger_schedule_proposal` to the shipped
 //      `ScheduleProposalCard` — and its own ten-record capture round
-//      (evidence/2788-s9d-rework) gave AC-3 the rendered proof its gap named as
+//      (https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework) gave AC-3 the rendered proof its gap named as
 //      absent, so that row is MAPPED again. The conformance-matrix row is
 //      UNTOUCHED by this round and stays MISSING: it asks for the S0 spec-
 //      matrix capture sweep specifically, which is a different round's work.
@@ -59,6 +59,7 @@ import {
   DISPOSITIONS,
   MANIFEST_PATH,
   auditManifest,
+  proofExists,
   proofsOf,
   strictReport,
 } from "../chat-hitl-acceptance-gate.mjs";
@@ -294,22 +295,25 @@ describe("the REAL manifest", () => {
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
-    // design#132 (lifecycle-b W1) moved the pin to the drawing that makes the
-    // schedule ONE FORM in five readings. Every pin the rows were read against
-    // before this move is still here: the previous head becomes `previousPin`,
-    // and the head before THAT is APPENDED to `priorPins` rather than replacing
-    // what was already in it. The whole point of the drift record is that a pin
-    // move leaves a trail, so the assertions walk the WHOLE trail rather than
-    // only checking the head — a move that dropped an older pin on its way past
-    // would still satisfy a head-only check.
-    expect(m.specCommit).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
+    // The pin was adopted onto the revision the drawings' main line stands at,
+    // taking in the three ratifications it had not adopted. Every pin the rows
+    // were read against before this move is still here: the previous head
+    // becomes `previousPin`, and the head before THAT is APPENDED to
+    // `priorPins` rather than replacing what was already in it. The whole point
+    // of the drift record is that a pin move leaves a trail, so the assertions
+    // walk the WHOLE trail rather than only checking the head — a move that
+    // dropped an older pin on its way past would still satisfy a head-only
+    // check.
+    expect(m.specCommit).toContain("38f3635b83c34a30d2a8fe76fcbba8e4f5fbb978");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.previousPin).toContain("71398a49c1f8adfe6176ab0dda25486920fac958");
+    expect(m.specCommitDrift.previousPin).toContain("458fb7ffce6cf4ab6a2c60d3ff47198135d8ea2f");
     expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     for (const prior of [
       "6c20871b4108176c1d0193f19ecd2947f6c6355f",
       "92c1be7c6f864dec6382a9ef01e7b2e1c38aa871",
+      "71398a49c1f8adfe6176ab0dda25486920fac958",
+      "fe2182547d4a98125a0968824ffb0d45fb25a8e5",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -318,6 +322,20 @@ describe("the REAL manifest", () => {
     const trail = [m.specCommit, m.specCommitDrift.previousPin, ...m.specCommitDrift.priorPins];
     const commits = trail.map((entry) => entry.slice("design@".length, "design@".length + 40));
     expect(new Set(commits).size, trail.join("\n")).toBe(commits.length);
+    // The trail is a TRAIL: the entries stand in the order they stood in, oldest
+    // first, each labelled with the date it stopped standing. A membership check
+    // alone would pass a record that put a displaced pin in front of a pin it
+    // outlived, and a reader walking such a trail would read the moves in the
+    // wrong order.
+    const untilDates = m.specCommitDrift.priorPins.map((entry) => {
+      const match = /\(until (\d{4}-\d{2}-\d{2})\)$/.exec(entry);
+      expect(match, entry).not.toBeNull();
+      return match[1];
+    });
+    expect(untilDates, m.specCommitDrift.priorPins.join("\n")).toStrictEqual([...untilDates].sort());
+    // The pin this move displaced is the one that stood LAST, so it is the tail
+    // of the trail and not an insertion into the middle of it.
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -325,7 +343,7 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-25/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-30/);
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
@@ -353,7 +371,7 @@ describe("the REAL manifest", () => {
     // dark) and this row cites all ten — pinned exactly, not merely "some",
     // so a future citation dropped or silently added is caught here.
     expect(row.e2eProofs).toHaveLength(10);
-    expect(row.e2eProofs.every((p) => p.file === "evidence/2788-s9d-rework/README.md")).toBe(
+    expect(row.e2eProofs.every((p) => p.file === "https://github.com/cinatra-ai/cinatra/blob/35e369ed68a6446b0125cfecaee6aa993742a961/evidence/2788-s9d-rework/README.md")).toBe(
       true,
     );
     expect(new Set(row.e2eProofs.map((p) => p.testName)).size).toBe(10);
@@ -375,5 +393,55 @@ describe("the REAL manifest", () => {
       // public manifest (the source-leak gate enforces the same rule repo-wide).
       expect(r.ruling, r.criterion.slice(0, 50)).not.toMatch(/eng(ineering)?#\d+/);
     }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// EVERY READER OVERRIDE IS GATED BY THE ONE FLAG. `proofExists` and
+// `auditManifest` took reader overrides that were honoured merely for being
+// passed — the last place in this module where supplying a function replaced
+// the source of truth without asking for a virtual filesystem.
+// ---------------------------------------------------------------------------
+describe("an injected document reader is honoured only under the flag", () => {
+  // `package.json` really exists and really does NOT contain this string, so a
+  // reader that vouches for it is vouching for something untrue.
+  const CELL = "ZZZ__review-card__chat_thread__pending.png";
+  const proof = { file: "package.json", testName: CELL };
+  const vouchingReader = () => `a document that mentions ${CELL} and nothing else`;
+
+  it("WITHOUT the flag the override is dropped and the lexical check reads the real file", () => {
+    const found = proofExists(proof, REPO_ROOT, vouchingReader);
+    expect(found.ok).toBe(false);
+    expect(found.reason).toBe(`no "${CELL}" in package.json`);
+  });
+
+  it("WITH the flag the suite's reader is honoured, as designed", () => {
+    expect(proofExists(proof, REPO_ROOT, vouchingReader, null, true)).toEqual({ ok: true });
+  });
+
+  it("the real file still answers honestly for something it DOES contain", () => {
+    expect(proofExists({ file: "package.json", testName: '"name"' }, REPO_ROOT).ok).toBe(true);
+  });
+
+  it("auditManifest passes the flag through — a vouching reader is ignored without it", () => {
+    const manifest = {
+      rows: [
+        {
+          criterion: CANONICAL_CRITERIA[0],
+          disposition: "BUILT",
+          unitProofs: [{ file: "package.json", testName: CELL }],
+        },
+      ],
+    };
+    const ignored = auditManifest({ manifest, repoRoot: REPO_ROOT, readFileImpl: vouchingReader });
+    expect(ignored.some((v) => v.includes(`no "${CELL}" in package.json`))).toBe(true);
+    const honoured = auditManifest({
+      manifest,
+      repoRoot: REPO_ROOT,
+      readFileImpl: vouchingReader,
+      virtualFilesystem: true,
+    });
+    expect(honoured.some((v) => v.includes(`no "${CELL}"`))).toBe(false);
   });
 });

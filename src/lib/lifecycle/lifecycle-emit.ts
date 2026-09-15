@@ -71,20 +71,38 @@ export interface BuildProducedEventInsertInput {
 export function buildProducedEventInsertOp(
   schema: string,
   input: BuildProducedEventInsertInput,
+  opts?: {
+    /**
+     * A SQL boolean expression the insert is GUARDED on — the op becomes
+     * `INSERT … SELECT … WHERE <guard>` instead of `INSERT … VALUES …`.
+     *
+     * Added for the object-backed contract's mint (enabler 0.13, cinatra#3028):
+     * that writer's capture statement mints a revision on ONE of its two arms
+     * and reuses an existing one on the other, so an unguarded same-transaction
+     * emit would announce a revision the reuse arm never wrote. The guard is a
+     * fragment the CALLER composes; it may reference its own literals and THIS
+     * builder's own bound parameters (`$2` the organization, `$3` the artifact,
+     * `$4` the representation revision) and nothing from the caller's other
+     * statements. Omitted ⇒ the plain VALUES insert every existing choke point
+     * already splices, byte-identical.
+     */
+    whereExistsSql?: string;
+  },
 ): ProducedEventInsertOp {
   if (!isProducedEventEmitter(input.emitter)) {
     throw new Error(`[lifecycle-emit] unknown produced-event emitter "${input.emitter}"`);
   }
   const eventKind = input.eventKind ?? "artifact_produced";
   const eventId = producedEventId(input.artifactId, input.representationRevisionId, eventKind);
+  const bound = `$1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
+        $7::text, $8::text, $9::text, $10::text,
+        $11::text, NULL, 'pending'`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
    producer_run_id, producer_agent_id, origin_kind, destination_class,
    continuation_mode, continuation_address, status)
-VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
-        $7::text, $8::text, $9::text, $10::text,
-        $11::text, NULL, 'pending')
+${opts?.whereExistsSql ? `SELECT ${bound}\nWHERE ${opts.whereExistsSql}` : `VALUES (${bound})`}
 ON CONFLICT (event_id) DO NOTHING`,
     values: [
       eventId,
@@ -111,7 +129,8 @@ ON CONFLICT (event_id) DO NOTHING`,
 export function maybeBuildProducedEventInsertOp(
   schema: string,
   input: BuildProducedEventInsertInput,
+  opts?: { whereExistsSql?: string },
 ): ProducedEventInsertOp | null {
   if (!isLifecycleReviewOrchestrationActive()) return null;
-  return buildProducedEventInsertOp(schema, input);
+  return buildProducedEventInsertOp(schema, input, opts);
 }

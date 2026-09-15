@@ -42,7 +42,7 @@ concurrency:
 jobs:
   watch:
     if: github.repository == 'cinatra-ai/cinatra'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     env:
       GH_TOKEN: ${{ github.token }}
       # The dormant consumer this watch fires. Referenced (never auto-mutated).

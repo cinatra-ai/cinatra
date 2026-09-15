@@ -717,10 +717,11 @@ describe("divergent requester and run owner", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The DISPATCHING actor (an admin releasing / a reviewer clearing SOMEONE
-// ELSE's run) must be in scope too
+// The DISPATCHING actor (a reviewer clearing SOMEONE ELSE's run) must be in
+// scope too. The admin-release half of this pair is gone with Run now itself
+// (cinatra#2972); the guard it shared with the HITL resume is unchanged.
 // ---------------------------------------------------------------------------
-describe("dispatching actor (releaseTriggerNow / HITL approve)", () => {
+describe("dispatching actor (HITL approve)", () => {
   beforeEach(() => {
     seedTemplate({ ownerLevel: "team", ownerId: "team-7" });
     seedRun({ runBy: "user-owner" });

@@ -66,6 +66,14 @@ export interface RecommendationCandidate {
    * so adding it cannot move a single score. Absent ⇒ `name` is the label.
    */
   displayName?: string;
+  /**
+   * The owning extension's RESOLVED VENDOR BYLINE (cinatra#3047), when one can
+   * be resolved. PRESENTATION ONLY, exactly like `displayName` above: it is
+   * carried to `RankedRecommendation` untouched and is deliberately NOT
+   * tokenized into the candidate's token set, so adding it cannot move a single
+   * score. Absent ⇒ the surface prints the label with no "by".
+   */
+  vendorName?: string;
   description: string;
   /** Optional short cue text (e.g. the SKILL.md `match_when` block or the first
    * lines of content) used only to widen the token surface the intent is
@@ -142,6 +150,13 @@ export interface RankedRecommendation {
    * non-empty.
    */
   displayName: string;
+  /**
+   * THE VENDOR A SURFACE PRINTS BESIDE THE LABEL (cinatra#3047) — the owning
+   * extension's resolved byline, or `null` when the package declares neither
+   * tier the platform's vendor resolver reads. `null` is a true answer and the
+   * surface prints the name alone; it is never filled in from the npm scope.
+   */
+  vendorName: string | null;
   /** Deterministic final score in [0,1], rounded to 4dp. */
   score: number;
   /** 1-based rank (1 = best); ties broken by `skillId` ascending. */
@@ -304,6 +319,8 @@ export function scoreSkillRecommendations(
       // fallback is the candidate's own name, which is exactly the label this
       // row carried before the manifest title was resolved.
       displayName: candidate.displayName ?? candidate.name,
+      // Carried, never scored — see `RecommendationCandidate.vendorName`.
+      vendorName: candidate.vendorName ?? null,
       score,
       recommended: score >= weights.recommendThreshold,
       scoredFeatures: features,

@@ -16,7 +16,8 @@
 //   2. The run path answers `absent` for every binding that does not hold: a run
 //      no proposal produced, a reader who is not the person who confirmed it, a
 //      different organization, a vanished template, a run with nothing installed.
-//   3. It answers the SETTLED chrome, with `canRelease` admin-only, when it does.
+//   3. It answers the SETTLED body, with **Cancel schedule** offered only for a
+//      recurring schedule that has fired once, when it does (cinatra#2972).
 //   4. `absent` never carries a body — the privacy contract, on this path too.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +41,7 @@ import {
 } from "../lifecycle-card-ref";
 import { resolveTriggerScheduleProposalCard } from "../trigger-schedule-proposal-card";
 
-const READER = { userId: "u-1", orgId: "org-1", isAdmin: false };
+const READER = { userId: "u-1", orgId: "org-1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,20 +84,47 @@ describe("the run-scoped resolve", () => {
   it("routes a run ref to the RUN path and a token to the reader path — never both", async () => {
     resolveProposalForRun.mockResolvedValue({ phase: "absent" });
     await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
-    expect(resolveProposalForRun).toHaveBeenCalledWith("run-42", {
-      userId: "u-1",
-      orgId: "org-1",
-    });
+    expect(resolveProposalForRun).toHaveBeenCalledWith(
+      "run-42",
+      { userId: "u-1", orgId: "org-1" },
+      // cinatra#3004: the run path also carries the reader's STANDING, because a
+      // run whose schedule came from its own scheduling step is read under the
+      // RUN's access control. `undefined` where the caller presented none — the
+      // service then falls back to the run's own owner.
+      undefined,
+      // cinatra#3044: and what the REFERENCE records — whether the run's own
+      // schedule step opened in a conversation. This reference is a plain
+      // run-scoped one, so the answer is false and the service's refusals are
+      // exactly what they have always been.
+      { fromScheduleStep: false },
+    );
     expect(resolveProposalForReader).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     resolveProposalForReader.mockResolvedValue({ phase: "absent" });
     await resolveTriggerScheduleProposalCard({ ref: "cst_token", ...READER });
+    // The TOKEN path takes no standing: a proposal is bound to one person, and
+    // that binding is the token's own.
     expect(resolveProposalForReader).toHaveBeenCalledWith("cst_token", {
       userId: "u-1",
       orgId: "org-1",
     });
     expect(resolveProposalForRun).not.toHaveBeenCalled();
+  });
+
+  it("hands the run path the standing the caller presented, and never one it made up", async () => {
+    resolveProposalForRun.mockResolvedValue({ phase: "absent" });
+    const access = {
+      actor: { userId: "u-1" } as never,
+      roles: { orgRole: "admin", actorOrganizationId: "org-1" } as never,
+    };
+    await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER, access });
+    expect(resolveProposalForRun).toHaveBeenCalledWith(
+      "run-42",
+      { userId: "u-1", orgId: "org-1" },
+      access,
+      { fromScheduleStep: false },
+    );
   });
 
   it("a run the binding does not hold for draws NO card and carries NO body", async () => {
@@ -106,8 +134,13 @@ describe("the run-scoped resolve", () => {
     expect(card.view).toBeNull();
   });
 
-  it("a settled run draws the trigger's chrome, and Release is admin-only", async () => {
-    const settled = {
+  // cinatra#2972 AMENDED THIS TEST'S SUBJECT. It used to read "a settled run
+  // draws the trigger's chrome, and Release is admin-only" and asserted a
+  // `canRelease` that varied by standing. Plan (A) §7.2 as amended 2026-08-25
+  // withdrew Run now from every surface, and rewrote what Cancel schedule is
+  // offered for: "shown only for a recurring schedule that has fired once".
+  it("a settled recurring run that has FIRED offers Cancel schedule", async () => {
+    resolveProposalForRun.mockResolvedValue({
       phase: "settled" as const,
       runId: "run-42",
       agentName: "Weekly cohort sweep",
@@ -116,28 +149,61 @@ describe("the run-scoped resolve", () => {
       timezone: "Europe/Berlin",
       released: false,
       arming: false,
-    };
-    resolveProposalForRun.mockResolvedValue(settled);
+      firedOnce: true,
+      stopped: false,
+    });
 
-    const member = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
-    expect(member.state).toEqual({ state: "settled" });
-    expect(member.view).toMatchObject({
+    const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
+    expect(card.state).toEqual({ state: "settled" });
+    expect(card.view).toMatchObject({
       phase: "settled",
       runId: "run-42",
       scheduleCopy: "Every weekday at 9:00 AM",
       canCancel: true,
-      canRelease: false,
     });
-
-    const admin = await resolveTriggerScheduleProposalCard({
-      ref: RUN_REF,
-      ...READER,
-      isAdmin: true,
-    });
-    expect(admin.view).toMatchObject({ canRelease: true });
+    // THE WITHDRAWN CONTROL IS DEAD, NOT ABSENT FROM THE WIRE (cinatra#2972,
+    // codex round 2). The key is still emitted as a constant false, so a stale
+    // bundle whose strict settled schema still requires it goes on parsing
+    // settled cards through a rolling deploy. What is gone is the control, the
+    // confirm strip and the `release` op — nothing can read this back into one.
+    expect(card.view).toMatchObject({ canRelease: false });
   });
 
-  it("while the install is still draining, neither control is offered", async () => {
+  it("a recurring schedule that has NOT fired yet offers no control", async () => {
+    resolveProposalForRun.mockResolvedValue({
+      phase: "settled",
+      runId: "run-42",
+      agentName: "a",
+      triggerType: "recurring",
+      scheduleCopy: "Every weekday at 9:00 AM",
+      timezone: "UTC",
+      released: false,
+      arming: false,
+      firedOnce: false,
+      stopped: false,
+    });
+    const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
+    expect(card.view).toMatchObject({ canCancel: false });
+  });
+
+  it("a ONE-OFF that has fired offers no control, whatever its stamps say", async () => {
+    resolveProposalForRun.mockResolvedValue({
+      phase: "settled",
+      runId: "run-42",
+      agentName: "a",
+      triggerType: "scheduled",
+      scheduleCopy: "Once, at 2026-09-01 09:00 UTC",
+      timezone: "UTC",
+      released: true,
+      arming: false,
+      firedOnce: true,
+      stopped: false,
+    });
+    const card = await resolveTriggerScheduleProposalCard({ ref: RUN_REF, ...READER });
+    expect(card.view).toMatchObject({ released: true, canCancel: false });
+  });
+
+  it("while the install is still draining, no control is offered", async () => {
     resolveProposalForRun.mockResolvedValue({
       phase: "settled",
       runId: "run-42",
@@ -147,16 +213,17 @@ describe("the run-scoped resolve", () => {
       timezone: "UTC",
       released: false,
       arming: true,
+      firedOnce: true,
+      stopped: false,
     });
     const card = await resolveTriggerScheduleProposalCard({
       ref: RUN_REF,
       ...READER,
-      isAdmin: true,
     });
-    expect(card.view).toMatchObject({ arming: true, canCancel: false, canRelease: false });
+    expect(card.view).toMatchObject({ arming: true, canCancel: false });
   });
 
-  it("an already-released trigger offers neither control either", async () => {
+  it("a STOPPED recurring schedule offers no control and says so on the wire", async () => {
     resolveProposalForRun.mockResolvedValue({
       phase: "settled",
       runId: "run-42",
@@ -164,22 +231,22 @@ describe("the run-scoped resolve", () => {
       triggerType: "recurring",
       scheduleCopy: "Every weekday at 9:00 AM",
       timezone: "UTC",
-      released: true,
+      released: false,
       arming: false,
+      firedOnce: true,
+      stopped: true,
     });
     const card = await resolveTriggerScheduleProposalCard({
       ref: RUN_REF,
       ...READER,
-      isAdmin: true,
     });
-    expect(card.view).toMatchObject({ released: true, canCancel: false, canRelease: false });
+    expect(card.view).toMatchObject({ stopped: true, canCancel: false });
   });
 
   it("a reader with no attributable user or org resolves nothing at all", async () => {
     for (const bad of [{ userId: "", orgId: "org-1" }, { userId: "u-1", orgId: "" }]) {
       const card = await resolveTriggerScheduleProposalCard({
         ref: RUN_REF,
-        isAdmin: false,
         ...bad,
       });
       expect(card.state).toEqual({ state: "absent" });

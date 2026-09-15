@@ -190,7 +190,7 @@ export function fingerprintHasUnreadableInput(raw: string): boolean {
   return raw.includes(READINESS_INPUT_UNREADABLE);
 }
 
-export function computeReadinessFingerprint(provider: LlmProvider): string {
+export async function computeReadinessFingerprint(provider: LlmProvider): Promise<string> {
   // The credential component is kept OUT of the hashed section and carried
   // verbatim. Two reasons, and the second is the load-bearing one:
   //
@@ -210,7 +210,7 @@ export function computeReadinessFingerprint(provider: LlmProvider): string {
   let credentialComponent = "n/a";
 
   if (provider === "anthropic") {
-    credentialComponent = readAnthropicCredentialFingerprint() ?? "none";
+    credentialComponent = (await readAnthropicCredentialFingerprint()) ?? "none";
     nonCredentialParts.push(`mcpMode=${readAnthropicMcpMode()}`);
     nonCredentialParts.push(`catalog=${computeSkillCatalogSignature()}`);
     // The workspace upload opt-in is a readiness input too (codex round-1
@@ -245,9 +245,9 @@ export function computeReadinessFingerprint(provider: LlmProvider): string {
  * key — so a receipt earned with a key never keeps matching once the key
  * becomes unreadable.
  */
-function readAnthropicCredentialFingerprint(): string | null {
+async function readAnthropicCredentialFingerprint(): Promise<string | null> {
   try {
-    return deriveApiKeyFingerprint();
+    return await deriveApiKeyFingerprint();
   } catch {
     return null;
   }
@@ -413,11 +413,11 @@ export function clearSetupReadinessReceipt(): void {
  * than the one currently stored, or a receipt whose fingerprint no longer
  * matches the live configuration all read as NOT ready.
  */
-export function readSetupReadinessState(): {
+export async function readSetupReadinessState(): Promise<{
   ready: boolean;
   receipt: SetupReadinessReceipt | null;
   reason?: "no-receipt" | "provider-changed" | "configuration-changed";
-} {
+}> {
   const receipt = readSetupReadinessReceipt();
   if (!receipt) return { ready: false, receipt: null, reason: "no-receipt" };
 
@@ -426,7 +426,7 @@ export function readSetupReadinessState(): {
     return { ready: false, receipt, reason: "provider-changed" };
   }
 
-  const current = computeReadinessFingerprint(receipt.provider);
+  const current = await computeReadinessFingerprint(receipt.provider);
   // Fail closed on an unreadable input on EITHER side — a receipt earned
   // against an unreadable configuration is not evidence, and neither is a
   // comparison against one.
@@ -483,7 +483,7 @@ export type SetupReadinessPorts = {
    * reason as {@link SetupReadinessPorts.commitDefaultProvider}. */
   restoreDefaultProvider(provider: string): Promise<void>;
   readStoredDefaultProvider(): string;
-  computeFingerprint(provider: LlmProvider): string;
+  computeFingerprint(provider: LlmProvider): Promise<string>;
   writeReceipt(receipt: SetupReadinessReceipt): void;
   clearReceipt(): void;
   now(): Date;
@@ -565,7 +565,7 @@ export async function runSetupReadinessSaga(
   // configuration BEFORE proving anything, and re-compare at commit. Sampling
   // only at the end would stamp a proof about configuration A onto
   // configuration B if anything changed mid-run.
-  const fingerprintAtStart = ports.computeFingerprint(provider);
+  const fingerprintAtStart = await ports.computeFingerprint(provider);
 
   // Guard BEFORE any side effect: a provider that cannot be the stored default
   // must never reach the consent/upload steps. The commit would refuse it at
@@ -653,7 +653,7 @@ export async function runSetupReadinessSaga(
   // the MCP mode, or the catalog changed WHILE we were proving them, the proof
   // is about a configuration that no longer exists and must not be stamped as
   // verified. Refuse rather than record a receipt for work we did not do.
-  const fingerprintAtCommit = ports.computeFingerprint(provider);
+  const fingerprintAtCommit = await ports.computeFingerprint(provider);
   if (fingerprintAtCommit !== fingerprintAtStart) {
     return await fail(
       "commit",

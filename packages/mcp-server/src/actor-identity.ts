@@ -64,6 +64,17 @@ export type ResolveActorIdentityInput = {
    * through to the service-account arm.
    */
   authHeader?: string | null;
+  /**
+   * Whether THIS request's `Authorization` header actually had its signature
+   * verified (the OAuth verify ran and passed). The header-derived arms — the
+   * human `sub` arm and the service-account `azp` arm — fire ONLY when this is
+   * true. It is FALSE on the development admin bypass path, where the OAuth
+   * verify is skipped by design: an unverified token is a string the caller
+   * wrote, so its subject must never become an identity. With it false the
+   * resolver falls through and the caller stays the anonymous local operator,
+   * never an existing user.
+   */
+  bearerSignatureVerified: boolean;
   /** The incoming Request (used only for env/isLocalhost decisions by the caller). */
   request: Request;
   /** Subset of process.env passed in for testability. */
@@ -243,7 +254,7 @@ export async function resolveSoleOrgMembership(input: {
 export async function resolveActorIdentity(
   input: ResolveActorIdentityInput,
 ): Promise<ResolvedActorIdentity> {
-  const { sessionUser, requestClientId, authHeader, env, isLocalhost, readServiceAccount, pool } = input;
+  const { sessionUser, requestClientId, authHeader, bearerSignatureVerified, env, isLocalhost, readServiceAccount, pool } = input;
 
   // 1. Cookie session wins if present (regression preserved). Its org is
   //    resolved by the transport from session.activeOrganizationId, so we
@@ -270,7 +281,16 @@ export async function resolveActorIdentity(
   //     live user, the arm does not fire and resolution falls through (the
   //     pre-#1592 behavior: only a real `service_accounts` match can yield an
   //     identity from an unverified header).
-  const bearerSub = decodeBearerSub(authHeader);
+  //
+  //     SIGNATURE FIRST. `decodeBearerSub` reads the payload WITHOUT checking
+  //     the signature, and the OAuth verify is skipped entirely on the
+  //     development admin-bypass path — so on that path the `sub` is simply a
+  //     string the caller typed. The arm therefore requires
+  //     `bearerSignatureVerified`: a real, checked signature. Without one the
+  //     arm does not fire at all and the caller stays the anonymous local
+  //     operator. A live `public.user` row is still required on top of that
+  //     (a verified token naming a deleted user composes nothing).
+  const bearerSub = bearerSignatureVerified ? decodeBearerSub(authHeader) : undefined;
   if (bearerSub && (await userExists({ userId: bearerSub, pool }))) {
     const orgId = await resolveSoleOrgMembership({ userId: bearerSub, pool });
     return { userId: bearerSub, orgId };
@@ -291,7 +311,11 @@ export async function resolveActorIdentity(
   //    identity stays org-less at this arm and the boundary denies (contract
   //    preserved) unless a dev-only bypass later supplies an org. The userId is
   //    still carried (audit/provenance); org-less alone denies in production.
-  if (requestClientId) {
+  //
+  //    SIGNATURE FIRST, for the same reason as the `sub` arm above: the client
+  //    id is decoded from the SAME unverified header, so an unverified token
+  //    naming a real service account must not resolve that account's creator.
+  if (bearerSignatureVerified && requestClientId) {
     const account = await readServiceAccount(requestClientId);
     if (account?.userId) {
       const orgId =
@@ -416,6 +440,12 @@ export async function composeBearerActorContext(input: {
    * so the OBO token's own `sub` never becomes the resolved identity.
    */
   authHeader?: string | null;
+  /**
+   * Whether this request's Authorization header had its signature VERIFIED.
+   * False on the development admin-bypass path (the verify is skipped there),
+   * which keeps every header-derived identity arm shut on that path.
+   */
+  bearerSignatureVerified: boolean;
   request: Request;
   /** `process.env.A2A_DEV_BYPASS`, threaded through for testability. */
   a2aDevBypass: string | undefined;
@@ -432,6 +462,7 @@ export async function composeBearerActorContext(input: {
     sessionUser,
     requestClientId,
     authHeader,
+    bearerSignatureVerified,
     request,
     a2aDevBypass,
     isLocalhost,
@@ -447,6 +478,7 @@ export async function composeBearerActorContext(input: {
           sessionUser,
           requestClientId,
           authHeader,
+          bearerSignatureVerified,
           request,
           env: { A2A_DEV_BYPASS: a2aDevBypass },
           isLocalhost,

@@ -36,6 +36,12 @@ const readAgentRunMessages = vi.fn();
 const readAgentTemplateById = vi.fn();
 const deriveRunHitlContext = vi.fn();
 const authenticateWidgetConversationRequest = vi.fn();
+const readRunReviewSlot = vi.fn(
+  async (runId: string): Promise<{ reviewTaskId: string | null; awaiting: boolean }> => {
+    void runId;
+    return { reviewTaskId: null, awaiting: false };
+  },
+);
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -63,6 +69,19 @@ import {
   WIDGET_AGENT_RUN_SEED_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
 } from "@/lib/widget-lifecycle-scope";
+
+// cinatra#2997 — the run's own review slot travels on this seed. The reader is
+// a plain run-scoped DB read behind this route's door; these suites are about
+// the route's answer, so it is stubbed to "no review" unless a case says
+// otherwise, and the ref minting is stubbed with it (a ref needs the instance
+// secret, which no unit tree holds).
+vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
+  readRunReviewSlot: (runId: string) => readRunReviewSlot(runId),
+}));
+vi.mock("@/lib/lifecycle/lifecycle-card-ref", () => ({
+  encodeLifecycleGateRef: (p: { runId: string; reviewTaskId: string }) =>
+    `ref:${p.runId}:${p.reviewTaskId}`,
+}));
 
 import { GET } from "../route";
 

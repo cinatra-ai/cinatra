@@ -1,0 +1,64 @@
+{
+  "$comment": [
+    "ROOT-TIER RUNNER LEDGER \u2014 direction 4 of scripts/audit/ci-pinned-tests-exist.mjs.",
+    "A tier config under `vitest/integration/` has exactly two lawful states: a workflow runs it, or it is recorded here.",
+    "`slice` is the issue whose work the tier IS \u2014 where wiring it belongs. It may be CLOSED, and that is exactly what",
+    "this ledger records: the tier shipped and its runner did not. An entry for a tier that IS run, or for a config file",
+    "that no longer exists, fails the gate, so this list can only shrink honestly.",
+    "The first seven entries below were found by the cinatra#2936 audit; that change wired the four proof tiers of its own plan and left",
+    "these untouched, because each belongs to another slice and wiring one needs that slice's services and its judgement.",
+    "The eighth and ninth entries record the same shape for their own slices, and were added by those slices' own changes."
+  ],
+  "exceptions": [
+    {
+      "config": "vitest/integration/1983.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/1983",
+      "reason": "No package script reaches this config at all \u2014 the only place it is named outside itself is a doc comment in the suite it configures, so there is not even a script for a workflow to call. Wiring it means adding both the script and a step with a real Postgres."
+    },
+    {
+      "config": "vitest/integration/2578.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2578",
+      "reason": "Reached by `pnpm test:usage-ledger`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/2669.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2669",
+      "reason": "Reached by `pnpm test:unknown-cost`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/2691.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2691",
+      "reason": "Reached by `pnpm test:week-window`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/2696.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2696",
+      "reason": "Reached by `pnpm test:install-semantics`, which no workflow invokes. Four suites, a real Postgres and its own provisioning; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/2823.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2823",
+      "reason": "Reached by `pnpm test:durable-reload`, which no workflow invokes \u2014 although the issue's own title calls it a required Postgres job. Making it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/2911.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/2911",
+      "reason": "Reached by `pnpm test:created-at-immutable`, which no workflow invokes. The tier needs a real Postgres; giving it one is that slice's call, not this CI-wiring change's."
+    },
+    {
+      "config": "vitest/integration/loopback-peer.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/3123",
+      "reason": "Reached by `pnpm test:loopback-peer`, which no workflow invokes. This tier boots the application's OWN development server and drives it over HTTP, so a runner needs a whole development stack inside one job: a real Postgres, a real Redis (with the queue backend unreachable the boot never reaches ready and the suite's readiness poll simply times out), the per-boot secrets the start-up path refuses to run without, the development runtime mode (the production path needs a baked seed that a plain source-tree run does not produce), the companion extension tree the start-up hook imports, and a ready budget of minutes for a cold compile. One job DOES carry that combination today, the chat-HITL held-turn dev-runtime e2e job, but giving this tier a step there is a workflow change and this change does not make one; that wiring is a CI-wiring change of its own. Folding the suite into a tier that job already runs is not an answer either: each of those configs pins SUPABASE_SCHEMA to a throwaway schema, which the spawned development server would inherit and boot against."
+    },
+    {
+      "config": "vitest/integration/3135.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/3135",
+      "reason": "Reached by `pnpm test:dev-instance-provisioning`, which no workflow invokes. The tier drives the four real setup writers against a real Postgres with the development runtime mode set, so a runner needs a database service step and the development-mode environment inside one job; adding that step is a workflow change, and this change makes none. The slice that owns the tier wires it when a job carrying that combination exists."
+    },
+    {
+      "config": "vitest/integration/3091.config.ts",
+      "slice": "https://github.com/cinatra-ai/cinatra/issues/3091",
+      "reason": "Reached by `pnpm test:w3-kind-typed-row`, which no workflow invokes. The tier mints artifact rows through the real write boundary against a real Postgres and writes real bytes to a blob root, so a runner needs a database service step inside the job; adding that step is a workflow change, and this change makes none. The slice that owns the tier wires it when a job carrying that combination exists."
+    }
+  ]
+}

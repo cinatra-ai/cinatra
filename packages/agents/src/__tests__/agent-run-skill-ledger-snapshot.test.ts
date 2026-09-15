@@ -30,6 +30,16 @@ vi.mock("@/lib/agents-store", () => ({
 vi.mock("@/lib/agent-run-skills-used", () => ({
   snapshotSkillsAtRunStart: skillLedgerMock.snapshotSkillsAtRunStart,
 }));
+// The worker asks for the run's AUTHORITATIVE selected-revision set on the way
+// to the snapshot, through a synchronous Postgres read. This suite has no
+// database, and a failed query is a failure rather than an empty result set
+// (cinatra#3254), so unmocked the read raises the refused connection, the
+// enclosing catch logs it, and the writer under test is never reached. Serve
+// the "no set exists" answer the suite means to exercise: the worker then falls
+// back to the computed assignment, which is what this test asserts.
+vi.mock("@/lib/run-selected-skill-revisions", () => ({
+  readRunSelectedSkillRevisions: vi.fn(() => []),
+}));
 
 // ---------------------------------------------------------------------------
 // Adapter / enricher mocks — keep real classes, replace the enricher + the

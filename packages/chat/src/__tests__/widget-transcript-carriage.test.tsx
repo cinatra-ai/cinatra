@@ -22,11 +22,13 @@
  *   2. PARITY IS A COMPARISON OF RENDERS. The same transcript is run through the
  *      `/chat` arm, and the two surfaces must produce the same kinds — measured
  *      from DOM on both sides rather than from a list either arm could edit.
- *   3. THE RECOMMENDATION ROW is consumed as an OBSERVATION. Its widget mount is
- *      owed by S9f (#2790) and the ratchet says so; this suite measures the real
- *      widget arm and asserts the observed-unmounted set is exactly what the
- *      ratchet owes, so the day S9f lands the row must be struck or CI goes red.
- *      The refusal that causes it is pinned beside it as a live discriminator.
+ *   3. THE RECOMMENDATION ROW is consumed as an OBSERVATION. Its widget mount
+ *      LANDED in S9f (cinatra#2790) and the ratchet's owed row was struck in the
+ *      same change; this suite measures the real widget arm and asserts the
+ *      observed-unmounted set is exactly what the ratchet still owes, so a row
+ *      struck ahead of its mount and a mount that stops drawing are both red.
+ *      The card's broker read is pinned beside it — a render alone would not
+ *      distinguish parity from an ambient-cookie fallback.
  *   4. A DENIAL IS STILL NO DOM, and a MIS-WIRED widget declaration issues no
  *      resolve at all — the negative controls that make a green run evidence.
  *
@@ -72,6 +74,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: () => holdStateMock(),
   confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
   skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
+}));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../agents/src/server-actions", () => ({
@@ -141,12 +156,45 @@ if (typeof window !== "undefined" && typeof window.localStorage?.getItem !== "fu
 }
 
 const RESOLVE_PATH = "/api/lifecycle-views/resolve";
+/** The HELD answer — the one state that makes the hold card draw at all. */
+const HELD_ANSWER = {
+  state: "held",
+  agentPackageName: "@cinatra-ai/proof-agent",
+  promptText: "{}",
+  recommendations: [
+    { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
+  ],
+  holdRef: "hold-ref-2826",
+} as Record<string, unknown>;
+
+/** The HITL screen's own authorized answer — the second INTERRUPT kind. */
+const ASKING_ANSWER = {
+  state: "asking",
+  runId: "run-held-2826",
+  screenRef: "hitl-screen-ref-2930",
+  gate: {
+    reviewTaskId: "task-2930",
+    xRenderer: "cinatra.schema-field:output",
+    inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+    currentValues: {},
+    fieldName: "answer",
+  },
+} as Record<string, unknown>;
 
 let widgetStub: ReturnType<typeof installWidgetServiceStub> | null = null;
 
 function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {}) {
   widgetStub = installWidgetServiceStub({
     lifecycle: (viewType) => LIFECYCLE_RESOLVE_ANSWERS.pending(viewType),
+    // cinatra#2790 (epic #2784 S9f): the recommendation hold is the one kind
+    // carried as a typed INTERRUPT, so on this surface it is read through the
+    // broker endpoint rather than a cookie-bound action. The widget's server
+    // answers it from the same mock the card would otherwise call.
+    recommendationHold: () => holdStateMock(),
+    // cinatra#2930 (lifecycle-b W3): the HITL screen is the SECOND kind carried
+    // as a typed INTERRUPT, so on this surface it is read through its own
+    // broker endpoint rather than a cookie-bound action, for the same reason.
+    hitlScreen: () => hitlScreenStateMock(),
     ...options,
   });
   return widgetStub;
@@ -193,8 +241,11 @@ function requestedViewTypes(): string[] {
  * product carries it, not the way that is convenient to assert.
  */
 async function mountKind(surface: SurfaceName, kind: LifecycleCardKind) {
+  // BOTH INTERRUPT KINDS ride the run's own dispatch part rather than a
+  // DATA_PART, so both are mounted from the transcript a parked dispatch really
+  // leaves behind (cinatra#2930 for the HITL screen, S9b for the hold).
   const messages =
-    kind === "recommendation_hold"
+    kind === "recommendation_hold" || kind === "agent_hitl_screen"
       ? lifecycleHeldTranscript()
       : lifecycleDataPartTranscript(kind, `ref-${kind}`);
   const mounted = await mountSurface(surface, { messages });
@@ -335,15 +386,10 @@ describe("the recommendation hold on the widget arm", () => {
     for (const kind of LIFECYCLE_CARD_KINDS) {
       installStub();
       if (kind === "recommendation_hold") {
-        holdStateMock.mockImplementation(async () => ({
-          state: "held",
-          agentPackageName: "@cinatra-ai/proof-agent",
-          promptText: "{}",
-          recommendations: [
-            { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
-          ],
-          holdRef: "hold-ref-2826",
-        }));
+        holdStateMock.mockImplementation(async () => HELD_ANSWER);
+      }
+      if (kind === "agent_hitl_screen") {
+        hitlScreenStateMock.mockImplementation(async () => ASKING_ANSWER);
       }
       const { root } = await mountKind("widget", kind);
       if (!drawnKinds(root).includes(kind)) unmounted.push(kind);
@@ -354,28 +400,41 @@ describe("the recommendation hold on the widget arm", () => {
     expect(unmounted.sort()).toEqual(owed);
   });
 
-  it("the REFUSAL behind that row is live: the real card draws nothing under the widget declaration", async () => {
-    holdStateMock.mockImplementation(async () => ({
-      state: "held",
-      agentPackageName: "@cinatra-ai/proof-agent",
-      promptText: "{}",
-      recommendations: [
-        { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
-      ],
-      holdRef: "hold-ref-2826",
-    }));
+  it("the STRUCK row is live: the real card DRAWS under the widget declaration", async () => {
+    // THE FLIP (cinatra#2790, epic #2784 S9f). This arm used to pin the refusal
+    // that kept the widget row owed: the card refused to render under any host
+    // that declared a credential, because its read and its decisions were
+    // cookie-bound server actions and would have answered — and recorded — as
+    // whoever else was signed in on the browser. The broker read and the broker
+    // decision landed, the guard was deleted, and the same fixture now draws.
+    installStub();
+    holdStateMock.mockImplementation(async () => HELD_ANSWER);
     const widget = render(
       <LifecycleCardSurfaceProvider {...WIDGET_LIFECYCLE_SURFACE}>
         <RecommendationHoldCard runId="run-2826" agentPackageName="@cinatra-ai/proof-agent" />
       </LifecycleCardSurfaceProvider>,
     );
     await settle();
-    expect(widget.container.innerHTML).toBe("");
+    expect(widget.container.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull();
+    // …and it read through the BROKER, with the surface's own proof and cookies
+    // omitted. A card that drew from an ambient cookie on a same-origin frame is
+    // the forbidden fallback, not parity — so the render alone is not the claim.
+    const call = (widgetStub?.calls ?? []).find(
+      (c) => c.url === "/api/lifecycle-views/recommendation-hold",
+    );
+    expect(call, "the widget card never asked the broker").toBeDefined();
+    expect(call!.init.credentials).toBe("omit");
+    expect(call!.init.headers).toMatchObject({
+      "X-Cinatra-Widget-User-Token": "cwu_user",
+      "X-Cinatra-Widget-Origin": "https://blog.example.com",
+    });
     cleanup();
 
-    // NEGATIVE CONTROL — the same card, the same state, a cookie host: it draws.
-    // Without this, "nothing rendered" would be indistinguishable from a fixture
-    // that never had anything to render.
+    // NEGATIVE CONTROL — the same card, the same state, a COOKIE host: it draws
+    // too, and it does NOT touch the broker endpoint. Without this, "the widget
+    // draws" would not distinguish a credential-aware card from one that had
+    // simply stopped checking anything.
+    const before = (widgetStub?.calls ?? []).length;
     const cookie = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <RecommendationHoldCard runId="run-2826" agentPackageName="@cinatra-ai/proof-agent" />
@@ -383,6 +442,33 @@ describe("the recommendation hold on the widget arm", () => {
     );
     await settle();
     expect(cookie.container.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull();
+    expect(
+      (widgetStub?.calls ?? [])
+        .slice(before)
+        .filter((c) => c.url === "/api/lifecycle-views/recommendation-hold"),
+      "the cookie host reached the broker endpoint — its read must stay the server action",
+    ).toEqual([]);
+  });
+
+  it("a widget declaration with NO credential still draws NO hold card", async () => {
+    // The guard that went away was the CREDENTIAL check, never the host
+    // declaration. A `site_widget` mount that declares no credential is refused
+    // by the provider, so there is no host — and no host is still no DOM at all,
+    // even now that a credentialed widget draws.
+    installStub();
+    holdStateMock.mockImplementation(async () => HELD_ANSWER);
+    const refused = render(
+      <LifecycleCardSurfaceProvider host="site_widget">
+        <RecommendationHoldCard runId="run-2826" agentPackageName="@cinatra-ai/proof-agent" />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await settle();
+    expect(refused.container.innerHTML).toBe("");
+    expect(
+      (widgetStub?.calls ?? []).filter(
+        (c) => c.url === "/api/lifecycle-views/recommendation-hold",
+      ),
+    ).toEqual([]);
   });
 });
 

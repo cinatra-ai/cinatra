@@ -53,9 +53,18 @@ function tuple(over: Partial<AdmittedClientBundleTuple> = {}): AdmittedClientBun
 
 const okActivate = { materialize: async () => {}, verify: async () => true };
 
-/** A minimal ArtifactSummary — resolveMount reads only objectType + identity. */
+/** A minimal ArtifactSummary — resolveMount reads only objectType + identity.
+ * Both identities carry the same value here: `artifact-service` projects the
+ * presentation identity FROM the effective one unless an assertion re-presents
+ * the row, and cinatra#2931 made the review path resolve off the presentation
+ * identity (the one the detail page has always used). */
 function summary(objectType: string, identity: EffectiveIdentity): ArtifactSummary {
-  return { artifactId: "art_1", objectType, effectiveIdentity: identity } as unknown as ArtifactSummary;
+  return {
+    artifactId: "art_1",
+    objectType,
+    effectiveIdentity: identity,
+    presentationIdentity: identity,
+  } as unknown as ArtifactSummary;
 }
 
 function mountFor(objectType: string, identity: EffectiveIdentity, mime: string) {

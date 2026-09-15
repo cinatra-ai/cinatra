@@ -42,6 +42,7 @@ import {
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
+import { readArtifactsScope } from "@/components/artifacts/library-scope-reading";
 import type { AvailableScopes } from "@/components/access-scope";
 import type { ScopeToken } from "@/lib/scope-filter";
 
@@ -132,8 +133,19 @@ export function LibraryToolbar({
   }
 
   return (
-    <Toolbar aria-label="Artifacts filters">
-      <ToolbarSearchGroup>
+    // §Responsive: "On a narrow viewport the toolbar wraps — the search
+    // field takes the full row, the Type / Scope / Upload controls wrap
+    // beneath it, and Upload stays reachable (never behind an overflow)"
+    // (cinatra#3283). The shared bar scrolls horizontally by default, which
+    // carries Scope and Upload off-canvas on a phone width; this mount wraps
+    // instead — search claims the whole first row below the small breakpoint,
+    // the remaining controls flow beneath it, and the group separators (a
+    // wide-row device) drop out rather than opening a wrapped row.
+    <Toolbar
+      aria-label="Artifacts filters"
+      className="flex-wrap gap-y-1.5 overflow-x-visible"
+    >
+      <ToolbarSearchGroup className="max-sm:w-full max-sm:flex-none">
         <ToolbarSearchInput
           value={searchValue}
           onChange={(e) => setSearchValue(e.target.value)}
@@ -141,7 +153,7 @@ export function LibraryToolbar({
           aria-label="Search artifacts"
         />
       </ToolbarSearchGroup>
-      <ToolbarSeparator />
+      <ToolbarSeparator className="max-sm:hidden" />
       <ToolbarGroup>
         <Select value={facetValue} onValueChange={selectFacet}>
           {/* Explicit accessible name (repo Select precedent): with only a
@@ -166,16 +178,20 @@ export function LibraryToolbar({
           </SelectContent>
         </Select>
       </ToolbarGroup>
-      <ToolbarSeparator />
+      <ToolbarSeparator className="max-sm:hidden" />
       <ToolbarGroup>
         {/* Artifacts carry no admin-only visibility tier, so the "Workspace:
             Admins only" row is not offered (a stale ?scope=admin collapses to
             the default via the canonical parser). */}
+        {/* cinatra#3229 — §I draws the control as "Scope: Workspace": the field
+            first, its value second, like the Type control beside it. The
+            reading is elected here, at this mount only. */}
         <ScopeFilterCombobox
           id="artifacts-scope-filter"
           value={scopeValue}
           scopes={scopes}
           showAdmin={false}
+          summarizeSelection={readArtifactsScope}
         />
       </ToolbarGroup>
       <div aria-hidden className="flex-1" />
