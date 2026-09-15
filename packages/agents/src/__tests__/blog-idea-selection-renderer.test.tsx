@@ -18,8 +18,8 @@
  *   - a radio-per-idea chooser renders and commits ideas[0] on mount as
  *     {selectedIdeaJson, userResponse} = JSON.stringify(idea);
  *   - changing the pick re-commits the newly chosen idea;
- *   - the no-ideas case degrades to the schema floor (no chooser, no
- *     selectedIdeaJson auto-commit) — never blank;
+ *   - the no-ideas case draws the step's empty reading (no chooser, no field,
+ *     no Continue, no selectedIdeaJson auto-commit) — never blank;
  *   - the binding id resolves to this renderer at the pre-relocation priority
  *     (80) and classifies as a mid-run HITL gate (parity with the `:output`
  *     suffix classification the shared reviewer binding used to provide).
@@ -131,20 +131,32 @@ describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)
     expect(JSON.parse(call.selectedIdeaJson)).toEqual(REF_ALPHA);
   });
 
-  it("degrades to the schema floor with no ideas — no chooser, no selectedIdeaJson auto-commit (never blank)", () => {
+  it("draws the empty reading with no ideas — no chooser, no field, no Continue, no selectedIdeaJson auto-commit (never blank)", () => {
     const { onChange } = renderChooser({ contentType: "text" });
     expect(screen.queryByText("Select one blog idea to draft.")).toBeNull();
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    // cinatra#3035: "an empty list draws no rows and no Continue" — and no
+    // response box either, which would settle the run's subject unpicked.
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: /continue|submit/i }),
+    ).toHaveLength(0);
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/nothing to pick/i);
     const committed = onChange.mock.calls.map(
       (c) => c[0] as { selectedIdeaJson?: unknown },
     );
     expect(committed.every((c) => c.selectedIdeaJson === undefined)).toBe(true);
   });
 
-  it("degrades to the schema floor for an empty ideas array", () => {
+  it("draws the empty reading for an empty ideas array", () => {
     renderChooser({ ideas: [] });
     expect(screen.queryByText("Select one blog idea to draft.")).toBeNull();
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: /continue|submit/i }),
+    ).toHaveLength(0);
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/nothing to pick/i);
   });
 });
 
@@ -189,5 +201,50 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
       CTX as never,
     );
     expect(orphaned).toBeFalsy();
+  });
+});
+
+/**
+ * ENVELOPE BOUNDARIES the empty reading now owns (convergence round, adopted
+ * from the paired review). Before this change these envelopes fell to the
+ * schema-driven field floor; they now take the drawn empty reading, so the
+ * boundary between "a list arrived" and "nothing is on offer" is pinned here
+ * rather than left to the reader of `offerableChoices`.
+ */
+describe("BlogIdeaSelectionRenderer — what counts as an offer", () => {
+  it("a list that arrived as a JSON STRING is not an offer — the empty reading, never a field", () => {
+    renderChooser({
+      ideas: JSON.stringify([
+        { artifactId: "idea-alpha", representationRevisionId: "rev-alpha", title: "Idea Alpha" },
+      ]),
+    });
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: /continue|submit/i }),
+    ).toHaveLength(0);
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/nothing to pick/i);
+  });
+
+  it("entries naming no artifact/revision pair are not offerable — no row is drawn for them", () => {
+    renderChooser({
+      ideas: [
+        { title: "No reference at all", text: "Body" },
+        { artifactId: "idea-alpha", representationRevisionId: "", title: "Half a reference" },
+        { artifactId: "idea-beta", representationRevisionId: "rev-beta", title: "Idea Beta" },
+      ],
+    });
+    const radios = screen.queryAllByRole("radio");
+    expect(radios).toHaveLength(1);
+    expect(screen.getByText("Idea Beta")).toBeTruthy();
+    expect(screen.queryByText("No reference at all")).toBeNull();
+    expect(screen.queryByText("Half a reference")).toBeNull();
+  });
+
+  it("an offer of only unofferable entries draws the empty reading, not a half list", () => {
+    renderChooser({ ideas: [{ title: "No reference at all" }] });
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/nothing to pick/i);
   });
 });
