@@ -9,6 +9,7 @@ const PKGS = [
   "email-outreach-agent",
   "blog-idea-generator-agent",
   "blog-draft-writer-agent",
+  "blog-image-generator-agent",
   "blog-image-prompt-agent",
   "blog-pipeline-agent",
 ];

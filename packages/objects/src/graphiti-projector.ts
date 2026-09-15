@@ -1,7 +1,7 @@
 import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
-import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client";
+import { addEpisode, addTriplet, deleteEpisode, identityHashToUuid } from "./graphiti-client";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
 import { claimedTypeRegisteringPackage } from "./claims";
@@ -148,12 +148,45 @@ export function projectMemoryConceptCapped(
 }
 
 function deriveEntityName(data: Record<string, unknown>, type: string): string {
+  // `frontmatter.title` and `conceptId` are where a memory-concept row keeps its
+  // human name — the flat `title` field the earlier candidates look for does not
+  // exist on that envelope (cinatra#2591). Without them EVERY memory row derived
+  // the bare type id, which was survivable while this only named an episode but
+  // is not survivable now that it also names the row's deterministic anchor
+  // node: identical names across rows are exactly what graphiti's name-based
+  // dedup collapses, and an embedding of the type id ranks for nothing.
+  const frontmatter =
+    data.frontmatter && typeof data.frontmatter === "object" && !Array.isArray(data.frontmatter)
+      ? (data.frontmatter as Record<string, unknown>)
+      : undefined;
   const candidate =
     (data.name as string | undefined) ??
     (data.title as string | undefined) ??
     (data.email as string | undefined) ??
+    (typeof frontmatter?.title === "string" ? frontmatter.title : undefined) ??
+    (typeof data.conceptId === "string" ? data.conceptId : undefined) ??
     type;
   return String(candidate).slice(0, 200);
+}
+
+/**
+ * The anchor node's NAME (cinatra#2591).
+ *
+ * Normally the row's entity name — that is the point: the anchor must rank for
+ * the same queries the row should answer, and graphiti embeds node name +
+ * summary.
+ *
+ * The exception is the row that has NO human-meaningful name, where
+ * `deriveEntityName` falls through to the bare type id. Seeding many rows under
+ * one identical name would push them all into the same dedup bucket and make
+ * one anchor stand for many rows. Those rows get a row-scoped suffix instead:
+ * still useless for semantic ranking (there is nothing to rank on — that is the
+ * input's fault, not the mechanism's), but distinct, so recovery stays
+ * one-to-one.
+ */
+function deriveAnchorName(entityName: string, type: string, objectId: string): string {
+  if (entityName !== type) return entityName;
+  return `${type} ${objectId.slice(0, 8)}`;
 }
 
 // Metadata/excerpt-only projection for artifact object rows.
@@ -357,6 +390,97 @@ function readCanonicalRow(objectId: string, orgId: string | null): CanonicalRow 
   return (result?.rows[0] as CanonicalRow | undefined) ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// DETERMINISTIC ANCHOR NODE (cinatra#2591 deliverable 4).
+//
+// THE DEFECT. Recall resolves graph hits back to canonical rows by reading a
+// row id off the entity nodes `search_nodes` returns. Four probes did that, and
+// three were measured INERT against Graphiti 0.28.2 (live verification
+// 2026-04-30): custom episode-body fields do not propagate to node attributes,
+// and the `[oid:…]` name tag does not survive extraction. The surviving probe
+// fired only when the extraction model INCIDENTALLY emitted the row UUID as an
+// entity-node name. So "did recall find this row" depended on model whim, and
+// `no_ids_extracted` could be reported for a row that was definitely indexed.
+//
+// THE MECHANISM. After the episode is handed over, seed ONE entity node whose
+// UUID WE choose — a pure function of the row id and the lane. The graph now
+// contains a node that names the row by construction, and the inverse map lives
+// in Postgres (`objects.graphiti_anchor_node_uuid`). Recall resolves ranked node
+// UUIDs through that column; nothing depends on what the model said.
+//
+// WHY IT ALSO RANKS. The anchor is not an opaque marker: its NAME is the row's
+// entity name, which is exactly what graphiti embeds and what
+// NODE_HYBRID_SEARCH_RRF ranks on. Measured on the wire 2026-08-10 against real
+// Neo4j: a seeded anchor came back from a semantic query that did not contain
+// its literal name.
+//
+// WHY IT NEEDS NO LLM. `add_triplet` writes through graphiti-core's embedder
+// path — node-name and fact embeddings — and reaches the LLM only if name-based
+// dedup finds an ambiguous candidate. With the local embedder floor
+// (docker/kg-embedder) an install with NO extraction provider still seeds and
+// still ranks. That is stronger than the issue asked for: ranking now depends
+// on the embedder, not on extraction.
+//
+// IDEMPOTENCE. graphiti-core looks the supplied UUID up first
+// (`EntityNode.get_by_uuid`), so re-projecting the same row re-writes the same
+// node instead of accumulating duplicates — measured: a second seed left
+// exactly one node carrying that name, with the same UUID.
+//
+// BEST EFFORT, ON PURPOSE. A failed seed must not fail the projection: the
+// episode is already handed over, and the row must still be marked projected or
+// the outbox would retry forever and re-bill extraction each time. A null
+// anchor degrades recall for that row to the legacy probes — the behaviour
+// before this change — and says so in the log.
+// ---------------------------------------------------------------------------
+
+/** The lane-scoped anchor node UUID for a row. Pure; distinct namespace from
+ *  the episode UUID so the two identities can never collide in the store. */
+export function anchorNodeUuidFor(objectId: string, groupId: string): string {
+  return identityHashToUuid(`anchor:${objectId}`, groupId);
+}
+
+async function seedAnchorNode(input: {
+  objectId: string;
+  groupId: string;
+  entityName: string;
+  type: string;
+}): Promise<string | null> {
+  const proposed = anchorNodeUuidFor(input.objectId, input.groupId);
+  const anchorName = deriveAnchorName(input.entityName, input.type, input.objectId);
+  try {
+    const result = await addTriplet({
+      source_node_name: anchorName,
+      edge_name: "RECORDED_IN",
+      fact: `${anchorName} is recorded in the cinatra object store.`,
+      // One hub node per lane. It is the edge's target only because
+      // `add_triplet` writes a TRIPLET; the anchor is the source node, and the
+      // hub carries no row identity of its own.
+      target_node_name: "cinatra object store",
+      group_id: input.groupId,
+      source_node_uuid: proposed,
+    });
+    // Read the uuid BACK. It is normally the one we proposed, but graphiti may
+    // resolve a new node onto an existing near-duplicate, and then the resolved
+    // uuid is what recall will actually see.
+    const resolved = result.nodes.find((n) => n.name === anchorName)?.uuid ?? null;
+    if (resolved && resolved !== proposed) {
+      console.log(
+        `[graphiti-projector] anchor for ${input.objectId} resolved onto an existing node ` +
+          `(${proposed} -> ${resolved}); recording the resolved uuid.`,
+      );
+    }
+    return resolved;
+  } catch (err) {
+    console.warn(
+      `[graphiti-projector] anchor seeding failed for ${input.objectId} in lane ${input.groupId} ` +
+        "— the episode was still handed over, but recall for this row falls back to " +
+        "incidental id extraction until the next projection:",
+      err,
+    );
+    return null;
+  }
+}
+
 function markProjected(input: {
   objectId: string;
   episodeUuid: string;
@@ -366,6 +490,22 @@ function markProjected(input: {
   // every path (memory rows carry the nested lane; non-memory/adapter rows
   // carry the ambient org lane) so the column is always populated post-project.
   projectedGroupId: string;
+  // The deterministic anchor node this row is seeded as, or null when seeding
+  // failed.
+  anchorNodeUuid: string | null;
+  // TRUE when this projection moved the row into a DIFFERENT lane than the one
+  // it was last projected into. It decides whether a null anchor may fall back
+  // to the stored value: on a same-lane re-projection the stored anchor is still
+  // the right node, so COALESCE keeping it is correct; on a lane MOVE the stored
+  // anchor belongs to the lane we just left, and keeping it would point recall
+  // at a node in a lane this row no longer occupies.
+  laneChanged: boolean;
+  // Operator-visible note when the anchor could not be seeded. Without it a
+  // failed seed is invisible: the version is marked projected (deliberately —
+  // re-projecting would re-bill extraction), so the equal-version guard stops
+  // the outbox from retrying, and the row would silently sit on the legacy
+  // incidental probes with nothing recording why.
+  anchorError: string | null;
 }): void {
   const schema = postgresSchema.replaceAll('"', '""');
   runPostgresQueriesSync({
@@ -377,11 +517,21 @@ function markProjected(input: {
                  graphiti_episode_uuid = $1,
                  graphiti_projected_version = $2,
                  graphiti_projected_at = now(),
-                 graphiti_projection_error = NULL,
-                 projected_group_id = $4
+                 graphiti_projection_error = $6,
+                 projected_group_id = $4,
+                 graphiti_anchor_node_uuid = ${
+                   input.laneChanged ? "$5" : "COALESCE($5, graphiti_anchor_node_uuid)"
+                 }
              WHERE id = $3
                AND (graphiti_projected_version IS NULL OR graphiti_projected_version < $2)`,
-        values: [input.episodeUuid, input.projectedVersion, input.objectId, input.projectedGroupId],
+        values: [
+          input.episodeUuid,
+          input.projectedVersion,
+          input.objectId,
+          input.projectedGroupId,
+          input.anchorNodeUuid,
+          input.anchorError,
+        ],
       },
     ],
   });
@@ -406,6 +556,15 @@ function markLaneRetracted(objectId: string): void {
         text: `UPDATE "${schema}"."objects"
              SET graphiti_sync_status = 'skipped',
                  graphiti_episode_uuid = NULL,
+                 -- cinatra#2591: the row is leaving projection, so it must also
+                 -- stop being DETERMINISTICALLY recoverable. Clearing the column
+                 -- removes it from the recall inverse map immediately. The anchor
+                 -- NODE itself survives in the graph until a clear/rebuild (the
+                 -- MCP surface exposes no node delete) — recall can therefore
+                 -- still RANK it, but it now resolves to nothing here, and every
+                 -- candidate is re-fetched and authz-filtered in Postgres either
+                 -- way. Stated rather than hidden; see the PR's honest gaps.
+                 graphiti_anchor_node_uuid = NULL,
                  projected_group_id = NULL,
                  graphiti_projected_at = now(),
                  graphiti_projection_error = NULL
@@ -477,7 +636,7 @@ export async function projectObjectToGraphiti(input: {
   objectId: string;
   objectVersion: number;
   orgId: string | null;
-}): Promise<{ episodeUuid: string | null; skipped?: boolean }> {
+}): Promise<{ episodeUuid: string | null; skipped?: boolean; anchorNodeUuid?: string | null }> {
   // episodeUuid is "" when Graphiti returns no uuid in any known shape.
   // Callers should treat empty string as a soft-failure signal (still marks
   // the row projected to avoid retry loops, but downstream lookups by uuid
@@ -591,6 +750,12 @@ export async function projectObjectToGraphiti(input: {
       // Adapter-owned types (CRM pointer rows) are never memory-scoped and
       // project to the ambient org lane.
       projectedGroupId: deriveProjectionGroupId(input.orgId ?? row.org_id),
+      // Adapter-owned rows (CRM pointer rows) are projected by the adapter's own
+      // episode, not by the body this file builds, so there is no anchor to seed
+      // here. `laneChanged: false` keeps COALESCE, so any prior anchor stays.
+      anchorNodeUuid: null,
+      laneChanged: false,
+      anchorError: null,
     });
     return { episodeUuid: adapterEpisodeUuid };
   }
@@ -708,9 +873,11 @@ export async function projectObjectToGraphiti(input: {
   //
   // Embed [oid:<objectId>] in the episode name so it travels with
   // the episode record. NOTE: live verification (2026-04-30) showed this tag does
-  // NOT propagate to entity node names via LLM extraction in Graphiti 0.28.2.
-  // OID_RE in handlers.ts extractObjectIds is therefore inert for now; kept for
-  // a future Graphiti version or text-body embedding approach. Deferred.
+  // NOT propagate to entity node names via LLM extraction, and re-checking on
+  // the replacement server (cinatra#2591) did not change that — it is a property
+  // of extraction, not of the wrapper. So OID_RE in handlers.ts stays inert; it
+  // survives only as one of the demoted incidental probes. Row recovery is now
+  // carried by the deterministic anchor node seeded below, not by this tag.
   const episodeUuid = identityHashToUuid(row.id, groupId);
   // Artifact projection policy. Artifact rows MUST NOT
   // spread raw `row.data` into graph memory: even though the artifact writer
@@ -759,13 +926,22 @@ export async function projectObjectToGraphiti(input: {
     },
   });
 
+  const entityName = deriveEntityName(row.data, row.type);
+
   await addEpisode({
-    name: `${deriveEntityName(row.data, row.type)} [oid:${row.id}]`,
+    name: `${entityName} [oid:${row.id}]`,
     episode_body: episodeBody,
     source: "json",
     source_description: `objects projection (run ${row.run_id ?? "n/a"})`,
     group_id: groupId,
     // uuid intentionally omitted — see EPISODE-UUID-EMPTY note above
+  });
+
+  const anchorNodeUuid = await seedAnchorNode({
+    objectId: row.id,
+    groupId,
+    entityName,
+    type: row.type,
   });
 
   markProjected({
@@ -775,8 +951,15 @@ export async function projectObjectToGraphiti(input: {
     // Persist the lane just projected into so a later scope change can locate
     // and delete THIS episode (#1379 lane-move bookkeeping).
     projectedGroupId: groupId,
+    anchorNodeUuid,
+    laneChanged: priorLane !== null && priorLane !== groupId,
+    anchorError:
+      anchorNodeUuid === null
+        ? "anchor seeding failed; deterministic row recovery is unavailable for this row " +
+          "until its next projection"
+        : null,
   });
-  return { episodeUuid };
+  return { episodeUuid, anchorNodeUuid };
 }
 
 // Caller note:

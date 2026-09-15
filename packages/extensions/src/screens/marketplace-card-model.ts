@@ -46,7 +46,12 @@ export interface MarketplaceCardData {
   freshnessAt: string | null;
   /** Rating mirrored from the storefront entry; null when it has none. */
   rating: { average: number; count: number } | null;
-  /** /configuration/marketplace/<scope>/<name> (unchanged detail route). */
+  /**
+   * /configuration/marketplace/<scope>/<name> — the legacy in-app detail URL.
+   * The route behind it is RETIRED (cinatra#2736): it redirects to the plain
+   * marketplace grid. This stays as the no-JS fallback href of the card's
+   * "More details" opener, whose real affordance is the §II modal.
+   */
   detailHref: string;
   /**
    * Total install count, or null when the marketplace does not (yet) track it.
@@ -352,7 +357,11 @@ function normalizeKind(slug: string | null | undefined): MarketplaceCardKind {
   return slug && KNOWN_KINDS.has(slug) ? (slug as MarketplaceCardKind) : "unknown";
 }
 
-/** Detail route — drops the leading "@"; the route re-adds it. */
+/**
+ * The legacy in-app detail URL — drops the leading "@". The route behind it is
+ * RETIRED (cinatra#2736) and reads no params at all: it redirects to the plain
+ * marketplace grid, so this is a no-JS fallback, not a detail destination.
+ */
 export function marketplaceDetailHref(packageName: string): string {
   return `/configuration/marketplace/${packageName.replace(/^@/, "")}`;
 }
@@ -649,6 +658,40 @@ export function workspaceReachLabel(audience: "workspace" | "admin"): string {
   return audience === "admin"
     ? "Installed (Workspace: Admins only)"
     : "Installed (Workspace: All)";
+}
+
+/**
+ * The install map, corrected by the RUN GATE'S OWN VERDICT (cinatra#2944).
+ *
+ * The template-derived map is built from the visible extension templates, and a
+ * template whose package has NO canonical `installed_extension` row is
+ * grandfathered to "active" by the shared template read. For a catalog-governed
+ * opt-in package that grandfather is a CLAIM THE RUN GATE CONTRADICTS: the gate
+ * treats a `guardedOptional` catalog record with no canonical row as provably
+ * not installed and refuses the run with the opt-in message, while the card
+ * showed a disabled "Installed" pill and offered no way to install it.
+ *
+ * The two surfaces are made to agree BY CONSTRUCTION rather than by a second
+ * copy of the rule: the caller resolves availability with the gate's own
+ * resolver, and every package the gate calls `not-installed` is dropped from the
+ * map, so {@link resolveMarketplaceCardCta} sees `undefined` and renders the
+ * Install control. Only `not-installed` is acted on — `archived` keeps its
+ * Restore state, and every fail-open state the gate reports (`runnable` on an
+ * unreadable catalog or a store outage) leaves the map exactly as it was.
+ *
+ * Pure and client-safe: the verdicts travel in, no read happens here.
+ */
+export function applyRunGateInstallTruth(
+  installedVersionByName: Map<
+    string,
+    { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+  >,
+  availabilityByPackageName: ReadonlyMap<string, { state: string }>,
+): void {
+  for (const [packageName, availability] of availabilityByPackageName) {
+    if (availability.state !== "not-installed") continue;
+    installedVersionByName.delete(packageName);
+  }
 }
 
 export function resolveMarketplaceCardCta(

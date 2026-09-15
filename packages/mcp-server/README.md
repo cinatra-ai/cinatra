@@ -12,7 +12,7 @@ provider access.
 - `buildMcpAuthPlugins(options)` — pure `[jwt(), oauthProvider({...})]` builder (no app graph).
 - `DEFAULT_MCP_SCOPES` — default OAuth scopes advertised by the server.
 - `mcpRequestContextStorage` — `AsyncLocalStorage` carrying per-request actor/run context to tool handlers.
-- `isDelegatedChatMcpToolAllowed(name)` — delegated-chat tool allowlist predicate.
+- `evaluateDelegatedChatAdmission(planned, snapshot)` — the shared delegated-chat decision: hard family denies, the proposal override, the destructive-verb backstop, then exact version- and declaration-bound admission. Replaces the removed `isDelegatedChatMcpToolAllowed` name-only predicate (cinatra#2817).
 - Types: `CreateMcpServerMountOptions`, `CreateMcpServerAuthPluginsOptions`, `McpServerSettings`, `McpRuntimeToolServer`, `McpRequestContext`, `DelegatedMcpActor`, `ScreenDescriptor`, `NavigationTarget`, `McpAuthPlugins`, `McpAuthPluginsOptions`.
 
 ### Sub-entry points

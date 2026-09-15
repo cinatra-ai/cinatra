@@ -1,13 +1,15 @@
 "use client";
 
+import { durationCopyFor } from "./duration-copy";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, type DefaultValues } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CalendarClock, Repeat, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,11 +23,21 @@ import {
 import { toast } from "@/lib/cinatra-toast";
 
 import { format } from "date-fns";
-import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+import { declaredDurationEstimate } from "./duration-declared";
+// THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
+// `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
+// `@cinatra-ai/agents/lifecycle-coordinator` declares and exports — and answers
+// the row this form opens on. The form used to hold a second copy of that
+// decision in its own `defaultValues`.
+import { scheduleScreenSelection } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import type { ProposedSchedule } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import {
   buildCron,
+  DEFAULT_RECURRING_CONFIG,
   parseCronToRecurring,
   WEEKDAY_LABELS,
   MONTH_LABELS,
@@ -73,17 +85,144 @@ export type TriggerScreenFormValues = FormValues;
 // Helpers
 // -----------------------------------------------------------------------------
 
-function formatRange(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  return `${(seconds / 3600).toFixed(1)} hr`;
+/**
+ * THE DURATION LINE READS ONLY WHAT THE DRAWING GIVES IT (cinatra#3182 item 5).
+ *
+ * Application Design — Components, "Standard scheduling step": the line is drawn
+ * once, populated — "Estimated run duration" over "About 45s – 3.4 hr." The
+ * drawing gives no empty reading and no wording for one, and this form used to
+ * answer a missing estimate with the literal "Unavailable." — a sentence the
+ * drawing never draws, shown to every freshly installed agent, which is the
+ * reading the graded round measured.
+ *
+ * So the copy is the drawing's own sentence, and a missing estimate draws NO
+ * LINE: where the drawing gives nothing, nothing is drawn. Inventing an
+ * estimate for a run with no history would be a worse answer than withholding
+ * a line that has nothing to say.
+ *
+ * THE RENDERER ITSELF LIVES IN ITS OWN LEAF (cinatra#3174 fix leg 1). The
+ * schedule card in a conversation draws this same line, and its producer is a
+ * server module that cannot import this client component — so one pure leaf
+ * renders it for both surfaces rather than two copies rounding differently.
+ * Re-exported here under the name this module's own readers already use.
+ */
+export const durationCopy = (d: DurationEstimate): string => durationCopyFor(d);
+
+/**
+ * THE OPTION ROW, AS THE DRAWING DRAWS IT (cinatra#3182 items 2, 3 and 4).
+ *
+ * Every row — chosen or not — stands on the reserved surface
+ * (`background: var(--surface-strong)`), and the chosen row layers the primary
+ * tint on that same base (`linear-gradient(rgba(54,78,129,0.05),
+ * rgba(54,78,129,0.05)), var(--surface-strong)`) inside a
+ * `1px solid var(--blue)` edge. `--blue` is the drawing's own indigo, carried
+ * by `--indigo-ink` — the app token declared once and re-declared by no
+ * palette, so the chosen row marks the choice with the same colour in both
+ * (cinatra#3279: keyed to `--primary`, the palette's ACTION colour, the edge,
+ * the dot and the tint all went near-white in the dark palette); the
+ * boundary of an unchosen row is the control boundary `--input`, which carries
+ * `--line-strong`'s own value in the light palette and the raised dark value
+ * cinatra#3107 pinned for a control edge on a dark ground.
+ *
+ * ONE CLASS FOR ALL THREE ROWS, and none of them is a `Button` any more. The
+ * immediate row used to be `Button variant="outline"`, whose variant carries
+ * `dark:border-input dark:bg-input-fill/30` — a `dark:` utility outranks a
+ * plain `border-primary` by specificity, so the chosen row's edge went neutral
+ * in the dark palette however the row asked for the primary token. The row the
+ * drawing draws is this composite's own row, not the button primitive.
+ */
+export function optionRowClass(chosen: boolean, interactive: boolean): string {
+  return [
+    "flex flex-col gap-3 rounded-control border bg-surface-strong px-4 py-3 text-left transition-colors",
+    interactive ? "cursor-pointer" : "",
+    chosen
+      ? "border-indigo-ink bg-linear-to-b from-indigo-ink/5 to-indigo-ink/5"
+      : "border-input",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
-function durationCopy(d: DurationEstimate | null): string {
-  if (!d) return "Unavailable.";
-  const min = formatRange(d.prepMinSeconds + d.gatedMinSeconds);
-  const max = formatRange(d.prepMaxSeconds + d.gatedMaxSeconds);
-  return `${min}–${max}.`;
+/** The radio disc: `2px solid var(--line-strong)`, the drawn indigo once chosen. */
+export function optionDiscClass(chosen: boolean): string {
+  return `flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
+    chosen ? "border-indigo-ink" : "border-input"
+  }`;
+}
+
+/**
+ * THE ROWS ANSWER THE KEYBOARD (cinatra#3182, convergence round).
+ *
+ * Collapsing an unchosen row (item 3) took its fields out of the document, and
+ * those fields were what a keyboard reached the row through: the old always-drawn
+ * `Run at` input selected the scheduled row from its own change handler. With the
+ * fields gone, a row that is only a click target is a row a keyboard cannot
+ * choose. So each row head is the radio the group is made of: focusable, checked
+ * or not, and answering Enter and Space the way a radio answers them.
+ *
+ * The guard keeps the handler off the controls INSIDE the chosen row — a space
+ * typed in a field is a space, not a re-selection of the row it stands in.
+ */
+export function selectOnKey(
+  event: React.KeyboardEvent<HTMLElement>,
+  select: () => void,
+): void {
+  if (event.currentTarget !== event.target) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  select();
+}
+
+/** The head of a row: the radio itself, so it carries a visible focus ring. */
+const OPTION_HEAD_CLASS =
+  "flex items-center gap-3 rounded-control outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
+
+/** The hours and the minutes a one-off "Run at" can name. */
+const RUN_AT_HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+const RUN_AT_MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+
+/**
+ * THE FORM'S INITIAL VALUES, FROM THE ROW THE RUNNER'S DECISION NAMED
+ * (cinatra#2936).
+ *
+ * `scheduleScreenSelection` says which row the schedule screen opens on; this
+ * turns that row into the fields this particular form holds it in. It decides
+ * nothing: an immediate row is the immediate row because the decision said so,
+ * and a stated schedule is filled into the same rows the person would have
+ * picked — which is what the held schedule's card already does with the schedule
+ * its reader stated.
+ *
+ * NO SELECTION IS A REFUSAL, NOT A ROW. The decision answers "none" for a run
+ * nobody is present for, and the screen is not offered for such a run at all; a
+ * mount that reached one anyway opens with NO row chosen rather than with an
+ * invented one, and its submit cannot validate.
+ *
+ * Exported so the mapping can be read without a DOM.
+ */
+export function scheduleFormDefaults(
+  selection: ProposedSchedule | null,
+  browserTimezone: string,
+): DefaultValues<FormValues> {
+  const values: Record<string, string> =
+    selection === null
+      ? { timezone: browserTimezone }
+      : selection.kind === "scheduled"
+        ? {
+            triggerType: "scheduled",
+            scheduledAt: selection.runAt,
+            timezone: selection.timezone || browserTimezone,
+          }
+        : selection.kind === "recurring"
+          ? {
+              triggerType: "recurring",
+              cronExpression: buildCron({
+                ...DEFAULT_RECURRING_CONFIG,
+                ...selection.selection,
+              }),
+              timezone: selection.timezone || browserTimezone,
+            }
+          : { triggerType: "immediate", timezone: browserTimezone };
+  return values as DefaultValues<FormValues>;
 }
 
 // -----------------------------------------------------------------------------
@@ -95,7 +234,37 @@ export type TriggerScreenClientProps = {
   instanceId: string;
   templateId: string;
   isAdmin?: boolean;
+  /** The run this screen's schedule belongs to, when one exists (cinatra#2933). */
+  runId?: string | null;
+  /**
+   * May this person type in the window? Server-derived from the RUN's access
+   * (`respondToHitl`), replacing the platform-administrator check the screen
+   * used to hide its box behind. Absent ⇒ shown, for the pre-run screen that
+   * has no run to ask.
+   */
+  canRespondInWindow?: boolean;
+  /**
+   * Is a person present for the run this schedule belongs to (cinatra#2936)?
+   * One of the two inputs the runner's schedule default takes, read off the RUN
+   * ROW by the screen that mounts this form. Absent ⇒ present, the same reading
+   * `canRespondInWindow` above takes for a screen with no run to ask.
+   */
+  humanPresent?: boolean;
+  /**
+   * A schedule the person already stated, when the surface knows one — the
+   * decision's other input. The conversation's held schedule is the carrier that
+   * knows one and its own card fills it into these same rows; the run page's
+   * scheduling step is reached only by a run with no trigger row, so it has none
+   * to pass.
+   */
+  statedSchedule?: ProposedSchedule | null;
   durationEstimate?: DurationEstimate | null;
+  /**
+   * How many steps the agent declares (cinatra#3224). Where the estimator has
+   * no reading — a freshly installed agent, no history — the Estimated run
+   * duration line is drawn over this count instead of being withheld.
+   */
+  declaredStepCount?: number | null;
   inputParams?: unknown;
   requiredFields?: unknown;
   properties?: unknown;
@@ -115,9 +284,58 @@ export type TriggerScreenClientProps = {
    *  behaves like every other HITL renderer (canonical onChange path). The
    *  WayFlow persist node owns actual storage via trigger_config_set. */
   onSubmit?: (values: FormValues) => void | Promise<void>;
+  /**
+   * THE READ-ONLY READING (cinatra#2980).
+   *
+   * design@fe2182547d4a `specs/app-components.html` § "Standard scheduling
+   * step", the "Configured schedule step" reading: "Once a *Run right after
+   * setup* or *Schedule for later* schedule has fired it cannot be changed any
+   * more: the form stays as a **read-only** reading with no controls at all."
+   *
+   * So the form is still DRAWN — it is the reading of the schedule this run had
+   * — and it carries nothing to press: no submit, no assistant panel to fill it
+   * in, and every row disabled through one `fieldset` rather than through a flag
+   * on each control that a control added later could miss.
+   *
+   * Set by the run page for a run whose own one-off schedule has already fired
+   * (`shouldFreezeFiredOneOffSchedule`); every other mount is unchanged.
+   */
+  readOnly?: boolean;
 };
 
+/**
+ * WHERE A CONTINUE LANDS (cinatra#3004).
+ *
+ * The plan, on the moment after the press: "After Confirm the card stays where
+ * it is and stays editable … the same option rows show the schedule as it
+ * stands." A press that ARMS A SCHEDULE therefore navigates nowhere — it
+ * re-renders the surface it was pressed on, which comes back drawing the armed
+ * schedule through the one schedule renderer: the run page's schedule step, the
+ * run's own schedule surface, and the setup rail's schedule step all mount THIS
+ * component and all read the same row afterwards. Sending the reader to another
+ * screen is what put a second drawing of the schedule in front of them.
+ *
+ * **RUN RIGHT AFTER SETUP** IS NOT A SCHEDULE and keeps the landing it has
+ * always had. That press starts the run, and the run page is where a run is
+ * watched; staying here would leave the person on a form for a run that is
+ * already going.
+ *
+ * WRITTEN AS AN ALLOW-LIST of the two scheduled kinds, so a kind added later
+ * keeps the old landing rather than silently staying on a surface that draws
+ * nothing for it — the same reading the card resolver takes.
+ *
+ * Exported so the unit test can read the rule without a router.
+ */
+export type ContinueLanding = "in-place" | "run-page";
+
+export function scheduleContinueLanding(triggerType: string): ContinueLanding {
+  return triggerType === "scheduled" || triggerType === "recurring"
+    ? "in-place"
+    : "run-page";
+}
+
 export function TriggerScreenClient(props: TriggerScreenClientProps) {
+  const readOnly = props.readOnly === true;
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -138,20 +356,29 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     }
   }, []);
 
-  // Recurring UI state (drives cron generation)
-  const [recurring, setRecurring] = useState<RecurringConfig>({
-    frequency: "weekly",
-    interval: 1,
-    weekdays: [],
-    dayOfMonth: 1,
-    monthlyMode: "date",
-    nthWeek: 1,
-    monthlyWeekday: 0,
-    quarterAnchor: "start",
-    yearlyMonth: 1,
-    hour: 9,
-    minute: 0,
-  });
+  // THE ROW THIS FORM OPENS ON (cinatra#2936). Not a default of this form's:
+  // the two inputs go to the runner's own decision and the answer comes back as
+  // the row to preselect. For the ordinary case — a person present who stated
+  // nothing — that answer is the immediate row, which is what this screen has
+  // always shown.
+  const initialSelection = useMemo(
+    () =>
+      scheduleScreenSelection({
+        humanPresent: props.humanPresent ?? true,
+        statedSchedule: props.statedSchedule ?? null,
+      }),
+    [props.humanPresent, props.statedSchedule],
+  );
+
+  // Recurring UI state (drives cron generation). Seeded from the selection when
+  // the person stated a recurring schedule, so the row they see IS the schedule
+  // they stated; otherwise the vocabulary's own default selections, which this
+  // component used to repeat inline.
+  const [recurring, setRecurring] = useState<RecurringConfig>(
+    initialSelection !== null && initialSelection.kind === "recurring"
+      ? { ...DEFAULT_RECURRING_CONFIG, ...initialSelection.selection }
+      : DEFAULT_RECURRING_CONFIG,
+  );
 
   const {
     register,
@@ -161,12 +388,34 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { triggerType: "immediate", timezone: browserTz },
+    defaultValues: scheduleFormDefaults(initialSelection, browserTz),
   });
 
   const triggerType = watch("triggerType");
   const timezone = watch("timezone");
   const scheduledAtValue = (watch as (n: string) => string)("scheduledAt") ?? "";
+
+  // THE "RUN AT" FIELD, ON THE APP'S OWN CHROME (cinatra#3182 item 6). The
+  // stored value is unchanged — one `YYYY-MM-DDTHH:mm` string in `scheduledAt`
+  // — and the field is now the drawn `DatePicker` plus the composite's own
+  // hour/minute selects reading the two halves of it. The time-of-day is held
+  // here only while no day is chosen yet, so choosing 09:30 before choosing a
+  // day is not forgotten the moment the day arrives.
+  const [timeOfDayDraft, setTimeOfDayDraft] = useState("09:00");
+  const scheduledDay = scheduledAtValue.slice(0, 10);
+  const scheduledTimeOfDay =
+    scheduledAtValue.length >= 16 ? scheduledAtValue.slice(11, 16) : timeOfDayDraft;
+  const scheduledHour = scheduledTimeOfDay.slice(0, 2);
+  const scheduledMinute = scheduledTimeOfDay.slice(3, 5);
+
+  function setScheduledAt(day: string, timeOfDay: string) {
+    setTimeOfDayDraft(timeOfDay);
+    setValue("triggerType", "scheduled");
+    (setValue as (field: string, value: string) => void)(
+      "scheduledAt",
+      day.length > 0 ? `${day}T${timeOfDay}` : "",
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // HitlConversationPanel wiring
@@ -174,14 +423,25 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // structured trigger suggestions. Pattern copied from
   // orchestrator-stepper-panel.tsx — same fetch shape, same error handling.
   // ---------------------------------------------------------------------------
+  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
+  // `document.querySelector("main")` — the page frame — which put the window at
+  // the end of the page and docked it across the whole frame. The ratified
+  // drawing puts it under the step's own work, in the same column, so the target
+  // is a node rendered exactly there: the composition
+  // `schedule-prompt-window.tsx` already uses.
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
-  const convIdRef = useRef(0);
+  // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION. What is typed
+  // here is kept with the run: read on mount, appended server-side per turn,
+  // present after a reload. The field-assist call below still fills the form's
+  // own fields and is retired by #2934 together with the fill that replaces it.
+  const runWindow = useRunWindowConversation({
+    runId: props.runId ?? null,
+    surface: "schedule",
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setPortalTarget(document.querySelector("main"));
     return () => { abortRef.current?.abort(); };
   }, []);
 
@@ -223,8 +483,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const userId = ++convIdRef.current;
-    setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
+    void runWindow.send(prompt);
     setPromptPending(true);
     try {
       const res = await fetch(
@@ -236,6 +495,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
           body: JSON.stringify({
             prompt,
             xRenderer: "trigger-config",
+            // cinatra#2933 - the run the screen belongs to, so the route asks
+            // the RUN's access instead of the platform tier.
+            ...(props.runId ? { runId: props.runId } : {}),
             currentValue: {
               triggerType: watch("triggerType"),
               scheduledAt: (watch as (n: string) => string)("scheduledAt") ?? null,
@@ -245,7 +507,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             },
             schemaProperties: ["triggerType", "scheduledAt", "timezone", "cronExpression"],
             lastAssistantMessage:
-              [...conversation].reverse().find(m => m.role === "assistant")?.content ?? null,
+              [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
           }),
         },
       );
@@ -270,25 +532,15 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         const parsed = parseCronToRecurring(suggestions.cronExpression);
         if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
       }
-      const assistantMsg = (json.message?.trim()) || "Done.";
-      if (Object.keys(suggestions).length > 0) {
-        setConversation(prev => [
-          ...prev,
-          { id: ++convIdRef.current, role: "assistant", content: assistantMsg },
-        ]);
-      } else {
+      if (Object.keys(suggestions).length === 0) {
         toast.error("No suggestions generated. Try describing the schedule you want, e.g. \"Every Monday at 9am\".");
       }
     } catch (err) {
       console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
-      setConversation(prev => [
-        ...prev,
-        { id: ++convIdRef.current, role: "assistant", content: "Could not fetch suggestions — please try again." },
-      ]);
     } finally {
       setPromptPending(false);
     }
-  }, [props.templateId, conversation, watch, setValue]);
+  }, [props.templateId, runWindow, watch, setValue]);
 
   function updateRecurring(patch: Partial<RecurringConfig>) {
     setValue("triggerType", "recurring");
@@ -307,6 +559,12 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   }
 
   const onSubmit = (values: FormValues) => {
+    // NOTHING IS SUBMITTED FROM THE READ-ONLY READING (cinatra#2980). The submit
+    // CONTROL is gone, but the form element keeps its handler, and a submit
+    // event can still reach it (a stray Enter, a programmatic submit). The
+    // server refuses this anyway; refusing it here means the reading never even
+    // asks.
+    if (readOnly) return;
     setServerError(null);
     // HITL renderer path: defer to the parent's onChange via props.onSubmit.
     // The WayFlow persist node owns storage via trigger_config_set, so we
@@ -340,6 +598,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         setServerError(result.error);
         return;
       }
+      // THE SCHEDULE STAYS WHERE IT WAS ARMED (cinatra#3004) — see
+      // `scheduleContinueLanding`. The refresh re-renders the server tree for
+      // the surface this form is mounted on, so the step it stood in comes back
+      // as the armed form; nothing about the reader's place on the page moves.
+      if (scheduleContinueLanding(values.triggerType) === "in-place") {
+        router.refresh();
+        return;
+      }
       router.push(`/agents/${props.agentId}/${encodeURIComponent(props.instanceId)}`);
     });
   };
@@ -356,49 +622,115 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
           <div className="flex flex-col gap-2">
             <Label>When should this run?</Label>
-            <div className="flex flex-col gap-2">
+            {/* The three rows are one radio group (cinatra#3182, convergence
+                round): the step is a choice of one, and it says so. */}
+            <div className="flex flex-col gap-2" role="radiogroup" aria-label="When should this run?">
 
-              {/* Run right after setup */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setValue("triggerType", "immediate")}
-                className={`flex h-auto items-center justify-start gap-3 rounded-control border px-4 py-3 text-left transition-colors ${
-                  triggerType === "immediate" ? "border-primary bg-primary/5" : "border-input hover:bg-muted"
-                }`}
+              {/* Run right after setup — the drawing's lightning glyph between
+                  the disc and the label. THE ROW IS A DIV WITH A RADIO HEAD,
+                  exactly like the two rows below it. It was the one row still
+                  drawn as a bare `button` element, which the design-system
+                  boundary reserves for the `Button` primitive — and the
+                  primitive is the one thing this row cannot be (see
+                  `optionRowClass`). So the three rows of the group are now one
+                  shape: the row carries the drawn edge, the head is the radio,
+                  and the keyboard reaches this row exactly the way it reaches
+                  the other two. */}
+              <div
+                data-schedule-option="immediate"
+                className={optionRowClass(triggerType === "immediate", !readOnly)}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "immediate")}
               >
-                <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${triggerType === "immediate" ? "border-primary" : "border-muted-foreground"}`}>
-                  {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-primary" />}
-                </span>
-                <span className="text-sm font-medium">Run right after setup</span>
-              </Button>
+                <div
+                  data-schedule-option-head=""
+                  role="radio"
+                  aria-checked={triggerType === "immediate"}
+                  tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
+                  onKeyDown={
+                    readOnly
+                      ? undefined
+                      : (e) => selectOnKey(e, () => setValue("triggerType", "immediate"))
+                  }
+                  className={OPTION_HEAD_CLASS}
+                >
+                  <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "immediate")}>
+                    {triggerType === "immediate" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
+                  </span>
+                  <Zap aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
+                  <span data-schedule-option-label="" className="text-sm font-semibold">Run right after setup</span>
+                </div>
+              </div>
 
               {/* Schedule for later */}
+              {/* THE ROW IS A DIV, so the read-only reading's disabled fieldset
+                  does not reach it (a fieldset disables form controls, not
+                  arbitrary click handlers). Its handler and its pointer
+                  affordance are withheld explicitly instead — without this the
+                  "reading" would still change its own selection under the
+                  cursor (cinatra#2980). */}
               <div
-                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors cursor-pointer ${
-                  triggerType === "scheduled" ? "border-primary bg-primary/5" : "border-input hover:bg-muted"
-                }`}
-                onClick={() => setValue("triggerType", "scheduled")}
+                data-schedule-option="scheduled"
+                className={optionRowClass(triggerType === "scheduled", !readOnly)}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "scheduled")}
               >
-                <div className="flex items-center gap-3">
-                  <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${triggerType === "scheduled" ? "border-primary" : "border-muted-foreground"}`}>
-                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                <div
+                  data-schedule-option-head=""
+                  role="radio"
+                  aria-checked={triggerType === "scheduled"}
+                  tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
+                  onKeyDown={
+                    readOnly
+                      ? undefined
+                      : (e) => selectOnKey(e, () => setValue("triggerType", "scheduled"))
+                  }
+                  className={OPTION_HEAD_CLASS}
+                >
+                  <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "scheduled")}>
+                    {triggerType === "scheduled" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
-                  <span className="text-sm font-medium">Schedule for later</span>
+                  <CalendarClock aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
+                  <span data-schedule-option-label="" className="text-sm font-semibold">Schedule for later</span>
                 </div>
-                <div className="ml-7 flex flex-wrap gap-4" onClick={(e) => e.stopPropagation()}>
+                {/* NOT THE CHOSEN ROW, SO IT CARRIES NO FIELDS (cinatra#3182
+                    item 3) — the drawing's own sentence for this row. */}
+                {triggerType === "scheduled" && (
+                <div data-schedule-fields="" className="ml-7 flex flex-wrap gap-4" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="scheduledAt" className="font-normal">Run at</Label>
-                    <Input
-                      id="scheduledAt"
-                      type="datetime-local"
-                      className="w-56"
-                      {...register("scheduledAt" as never)}
-                      onChange={(e) => {
-                        void (register("scheduledAt" as never) as { onChange: (e: unknown) => void }).onChange(e);
-                        setValue("triggerType", "scheduled");
-                      }}
-                    />
+                    <div className="flex items-center gap-2">
+                      <DatePicker
+                        id="scheduledAt"
+                        className="w-44"
+                        value={scheduledDay}
+                        onValueChange={(day) => setScheduledAt(day, scheduledTimeOfDay)}
+                      />
+                      <Select
+                        value={scheduledHour}
+                        onValueChange={(v) => setScheduledAt(scheduledDay, `${v}:${scheduledMinute}`)}
+                      >
+                        <SelectTrigger aria-label="Hour" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {RUN_AT_HOURS.map((h) => (
+                            <SelectItem key={h} value={h}>{h}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-muted-foreground">:</span>
+                      <Select
+                        value={scheduledMinute}
+                        onValueChange={(v) => setScheduledAt(scheduledDay, `${scheduledHour}:${v}`)}
+                      >
+                        <SelectTrigger aria-label="Minute" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {RUN_AT_MINUTES.map((m) => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input type="hidden" {...register("scheduledAt" as never)} />
                     {scheduledAtValue && (() => {
                       try {
                         return <p className="text-xs text-muted-foreground">{format(new Date(scheduledAtValue), "EEEE")}</p>;
@@ -428,22 +760,37 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     </Select>
                   </div>
                 </div>
+                )}
               </div>
 
-              {/* Recurring */}
+              {/* Recurring — a div for the same reason, withheld the same way. */}
               <div
-                className={`flex flex-col gap-3 rounded-control border px-4 py-3 transition-colors cursor-pointer ${
-                  triggerType === "recurring" ? "border-primary bg-primary/5" : "border-input hover:bg-muted"
-                }`}
-                onClick={() => setValue("triggerType", "recurring")}
+                data-schedule-option="recurring"
+                className={optionRowClass(triggerType === "recurring", !readOnly)}
+                onClick={readOnly ? undefined : () => setValue("triggerType", "recurring")}
               >
-                <div className="flex items-center gap-3">
-                  <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${triggerType === "recurring" ? "border-primary" : "border-muted-foreground"}`}>
-                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-primary" />}
+                <div
+                  data-schedule-option-head=""
+                  role="radio"
+                  aria-checked={triggerType === "recurring"}
+                  tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly || undefined}
+                  onKeyDown={
+                    readOnly
+                      ? undefined
+                      : (e) => selectOnKey(e, () => setValue("triggerType", "recurring"))
+                  }
+                  className={OPTION_HEAD_CLASS}
+                >
+                  <span data-schedule-option-disc="" className={optionDiscClass(triggerType === "recurring")}>
+                    {triggerType === "recurring" && <span className="h-2 w-2 rounded-full bg-indigo-ink" />}
                   </span>
-                  <span className="text-sm font-medium">Recurring</span>
+                  <Repeat aria-hidden="true" className="size-3.5 shrink-0 text-foreground" />
+                  <span data-schedule-option-label="" className="text-sm font-semibold">Recurring</span>
                 </div>
-                <div className="ml-7 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+                {/* The same invariant, drawn the same way for this row. */}
+                {triggerType === "recurring" && (
+                <div data-schedule-fields="" className="ml-7 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-2">
                     <Label className="shrink-0 font-normal">Repeat every</Label>
                     {(recurring.frequency === "daily" || recurring.frequency === "weekly" || recurring.frequency === "monthly") && (
@@ -513,16 +860,38 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       <Label className="shrink-0 font-normal">On</Label>
                       <div className="flex gap-1">
                         {WEEKDAY_LABELS.map((label, i) => (
+                          /* THE WEEKDAY CELL, AS THE DRAWING DRAWS IT
+                             (cinatra#3182 item 7): unselected is
+                             `border: 1px solid var(--line-strong);
+                             background: var(--surface-strong)`, selected is the
+                             blue fill.
+
+                             THE VARIANT CARRIES THE STATE, the class list only
+                             names the tokens — the same reading the schedule
+                             proposal card already ships for its own weekday
+                             chips. A selected day is the `default` variant,
+                             which holds no `dark:` fill of its own, so the blue
+                             stays legible on both grounds. An unselected day is
+                             `outline`, whose `dark:bg-input-fill/30` would
+                             otherwise paint the control fill over the reserved
+                             surface in the dark palette; naming the surface
+                             under `dark:` as well lets tailwind-merge's
+                             same-modifier dedup drop the variant's own class
+                             instead, so the cell stands where the drawing
+                             stands it on both grounds. The hover pair is named as well, so
+                             the variant's own hover fills do not put the
+                             control fill back under the cursor. */
                           <Button
                             key={i}
                             type="button"
-                            variant="outline"
+                            variant={recurring.weekdays.includes(i) ? "default" : "outline"}
                             size="sm"
+                            aria-pressed={recurring.weekdays.includes(i)}
                             onClick={() => toggleWeekday(i)}
-                            className={`h-8 w-10 rounded-control text-xs font-medium border transition-colors ${
+                            className={`h-8 w-10 rounded-control border text-xs font-semibold transition-colors ${
                               recurring.weekdays.includes(i)
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-background text-muted-foreground border-input hover:bg-muted"
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-input bg-surface-strong text-muted-foreground hover:bg-surface-strong dark:bg-surface-strong dark:hover:bg-surface-strong"
                             }`}
                           >
                             {label}
@@ -601,8 +970,13 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <span className="text-muted-foreground">:</span>
                     <Select value={String(recurring.minute)} onValueChange={(v) => updateRecurring({ minute: Number(v) })}>
                       <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278) — the same
+                          defect the schedule card carried: a stated 05:12 found
+                          no option for 12 and drew a blank minute. Only the
+                          option set changes; the cron this row builds is the
+                          same builder it always was. */}
                       <SelectContent>
-                        {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                        {Array.from({ length: 60 }, (_, m) => (
                           <SelectItem key={m} value={String(m)}>{String(m).padStart(2, "0")}</SelectItem>
                         ))}
                       </SelectContent>
@@ -632,50 +1006,105 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <p className="text-sm text-destructive">{errorBag.cronExpression.message}</p>
                   )}
                 </div>
+                )}
               </div>
 
             </div>
           </div>
 
-          {/* Estimated run duration */}
-          <div className="flex flex-col gap-1">
+          {/* THE ESTIMATED RUN DURATION LINE, ALWAYS (cinatra#3224). The ratified
+              drawing gives it as part of the step's anatomy with no condition
+              on it — "An Estimated run duration line sits above the actions" —
+              and the re-opened Schedule step shows "the same Estimated run
+              duration". Where the estimator has no reading the line is drawn
+              over the agent's declared step count (`declaredDurationEstimate`),
+              never withheld and never a sentence saying it has no answer; this
+              supersedes the withheld-line rule the note above `durationCopy`
+              records from cinatra#3182 item 5. */}
+          <div className="flex flex-col gap-1" data-schedule-duration="">
             <Label>Estimated run duration</Label>
-            <p className="text-sm text-muted-foreground">{durationCopy(props.durationEstimate ?? null)}</p>
+            <p className="text-sm text-muted-foreground" data-schedule-duration-copy="">
+              {durationCopy(props.durationEstimate ?? declaredDurationEstimate(props.declaredStepCount))}
+            </p>
           </div>
 
-          {/* Submit */}
-          {serverError && <p className="text-sm text-destructive">{serverError}</p>}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={isPending} className="gap-1.5">
-              {isPending ? "Continuing…" : "Continue"}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
+          {/* Submit — absent entirely in the read-only reading (cinatra#2980):
+              "no controls at all". A disabled Continue would still be a control,
+              and would still say the schedule is a thing you re-arm here. There
+              is no submit, so there is no server error to render either. */}
+          {readOnly ? null : (
+            <>
+              {serverError && <p className="text-sm text-destructive">{serverError}</p>}
+              <div className="flex justify-end">
+                <Button type="submit" disabled={isPending} className="gap-1.5">
+                  {isPending ? "Continuing…" : "Continue"}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </>
+          )}
 
     </>
+  );
+
+  // ONE WRAPPER DISABLES THE WHOLE READING (cinatra#2980). A disabled `fieldset`
+  // disables every form control inside it, so the rows, the date-time field, the
+  // recurrence builder and the timezone selects are all inert without each of
+  // them having to know about it — and a control added to this form later is
+  // inert too. It carries the form's own layout classes so the reading is drawn
+  // exactly as the editable form is, which is what the spec's "the form stays"
+  // means.
+  const formBody = readOnly ? (
+    <fieldset
+      disabled
+      data-schedule-readonly=""
+      className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+    >
+      {formContent}
+    </fieldset>
+  ) : (
+    formContent
   );
 
   return (
     <>
     <form onSubmit={handleSubmit(onSubmit)}>
       {props.embeddedAsRenderer ? (
-        <div className="flex flex-col gap-6">{formContent}</div>
+        <div className="flex flex-col gap-6">{formBody}</div>
       ) : (
         <Card>
-          <CardContent className="flex flex-col gap-6 p-6">{formContent}</CardContent>
+          <CardContent className="flex flex-col gap-6 p-6">{formBody}</CardContent>
         </Card>
       )}
     </form>
-    {/* Always-visible bottom overlay — no toggle (by design).
-        resetSignal omitted — trigger form has no renderer transitions. */}
+    {/* The window under the form — no toggle (by design).
+        resetSignal omitted — trigger form has no renderer transitions.
+        NOT in the read-only reading (cinatra#2980): the panel exists to FILL IN
+        this form from a sentence, which is a control like any other. */}
+    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={!props.embeddedAsRenderer && !!props.templateId && !!portalTarget && props.isAdmin !== false}
-      conversation={conversation}
-      promptPending={promptPending}
+      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+      // `app-artifact-review.html` §X): the mount names its surface and the
+      // window reads the drawing's own sentence for it.
+      surface="schedule"
+      // cinatra#2933 — the schedule screen used to HIDE its box from anyone who
+      // was not a platform administrator; the run's own access decides now.
+      // The read-only reading (cinatra#2980) still carries no box at all: the
+      // box exists to FILL IN this form, and a fired schedule takes no filling.
+      visible={
+        !readOnly &&
+        !props.embeddedAsRenderer &&
+        !!props.templateId &&
+        !!portalTarget &&
+        props.canRespondInWindow !== false
+      }
+      conversation={runWindow.entries}
+      promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_trigger_assist_${props.templateId}`}
       onSubmit={handlePromptSubmit}
     />
+    </div>
     </>
   );
 }

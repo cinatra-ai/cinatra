@@ -11,6 +11,7 @@
     "./field-renderer-props": "./src/field-renderer-props.ts",
     "./prompt-field": "./src/prompt-field.tsx",
     "./widget": "./src/widget.tsx",
+    "./artifacts/pdf-detail-shell": "./src/artifacts/pdf-detail-shell.tsx",
     "./marketplace": "./src/marketplace.ts",
     "./connector-setup-page": "./src/connector-setup-page.tsx",
     "./connector-setup-columns": "./src/connector-setup-columns.tsx",

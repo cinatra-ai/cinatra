@@ -32,7 +32,7 @@
  * expansion core, and the real container-reference assembly all execute, but no
  * provider is contacted. Provider-side acceptance of these artifacts is a
  * separate, LIVE claim and is evidenced by the live conformance arm
- * (`evidence/2094-s7-acceptance/live-results.json` — C8 proves the 8-per-request
+ * (`https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-results.json` — C8 proves the 8-per-request
  * ceiling is the server's own, C9 that an unresolvable reference fails closed).
  * Nothing here is labelled live.
  */

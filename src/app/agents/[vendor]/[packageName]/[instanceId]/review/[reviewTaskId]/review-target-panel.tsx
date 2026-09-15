@@ -1,9 +1,7 @@
 import "server-only";
 
 import type { ReactNode } from "react";
-import Link from "next/link";
 
-import { Button } from "@/components/ui/button";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
@@ -12,28 +10,53 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
-  reviewRevisionMarker,
-  reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
 /**
- * ONE review target panel (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 §II/§III):
+ * ONE review target panel (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997 §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
- * the RENDERER-PROVENANCE chip, over the REPRESENTATION SLOT into which the
- * artifact's type renderer mounts (fed host display-only props). Every target is
- * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
+ * the REPRESENTATION SLOT into which the artifact's type renderer mounts (fed
+ * host display-only props). Every target is type-agnostic: it keys on the OPAQUE
+ * host mount kind only (G1-clean).
  *
- * Conformance anchors (design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891): the panel is `review-target`; the
- * provenance region is `review-provenance-native` (build-time), `review-
- * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
- * §III axis derived from the mount kind.
+ * NOTHING IS DRAWN ABOVE THE WORK ANY MORE. The panel used to open a
+ * renderer-provenance region over every rendered target — a type chip, a package
+ * chip for a runtime tier, and a mono `build-time · detail` line. §V of the
+ * ratified artifact-review drawing forbids it outright: the resolution "is not
+ * put on screen: a display shows the work and nothing about itself — no renderer
+ * name, no package identity, no provenance line". §V.1 repeats it for the display
+ * in the slot, and the lifecycle-cards drawing §III says it a third time.
+ *
+ * THE ISSUE QUOTED AN OLDER SENTENCE. cinatra#3141's own wording asks for a chip
+ * here, which is what the drawing said at the commit this repository's pin names.
+ * The drawing at its default branch is the text that governs the branch under
+ * proof, and it decides against the region.
+ *
+ * Conformance anchors: the panel is `review-target`; the ONE region left is
+ * `review-target-floor`, which the drawing keeps and requires — "the one that
+ * does speak on a surface is the floor, and only because a reader must be told a
+ * render failed".
+ *
+ * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
+ * used to pass a generic "no type renderer resolved" card — a sentence, a table
+ * of technical fields, and Preview / Download links — as the floor node beneath
+ * every degrade. A download link is never the body of a review, and inside a
+ * third-party application those links were dead ends demanding a login that
+ * never exists there. What remains is the sanitized diagnostic the mount draws
+ * for a genuine no-renderer state and for each defensive state (a deleted or
+ * unreadable target, a display mid-upgrade, a runtime failure), which keep their
+ * own honest readings.
  */
 export function ReviewTargetPanel({
   prepared,
+  orgId,
   capturePair = null,
 }: {
   prepared: PreparedReviewTarget;
+  /** The reviewing surface's TRUSTED organization scope, from the host that
+   * already authorized this reader — the form rung reads bytes under it. */
+  orgId: string;
   /** S6 (#2044 L-B + L-D): the visual before/after PAIR pinned at gate creation
    * for this target — the live page beside the proposal composed into its chrome.
    * `null` for every target that has no captures, which renders nothing: the
@@ -41,128 +64,67 @@ export function ReviewTargetPanel({
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
-  const { target, props, mount } = prepared;
-  const title = props?.artifact.title ?? target.artifactId;
-  const objectType = props?.artifact.objectType ?? "";
-  const typeLabel = objectType ? reviewTypeLabel(objectType) : "Artifact";
-  const revision = reviewRevisionMarker(target.representationRevisionId);
+  const { props, mount } = prepared;
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
 
-  // The never-blank generic FLOOR fallback (§III): a type-level floor renders it
-  // BENEATH the diagnostic (there is an authorized representation); an artifact-
-  // level floor (props null) has nothing to show, so the fallback is empty and
-  // ReviewTargetMount shows the sanitized diagnostic alone.
-  const genericFloor: ReactNode = props ? <ReviewGenericFloor prepared={prepared} /> : null;
-
   return (
+    // IT DOES NOT CLIP THE WORK (the tenth proof round's counted defect 3 on
+    // cinatra#3143: "the drawn bodies are CLIPPED with no visible scroll
+    // affordance ... cut hard at the panel's right edge"). The frame used to
+    // carry `overflow-hidden`, which took a display wider than the panel and
+    // simply cut it — a structured-data tree lost its right-hand columns and a
+    // text body lost the end of every long line, with nothing on screen to say
+    // anything had been cut. The container is the slot below, and it scrolls;
+    // the frame around it only draws the border.
     <div
       data-conformance-id="review-target"
       data-field="name=type.displayName"
-      className="overflow-hidden rounded-control border border-line bg-surface-strong"
+      className="rounded-control border border-line bg-surface-strong"
     >
-      {/* §II — the immutable target header (inert). */}
-      <div className="border-b border-line px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-sans text-sm font-bold text-foreground">{title}</span>
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-xs font-semibold text-blue">
-            {typeLabel}
-          </span>
-        </div>
-        <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
-          {objectType ? <span>{objectType} · </span> : null}
-          <span title={revision.full}>revision {revision.short}</span>
-          <span className="text-mustard-ink"> · pinned</span>
-          {props ? (
-            <>
-              {" · "}
-              {props.artifact.ownerLevel} · {props.artifact.visibility} · {props.artifact.mime} · updated{" "}
-              {props.artifact.updatedAt}
-            </>
-          ) : null}
-        </p>
-      </div>
+      {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
+          The header used to be drawn here, inside the island document, which is
+          the one part of the review a reader only sees once an iframe has
+          painted: while the frame was still arriving the card drew a skeleton
+          over it, and past the island's bounded wait it drew a recovery panel,
+          and neither carried a title, a type or a revision. A pending gate on
+          the run page drew with no header at all.
 
-      {/* §III — renderer provenance chip. */}
-      <div
-        data-conformance-id={provenanceConformanceId}
-        className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
-      >
-        {provenance.kind === "floor" ? (
+          `ReviewTargetHeader`, in the card, draws it in every one of those
+          states — so what stays here is the part that genuinely needs the
+          server: the provenance reading and the representation itself. Exactly
+          one header per pinned target, and the card is the only place one can
+          come from. */}
+      {/* §V — THE FLOOR'S REGION, AND NO OTHER. A target that rendered says
+          nothing about what rendered it; a target that did NOT render is the one
+          reading the drawing keeps on screen, over the generic read-only view of
+          the representation. */}
+      {provenanceConformanceId !== null && provenance !== null ? (
+        <div
+          data-conformance-id={provenanceConformanceId}
+          className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
+        >
           <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
             Floor
           </span>
-        ) : (
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
-            {typeLabel}
+          <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
+            structured data
           </span>
-        )}
-        {provenance.kind === "runtime" && provenance.packageName ? (
-          <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
-            {provenance.packageName}
-          </span>
-        ) : null}
-        <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
-          {provenance.kind === "build-time"
-            ? `build-time · ${provenance.slot}`
-            : provenance.kind === "runtime"
-              ? `runtime · ${provenance.slot}`
-              : "structured data"}
-        </span>
-      </div>
+        </div>
+      ) : null}
 
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context. */}
-      <div className="p-4" data-review-representation-slot="">
-        <ReviewTargetMount mount={mount} props={props} fallback={genericFloor} />
+      {/* THE SLOT IS THE CONTAINER THAT SCROLLS. `overflow-x-auto` gives a
+          representation wider than the panel its own horizontal scroll — the
+          reader reaches the whole of it, and the page around it never widens.
+          `min-w-0` is what lets that happen inside the flex column the island
+          body draws: without it the slot takes its width from its content and
+          the overflow moves back out to the document. */}
+      <div className="min-w-0 overflow-x-auto p-4" data-review-representation-slot="">
+        <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
-    </div>
-  );
-}
-
-/**
- * The generic, read-only floor content (§III) — a design-neutral view built from
- * the host display-only props: the artifact title, a muted note that no type
- * renderer resolved, and the host-authorized (version-pinned) preview / download
- * links. Never the raw bytes; never blank. Shown BENEATH the ReviewTargetMount
- * sanitized diagnostic for a type-level floor.
- */
-function ReviewGenericFloor({ prepared }: { prepared: PreparedReviewTarget }): ReactNode {
-  const { props } = prepared;
-  if (!props) return null;
-  return (
-    <div className="rounded-control bg-surface p-3">
-      <div className="font-sans text-xs font-bold text-foreground">
-        {props.artifact.title ?? props.artifact.id}
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        No type renderer resolved for this artifact — showing the generic read-only view.
-      </p>
-      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-badge-xs text-muted-foreground">
-        <dt>type</dt>
-        <dd className="text-foreground">{props.artifact.objectType}</dd>
-        <dt>mime</dt>
-        <dd className="text-foreground">{props.artifact.mime}</dd>
-        <dt>revision</dt>
-        <dd className="text-foreground">{props.representation?.revisionId ?? "—"}</dd>
-      </dl>
-      {props.urls.preview || props.urls.download ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {props.urls.preview ? (
-            <Button asChild variant="link" size="sm" className="h-auto px-0">
-              <Link href={props.urls.preview}>Preview</Link>
-            </Button>
-          ) : null}
-          {props.urls.download ? (
-            <Button asChild variant="link" size="sm" className="h-auto px-0">
-              <Link href={props.urls.download} download>
-                Download
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }

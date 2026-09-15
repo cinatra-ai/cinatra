@@ -7,9 +7,9 @@
     "class-variance-authority"
   ],
   "registryDependencies": [
-    "utils",
-    "label",
-    "separator"
+    "@cinatra-ai/utils",
+    "@cinatra-ai/label",
+    "@cinatra-ai/separator"
   ],
   "files": [
     {

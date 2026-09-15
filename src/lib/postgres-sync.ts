@@ -81,10 +81,117 @@ const DEFAULT_TIMEOUT_MS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
 })();
 
+/**
+ * WHAT A FAILED WORKER REPORTS — and why it is more than a message.
+ *
+ * The worker answers through a JSON file, so the error has to be flattened to
+ * data. It used to be flattened to `{ message, stack }` alone, and the parent
+ * threw ONLY when that message was non-empty (`if (payload.error?.message)`).
+ * An error that carries no message of its own therefore came back as
+ * `results ?? []` — a failure answered as an empty, successful result set.
+ * `pg` produces exactly that error: when every address a host name resolves to
+ * refuses the connection, Node rejects with an `AggregateError` whose own
+ * `message` is the empty string and whose `errors` carry the ECONNREFUSED
+ * detail. Unit suites pointed at a placeholder connection string went green
+ * over a real socket attempt on the strength of it (cinatra#3254).
+ *
+ * The payload now carries the fields an error describes itself by, the parent
+ * throws for ANY error payload, and `describeWorkerError` derives the message
+ * when the error has none of its own.
+ */
+export type PostgresWorkerErrorDetail = {
+  name?: string;
+  message?: string;
+  code?: string;
+  errno?: number | string;
+  syscall?: string;
+};
+
+export type PostgresWorkerErrorPayload = PostgresWorkerErrorDetail & {
+  stack?: string;
+  /** The nested errors of an `AggregateError`, flattened one level. */
+  errors?: PostgresWorkerErrorDetail[];
+};
+
+/**
+ * Flatten a thrown value to the payload the response file carries. The WORKER
+ * runs this exact function: its source is stringified into `workerSource`
+ * below, so both sides of the file describe an error the same way. It must
+ * therefore stay self-contained — no imports, no module-scope references.
+ */
+export function serializeWorkerError(error: unknown): PostgresWorkerErrorPayload {
+  const detail = (value: unknown): PostgresWorkerErrorDetail => {
+    const e = (value ?? {}) as Record<string, unknown>;
+    const out: PostgresWorkerErrorDetail = {};
+    if (typeof e.name === "string") out.name = e.name;
+    if (typeof e.message === "string") out.message = e.message;
+    if (typeof e.code === "string") out.code = e.code;
+    if (typeof e.errno === "number" || typeof e.errno === "string") out.errno = e.errno;
+    if (typeof e.syscall === "string") out.syscall = e.syscall;
+    return out;
+  };
+
+  if (!(error instanceof Error)) {
+    return { message: String(error) };
+  }
+
+  const payload: PostgresWorkerErrorPayload = detail(error);
+  if (typeof error.stack === "string") payload.stack = error.stack;
+  const nested = (error as unknown as { errors?: unknown }).errors;
+  if (Array.isArray(nested) && nested.length > 0) {
+    payload.errors = nested.map(detail);
+  }
+  return payload;
+}
+
+/** What one error describes itself by, or "" when it describes nothing. */
+function describeErrorDetail(detail: PostgresWorkerErrorDetail): string {
+  const message = typeof detail.message === "string" ? detail.message.trim() : "";
+  if (message !== "") return message;
+  const parts: string[] = [];
+  if (detail.code) parts.push(String(detail.code));
+  if (detail.syscall) parts.push(String(detail.syscall));
+  if (detail.errno !== undefined && detail.errno !== null) parts.push(`errno ${detail.errno}`);
+  if (parts.length === 0 && detail.name) parts.push(String(detail.name));
+  return parts.join(" ");
+}
+
+/** The message to throw for a worker failure — NEVER the empty string. */
+export function describeWorkerError(payload: PostgresWorkerErrorPayload): string {
+  const own = describeErrorDetail(payload);
+  const nested = (payload.errors ?? []).map(describeErrorDetail).filter((part) => part !== "");
+  if (own !== "" && nested.length > 0) return `${own} (${nested.join("; ")})`;
+  if (own !== "") return own;
+  if (nested.length > 0) return nested.join("; ");
+  return "Postgres query worker failed without describing the error.";
+}
+
+/**
+ * The parent's answer to one worker response: the results, or a throw for ANY
+ * error payload. Presence of the payload is the test — never the truthiness of
+ * its message.
+ */
+export function resultsOrThrow(payload: {
+  results?: QueryResult[];
+  error?: PostgresWorkerErrorPayload;
+}): QueryResult[] {
+  if (payload.error) {
+    const error = new Error(describeWorkerError(payload.error));
+    if (payload.error.stack) {
+      error.stack = payload.error.stack;
+    }
+    throw error;
+  }
+  return payload.results ?? [];
+}
+
 const workerSource = `
 const { workerData } = require("node:worker_threads");
 const fs = require("node:fs");
 const { Client } = require("pg");
+
+// The parent module's own serializer, so both sides describe an error alike.
+const serializeWorkerError = (${serializeWorkerError.toString()});
 
 async function main() {
   const signal = new Int32Array(workerData.signalBuffer);
@@ -120,12 +227,7 @@ async function main() {
 
     fs.writeFileSync(
       workerData.responsePath,
-      JSON.stringify({
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-      }),
+      JSON.stringify({ error: serializeWorkerError(error) }),
     );
   } finally {
     try {
@@ -184,7 +286,7 @@ function runWorkerSync(input: {
   const payload = existsSync(responsePath)
     ? JSON.parse(readFileSync(responsePath, "utf8")) as {
         results?: QueryResult[];
-        error?: { message?: string; stack?: string };
+        error?: PostgresWorkerErrorPayload;
       }
     : null;
 
@@ -194,15 +296,7 @@ function runWorkerSync(input: {
     throw new Error("Postgres query worker did not return a response.");
   }
 
-  if (payload.error?.message) {
-    const error = new Error(payload.error.message);
-    if (payload.error.stack) {
-      error.stack = payload.error.stack;
-    }
-    throw error;
-  }
-
-  return payload.results ?? [];
+  return resultsOrThrow(payload);
 }
 
 function quoteIdentifier(value: string) {

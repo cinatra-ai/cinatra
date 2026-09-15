@@ -309,3 +309,53 @@ test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a re
   const errors = validateAbsorbRecords(baseline);
   assert.deepEqual(errors, [], `committed absorb records must validate: ${JSON.stringify(errors)}`);
 });
+
+// --- Reconciliation: a forward merge REGENERATES this baseline by measuring, and
+// a measurement lowers every ceiling to the merged tree own count. That is the
+// right direction for a route the branch narrowed and the wrong one for a route it
+// never touched: committed headroom is a decision, and re-measuring it away
+// tightens an unrelated route budget without authority while deleting the
+// annotation that explains it. The rule pinned here is the one this branch's own
+// /chat record states in this same file: a ceiling is a ceiling, and a forward
+// merge does not ratchet an untouched route down.
+//
+// /sign-in is the route that rule is about. It reaches none of the leaves the
+// appointment-schedule bridge adds, it measures far under its ceiling on both
+// trees, and the ceiling and record it carries were committed by cinatra#2988.
+// Either both survive a forward merge or neither does; a ceiling silently
+// re-measured down, or kept with its record dropped, is a merge editing a decision
+// it did not make. ---
+test("RECONCILIATION: an untouched route keeps the ceiling and the absorb record the base branch committed", () => {
+  const baselinePath = join(HERE, "..", "route-graph-ratchet.baseline.json");
+  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+  assert.equal(
+    baseline.routes["/sign-in"],
+    223,
+    "/sign-in reaches nothing this branch adds, so its ceiling is the base branch committed 223 — a forward merge that re-measures it down to the merged tree own count ratchets an untouched route without authority",
+  );
+  const record = baseline.absorbs?.["/sign-in"];
+  assert.ok(
+    record,
+    "/sign-in keeps its cinatra#2988 absorb record: the ceiling and the annotation that explains it move together or not at all",
+  );
+  assert.deepEqual(
+    { from: record.from, to: record.to, pr: record.pr },
+    { from: 222, to: 223, pr: 2988 },
+    "the carried-forward /sign-in record is the base branch own, unedited",
+  );
+  // The numbers alone do not prove the record is UNEDITED: reason is the part the
+  // gate only checks for non-emptiness, so a rewritten history would slip past a
+  // from/to/pr comparison. Anchor on the two facts the base branch's own record
+  // asserts and that nothing on this branch may restate: the measurement base SHA
+  // it was taken at, and the issue that authorised the raise.
+  assert.match(
+    record.reason,
+    /1fb86826b078b7031c422cfab7c60c0182d9b8f3/,
+    "the /sign-in reason keeps the base branch's own measurement anchor — a rewritten reason is an edited decision even when from/to/pr still match",
+  );
+  assert.match(
+    record.reason,
+    /cinatra#2988/,
+    "the /sign-in reason still names the issue that authorised the raise",
+  );
+});

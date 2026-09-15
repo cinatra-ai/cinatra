@@ -66,6 +66,8 @@ import type { GuardedRunCompanionWrite } from "./org-write-run-seam";
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import type { AgentRunStatus } from "./run-status";
 
+import { emitLifecycleMomentOpened } from "./lifecycle-part-outbox";
+
 // ---------------------------------------------------------------------------
 // The answer shape
 // ---------------------------------------------------------------------------
@@ -313,44 +315,31 @@ export function verifiedHumanPresence(input: {
 // The schedule default — the coordinator's own, not an organization rule
 // ---------------------------------------------------------------------------
 
-/** What the schedule screen offers before a person's run begins. */
-export type ScheduleDefault =
-  | { readonly kind: "run_after_setup" }
-  | { readonly kind: "stated"; readonly schedule: unknown }
-  | { readonly kind: "none"; readonly why: string };
-
 /**
- * The schedule moment's own default, stated once and here.
- *
- * Run right after setup, UNLESS the person stated a schedule in the conversation
- * or changed it on the screen — and NEVER for a run nobody is present for. A
+ * THE SCHEDULE MOMENT'S DEFAULT, which this module owns and exports: run right
+ * after setup, unless the person stated a schedule in the conversation or
+ * changed it on the screen, and never for a run nobody is present for. A
  * schedule has no artifact type, destination or origin, so it is not a row in
- * the policy table and no organization rule governs it.
+ * the policy table and no organization rule governs it — the decision is the
+ * coordinator's own, and `scheduleScreenSelection` is the one mapping from that
+ * answer to the row a screen opens on.
  *
- * Nothing this function returns ARMS anything, and `launchAgentRun` does not
- * call it. It answers what the SCREEN would offer, and the screen is W3's
- * (cinatra#2930) — this slice changes no screen and parks no run that does not
- * park today, so a launch that applied this default would be inventing a wait
- * with no card to release it. What lives here is the DECISION, stated once and
- * in the coordinator rather than as a row in the policy table; what consumes it
- * is the slice that draws the card.
+ * IT NOW HAS ITS CONSUMER, AND ONE STATEMENT (cinatra#2936). The decision used
+ * to be stated in this file and consumed by nothing but its own unit test, while
+ * the scheduling step preselected "Run right after setup" from a local default
+ * of its own — the same decision, stated twice, with nothing keeping the two
+ * agreed. It could not be otherwise: this module is `server-only` and both
+ * surfaces that draw a schedule are client modules, so the statement moved to
+ * the tier-neutral card registry, which every tier reads and which is already on
+ * every locked route graph. The coordinator goes on declaring and exporting it
+ * under its own name; the schedule step's form and the held schedule's card
+ * both derive what they preselect from it.
  */
-export function scheduleDefaultForLaunch(input: {
-  humanPresent: boolean;
-  /** A schedule the person already stated, if any. */
-  statedSchedule?: unknown;
-}): ScheduleDefault {
-  if (!input.humanPresent) {
-    return {
-      kind: "none",
-      why: "nobody is present for this run — the schedule it was given applies and no screen is shown",
-    };
-  }
-  if (input.statedSchedule !== undefined && input.statedSchedule !== null) {
-    return { kind: "stated", schedule: input.statedSchedule };
-  }
-  return { kind: "run_after_setup" };
-}
+export {
+  scheduleDefaultForLaunch,
+  scheduleScreenSelection,
+  type ScheduleDefault,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 // ---------------------------------------------------------------------------
 // The moment triple
@@ -399,6 +388,26 @@ async function stateMoment(input: {
       },
       input.authority,
     );
+    // THE MOMENT OPENED, SO THE OUTBOX IS FED (cinatra#2930, W3). The plan:
+    // "In a conversation the platform itself writes the card into the run's own
+    // turn, from an outbox the coordinator feeds when a moment opens — a durable
+    // part with its provenance and its place in the turn, so it is there after a
+    // reload and whether or not the assistant's model says anything."
+    //
+    // AFTER the record and not before it: the injected part points AT the run's
+    // stated moment, so a part written first would name a moment the row does
+    // not state yet. A CLEARED moment feeds nothing — there is no card to put
+    // anywhere — and the host writer is the one that decides whether the run is
+    // playing out in a conversation at all.
+    if (input.moment !== null) {
+      await emitLifecycleMomentOpened({
+        runId: input.run.id,
+        orgId: input.run.orgId,
+        moment: input.moment,
+        cardKind: cardKindForMoment(input.moment),
+        cardRef: input.cardRef ?? null,
+      });
+    }
   } catch (err) {
     // The run id is request-influenced, so it is a discrete ARGUMENT and never
     // interpolated into the format string (CodeQL js/tainted-format-string).
@@ -600,6 +609,28 @@ export type LaunchInput = {
   template?: Pick<AgentTemplateRecord, "packageName"> & { lifecycleConfig?: string | null };
   /** A headless producer that mints its own authority hands it in here. */
   authority?: OrgWriteAuthority | undefined;
+  /**
+   * The vantage this launch was made FROM (cinatra#2809, epic #2806) — the
+   * scope base of the route the person launched on, as the closed
+   * `LaunchScopeAnchorV1` payload `src/lib/launch-scope-anchor.ts` owns and
+   * `buildLaunchScopeAnchor` mints. Carried as `unknown` through the fence: the
+   * payload is validated where it is MINTED and decoded where it is READ, and
+   * naming the type here would add that module to four locked route graphs
+   * whose counts may only ever shrink.
+   *
+   * IT LIVES ON THE FENCE, not on each producer. This function is the single
+   * place every way of creating a run goes through, so an anchor threaded here
+   * reaches all of them — including one added tomorrow — and no producer can
+   * forget it. A producer that launches from NO vantage of ours (headless, A2A,
+   * a global entry point) simply omits it and the run is unanchored: the
+   * absence is the honest record, and nothing here infers a home from the org,
+   * the project or the actor, because all three move.
+   *
+   * Composed and recurring descendants INHERIT their parent's anchor by passing
+   * the parent's value here — a child of a team-scoped run belongs to that team
+   * however far down the chain it was born.
+   */
+  launchScopeAnchor?: unknown;
 };
 
 /**
@@ -689,6 +720,7 @@ async function runTheLaunch(
             ...create.input,
             runBy: create.input.runBy,
             humanPresent: humanPresent ? true : undefined,
+            launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,
         )
@@ -697,6 +729,7 @@ async function runTheLaunch(
             ...create.input,
             initialStatus: parkOnCreate ? "pending_input" : "queued",
             humanPresent: humanPresent ? true : undefined,
+            launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,
         );
@@ -1249,6 +1282,59 @@ export async function onAgentHitl(input: HitlInput): Promise<CoordinatorAnswer> 
       : { kind: "run", run: input.run as AgentRunRecord },
     status: current?.status ?? input.run.status,
     moment: "hitl",
+  };
+}
+
+/**
+ * THE RUN STOPPED AT A REVIEW GATE (cinatra#3221, fix leg 7).
+ *
+ * THE SAME ENTRY SHAPE AS THE PAUSE ABOVE, AND FOR THE SAME REASON. A run
+ * parked at the work review gate leaves a row behind, and the row is what every
+ * surface reads: the rail asks which moment the run stands at before it can
+ * elect the entry the reader is standing on. That row said nothing here — the
+ * review gate's park stated no moment at all — so a run genuinely stopped in
+ * front of its review carried whatever the PREVIOUS gate had left (or nothing),
+ * and the run page elected no entry on the gate. The third proof round measured
+ * exactly that, in both palettes.
+ *
+ * WHY NOT `onArtifactProduced`. That entry answers a different question — did an
+ * artifact write open a review — and states its moment OVER NO PARK, because a
+ * write can land on a run already waiting somewhere else. This one is the park
+ * itself: the run IS stopped here, so the moment is pinned to the status the
+ * caller just won, exactly as the pause above pins its own.
+ *
+ * NO POLICY, for the same reason the pause has none: whether a review exists was
+ * decided by the review core before the gate was ever emitted. This records that
+ * the run is now standing at it.
+ */
+export type ReviewGateInput = {
+  run: Pick<AgentRunRecord, "id" | "orgId" | "status">;
+  /** The gate's server-minted card reference — `null` where none was minted. */
+  gateRef: string | null;
+  authority: OrgWriteAuthority | undefined;
+};
+
+export async function onRunStoppedAtReviewGate(
+  input: ReviewGateInput,
+): Promise<CoordinatorAnswer> {
+  // ONLY WHILE THE RUN IS STILL PARKED WHERE THE CALLER LEFT IT — the same
+  // compare-and-set the pause above states, and for the same window: a decision
+  // fast enough to land between the park and this record would otherwise put a
+  // card back on a run that is already moving again.
+  await stateMoment({
+    run: input.run,
+    moment: "review",
+    cardRef: input.gateRef,
+    authority: input.authority,
+    onlyWhileStatus: input.run.status,
+  });
+  const current = await readAgentRunById(input.run.id);
+  return {
+    carrier: current
+      ? { kind: "run", run: current }
+      : { kind: "run", run: input.run as AgentRunRecord },
+    status: current?.status ?? input.run.status,
+    moment: "review",
   };
 }
 

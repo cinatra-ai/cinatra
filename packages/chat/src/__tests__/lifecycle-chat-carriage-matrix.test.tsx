@@ -98,6 +98,19 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
   skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
 }));
+const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+// The HITL screen card's own server-only entry, stubbed for the same reason
+// (cinatra#2930, lifecycle-b W3): the column mounts that card beside the §V one
+// now, and an unstubbed `"use server"` module fails the whole lazy chat chunk.
+// The default answer is "no screen", so a suite that is not about this kind sees
+// exactly what it saw before the card existed.
+vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
+}));
+vi.mock("../../../agents/src/hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 // A server-only graph: stubbed rather than loaded, carrying every symbol the
 // lazy chat chunk reaches — a missing one fails the chunk and the transcript
 // never mounts, which would read as a passing negative arm.
@@ -194,6 +207,26 @@ const REF_BY_KIND: Record<LifecycleCardKind, string> = {
   // keyed by the protocol's closed set and a missing key would be a kind the
   // matrix silently skips.
   agent_hitl_screen: "hitl-screen-ref-2928",
+};
+
+/**
+ * The HITL screen's own authorized answer (cinatra#2930, lifecycle-b W3). Its
+ * carriage is an INTERRUPT, so it has no envelope to mint and no ref to post —
+ * the run states the moment and the card reads it, which is what this stands in
+ * for. Answered ONLY on this kind's arm, so the other four keep the transcripts
+ * they were measured on.
+ */
+const HITL_SCREEN_ASKING = {
+  state: "asking",
+  runId: RUN_ID,
+  screenRef: REF_BY_KIND.agent_hitl_screen,
+  gate: {
+    reviewTaskId: "task-2827",
+    xRenderer: "cinatra.schema-field:output",
+    inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+    currentValues: {},
+    fieldName: "answer",
+  },
 };
 
 /** The self-MCP tool the shipped allowlist authorizes to mint this kind. */
@@ -457,6 +490,11 @@ async function settleResolves() {
 
 /** Mount the production `/chat` column on one kind's reduced transcript. */
 async function mountKind(kind: LifecycleCardKind) {
+  // The HITL screen answers only on its own arm — the other four kinds keep the
+  // transcript they have always been measured on, with no second card in it.
+  hitlScreenStateMock.mockImplementation(async () =>
+    kind === "agent_hitl_screen" ? HITL_SCREEN_ASKING : { state: "none" },
+  );
   const { messages, producingSlot } = await reducedTurn(kind);
   const mounted = await mountSurface("chat", { messages });
   const root = mounted.container.querySelector<HTMLElement>('[data-parity-surface="chat"]');
@@ -707,8 +745,19 @@ describe("what cannot satisfy a row", () => {
   it("a card in the RUN CARD's subtree does not: it is another host's mount", async () => {
     const row = carriageRowFor("recommendation_hold");
     const { root, producingSlot } = await mountKind("recommendation_hold");
-    const runCard = root.querySelector<HTMLElement>("[data-inline-run-card]");
-    expect(runCard, "the inline run card did not mount at the agent_run slot").not.toBeNull();
+    // THE FOREIGN SUBTREE, DECLARED THE WAY THE SHIPPED PANEL DECLARES IT.
+    // A HELD turn draws no run panel at all since cinatra#2790 (the run progress
+    // card waits for the skills decision), so there is no rendered panel to
+    // borrow here — and in this file there never was one either: the run card is
+    // a stand-in that renders exactly these two attributes. The subtree is
+    // therefore planted in the producing container with that same declaration,
+    // which is what the observer keys on.
+    const slot = root.querySelector<HTMLElement>("[data-agent-run-slot]");
+    expect(slot, "the agent_run producing container is not in the transcript").not.toBeNull();
+    const runCard = document.createElement("div");
+    runCard.setAttribute("data-lifecycle-card-host", "run_card");
+    runCard.setAttribute("data-inline-run-card", "");
+    slot!.appendChild(runCard);
     // Plant the row's own anchors INSIDE the run card, as a mislabeled-evidence
     // mount would. The observation must not see them.
     const planted = document.createElement("div");
@@ -734,7 +783,7 @@ describe("what cannot satisfy a row", () => {
     // and their per-chip controls sit inside it.
     const real = root.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
     const before = observeChatCarriage(root, row, producingSlot);
-    runCard!.appendChild(planted);
+    runCard.appendChild(planted);
     const after = observeChatCarriage(root, row, producingSlot);
     expect(after.rootCandidates).toEqual(before.rootCandidates);
     expect(after.rootCandidates.some((c) => c.controls.length === 0)).toBe(false);

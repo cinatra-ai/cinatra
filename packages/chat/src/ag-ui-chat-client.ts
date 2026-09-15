@@ -226,6 +226,13 @@ export type StreamAssistantTurnOptions = {
    *  OMITTED ⇒ the server's implicit-default container (byte-identical to the
    *  pre-#2650 wire). */
   chatContainer?: ChatTurnContainerRef;
+  /**
+   * The BOUND CARD claim for this turn (cinatra#2932, lifecycle-b W5a) —
+   * forwarded verbatim as `body.boundCard`. The server re-resolves every ref
+   * under the reader's own access; this is what the composer could SEE, not a
+   * decision it made.
+   */
+  boundCard?: { refs: string[]; focused: string | null };
   resumeEndpointFor?: (runId: string) => string;
   // ----- S5 Lane B embed seams (cinatra#1221 §9.1) — ADDITIVE; every field is
   // optional and defaults to today's session behaviour so `/chat` is
@@ -330,7 +337,7 @@ const MAX_RENDERED_REJECTION_LENGTH = 300;
  * contract's "unavailability is a VISIBLE error" reached the client and was thrown
  * away one line before the banner — which is what S7's block C captured.
  *
- * WHY IT IS NOT READ IN GENERAL (codex round 1). A non-OK response can be
+ * WHY IT IS NOT READ IN GENERAL (convergence round 1). A non-OK response can be
  * anything: an arbitrary 5xx, an HTML proxy error page, a JSON body carrying
  * stack detail. Rendering any of those in the chat banner would be an information
  * leak wearing a bug fix's clothes. So this is an ALLOW-LIST of exactly one
@@ -410,6 +417,10 @@ export async function streamAssistantTurn(
       // The thread's CONTAINER (cinatra#2650) — the assistant this conversation
       // is HOMED in, which is not the same question as who answers this turn.
       ...(options.chatContainer ? { chatContainer: options.chatContainer } : {}),
+      // cinatra#2932 (lifecycle-b W5a) — the bound-card CLAIM. Omitted entirely
+      // when the composer has no card on screen, so an ordinary turn's body is
+      // byte-identical to what it was before this field existed.
+      ...(options.boundCard ? { boundCard: options.boundCard } : {}),
     }),
     signal: options.signal,
   });
@@ -591,6 +602,16 @@ export type DriveAssistantChatTurnOptions = {
    *  to its assistant from its first persisted moment. DISTINCT from
    *  {@link assistant}, which picks the PRODUCER of this one turn. */
   chatContainer?: ChatTurnContainerRef;
+  /**
+   * The BOUND CARD this message is sent with (cinatra#2932, lifecycle-b W5a).
+   *
+   * A CLAIM, NEVER A CONCLUSION. It is what the composer can SEE — the refs of
+   * the lifecycle cards on screen and the one the reader pressed — and the
+   * server re-resolves every ref under the reader's own access before anything
+   * binds. The page decides nothing: it cannot bind a card the reader may not
+   * see, and it cannot suppress the platform's refusal when two are open.
+   */
+  boundCard?: { refs: string[]; focused: string | null };
   // ----- Broker-transport seams (cinatra#2683, epic #2564 S8f) — ADDITIVE.
   // `streamAssistantTurn` has carried these since S5 Lane B (#1221 §9.1); this
   // driver did not, so the embed could not use it and drove the wire itself
@@ -661,6 +682,10 @@ export async function driveAssistantChatTurn(
       streamAssistantTurn({
         threadId: options.threadId,
         messages: options.messages,
+        // cinatra#2932 — carried on the initial attempt AND the retry, so a
+        // transport hiccup cannot silently drop the person's binding and turn a
+        // bound message into an unbound one.
+        ...(options.boundCard ? { boundCard: options.boundCard } : {}),
         // Propagated on BOTH the initial attempt and the retry (this closure
         // is re-invoked for the retry-once path) so the producer endpoint +
         // assistant selector are never silently downgraded to the default
@@ -846,7 +871,7 @@ export function extractAgentName(text: string): string | null {
 
 /**
  * HOW LONG ONE THREAD SAVE MAY STAY OPEN before it is abandoned (cinatra#2823
- * S9j, codex round 4 finding 3).
+ * S9j, convergence round 4 finding 3).
  *
  * A browser applies NO default timeout to `fetch`, and these saves are now
  * CHAINED per thread, so an unbounded request is not just one lost save: it is
@@ -968,7 +993,7 @@ export async function saveChatThreadViaFetch(
  * later ones.
  *
  * EVERY SLOT SETTLES, which is what makes the chain safe to queue behind. Each
- * POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS` (codex round 4, finding 3):
+ * POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS` (convergence round 4, finding 3):
  * without it a single hung connection wedged this thread's persistence — and the
  * edit that awaits it — for the life of the tab.
  */

@@ -51,10 +51,48 @@ describe("runHasExecutionRecord — the armed run has not run", () => {
     expect(runHasExecutionRecord({ runStatus: null, ...NO_RECORD })).toBe(false);
   });
 
-  it("answers YES for a run that is in an execution, with or without output yet", () => {
-    for (const runStatus of ["queued", "running", "pending_approval", "waiting_trigger"]) {
+  it("answers YES for a run that is IN an execution, with or without output yet", () => {
+    // Each of these names a run the work is happening inside, so the status is
+    // the record for them even before the first line of output.
+    for (const runStatus of ["running", "waiting_trigger"]) {
       expect(runHasExecutionRecord({ runStatus, ...NO_RECORD })).toBe(true);
     }
+  });
+
+  // AND `queued` READS THE RECORD TOO (cinatra#3184 fix leg 4). It sat in the
+  // live set above as "reached only by DISPATCHING the run", which is true and
+  // is not the same claim: the dispatch CAS writes `queued` before anything has
+  // been picked up, and the run page is rendered at exactly that moment --
+  // answering the skills question releases the run, the decision's own round
+  // trip returns as the dispatch lands, and the refresh that follows reads the
+  // run mid-handoff. Driven on a boot, the page read `queued` with nothing
+  // behind it and drew the settled Skills row alone with Setup lit over it. A
+  // re-queued retry still reads true, because its record answers.
+  it("reads the RECORD for a queued run -- the dispatch precedes the work", () => {
+    expect(runHasExecutionRecord({ runStatus: "queued", ...NO_RECORD })).toBe(false);
+    expect(
+      runHasExecutionRecord({ runStatus: "queued", ...NO_RECORD, stepResultCount: 1 }),
+    ).toBe(true);
+  });
+
+  // AND `pending_approval` READS THE RECORD (cinatra#3184 fix leg 3). It was in
+  // the live set above until the second graded reading of that branch measured
+  // the counterexample: answering the run's skills question releases the run,
+  // and the gate it parks at next writes `pending_approval` with no step
+  // result, no run message and no streamed text behind it. Reading the status
+  // there called a run that had produced nothing an execution, which collapsed
+  // the run page's rail to the settled Skills row alone and lit Setup over it.
+  it("reads the RECORD for an approval gate -- a run can park there before it has run", () => {
+    expect(runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD })).toBe(false);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, stepResultCount: 1 }),
+    ).toBe(true);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, runMessageCount: 1 }),
+    ).toBe(true);
+    expect(
+      runHasExecutionRecord({ runStatus: "pending_approval", ...NO_RECORD, streamedTextLength: 12 }),
+    ).toBe(true);
   });
 
   it("reads the RECORD for the terminal statuses — a cancelled schedule never ran", () => {
@@ -130,25 +168,36 @@ describe("the screen composes THROUGH the step, not beside it", () => {
   it("hands the rail and the run detail to the schedule step, with the first paint it derived", () => {
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
     expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
-    expect(SCREEN_SRC).toMatch(
-      /initialSelection=\{opensOnScheduleStep \? "schedule" : "detail"\}/,
-    );
+    // The screen derives its first paint through the whole ladder since
+    // cinatra#2790 (S9f) — `runDetailInitialStep`, which composes this
+    // predicate — so the pin follows the composition rather than the spelling
+    // it used to have.
+    expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);
+    expect(SCREEN_SRC).toContain("runDetailInitialStep({");
     expect(SCREEN_SRC).toContain("runDetailOpensOnSchedule({");
     expect(SCREEN_SRC).toContain("runHasExecutionRecord({");
   });
 
   it("puts the run's panels INSIDE the detail slot — never beside the schedule step", () => {
     const detailStart = SCREEN_SRC.indexOf("const detailNode = (");
-    const detailEnd = SCREEN_SRC.indexOf("if (scheduleRailRef) {");
+    const detailEnd = SCREEN_SRC.indexOf("if (railSteps.length > 0) {");
     expect(detailStart).toBeGreaterThan(-1);
     expect(detailEnd).toBeGreaterThan(detailStart);
     const detail = SCREEN_SRC.slice(detailStart, detailEnd);
     for (const panel of ["<OrchestratorStepperPanel", "<SetupCompletionWatcher"]) {
       expect(detail, panel).toContain(panel);
     }
-    // And the step is placed with BOTH slots — a placement that kept a column of
-    // its own would be the composition the plan rules out.
-    const stepAt = SCREEN_SRC.indexOf("<ScheduleRailStep");
+    // And the steps are placed with BOTH slots — a placement that kept a column
+    // of its own would be the composition the plan rules out. The frame is the
+    // one that carries them since cinatra#2790 (S9f), because the run page now
+    // has two gate steps in one rail.
+    // THE MOUNT, NOT A ROW (cinatra#3221, fix leg 2). The screen also draws a
+    // `<RunSurfaceRailRow>` for the gate the run is parked on, and that tag
+    // shares this one's first fifteen characters — a bare prefix match found
+    // the row and read the frame as mounted above the detail it is handed. The
+    // mount is the tag that opens its own line.
+    const stepAt = SCREEN_SRC.indexOf("<RunSurfaceRail\n");
     expect(stepAt).toBeGreaterThan(detailEnd);
+    expect(SCREEN_SRC).toContain('key: "schedule"');
   });
 });

@@ -4,6 +4,7 @@ import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { cn } from "../lib/utils"
+import { overlayCollisionPadding } from "../lib/overlay-collision"
 
 function Popover({
   ...props
@@ -21,6 +22,7 @@ function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
+  collisionPadding,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
@@ -29,6 +31,10 @@ function PopoverContent({
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
+        // cinatra#3105 — the portable primitive carries the same bound as the
+        // host's, so a panel opened from a connector surface never occupies the
+        // app-shell header band either.
+        collisionPadding={collisionPadding ?? overlayCollisionPadding()}
         className={cn(
           "z-[160] flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg border border-line bg-popover p-2.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className

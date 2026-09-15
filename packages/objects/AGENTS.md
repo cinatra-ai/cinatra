@@ -10,12 +10,13 @@ Provides the `objects_*` MCP primitives that let agents store and retrieve typed
 
 Write path: every write lands in Postgres via an atomic CTE that also creates a `graphiti_projection_outbox` row. A BullMQ repair job (`GRAPHITI_PROJECTION_REPAIR`, 30s interval) projects pending rows to Graphiti asynchronously.
 
-Read path: `objects_get` and `objects_list` (no query) read from Postgres exclusively. `objects_list` with a `query` calls Graphiti `search_nodes` for ranked IDs, then fetches canonical rows from Postgres (authorization boundary).
+Read path: `objects_get` and `objects_list` (no query) read from Postgres exclusively. `objects_list` with a `query` calls Graphiti `search_nodes` for ranked IDs, then fetches canonical rows from Postgres (authorization boundary). `memory_recall` (cinatra#1380) is the third read primitive and takes the same ranked-IDs-then-Postgres route, pinned to the `@cinatra-ai/memory:concept` type, over server-derived lanes. It returns a capped projection plus a required `mode` (`semantic` or `degraded-recent`) that states whether the answer was actually ranked. The response schema is a discriminated union on `mode`, so the `ordering` and the degradation metadata cannot disagree with it. The whole serialized answer is bounded at 64 KiB: trailing rows are dropped to hold the bound and the drop is reported as `meta.responseCeiling`.
 
 ```
 Write: objects_save → upsertObjectAndEnqueue (PG + outbox CTE) → repair worker → addEpisode
 Read:  objects_get / objects_list (no query) → Postgres only
        objects_list (with query) → Graphiti (IDs only) → Postgres (canonical rows)
+       memory_recall → Graphiti (IDs only, entitled lanes) → Postgres (canonical rows) → capped projection + mode
 ```
 
 ## Key files
@@ -26,9 +27,9 @@ Read:  objects_get / objects_list (no query) → Postgres only
 | `src/lib/drizzle-store.ts` | Inline DDL migrations: projection columns + `graphiti_projection_outbox` table |
 | `src/lib/background-jobs.ts` | `GRAPHITI_PROJECTION_REPAIR` job + 30s self-reschedule |
 | `src/graphiti-projector.ts` | Outbox worker: `projectObjectToGraphiti`, `processProjectionOutbox` |
-| `src/graphiti-client.ts` | Low-level MCP calls to Graphiti (used only by projector). |
+| `src/graphiti-client.ts` | Low-level MCP calls to Graphiti. `addEpisode` / `deleteEpisode` are the projector's; `searchNodes` is also called directly by the ranked read paths in `src/mcp/handlers.ts` (`objects_list` with a query, and `memory_recall`). |
 | `src/graphiti-types.ts` | Zod schemas for Graphiti tool inputs/outputs. |
-| `src/mcp/handlers.ts` | `objects_save`, `objects_get`, `objects_list`, `objects_update`, `objects_delete`, `objects_classify`, `objects_types_list` |
+| `src/mcp/handlers.ts` | `objects_save`, `objects_get`, `objects_list`, `objects_update`, `objects_delete`, `objects_classify`, `objects_types_list`, `memory_recall` |
 | `src/classifier.ts` | LLM-based object type classification. |
 | `src/identity.ts` | Derives stable identity hash from object data. |
 | `src/registry.ts` | Static object type registry. |
@@ -288,3 +289,268 @@ node /tmp/test-graphiti-crud.mjs
 - **Sealed-room re-filter** — `listObjectsByFilter` accepts `projectId?: string|null` and adds `AND project_id = $projectId` at the data layer. Non-bypassable from any handler — including the `ids = ANY(...)` semantic-search candidate path (Graphiti returns from P+Q+ambient → re-filtered to P only).
 - **Write-block** — both writers call `assertProjectWritableSync(projectIdForRow)` when the resolved inheritance projectId is non-NULL → archived targets reject at the writer layer.
 - **Move** — `objects_update` accepts optional `project_id` change with source+target authz + transactional cascade via `runResourceProjectMove`.
+- **Explicit binding (external callers)** — `objects_save` accepts optional `projectId` for a caller with no ambient frame. See the section below.
+
+## External memory writers — the `objects_save` actor contract (cinatra#1377, epic #1373)
+
+The agent-memory sync path writes from **outside** any agent run: a coding agent's
+`memory` CLI holds no `mcpRequestContextStorage.projectContext` frame, because that
+frame only exists inside a run/chat execution on this host. Such a caller reaches
+`objects_save` over the **authenticated MCP transport** — not the in-process
+deterministic client, which is a same-process convenience for host code.
+
+**Identity is transport-derived, never caller-supplied.**
+
+| Axis | Source | Caller-supplied? |
+|---|---|---|
+| `orgId` | actor / request frame (`getActorExt`) | **never** — no primitive accepts it |
+| user / agent identity | the authenticated actor | **never** |
+| `runId`, `agentId`, package versions | actor provenance (`actorExt`) | **never** |
+| `ownerLevel` / `ownerId` / `visibility` | `deriveSaveDefaults` (user ⇒ `user`/`private`; system ⇒ `organization`/`organization`; an `agent_run` delegation derives from its OBO ceiling) | optional override, re-authorized by the `object.create` probe |
+| `projectId` | ambient frame, or the explicit input below | optional, authorized against the caller's own `projectGrants` |
+
+**Ownership defaults are unchanged.** A write defaults to user/private. An explicit
+wider tuple is only ever accepted **within the caller's own authorization** — the
+`object.create` probe runs against the projected row, so the scope ceiling denies
+anything the actor cannot satisfy. Widening beyond that is promotion, not a save.
+
+**`projectId` precedence** (keyed on presence — JSON carries all three states):
+
+| Input | Behavior |
+|---|---|
+| omitted | ambient inheritance (frame `projectId`, substrate exclusion applied); on a collision with a row bound to another project, refused — see collision semantics |
+| `null` | no project (substrate write); the ambient frame is **ignored, not consulted** |
+| `"<id>"` | bind the row to that project; the ambient frame is **ignored, not consulted** |
+
+The explicit path never reads the frame, so it works from outside a run **and** a
+stray ambient frame cannot bleed into an explicitly-scoped write.
+
+**A supplied id is a request, never a grant.** The handler runs, in order:
+`assertProjectReadAccess` (404-hides a project the caller holds no grant on, so the
+gate is not an existence oracle), then `assertProjectWritable(…, "write")`
+(existence + the archive gate + the write role tier). An unresolved `projectGrants`
+axis counts as no grants in both helpers — the gate fails closed. Postgres row
+authorization is unchanged and remains the data-access boundary.
+
+The axis itself reaches the actor from the transport: `packages/objects/src/mcp/registry.ts`
+resolves it through `resolveActorGrantsForUserInOrg` for the **same** `userId`/`orgId`
+pair the request frame carries (the in-process session client carries it on the
+`ActorContext` instead — `actorContextToObjectsEnvelope`). A frame with no identity
+pair, or a failed resolution, leaves the axis unresolved, which both gates read as no
+grants.
+
+**Collision semantics.** Identity resolution can steer a save onto an existing row
+(the upsert's `ON CONFLICT` arm). Then:
+
+- the row is additionally probed for `object.update` against its **stored** scope —
+  the create probe alone would authorize a write to a row the caller cannot touch;
+- ownership/visibility are **preserved** (the `ON CONFLICT` arm does not list
+  `owner_level` / `owner_id` / `visibility`), so a default-scoped user/private save
+  can never narrow a wider row. A request for a *different* tuple is **refused**
+  rather than accepted-and-silently-dropped;
+- an explicit `projectId` that differs from the row's current project is
+  **refused** with a pointer to `objects_update`'s move path, which carries the
+  move authorization and the `resource_project_moves` audit row;
+- an *omitted* `projectId` requests nothing, but the writer's preserve arm is
+  `COALESCE(EXCLUDED.project_id, objects.project_id)` — a resolved ambient
+  project overwrites rather than preserves. So a save inside a frame for project
+  P that lands on a row already bound to project **Q** is **refused** with the
+  same code and the same remedy: it would take the row out of Q's sealed room
+  with no authorization on Q and no audit row. Two ambient cases are **not**
+  refused, and both leave the row inside every room it was already in: a frame
+  that resolves to no project (no frame, or a substrate type) preserves the
+  tag, and an **untagged** row still inherits the active frame — the documented
+  write-time inheritance, which is purely additive;
+- a collision onto a **soft-deleted** row is **refused**. `upsertObjectAndEnqueue`'s
+  `ON CONFLICT` arm never clears `deleted_at` (only the canonical twin writer
+  does), so the write would rewrite the row, bump its version and emit the outbox
+  and change events while every ordinary read still could not see it — a success
+  reported over a write that lands nowhere visible. `objects_save` does not
+  undelete.
+
+### Refusal codes
+
+All five are `PrimitiveInvocationError`s, same contract as
+`OBJECTS_TYPE_NOT_REGISTERED` above (`retryable: false`; `code`/`details` preserved
+onto the run's tool result by `normalizePrimitiveError`).
+
+| Code | Raised when |
+|---|---|
+| `OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED` | an explicit binding names a pan-project substrate type (CRM / catalog); dropping it silently would misreport where the row landed |
+| `OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED` | the save resolves to an existing row whose project differs from the requested `projectId`, or (no `projectId` supplied) from the project the active frame resolves to while the row is bound to another one |
+| `OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED` | the save resolves to an existing row and requests a different `ownerLevel` / `ownerId` / `visibility` |
+| `OBJECTS_COLLISION_ROW_DELETED` | the save resolves to a soft-deleted row, which this writer would rewrite without undeleting |
+| `OBJECTS_WRITE_PRECONDITION_FAILED` | the writer's armed `collisionGuard` blocked the `DO UPDATE` arm and nothing was written |
+
+`OBJECTS_WRITE_PRECONDITION_FAILED` is what makes the collision probe **binding
+rather than advisory**. The probe and the write are separate statements, so the
+handler arms `upsertObjectAndEnqueue`'s `collisionGuard` with the exact row state it
+authorized (`expectedVersion` + `expectedProjectId`; a `null` version means "the
+probe saw no row", which blocks the `DO UPDATE` arm outright).
+
+The code and its message are **cause-neutral on purpose**. Two predicates block that
+arm — the collision guard and the cross-tenant `org_id` guard — and they produce the
+same empty result. Nothing outside the failed statement can tell them apart: a later
+re-read answers about a newer snapshot than the one that blocked the write. So neither
+the code nor its message names a cause; both state only what is certain, that the
+precondition did not hold and nothing was written.
+
+It is **terminal** for the same reason. Neither cause permits replaying the invocation
+under the authorization it already carries. A caller that wants to try again re-reads
+the row and re-authorizes against what is actually there, which is a fresh save rather
+than a retry. Auto-retrying a write whose authorization could not be confirmed is the
+thing the guard exists to prevent.
+
+An unauthorized binding is **not** in this table: it throws the canonical
+`AuthzError` (404-hidden / 403) from the project gates, so the refusal envelope is
+the same one every other project-scoped surface produces.
+
+**Deterministic-client parity.** `createDeterministicObjectsClient().save()` accepts
+`ownerLevel` / `ownerId` / `visibility` / `projectId` and passes them through
+unchanged. The in-process client is **not** a privileged path: it invokes the same
+handler and therefore the same gates.
+
+## Memory sync — the ingest gates and the preflight (cinatra#1378, epic #1373)
+
+`memory sync` is the one-way bridge from a local `.memory` bundle into memory rows.
+The client classifies and scans before it uploads, and **none of that decides
+anything**: a bundle is untrusted input end-to-end, so every rule below runs on the
+server, on the same seam that produces the persisted payload.
+
+**Ingest gates** (`enforceMemoryConceptEnvelope`, `packages/objects/src/mcp/handlers.ts`),
+in order, before any commit:
+
+1. the registered envelope schema — including the **server's own recomputation** of
+   `externalId` as `sha256(bundleId + NUL + conceptId)`; a mismatch is rejected, so a
+   forged field cannot steer which row a save lands on;
+2. **size caps on every author-controlled surface** — `bodyMarkdown` 64 KiB (#1376),
+   `frontmatter` 32 KiB serialized, `links` 512 entries, one link target 2 KiB,
+   `conceptId` and each `resolvedConceptId` 1 KiB, `okfVersion` 64 B, and the
+   **serialized envelope 512 KiB in aggregate**. An uncapped surface would make the
+   body cap decorative, because the same payload just moves into frontmatter — and
+   an uncapped surface added LATER would do it again, which is what the aggregate
+   cap is for. The schema is `.strict()` at the top level, so an unknown key is a
+   rejection rather than an unscanned, uncapped passenger; the handler splits the
+   server-injected keys off before parsing and merges them back afterwards
+   (`MEMORY_SERVER_INJECTED_KEYS`), which is what lets strictness fall only on what
+   the client sent;
+3. a **fail-closed secret scan** over the whole object about to be written, minus
+   the identity fields excluded by name (`MEMORY_SCAN_EXCLUDED_KEYS`:
+   `externalId`, `bundleId`, `cinatraAgentRunId`) — object **keys included**,
+   because `{ "<a real token>": "note" }` hides a credential exactly as well as a
+   value does. The polarity matters: enumerating the fields to SCAN left every
+   field added later unscanned by default, so the scan enumerates what it SKIPS.
+   The detector applies placeholder tolerance **per token** (a `${VAR}` somewhere
+   in a body does not un-scan the body), scores opaque tokens with an
+   **alphabet-aware** normalized entropy rule (a 4.5-bits-per-character rule is
+   structurally unreachable for hex, so hex-encoded keys rode through), and carries
+   explicit shapes for a **PEM private-key block**, a **password in a connection
+   URL's userinfo**, and a **standard-base64 run** (the token splitter consumes
+   `/`, so such a key arrived as fragments too short to score). Measured through
+   the whole detector: 100% on 64-hex, 97.6% on a 40-character standard-base64
+   key, 96.7% on 43-character base64url, 83.6% on 64-character standard base64
+   — measured numbers, not a claim of coverage. A hex DIGEST in a body is
+   flagged too: it is the same shape as a hex key and nothing in the string
+   separates them, so the gate resolves that ambiguity fail-closed. The same is
+   true of a common IDENTIFIER shape, and a memory concept is full of those: a
+   random v4 UUID flags 94.0% of the time (93.7% in prose, 93.5% in a link
+   target), a ULID-shaped id flags 85.8%, and a 40-character git commit SHA
+   flags about 99% of the time (a 12-character short SHA does not — under the
+   length floor). The
+   name-based exclusion above is the only carve-out, and it is top-level only:
+   the same UUID quoted anywhere else in the envelope is scanned. Both
+   directions refuse: a credential-shaped literal (`OBJECTS_MEMORY_SECRET_DETECTED`)
+   and a scan that could not **complete** (`OBJECTS_MEMORY_SECRET_SCAN_FAILED`) —
+   "could not look" must never produce the same answer as "looked and found
+   nothing". Both refusals name the SHAPE and the location, never the matched text.
+   The location is echo-safe for the same reason: it is built from keys, so a key
+   is rendered verbatim only when it is a short ordinary identifier the detector
+   itself does not flag, and positionally (`[key#3]`) otherwise. There is no env
+   flag, no org opt-out and no claim probe on this gate.
+
+All of the memory refusal codes above are terminal `PrimitiveInvocationError`s
+(`retryable: false`), the same contract as the collision codes.
+
+**`source` is actor-derived.** The row's `source` column comes from the authenticated
+actor like every other provenance column, NOT from the client-declared
+`provenance.tool`. The envelope's provenance pair answers "which local tool wrote
+it" and is authorization-bearing for nothing; a reader looking for who wrote a memory
+row reads the columns.
+
+**The client leaves one file behind.** A `memory sync` run that wrote something
+writes `sync-ledger.json` at the BUNDLE root — object ids and content digests of what
+the last run pushed, used to report a row that drifted since. It is a per-checkout
+cache and is **not meant to be committed** (its object ids are minted per
+organization by whichever server answered, and nothing reads it as authority: the
+preflight decides). `memory init` writes a `.gitignore` excluding it. The
+conventions page says the same thing to the author.
+
+**Provenance.** Identity provenance is actor-derived onto the row's own columns
+(`orgId`, `createdBy`, `runId`, `agentId`, `packageVersion`), exactly as the table in
+the previous section states. The envelope adds only what no server-side value can
+answer: the bundle id, the concept path, and an optional client-declared
+`provenance: { tool, toolVersion }` — bounded, `.strict()`, and authorization-bearing
+for nothing.
+
+**Scope on a resync.** The sync client sends `ownerLevel` / `visibility` **only on a
+create**. On an update it omits them, so the `ON CONFLICT` arm preserves the row's
+stored tuple and a row that promotion widened stays wide. Requesting a different
+tuple is refused (`OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED`), never silently
+dropped. Sync never narrows a row and never deletes one.
+
+**Scope on a create — the ownership-authority gate.** Issue #1378 makes the bundle's
+`sync:` block and a concept's frontmatter a scope REQUEST "evaluated under the
+caller's normal authorization at save time (a request, never a grant)". The
+`object.create` probe alone does not deliver that sentence: `enforceResourceAccess`
+short-circuits only for a row user-owned by the ACTOR, everything else falls through
+to `can()`, and `can()` reads the cross-org guard and role→permission and never reads
+`ownerType` / `ownerId` / `visibility` at all. `object.create` is in the plain member
+set, so a same-org member's create naming another user, another team, or `public`
+passed on the member grant alone. That kernel gap is not this type's to close; what
+IS is that a memory bundle is an **untrusted file**, making this the one save path
+whose ownership request originates in a file. `enforceMemoryOwnershipRequest` is
+therefore memory-scoped and narrow, and changes `objects_save` for no other type:
+
+- `ownerId` is **refused** (`OBJECTS_MEMORY_OWNERSHIP_REFUSED`), exactly as `orgId`
+  already is everywhere. A request may choose a LEVEL; it may never name a PRINCIPAL.
+- `ownerLevel: "user"` resolves the owner to the authenticated user and
+  `"organization"` to the caller's own organization — both actor-derived, so the
+  written tuple is always coherent and always one the caller could write anyway.
+- `ownerLevel: "team"` / `"workspace"` and `visibility: "public"` are **refused**: no
+  team or workspace authority is derivable at this seam, and publishing is a reviewed
+  **promotion** (epic #1373), not something a file asks for at create time.
+
+The gate is asserted twice — on the declared `typeHint` (before the probe, so the
+probe evaluates the tuple the gate produced) and again on the RESOLVED type, closing
+the residual path where a save reaches the memory type without declaring it. Its
+coverage is pinned in `handlers-memory-ownership.test.ts`, which drives a kernel
+double that GRANTS `object.create` (as a real member grant does), so the refusals are
+attributable to the gate and not to an authz accident — the package-wide
+allow-by-default alias stub would make those assertions vacuous.
+
+**Identity is immutable on update.** The envelope's `superRefine` checks only that
+`externalId` equals `sha256(bundleId + NUL + conceptId)` — INTERNAL consistency — and
+never compares the triple against the identity the row already carries. Since
+`data->>'externalId'` became a lookup key, accepting a coherent triple from another
+bundle would point that bundle's next preflight at this row. `enforceMemoryIdentityImmutable`
+refuses any change to `externalId` / `bundleId` / `conceptId` on an existing row
+(`OBJECTS_MEMORY_IDENTITY_IMMUTABLE`, terminal). There is no rebind flow: a concept
+that moved bundle or path is a new identity and therefore a new row, which is what
+"path = identity" means in OKF.
+
+**`objects_list.externalIds`** is the sync preflight: a batch key lookup over
+`data->>'externalId'`, capped at 500 entries with each id capped at 256 bytes. The
+array cap alone does not bind, because `limit` **defaults to 100** and `LIMIT` is
+applied in SQL after the WHERE while the handler always answers `nextCursor: null` —
+so an over-limit batch was truncated with nothing to say so. The handler therefore
+refuses a call whose batch exceeds its EFFECTIVE `limit`, the same way it refuses a
+missing `type`. It is a **filter on the existing primitive**, so the
+authorization it gets is exactly `objects_list`'s — org-scoped in SQL,
+ownership-filtered in SQL, `object.read`-probed per row. A row the caller may not read
+is simply **absent**, indistinguishable from one that does not exist, which is what
+keeps the preflight from being an existence oracle. It refuses what it cannot answer
+honestly rather than approximating: without an explicit `type` (an external id is
+unique only within its type), combined with a semantic `query` (a relevance cut would
+report present rows as absent, and a sync run reads absent as "create"), and on an
+empty batch (a filter that silently disappeared would widen the read to the whole
+type).

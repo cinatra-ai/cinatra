@@ -8,6 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The root vitest config aliases @/lib/database to a stub whose connection
 // string is host "stub" — notifications-host reads getPostgresConnectionString
@@ -27,7 +28,7 @@ vi.mock("@/lib/database", async () => {
 
 const TEST_SCHEMA = "cinatra_test_upload_refusal_1890";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const USER = "user-refusal-1890";
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#1890 upload-refusal advisory persistence (real DB)", () => {

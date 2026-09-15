@@ -134,6 +134,24 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
       "provider failure on an Anthropic-default instance.",
   },
   {
+    purpose: "output-form-detection",
+    file: "src/lib/artifacts/output-detection-model-rung.ts",
+    what:
+      "The detection ladder's MODEL RUNG (cinatra#3029): names the form of an " +
+      "end-node output the structural probes left ambiguous - plain text, " +
+      "markdown or csv - over at most the first 16 KB, one fixed question with a " +
+      "fixed set of answers at zero temperature, cached by content hash.",
+    policy: "exact-default",
+    rationale:
+      "Provider-neutral classification with no capability dependency, and it " +
+      "deliberately reuses the SAME configured runtime the meaning matcher and " +
+      "the object classifier already send content to, so the default road adds " +
+      "no new class of data leaving the deployment. It degrades cleanly: an " +
+      "unconfigured runtime, an unparseable answer or a verdict below the " +
+      "confidence threshold yields plain text, and the organisation can switch " +
+      "the rung off entirely.",
+  },
+  {
     purpose: "skill-prefill-generation",
     file: "packages/skills/src/prefill-generation.ts",
     what: "Generates the prefilled SKILL.md scaffold on skill creation.",
@@ -205,15 +223,6 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
     pinnedProvider: "openai",
     rationale:
       "INVENTORY FINDING: pinned in code today via an explicit provider argument. Recorded as-is rather than silently widened — the extraction depends on strict structured-output schema adherence that has only been validated on OpenAI. Re-evaluating it is follow-up work, not a drive-by change inside the un-fencing.",
-  },
-  {
-    purpose: "agent-run-input-extraction",
-    file: "src/app/api/chat/explicit-dispatch-server.ts",
-    what: "Extracting structured agent-run inputs from a chat prompt.",
-    policy: "explicit-pin",
-    pinnedProvider: "openai",
-    rationale:
-      "Same strict structured-output dependency and the same as-is recording as chat-hitl-prompt-drive.",
   },
 
   // ---- separate-default --------------------------------------------------

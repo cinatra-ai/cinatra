@@ -25,6 +25,8 @@ import "server-only";
  */
 import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 
+import { artifactKindLabelFor } from "./artifact-kind-label";
+
 // ---------------------------------------------------------------------------
 // Presentation helpers (pure)
 // ---------------------------------------------------------------------------
@@ -46,22 +48,12 @@ export function humanizeTypeLocalPart(typeId: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-/**
- * The extension label for the Defined by / Used by columns: the humanized
- * package name (scope stripped, per-word title-cased) — the SAME derivation the
- * library surface renders for its extension labels. `@cinatra-ai/email` →
- * "Email", `@cinatra-ai/prospect-lists` → "Prospect Lists". A version/local
- * suffix (`:local`, `@1.2.0`) is dropped before humanizing.
- */
-export function humanizeExtensionPackage(packageName: string): string {
-  const afterScope = packageName.includes("/")
-    ? packageName.slice(packageName.indexOf("/") + 1)
-    : packageName;
-  const base = afterScope.split(":")[0]?.split("@")[0] ?? afterScope;
-  const words = base.split(/[-_]+/).filter(Boolean);
-  if (words.length === 0) return packageName;
-  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-}
+// The extension label for the Defined by / Used by columns is the pack's own
+// DECLARED name, read through the one host function (`artifactKindLabelFor`)
+// whose package-id derivation is the floor. The former local
+// `humanizeExtensionPackage` was a third copy of that derivation, commented as
+// "the SAME derivation the library surface renders" — which is now true by
+// construction rather than by hand.
 
 // ---------------------------------------------------------------------------
 // Row model + pure derivation
@@ -120,14 +112,14 @@ export function deriveTypeDefinitionRows(
     const dependents = definer ? dependentsByDefiner.get(definer) : undefined;
     const usedByLabels = dependents
       ? Array.from(dependents)
-          .map(humanizeExtensionPackage)
+          .map((pkg) => artifactKindLabelFor(pkg))
           .sort((a, b) => a.localeCompare(b))
       : [];
     return {
       typeId,
       displayName: humanizeTypeLocalPart(typeId),
       definedByPackage: definer,
-      definedByLabel: definer ? humanizeExtensionPackage(definer) : "—",
+      definedByLabel: definer ? artifactKindLabelFor(definer) : "—",
       usedByLabels,
     };
   });

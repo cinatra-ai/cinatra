@@ -11,7 +11,7 @@ import type { Permission } from "./permissions";
 
 const PERMISSION_SET = new Set<string>([
   "agent.read", "agent.list", "agent.execute", "agent.update", "agent.delete",
-  "agent.share", "agent.managePermissions",
+  "agent.share", "agent.managePermissions", "agent.assignments.manage",
   "run.read", "run.list", "run.readData", "run.cancel", "run.share",
   "run.approveHitl", "run.respondToHitl", "run.resume", "run.editOutput",
   "object.read", "object.list", "object.search", "object.create", "object.update",
@@ -25,6 +25,7 @@ const PERMISSION_SET = new Set<string>([
   "organization.manageMembers",
   "skill.read", "skill.list", "skill.assign", "skill.create", "skill.update",
   "skill.delete", "skill.install", "skill.manageVisibility",
+  "context.assign",
   "connector.read", "connector.use", "connector.create", "connector.update",
   "connector.delete",
   "registry.read", "registry.install", "registry.update", "registry.uninstall",

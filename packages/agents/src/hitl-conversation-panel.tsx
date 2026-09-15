@@ -5,6 +5,37 @@ import { createPortal } from "react-dom";
 import { PromptField, type PromptFieldHandle } from "@cinatra-ai/sdk-ui";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
+import type { RunWindowSurface } from "./run-window-conversation-store";
+
+/**
+ * ONE WINDOW, FIVE READINGS — the sentence in the empty field, per surface
+ * (design `458fb7ffce6c`, `app-artifact-review.html` §X).
+ *
+ * §X, in its own words: "These are five readings of one window, never five
+ * windows … One thing is read per surface — the sentence in the empty field,
+ * which names what the window does where it stands. Nothing else about the
+ * window changes from one reading to the next."
+ *
+ * WHY THE MAP AND NOT A PROP EACH MOUNT FILLS IN. The five sentences are the
+ * drawing's, character for character, and they belong together where they can
+ * be read against it. A mount declares WHICH READING it is — the surface it
+ * already declares to the one controller — and never a wording of its own, so
+ * no window can drift from the drawing on its own, and a sixth surface cannot
+ * compile without a sentence for it.
+ */
+export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
+  /** The run page — a step waiting for its fields. */
+  "run-page": "Ask Cinatra to fill the fields above, or ask about this step…",
+  /** The step-by-step screen — one step of a multi-step run. */
+  "step-by-step": "Ask Cinatra to fill this step's fields, or ask about the run…",
+  /** The schedule screen — the scheduler form, in both of its states. */
+  schedule: "Ask Cinatra to set the schedule above, or ask about it…",
+  /** The armed-trigger tab — the run's schedule as it stands. */
+  "armed-trigger": "Ask Cinatra to change this schedule, or ask about it…",
+  /** The review page — under the decision bar. */
+  review: "Ask Cinatra about this review, or ask for changes to the work…",
+};
+
 export type HitlConversationEntry = {
   id: number;
   role: "user" | "assistant";
@@ -12,7 +43,13 @@ export type HitlConversationEntry = {
 };
 
 export type HitlConversationPanelProps = {
-  /** Stable element to portal into (parent computes via document.querySelector("main")). */
+  /**
+   * Stable element to portal into — the mount the HOST renders where the
+   * drawing puts the window, under the work it belongs to (cinatra#3188 item
+   * 3). A host that hands over the page frame instead puts the window at the
+   * END of the page rather than under anything in particular, which is the one
+   * thing this prop must not be used for.
+   */
   portalTarget: HTMLElement | null;
   /** Visibility gate set by the parent. */
   visible: boolean;
@@ -22,6 +59,17 @@ export type HitlConversationPanelProps = {
   promptPending: boolean;
   /** Storage key for PromptField persistence (template + xRenderer scoped). */
   storageKey: string;
+  /**
+   * WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
+   * `app-artifact-review.html` §X).
+   *
+   * The window takes its sentence from the surface it is mounted on. The mount
+   * names the surface — the same one it opens the run's conversation with —
+   * and the panel reads the drawing's sentence for it out of
+   * {@link RUN_WINDOW_PLACEHOLDERS}. Nothing else about the window changes
+   * from one reading to the next.
+   */
+  surface: RunWindowSurface;
   /** Async submit callback — parent drives the fetch + conversation
    *  update. The optional second argument carries pending paperclip
    *  attachments uploaded inside the panel; back-compat-by-default
@@ -58,10 +106,14 @@ export function HitlConversationPanel({
   conversation,
   promptPending,
   storageKey,
+  surface,
   onSubmit,
   resetSignal,
   enableAttachments,
 }: HitlConversationPanelProps) {
+  // §X's one difference between the five readings, resolved here rather than at
+  // any mount: the sentence in the empty field.
+  const placeholder = RUN_WINDOW_PLACEHOLDERS[surface];
   const [convOpen, setConvOpen] = useState(false);
   const convContainerRef = useRef<HTMLDivElement>(null);
   const convScrollRef = useRef<HTMLDivElement>(null);
@@ -183,15 +235,16 @@ export function HitlConversationPanel({
 
   if (!visible || !portalTarget) return null;
 
+  // THE WINDOW STANDS UNDER THE WORK, IT DOES NOT DOCK (cinatra#3188 item 3).
+  // The ratified drawing puts it "below the scheduler, in the same column", and
+  // has the gate's "decision bar and the run's prompt window ... fill the run
+  // detail on the right" — a window fixed across the foot of the frame is
+  // neither. So the dock goes (`sticky bottom-0 z-30`), and with it the fade
+  // that existed only to soften the page passing UNDER a floating window;
+  // nothing passes under it now. The inset it keeps is the window's own
+  // breathing room inside the column it stands in.
   return createPortal(
-    <div
-      data-conv-open={convOpen}
-      className="sticky bottom-0 z-30 px-5 pb-4 pt-6"
-      style={{
-        background:
-          "linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 85%, transparent) 30%, var(--background) 55%)",
-      }}
-    >
+    <div data-conv-open={convOpen} className="px-5 pb-4 pt-6">
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
           <div className="mb-3 rounded-panel border border-line bg-surface p-3 shadow-sm">
@@ -226,7 +279,7 @@ export function HitlConversationPanel({
         <div onFocus={handleFocus} onClick={handleFocus}>
           <PromptField
             ref={promptFieldRef}
-            placeholder="Ask Cinatra to suggest edits to the fields above…"
+            placeholder={placeholder}
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}

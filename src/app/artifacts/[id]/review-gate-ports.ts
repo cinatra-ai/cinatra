@@ -47,6 +47,7 @@ import {
 } from "@/lib/authz/build-actor-context";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import {
   type PrepareReviewInput,
   type PrepareReviewResult,
@@ -81,6 +82,10 @@ import {
   prepareArtifactReviewTargets,
   type ReviewRunGatePorts,
 } from "./review-target-prepare";
+// TYPE-ONLY (wave 3): the roads are constructed on the surfaces that choose
+// them, so the four locked routes that reach this module carry none of their
+// graphs. See `./review-surface-roads`.
+import type { ReviewSurfaceRoads } from "./review-surface-roads";
 
 /** The reviewing principal + org + role hints threaded to every port. */
 export interface ReviewActorContext {
@@ -105,14 +110,23 @@ export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePo
 }
 
 /**
- * Prepare a caller's review targets against a run's pending gate — the fully
- * bound counterpart of the #1807 fenced `prepareArtifactReviewTargets`. Resolves
- * the kernel actor for the artifact-side reads, binds the run/gate ports, and
- * runs the pure core.
+ * Prepare a caller's review targets against a run's gate — the fully bound
+ * counterpart of the #1807 fenced `prepareArtifactReviewTargets`. Resolves the
+ * kernel actor for the artifact-side reads, binds the run/gate ports, and runs
+ * the pure core.
+ *
+ * A PENDING gate by default. The read-only history reading passes
+ * `acceptResolvedGate` on the input to prepare a DECIDED gate's frozen set as
+ * well (`loadReviewGateSurface`'s settled answer, and nowhere else); every
+ * decision path leaves it unset and is refused on a gate that is no longer
+ * pending, exactly as before.
  */
 export async function prepareReviewTargets(args: {
   input: PrepareReviewInput;
   actorCtx: ReviewActorContext;
+  /** The roads this surface named (wave 3). Absent ⇒ the session byte routes,
+   *  the channel's named absence, and the first-party capture pair. */
+  roads?: ReviewSurfaceRoads | null;
 }): Promise<PrepareReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
@@ -125,6 +139,10 @@ export async function prepareReviewTargets(args: {
     orgId: actorCtx.orgId,
     actor: kernelActor,
     runGatePorts: bindReviewRunGatePorts(actorCtx),
+    // WAVE 3 — the roads. A surface that named one gets its addresses and its
+    // content; every other caller passes nothing and keeps exactly what it had.
+    byteMinter: args.roads?.byteMinter,
+    buildContent: args.roads?.buildContent,
   });
 }
 
@@ -132,15 +150,28 @@ export async function prepareReviewTargets(args: {
 // DECIDE — the full SubmitDecisionPorts the decision core consumes.
 // ---------------------------------------------------------------------------
 
-/** Map the type-resolved mount to audit provenance (host-authoritative). */
-function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
-  if (resolved.kind === "build-map") {
-    return { kind: "build-map", packageName: resolved.packageName, digest: null };
+/** Map the type-resolved mount to audit provenance (host-authoritative).
+ * Exported for its own unit test — the submit-time port that calls it needs a
+ * database, and the mapping is exactly what must not drift when a mount kind is
+ * added (cinatra#2931 W4). */
+export function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
+  switch (resolved.kind) {
+    case "build-map":
+      return { kind: "build-map", packageName: resolved.packageName, digest: null };
+    case "runtime":
+      return {
+        kind: "runtime",
+        packageName: resolved.packageName,
+        digest: resolved.descriptor.tuple.digest,
+      };
+    // The FORM RUNG, re-resolved at submit time like every other kind, so a
+    // rendered text target is recorded as RENDERED. Recording it as a floor
+    // would put a fallback on the audit row of a review the reader read in full.
+    case "form":
+      return { kind: "first-party", packageName: null, digest: null };
+    case "floor":
+      return { kind: "floor", packageName: resolved.packageName, digest: null };
   }
-  if (resolved.kind === "runtime") {
-    return { kind: "runtime", packageName: resolved.packageName, digest: resolved.descriptor.tuple.digest };
-  }
-  return { kind: "floor", packageName: resolved.packageName, digest: null };
 }
 
 /** Bind every decision port (run access + gate state + submit-time membership +
@@ -163,15 +194,14 @@ export function bindSubmitDecisionPorts(ctx: ReviewActorContext): SubmitDecision
       target.representationRevisionId,
     );
     if (!member) return { kind: "floor", packageName: null, digest: null };
-    const props = artifactPorts.buildProps({
-      artifact: read.artifact,
-      representationRevisionId: target.representationRevisionId,
-      mime: member.mime,
-    });
+    // The mount is resolved at the host's CEILING (enabler 0.4: the check is a
+    // window, not an equality), and provenance is derived from the mount alone —
+    // the submit path records WHICH renderer resolved, never a props snapshot,
+    // so it no longer builds one it would immediately throw away.
     const resolved = await artifactPorts.resolveMount({
       artifact: read.artifact,
       mime: member.mime,
-      propsApiVersion: props.propsApiVersion,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
     });
     return provenanceFromResolvedMount(resolved);
   };
@@ -315,7 +345,7 @@ export async function readReviewGatePinnedTargets(
 
 // ---------------------------------------------------------------------------
 // SURFACE LOADER — the host decision-chrome page's single server entrypoint
-// (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 §I–VI). Composes the run/gate
+// (cinatra#1795 S12 item 4; spec design@0c484154b069c6369a33c1375056126289888997 §I–VI). Composes the run/gate
 // ports into the discriminated `ReviewSurfaceModel` the page renders: reads the
 // pinned gate, prepares EVERY pinned target (the host reviews the whole gate —
 // the reviewer never supplies targets), and resolves the terminal/comment
@@ -326,17 +356,33 @@ export async function readReviewGatePinnedTargets(
  * Load the review surface for a run's gate. Order is security-load-bearing
  * (§V): read access FIRST (a viewer with none never reaches the targets), then
  * the gate's own state — a DECIDED gate is `settled` (the card draws its
- * recorded reading) and an unavailable one is a single blocked state, gate
- * existence never leaked — then prepare the pinned set, then the decision
- * permissions. Never throws for an authorization/gate-state outcome — those are
+ * recorded reading over the reviewed target(s), kept read-only) and an
+ * unavailable one is a single blocked state, gate existence never leaked — then
+ * prepare the pinned set, then the decision permissions. Never throws for an authorization/gate-state outcome — those are
  * modelled states, not errors.
  */
 export async function loadReviewGateSurface(args: {
   runId: string;
   reviewTaskId: string;
   actorCtx: ReviewActorContext;
+  /**
+   * THE ROADS THIS SURFACE NAMED (wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
+   *
+   * The island renders the same gate, for the same reader, through this same
+   * loader — that is why the card and the page cannot drift — but its reader
+   * holds a broker bearer and no cookie, so every address the surface hands out
+   * has to be one a subresource load can actually fetch. Naming the roads here
+   * is what switches all of it at once: the media displays' byte addresses, the
+   * CMS picture pair's, and the content the three browser fetchers stop
+   * fetching.
+   *
+   * ABSENT IS THE UNCHANGED ANSWER, in every particular.
+   */
+  roads?: ReviewSurfaceRoads | null;
 }): Promise<ReviewSurfaceModel> {
   const { runId, reviewTaskId, actorCtx } = args;
+  const roads = args.roads ?? null;
 
   // 1. Read access (§V) — no run read ⇒ never reach the surface.
   const readAccess = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
@@ -356,7 +402,12 @@ export async function loadReviewGateSurface(args: {
   //                      suggestion chips — so the surface says "mount the card"
   //                      rather than blocking before the card exists. Plan §4.4
   //                      step 7: everyone looking at that run, in any channel,
-  //                      sees the same settled card.
+  //                      sees the same settled card. And that card is not a
+  //                      decision line over an empty box: "A resolved gate opens
+  //                      read-only: what was decided, and the reviewed
+  //                      target(s), kept for the run's audit trail" — so this
+  //                      answer prepares the gate's OWN frozen pinned set,
+  //                      read-only, exactly as the pending answer prepares it.
   //
   //      `unavailable` → `blocked`, unchanged. A gate that never existed and a
   //                      row too corrupt to read are not a decided review, and
@@ -369,7 +420,42 @@ export async function loadReviewGateSurface(args: {
     return { kind: "blocked", reason: "no-longer-pending" };
   }
   if (gate.status !== "pending") {
-    return { kind: "settled" };
+    // The decided reading KEEPS THE REVIEWED WORK. The set is read from the gate
+    // itself — the frozen one it pinned, so the reader sees the revision the
+    // decision was taken on and never a later re-materialization ("You approve
+    // exactly what you saw") — and prepared through the SAME never-blank ladder
+    // the pending reading uses. `acceptResolvedGate` is opened HERE and nowhere
+    // a decision is taken; nothing on this path can decide anything, because the
+    // decision floor is the card's and the decided card draws none.
+    const pinned = await readReviewGatePinnedTargets(runId, reviewTaskId);
+    // The gate answered `resolved` a line ago; a set that is gone underneath is
+    // a row that can no longer be read, which is blocked, not decided.
+    if (!pinned) return { kind: "blocked", reason: "no-longer-pending" };
+    const history = await prepareReviewTargets({
+      input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
+      actorCtx,
+      roads,
+    });
+    if (!history.ok) {
+      return history.error.kind === "run-access-denied"
+        ? { kind: "not-authorized" }
+        : { kind: "blocked", reason: "no-longer-pending" };
+    }
+    return {
+      kind: "settled",
+      targets: history.prepared,
+      pinnedCapturePairs: await loadPinnedCapturePairsForTargets(
+        actorCtx.orgId,
+        history.prepared,
+        isRepairSuccessorTaskId(reviewTaskId)
+          ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
+          : null,
+        roads,
+      ),
+      // As on the ready path: no gate/run column carries a producer summary in
+      // this slice, so the chrome renders nothing rather than an empty summary.
+      agentSummary: null,
+    };
   }
 
   // 3. Prepare EVERY pinned target through the fully-bound core (never-blank
@@ -377,6 +463,7 @@ export async function loadReviewGateSurface(args: {
   const prepared = await prepareReviewTargets({
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
+    roads,
   });
   if (!prepared.ok) {
     switch (prepared.error.kind) {
@@ -425,6 +512,7 @@ export async function loadReviewGateSurface(args: {
     actorCtx.orgId,
     targets,
     repairSuccessorGateId,
+    roads,
   );
 
   return {
@@ -562,12 +650,33 @@ async function loadPinnedCapturePairsForTargets(
   orgId: string,
   targets: readonly PreparedReviewTarget[],
   repairSuccessorGateId: string | null,
+  roads: ReviewSurfaceRoads | null = null,
 ): Promise<Record<string, PinnedCapturePairView>> {
   const out: Record<string, PinnedCapturePairView> = {};
   for (const prepared of targets) {
+    // WAVE 3 — "The CMS picture pair's broker minter — built today, with no
+    // caller — is wired here, so the pair loads inside a third-party
+    // application as well." This is that caller. The broker builder reads the
+    // SAME store rows and projects them through the SAME pure pair builder as
+    // the first-party arm below; only the address each picture carries differs,
+    // so the two tiers cannot show different comparisons.
+    //
+    // THE REPAIR SUCCESSOR'S PAIR IS NOT THIS BUILDER'S TO MAKE. A repair
+    // reading's pair is a comparison ACROSS two targets — the base gate's
+    // current picture against the successor's repaired one, with the drifted
+    // regions — and a per-target minter can only ever mint the successor's own
+    // two. Letting it answer here would silently replace the comparison the
+    // reviewer is being asked about with a different one, and the base
+    // picture's capability would in any case be sealed to a gate that does not
+    // pin the base target. So the surface's road is asked ONLY where the pair
+    // is a single target's; a repair successor keeps the first-party pair, and
+    // its pictures on the session road are a named gap rather than a wrong
+    // comparison drawn confidently.
     const pair = repairSuccessorGateId
       ? await loadPinnedRepairPair(orgId, repairSuccessorGateId, prepared.target)
-      : loadPinnedCapturePair(orgId, prepared.target, "review");
+      : roads?.capturePair
+        ? roads.capturePair(prepared.target)
+        : loadPinnedCapturePair(orgId, prepared.target, "review");
     if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
   }
   return out;

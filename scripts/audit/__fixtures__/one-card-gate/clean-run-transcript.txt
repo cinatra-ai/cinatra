@@ -1,0 +1,3 @@
+$ node scripts/audit/chat-hitl-one-card-gate.mjs
+[chat-hitl-one-card] clean — every lifecycle card kind is drawn, consumed, mounted and proven.
+exit 0

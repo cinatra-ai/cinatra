@@ -27,8 +27,12 @@ import React, { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
+const panelProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 vi.mock("@cinatra-ai/agents/client-entry", () => ({
-  AgenticRunPanel: () => <div data-testid="run-panel-stub" />,
+  AgenticRunPanel: (props: Record<string, unknown>) => {
+    panelProps.current = props;
+    return <div data-testid="run-panel-stub" />;
+  },
 }));
 vi.mock("../use-agent-creation-progress", () => ({
   useAgentCreationProgress: () => [],
@@ -171,5 +175,56 @@ describe("a host that cannot say who is asking issues no request", () => {
     );
     expect(fetchCalls).toHaveLength(0);
     expect(screen.queryByTestId("run-panel-stub")).toBeNull();
+  });
+});
+
+// cinatra#2997 — the panel re-reads the run's review slot after the run
+// finishes, so the placeholder can become the review screen without anybody
+// asking. That read is the SAME route the seed is, so it must travel on the SAME
+// credential: the wrapper hands the panel a reader built by the one shared
+// builder, and a host that cannot say who is asking hands it nothing at all.
+describe("the review-slot reader asks with the host's own credential", () => {
+  it("BROKER: the slot read carries the widget headers and omits cookies", async () => {
+    render(brokerHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+
+    const read = panelProps.current!.readReviewSlot as () => Promise<unknown>;
+    expect(typeof read).toBe("function");
+    fetchCalls = [];
+    await read();
+
+    expect(fetchCalls).toHaveLength(1);
+    const call = fetchCalls[0];
+    expect(call.url).toBe(SEED_URL);
+    expect(call.init.credentials).toBe("omit");
+    const headers = headersOf(call.init);
+    expect(headers["x-cinatra-widget-user-token"]).toBe("cwu_user");
+    expect(headers["authorization"]).toBe("Bearer cit_site");
+  });
+
+  it("COOKIE: the first-party slot read is the first-party request, unchanged", async () => {
+    render(cookieHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+
+    fetchCalls = [];
+    await (panelProps.current!.readReviewSlot as () => Promise<unknown>)();
+
+    expect(fetchCalls).toHaveLength(1);
+    expect("credentials" in fetchCalls[0].init).toBe(false);
+    for (const name of Object.keys(headersOf(fetchCalls[0].init))) {
+      expect(name.startsWith("x-cinatra-widget-")).toBe(false);
+    }
+  });
+
+  it("REFUSED: no reader is handed down, so nothing is ever read", async () => {
+    panelProps.current = null;
+    render(refusedHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await waitFor(() =>
+      expect(screen.getByText(/cannot be shown here/i)).toBeTruthy(),
+    );
+    expect(panelProps.current).toBeNull();
+    expect(fetchCalls).toHaveLength(0);
   });
 });

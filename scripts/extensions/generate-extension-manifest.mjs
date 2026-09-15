@@ -1194,7 +1194,7 @@ export const SCHEMA_CONFIG_FIELD_KEYS = {
   "named-action": new Set(["kind", "label", "actionId", "confirm", "role", "description"]),
   select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
   "record-list": new Set([
-    "kind", "label", "listActionId", "deleteActionId", "emptyState",
+    "kind", "label", "listActionId", "deleteActionId", "emptyState", "emptyStateDetail",
     "itemTitleKey", "itemSubtitleKey", "itemBadges", "description",
   ]),
   banner: new Set(["kind", "label", "variants"]),
@@ -1323,6 +1323,20 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
       errors.push(`${at}: record-list "deleteActionId" must be a valid action id`);
     }
     if (!nonEmptyStr(raw.emptyState)) errors.push(`${at}: record-list requires "emptyState"`);
+    // cinatra#3231 — the optional Empty-state detail (helper + action label).
+    // Mirrors the TS parser: object, allowlisted keys, non-empty strings, and
+    // at least one of the two.
+    if (raw.emptyStateDetail !== undefined) {
+      const dAt = `${at}.emptyStateDetail`;
+      const d = raw.emptyStateDetail;
+      if (!isObj(d)) {
+        errors.push(`${dAt}: must be an object`);
+      } else if (rejectUnknownConfigKeys(d, new Set(["helper", "actionLabel"]), dAt, errors)) {
+        if (d.helper !== undefined && !nonEmptyStr(d.helper)) errors.push(`${dAt}: "helper" must be a non-empty string`);
+        if (d.actionLabel !== undefined && !nonEmptyStr(d.actionLabel)) errors.push(`${dAt}: "actionLabel" must be a non-empty string`);
+        if (d.helper === undefined && d.actionLabel === undefined) errors.push(`${dAt}: requires "helper" and/or "actionLabel"`);
+      }
+    }
     if (!nonEmptyStr(raw.itemTitleKey)) errors.push(`${at}: record-list requires "itemTitleKey"`);
     const badges = raw.itemBadges;
     if (!Array.isArray(badges)) {
@@ -1330,12 +1344,21 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
     } else {
       badges.forEach((b, j) => {
         const bAt = `${at}.itemBadges[${j}]`;
-        if (!isObj(b) || !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant"]), bAt, errors)) {
+        // cinatra#2368: `showsValue` is the opt-in that makes a badge render the
+        // ROW's own value at `key` instead of the static `label` — mirrors the
+        // authoritative parser in src/lib/extension-schema-config.ts.
+        if (
+          !isObj(b) ||
+          !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant", "showsValue"]), bAt, errors)
+        ) {
           if (isObj(b)) return;
           errors.push(`${bAt}: must be an object`);
           return;
         }
         if (!nonEmptyStr(b.key) || !nonEmptyStr(b.label)) errors.push(`${bAt}: requires "key" and "label"`);
+        if (b.showsValue !== undefined && typeof b.showsValue !== "boolean") {
+          errors.push(`${bAt}: "showsValue" must be a boolean`);
+        }
         if (!nonEmptyStr(b.variant) || !SCHEMA_CONFIG_BADGE_VARIANTS.has(b.variant)) {
           errors.push(`${bAt}: invalid badge variant ${JSON.stringify(b.variant)}`);
         }
@@ -1616,6 +1639,46 @@ export function agentRendererComponentHostResolvable(tsconfigText, specifier, ex
 // same fail-closed posture. Re-exported here for the generator's own presence
 // probe and its tests.
 export { readDeclaredExtensionUniverse, assertDeclarationShapes };
+
+/**
+ * The PACKAGING RULE for an artifact extension's display (item 0.8 of
+ * `PLAN: Agents Lifecycle (C)`): "every artifact extension declares its display
+ * through its own `exports`, the generator requires it for artifact extensions,
+ * and the thirteen hand-maintained display aliases are deleted".
+ *
+ * So the package's own `exports` entry is REQUIRED and a host-owned tsconfig
+ * path alias is NOT an accepted substitute for it — an alias standing in for
+ * the packaging is exactly the host-edit-per-extension coupling the item
+ * removes. The alias survives only as a RESOLUTION ROAD, for a package the host
+ * deliberately does not depend on (the guarded-optional road); a package the
+ * host depends on resolves the ordinary way, through node_modules.
+ *
+ * Split out of buildManifest so the rule is directly testable on fixtures.
+ */
+export function assertArtifactRendererPackaging({
+  packageName,
+  slot,
+  specifier,
+  exportsKey,
+  hasExportsEntry,
+  hasAliasRoad,
+  hasDependencyEdge,
+}) {
+  if (!hasExportsEntry) {
+    throw new Error(
+      `[extension-manifest] ${packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" is not ` +
+        `published by its own package (no package.json exports["${exportsKey}"]) — an artifact extension declares ` +
+        `its display through its own exports; a host tsconfig.json path alias is not an accepted substitute`,
+    );
+  }
+  if (!hasAliasRoad && !hasDependencyEdge) {
+    throw new Error(
+      `[extension-manifest] ${packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" has no ` +
+        `resolution road (no root dependency edge on ${packageName}, no tsconfig.json path alias) — ` +
+        `the generated literal import would fail at runtime`,
+    );
+  }
+}
 
 export async function buildManifest() {
   const inv = await buildInventory();
@@ -2286,9 +2349,11 @@ export async function buildManifest() {
   // connector-setup-pages literal-import pattern), keyed `<pkg>::<slot>`. STAGED
   // + INERT: no bundled artifact declares `ui` yet (the companion-repo kind gate
   // rejects it until S3), so the emitted map is `{}` on day one. FAIL-CLOSED
-  // like the streams collection: validate the entry resolves to a real,
-  // importable module (tsconfig alias OR package.json exports) so the generated
-  // literal import can never fail at runtime; a runtime-installed claimant that
+  // like the streams collection, and — since item 0.8 of `PLAN: Agents Lifecycle
+  // (C)` — under the PACKAGING RULE: the package's own `exports` entry is
+  // REQUIRED, and a host path alias is no longer an accepted substitute for it;
+  // an alias may only supply the resolution road for a package the host does not
+  // depend on. See assertArtifactRendererPackaging. A runtime-installed claimant that
   // is absent from the build is the host's "requires rebuild" degrade, not a
   // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
   // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
@@ -2326,13 +2391,17 @@ export async function buildManifest() {
         const specifier = `${r.packageName}/${importSubpath}`;
         const exportsKey = `./${importSubpath}`;
         const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
-        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
-          throw new Error(
-            `[extension-manifest] ${r.packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" is not ` +
-              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
-              `the generated literal import would fail at runtime`,
-          );
-        }
+        assertArtifactRendererPackaging({
+          packageName: r.packageName,
+          slot,
+          specifier,
+          exportsKey,
+          hasExportsEntry,
+          hasAliasRoad: tsconfigText.includes(JSON.stringify(specifier)),
+          hasDependencyEdge: Boolean(
+            rootPkg?.dependencies?.[r.packageName] ?? rootPkg?.devDependencies?.[r.packageName],
+          ),
+        });
         const representations = Array.isArray(renderer.representations)
           ? renderer.representations.filter((m) => typeof m === "string")
           : [];
@@ -3060,6 +3129,45 @@ function emitWebhookRegistryMeta(webhookHooks) {
   );
 }
 
+// The DECLARED artifact-kind labels (cinatra#2926 / #3023 — the core/extension
+// border). One entry per present `kind:"artifact"` record that declares
+// `cinatra.displayName`: the name the PACK gives its own kind. Sorted by
+// package so the emission is byte-stable under `--check`.
+export function artifactKindLabelEntries(records) {
+  return records
+    .filter(
+      (r) =>
+        r.kind === "artifact" &&
+        typeof r.displayName === "string" &&
+        r.displayName.trim().length > 0,
+    )
+    .map((r) => ({ packageName: r.packageName, label: r.displayName.trim() }))
+    .sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0));
+}
+
+// Import-free pure data (client- AND server-safe). Safe in any bundle.
+export function emitArtifactKindLabels(records) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = artifactKindLabelEntries(records)
+    .map((e) => `  ${JSON.stringify(e.packageName)}: ${JSON.stringify(e.label)},`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Declared artifact-kind labels (cinatra#2926 / #3023 — the core/extension\n` +
+    `// border). One entry per present kind:"artifact" package that declares\n` +
+    `// cinatra.displayName, which the pack owns as the name of ITS OWN kind.\n` +
+    `// Import-free pure data (client- and server-safe). The ONE host reader is\n` +
+    `// src/lib/artifacts/artifact-kind-label.ts, whose package-id derivation is\n` +
+    `// only the never-blank FLOOR for a pack that declares nothing.\n` +
+    `// A carried DECLARATION, never a host roster: a package absent here has not\n` +
+    `// spoken, it is not a package the host holds an opinion about.\n` +
+    `export const GENERATED_ARTIFACT_KIND_LABELS: Readonly<Record<string, string>> = {\n` +
+    (body ? `${body}\n` : "") +
+    `};\n`
+  );
+}
+
 function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs = []) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const setupBody = setupPages
@@ -3106,7 +3214,7 @@ function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs =
 // "requires rebuild", never a blank. Empty on day one (no bundled artifact
 // declares `cinatra.artifact.ui` yet) — an intentionally empty seam like
 // GENERATED_CLIENT_WIDGETS.
-function emitArtifactRenderers(artifactRenderers) {
+export function emitArtifactRenderers(artifactRenderers) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = artifactRenderers
     .map((a) => {
@@ -3606,6 +3714,7 @@ const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
 const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_ARTIFACT_RENDERERS = generatedOutPath("artifact-renderers.ts");
+const OUT_ARTIFACT_KIND_LABELS = generatedOutPath("artifact-kind-labels.ts");
 const OUT_FIELD_RENDERER_COMPONENTS = generatedOutPath("field-renderer-components.ts");
 const OUT_CHAT_VIEWS = generatedOutPath("chat-views.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
@@ -3654,6 +3763,7 @@ async function main() {
     [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
     [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
     [OUT_ARTIFACT_RENDERERS, emitArtifactRenderers(artifactRenderers)],
+    [OUT_ARTIFACT_KIND_LABELS, emitArtifactKindLabels(records)],
     [OUT_FIELD_RENDERER_COMPONENTS, emitFieldRendererComponents(fieldRendererComponents)],
     [OUT_CHAT_VIEWS, emitChatViews(chatViews)],
     [

@@ -261,6 +261,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact row-scope promotion-request store (cinatra#1437, epic #1424): the pending requests to WIDEN one artifact row's visibility through the shared approvals surface — create (partial-unique one-pending guard), the Inbox list/count reads, and the CAS-guarded decide/supersede/compensate transitions (business decisions returned as VALUES via rowCount, never a throw). Request-time store mirroring the agent_creation_request store idiom and artifact-claim-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
   },
+  "src/lib/objects/memory-promotion-request-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Memory row-promotion request store (cinatra#1381, epic #1373): the pending requests to WIDEN one memory concept row's ownership/visibility tuple through the shared approvals surface — create (the one-pending generated-column UNIQUE guard), the inbox/mine list + count reads, the CAS reject and supersede transitions (business decisions returned as VALUES via rowCount, never a throw), the re-exported team-containment read, and the advisory audience-visible duplicate count. The APPROVE claim is deliberately NOT executed here: it is BUILT here as a statement and co-committed with the canonical writer's widen inside one org-write-guarded transaction, which is why this store has no compensation path. Request-time store mirroring the artifact-promotion-request-store idiom (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
   "src/lib/objects/artifact-uninstall-operations.ts": {
     class: "migratable-background-setup",
     justification:
@@ -319,7 +324,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/run-selected-skill-revisions.ts": {
     class: "migratable-request-path",
     justification:
-      "The authoritative per-run selected skill-revision store (cinatra#2041 S3): immutable write (execution worker / headless auto-apply) + read (execution-start snapshot, llm-bridge delivery). Mirrors the sync-store shape of agent-run-skills-used.ts so both consumers share one import surface; the reads are best-effort at each call site (a failure falls back to the computed assignment, never failing the run/request). Also carries the run-level recommendation-skip record (cinatra#2794 S9b, table run_recommendation_skips / migration core__0095): the verified write pairs an ON CONFLICT DO NOTHING insert with a read-back on the SAME non-transactional call, so the marker is proved COMMITTED before the run's park is released — one call site that cannot be split without losing that guarantee. Request/run-time; migratable to async pooled access.",
+      "The authoritative per-run selected skill-revision store (cinatra#2041 S3): immutable write (execution worker / headless auto-apply) + read (execution-start snapshot, llm-bridge delivery). Mirrors the sync-store shape of agent-run-skills-used.ts so both consumers share one import surface; the reads are best-effort at each call site (a failure falls back to the computed assignment, never failing the run/request). Also carries the run-level recommendation-skip record (cinatra#2794 S9b, table run_recommendation_skips / migration core__0095): the verified write pairs an ON CONFLICT DO NOTHING insert with a read-back on the SAME non-transactional call, so the marker is proved COMMITTED before the run's park is released — one call site that cannot be split without losing that guarantee. Two further call sites carry the PRE-START selection edit (cinatra#3047): the Skills step stays editable while a run has not begun executing, so a re-decision must be able to take a skill OUT again — which a first-write-wins insert cannot do. Both test the run's status IN the statement, against PRE_EXECUTION_RUN_STATUSES, so a started run's materialized ledger is untouched whatever a caller asks for; the replace additionally runs its probe, its DELETE and its INSERT in ONE transaction, so the edit lands whole on a pre-start run or not at all and a dispatch cannot interleave between the two writes. Request/run-time; migratable to async pooled access.",
   },
   "src/lib/skill-efficacy.ts": {
     class: "migratable-request-path",
@@ -401,6 +406,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Policy-aware content snapshots for claimed typed object rows (cinatra#1430): captures an immutable JSON snapshot of a typed row's normalized data at resolution time as a representation revision over a blob resource, keyed for reuse in object_content_snapshots. Composed at context-resolution request time; the write branch runs under a per-artifact advisory-locked transaction (re-read under the lock). Sync leaf mirroring representation-store/resource-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/object-backed-contract.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The object-backed contract's review road (cinatra#3028, epic #3023 — enabler 0.13). Its ONE sync call site is the idempotent produced-event insert for a REUSED snapshot: a snapshot minted earlier for context pinning carries no produced event, so the first review of that row would open no gate without it. A single ON CONFLICT DO NOTHING insert on the review-opening request path, in the same sync leaf family as object-content-snapshot.ts, which it composes with; migratable to async pooled access with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/typed-promotion-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The typed promotion road's store half (cinatra#3028, epic #3023 — enabler 0.14). Three sync call sites, all on the library's Confirm request path: the base-typed row read (with its latest representation and the blob's own detected mime, because the promotion re-validates the shared content against the target type's accepted forms), the matcher-association read, and the append-only representation revision the promotion adds over the base revision's own resource. The retype itself is NOT here — it goes through the canonical history-aware objects writer. Sync leaf mirroring representation-store / semantic-assertion-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/context-selection-finalize.ts": {
     class: "migratable-request-path",
     justification:
@@ -469,7 +484,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/objects-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Core objects store read/written heavily on request paths. Highest-volume migration target for the staged async conversion.",
+      "Core objects store read/written heavily on request paths. Highest-volume migration target for the staged async conversion. cinatra#2591 adds one call site, resolveObjectIdsByAnchorNodeUuids: a READ-ONLY id resolution (SELECT id, graphiti_anchor_node_uuid WHERE graphiti_anchor_node_uuid = ANY($1) AND (org_id = $2 OR $2 IS NULL) AND deleted_at IS NULL) that maps the anchor UUIDs a graph recall returned back onto the rows they name. It goes through the SAME bridge as every other read in this file, adds NO write, and makes NO authorization decision: every resolved id is re-fetched through listObjectsByFilter with the caller's actor, which applies the ownership filter, the sealed-room project clause and the soft-delete filter in SQL. Same class, same migration path.",
   },
   "src/lib/project-writable.ts": {
     class: "migratable-request-path",

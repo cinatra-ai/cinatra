@@ -120,14 +120,14 @@ describe("partitionFindings — grandfathering by identity", () => {
   // from the live list made these tests pass only while debt existed — i.e. the
   // mechanism went untested exactly when the list was clean, which is the state
   // it is supposed to be in.
-  const KNOWN = "evidence/unbound-cell:X1__review-card__chat_thread__pending";
+  const KNOWN = "capture/unbound-cell:X1__review-card__chat_thread__pending";
   const POLICY_WITH_DEBT = {
     ...POLICY,
     knownFindings: [KNOWN],
     knownFindingNotes: { [KNOWN]: "a fixture entry, cleared by nothing" },
   };
   const findings = [
-    { key: KNOWN, code: "evidence/unbound-cell", detail: "" },
+    { key: KNOWN, code: "capture/unbound-cell", detail: "" },
     { key: "pointer-text:src/new.ts:10", code: "pointer-text", detail: "" },
   ];
 
@@ -209,8 +209,12 @@ describe("extractStringLiterals", () => {
 describe("the real tree", () => {
   it("discovers the shipped chat dispatch sources", () => {
     const sources = discoverDispatchSources(REPO_ROOT);
-    expect(sources).toContain("src/app/api/chat/explicit-dispatch-server.ts");
-    expect(sources).toContain("src/app/api/chat/explicit-dispatch.ts");
+    // cinatra#2935 (lifecycle-b W5d): the two pre-router modules are gone. The
+    // pin that remains is the card, and the assertion is now that the removed
+    // pair is NOT silently re-pinned by a stale literal.
+    expect(sources).not.toContain("src/app/api/chat/explicit-dispatch-server.ts");
+    expect(sources).not.toContain("src/app/api/chat/explicit-dispatch.ts");
+    expect(sources).toContain("packages/chat/src/inline-agent-run-card.tsx");
   });
 
   it("finds no pointer prose in the shipped dispatch surface today", () => {
@@ -245,9 +249,9 @@ beforeAll(() => {
     fixturePolicyPath,
     JSON.stringify({
       ...POLICY,
-      knownFindings: ["evidence/unbound-cell:X1__review-card__chat_thread__pending"],
+      knownFindings: ["capture/unbound-cell:X1__review-card__chat_thread__pending"],
       knownFindingNotes: {
-        "evidence/unbound-cell:X1__review-card__chat_thread__pending": "fixture",
+        "capture/unbound-cell:X1__review-card__chat_thread__pending": "fixture",
       },
     }),
   );
@@ -275,7 +279,7 @@ beforeAll(() => {
           proofs: [
             // Deliberately NOT one of the grandfathered cell names: this
             // fixture is the NEW claim a new branch makes, which must fail.
-            { file: "evidence/x/README.md", testName: "X9__review-card__chat_thread__pending.png" },
+            { file: "test-results/x/README.md", testName: "X9__review-card__chat_thread__pending.png" },
           ],
         },
       ],
@@ -303,7 +307,7 @@ describe("runGate over a fixture tree", () => {
     expect(result.exitCode).toBe(1);
     const codes = result.failing.map((f) => f.code);
     expect(codes).toContain("pointer-text");
-    expect(codes).toContain("evidence/unbound-cell");
+    expect(codes).toContain("capture/unbound-cell");
     expect(result.failing.find((f) => f.code === "pointer-text").detail).toMatch(
       /held-answer\.ts/,
     );
@@ -334,7 +338,7 @@ describe("runGate over a fixture tree", () => {
       },
     });
     expect(result.grandfathered.map((f) => f.code)).toContain(
-      "evidence/unbound-cell",
+      "capture/unbound-cell",
     );
     expect(result.failing.map((f) => f.code)).toEqual(["pointer-text"]);
   });

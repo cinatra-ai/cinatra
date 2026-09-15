@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("@/lib/database", () => ({
   readChatThreadForClassifier: () => null,
@@ -46,7 +47,7 @@ vi.mock("@/lib/database", () => ({
 
 const TEST_SCHEMA = "cinatra_test_artifact_matln_923";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 
 const ORG = "org-int-923";
 const RUN = "run-int-923";

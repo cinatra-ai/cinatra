@@ -227,7 +227,7 @@ export async function preflightAgentCreation(
   let environment: string | null = null;
   try {
     const svc = await import("@/lib/anthropic-skill-sync-service");
-    fingerprint = svc.deriveApiKeyFingerprint();
+    fingerprint = await svc.deriveApiKeyFingerprint();
     environment = svc.deriveEnvironmentNamespace();
   } catch (err) {
     errors.push({

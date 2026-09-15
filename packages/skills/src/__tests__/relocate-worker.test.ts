@@ -7,7 +7,7 @@
 //
 // Skipped when no real Postgres is available (e.g. CI without a DB). The
 // package vitest.config injects a non-connecting sentinel
-// (postgres://unused:unused@localhost:5432/unused) so env-shape checks pass;
+// (see vitest.placeholder-db-url.ts) so env-shape checks pass;
 // that sentinel is NOT a live DB, so it counts as "no DB" here — otherwise the
 // beforeAll pool.connect() would fire ECONNREFUSED and fail the whole file
 // instead of skipping cleanly.
@@ -18,6 +18,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 vi.mock("server-only", () => ({}));
 
@@ -38,7 +39,7 @@ vi.mock("../skills-store", async (importOriginal) => {
 const dbUrl = process.env.SUPABASE_DB_URL;
 // The unused:unused sentinel is the config's "env var is set but points at no
 // real server" placeholder; treat it (and any empty value) as no DB.
-const hasRealDb = !!dbUrl && !dbUrl.includes("//unused:unused@");
+const hasRealDb = !!dbUrl && !isPlaceholderDbUrl(dbUrl);
 const runDbTests = hasRealDb;
 const describeIfDb = runDbTests ? describe : describe.skip;
 

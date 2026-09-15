@@ -19,6 +19,7 @@ import {
   SDK_EXTENSIONS_ABI_VERSION,
 } from "@cinatra-ai/sdk-extensions/register";
 import type { AdmittedClientBundleTuple } from "@cinatra-ai/sdk-extensions/artifact-client-bundle";
+import { isPropsApiVersionSupported } from "@/lib/artifacts/props-version-negotiation";
 
 // ---------------------------------------------------------------------------
 // The never-blank FLOOR reason taxonomy (plan §2.6 / AC-5).
@@ -143,9 +144,17 @@ export function checkReactPeer(
 
 /**
  * SDK-ABI + props-contract compatibility: the host SDK ABI must satisfy the
- * renderer's `sdkAbiRange` AND the renderer's `propsApiVersion` must equal the
- * host snapshot's expected version. Both are known from the tuple — a
- * deterministic pre-import check (no module executed).
+ * renderer's `sdkAbiRange` AND the renderer's `propsApiVersion` must fall inside
+ * the host's SUPPORTED WINDOW. Both are known from the tuple — a deterministic
+ * pre-import check (no module executed).
+ *
+ * PER-DISPLAY NEGOTIATION, IN LOCKSTEP WITH THE BUILD MAP (enabler 0.4 of
+ * `PLAN: Agents Lifecycle (C)`, cinatra#3027). This was `===`, the same strict
+ * equality the build-map loader carried, and the two HAVE to move together: a
+ * build-map renderer and a signed-bundle renderer disagreeing about the
+ * negotiation rule would mean the same extension renders on one host and floors
+ * on the other. `expectedPropsApiVersion` is now the window's CEILING, kept
+ * under its historical name so no caller has to move.
  */
 export function checkAbi(
   tuple: AdmittedClientBundleTuple,
@@ -154,7 +163,9 @@ export function checkAbi(
   const abi = host.hostSdkAbi ?? SDK_EXTENSIONS_ABI_VERSION;
   return (
     isSdkAbiRangeSatisfied(abi, tuple.sdkAbiRange) &&
-    tuple.propsApiVersion === host.expectedPropsApiVersion
+    isPropsApiVersionSupported(tuple.propsApiVersion, {
+      max: host.expectedPropsApiVersion,
+    })
   );
 }
 

@@ -19,6 +19,11 @@ import { render, screen, cleanup } from "@testing-library/react";
 // (Same pattern as tests/orchestrator-run-panel.test.tsx.)
 // ---------------------------------------------------------------------------
 vi.mock("lucide-react", () => ({
+  // The gate's control floor draws the arrow glyph after the word
+  // (cinatra#3047 fix leg 8): the drawing's floor is "the primary
+  // Continue, right-aligned over a hairline floor".
+  ArrowRight: ({ className }: { className?: string }) =>
+    React.createElement("span", { "data-icon": "arrow-right", className }),
   ChevronDown: ({ className }: { className?: string }) =>
     React.createElement("span", { "data-icon": "chevron-down", className }),
   ChevronUp: ({ className }: { className?: string }) =>

@@ -33,6 +33,7 @@ import type { RenderableViewBase } from "../renderable-views";
 // than in a new leaf of its own.
 import {
   triggerScheduleProposalViewBodySchema,
+  type ProposedSchedule,
   type TriggerScheduleProposalViewBody,
 } from "./trigger-schedule-proposal-view";
 
@@ -129,46 +130,197 @@ export function lifecycleMomentParksRun(moment: LifecycleMoment): boolean {
   return moment !== "audit";
 }
 
+// ---------------------------------------------------------------------------
+// The SCHEDULE moment's default — one statement, read by the runner and by the
+// two surfaces that draw the card (cinatra#2936)
+// ---------------------------------------------------------------------------
+
+/** What the schedule screen offers before a person's run begins. */
+export type ScheduleDefault =
+  | { readonly kind: "run_after_setup" }
+  | { readonly kind: "stated"; readonly schedule: unknown }
+  | { readonly kind: "none"; readonly why: string };
+
 /**
- * How a kind REACHES a surface on the one wire.
+ * The schedule moment's own default, stated once.
  *
- * - `data_part` — the producer mints a versioned ref envelope at the tool_result
- *   arm and it rides a `DATA_PART` (this slice).
- * - `interrupt`  — the kind arrives as a TYPED `INTERRUPT` because the run is
- *   genuinely BLOCKED on the answer. `recommendation_hold` is the only one:
- *   the run waits, so a fire-and-forget data part would be the wrong frame.
- *   Its typed-interrupt discriminator lands with S4 (#2568); the kind is
- *   declared here so the registry is complete and the S4 slice fills a named
- *   seam instead of inventing a parallel one.
+ * Run right after setup, UNLESS the person stated a schedule in the conversation
+ * or changed it on the screen — and NEVER for a run nobody is present for. A
+ * schedule has no artifact type, destination or origin, so it is not a row in
+ * the policy table and no organization rule governs it: the decision is the
+ * runner's own, and `@cinatra-ai/agents/lifecycle-coordinator` is where it is
+ * declared and exported from.
+ *
+ * IT IS STATED HERE FOR THE REASON THE RESOLVE ENVELOPE ABOVE IS. The two
+ * surfaces that draw a schedule are CLIENT modules and the coordinator is
+ * `server-only`, so a decision whose only statement sat in the coordinator's own
+ * file could not reach a screen except as a second copy of itself — which is
+ * exactly what had happened: the scheduling step preselected "Run right after
+ * setup" from a local default of its own, and the decision was stated twice.
+ * This module is tier-neutral and already on every route graph that carries the
+ * barrel, so stating it here costs no locked route a module and leaves the
+ * coordinator, the card's server-side body and the form reading ONE answer.
+ *
+ * Nothing this function returns ARMS anything and `launchAgentRun` does not call
+ * it: it answers what the SCREEN offers.
+ */
+export function scheduleDefaultForLaunch(input: {
+  humanPresent: boolean;
+  /** A schedule the person already stated, if any. */
+  statedSchedule?: unknown;
+}): ScheduleDefault {
+  if (!input.humanPresent) {
+    return {
+      kind: "none",
+      why: "nobody is present for this run — the schedule it was given applies and no screen is shown",
+    };
+  }
+  if (input.statedSchedule !== undefined && input.statedSchedule !== null) {
+    return { kind: "stated", schedule: input.statedSchedule };
+  }
+  return { kind: "run_after_setup" };
+}
+
+/**
+ * The row the schedule screen opens on — the decision above, applied.
+ *
+ * One mapping, so the answer becomes rows in one place: `run_after_setup` is the
+ * immediate row ("Run right after setup"), `stated` is the schedule the person
+ * stated, filled into the form's own rows.
+ *
+ * `null` IS A REFUSAL, NOT A DEFAULT. For a run nobody is present for the screen
+ * is not offered at all — "the schedule it was given applies" — so a surface that
+ * reached one anyway has nothing to preselect, and must draw no selection rather
+ * than invent one.
+ */
+export function scheduleScreenSelection(input: {
+  humanPresent: boolean;
+  statedSchedule?: ProposedSchedule | null;
+}): ProposedSchedule | null {
+  const answer = scheduleDefaultForLaunch(input);
+  switch (answer.kind) {
+    case "none":
+      return null;
+    case "stated":
+      return answer.schedule as ProposedSchedule;
+    default:
+      return { kind: "immediate" };
+  }
+}
+
+/**
+ * WHERE A KIND'S TRUTH LIVES, AND HOW IT REACHES A SURFACE (cinatra#2930, W3).
+ *
+ * The record used to be ONE axis — how the kind rides the wire — and that
+ * conflated two different questions the injected-card work has to answer
+ * separately:
+ *
+ * `canonical` — WHICH FACT DECIDES THE CARD IS LIVE.
+ *   - `run_state` — the run itself states the moment, its card kind and the
+ *     card's server-checked reference, and every host mounts the card FROM that
+ *     row. Nothing is asked of a model, and a reload re-reads the same row.
+ *   - `data_part` — there is no run yet, so the part in the turn IS the whole
+ *     state. Exactly one kind is ever this, and only for as long as it has no
+ *     run: a schedule a person stated in a conversation, held until Confirm.
+ *
+ * `represent` — HOW THE CARD REACHES A TRANSCRIPT on the one wire.
+ *   - `data_part` — the producer mints a versioned ref envelope and it rides a
+ *     `DATA_PART`.
+ *   - `interrupt` — the kind arrives as a TYPED `INTERRUPT` because the run is
+ *     genuinely BLOCKED on the answer; its durable anchor in the turn is the
+ *     `agent_run` part of the dispatch it belongs to, which is what the card is
+ *     mounted at and re-read from after a reload.
+ *
+ * THE TWO ARE INDEPENDENT, and `recommendation_hold` is why: the run is blocked
+ * on it, so its representation is an interrupt — and its truth has always been
+ * the run's own row, which is what makes the mount survive a reload. The plan's
+ * `{ canonical: run_state, represent: data_part }` for the run-carried kinds is
+ * therefore stated per kind rather than as one value for all five: `represent`
+ * keeps the wire axis cinatra#2928 ratified for the two blocked kinds — flipping
+ * them would empty `LIFECYCLE_INTERRUPT_KINDS` and give two kinds a resolve
+ * envelope the run wire never mints — while `canonical` is the axis W3 adds.
  */
 export const LIFECYCLE_CARD_CARRIAGE = {
-  artifact_review_gate: "data_part",
-  verification_summary: "data_part",
-  recommendation_hold: "interrupt",
-  trigger_schedule_proposal: "data_part",
+  artifact_review_gate: { canonical: "run_state", represent: "data_part" },
+  verification_summary: { canonical: "run_state", represent: "data_part" },
+  recommendation_hold: { canonical: "run_state", represent: "interrupt" },
+  // THE ONE KIND WHOSE CANONICAL CARRIAGE MOVES. While the schedule is HELD it
+  // is a person's own instruction read back to them and nothing is written —
+  // the signed reference in the turn is the whole state, so the part is
+  // canonical. Confirm creates the run with the schedule in hand, and from then
+  // on the run carries the moment: see `canonicalCarriageForKind`.
+  trigger_schedule_proposal: { canonical: "data_part", represent: "data_part" },
   // `agent_hitl_screen` is an INTERRUPT for the same reason
   // `recommendation_hold` is: the run is genuinely BLOCKED on the answer, so a
   // fire-and-forget data part would be the wrong frame. It carries no
-  // data-part view type and therefore no resolve envelope.
-  agent_hitl_screen: "interrupt",
-} as const satisfies Record<LifecycleCardKind, "data_part" | "interrupt">;
+  // data-part view type and therefore no resolve envelope. Its truth is the
+  // run's own stated moment.
+  agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
+} as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
+
+/** Which fact decides a card is live. */
+export type LifecycleCanonicalCarriage = "run_state" | "data_part";
+
+/** How a card reaches a transcript on the one wire. */
+export type LifecycleRepresentCarriage = "data_part" | "interrupt";
+
+export type LifecycleCardCarriageRow = {
+  canonical: LifecycleCanonicalCarriage;
+  represent: LifecycleRepresentCarriage;
+};
 
 export type LifecycleCardCarriage =
   (typeof LIFECYCLE_CARD_CARRIAGE)[LifecycleCardKind];
 
+/**
+ * The kinds a RUN carries — the ones the platform injects from run state.
+ *
+ * `trigger_schedule_proposal` is deliberately absent while it is held and
+ * present once it is confirmed, which is a fact about a moment rather than
+ * about a kind — `canonicalCarriageForKind` is the reader that states it.
+ */
+export const LIFECYCLE_RUN_CARRIED_KINDS = LIFECYCLE_CARD_KINDS.filter(
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].canonical === "run_state",
+) as ReadonlyArray<LifecycleCardKind>;
+
+/**
+ * The canonical carriage of a kind AT A MOMENT.
+ *
+ * Only the schedule reads its second argument: held, the signed part in the
+ * turn is the whole state; confirmed, the run carries the moment like every
+ * other run-carried kind. Every other kind answers from the table alone.
+ */
+export function canonicalCarriageForKind(
+  kind: LifecycleCardKind,
+  state?: { scheduleConfirmed?: boolean },
+): LifecycleCanonicalCarriage {
+  if (kind === "trigger_schedule_proposal" && state?.scheduleConfirmed === true) {
+    return "run_state";
+  }
+  return LIFECYCLE_CARD_CARRIAGE[kind].canonical;
+}
+
+/** True when a kind's card is mounted from the run's own stated moment. */
+export function isRunCarriedLifecycleKind(
+  kind: LifecycleCardKind,
+  state?: { scheduleConfirmed?: boolean },
+): boolean {
+  return canonicalCarriageForKind(kind, state) === "run_state";
+}
+
 /** The kinds that ride a `DATA_PART` — i.e. the registered lifecycle viewTypes. */
 export const LIFECYCLE_DATA_PART_VIEW_TYPES = LIFECYCLE_CARD_KINDS.filter(
-  (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "data_part",
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "data_part",
 ) as ReadonlyArray<LifecycleDataPartViewType>;
 
 /** The kinds that ride an `INTERRUPT` — the run is BLOCKED on the answer. */
 export const LIFECYCLE_INTERRUPT_KINDS = LIFECYCLE_CARD_KINDS.filter(
-  (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "interrupt",
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "interrupt",
 ) as ReadonlyArray<LifecycleInterruptKind>;
 
 /** A lifecycle kind carried as a `DATA_PART` renderable view. */
 export type LifecycleDataPartViewType = {
-  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "data_part"
+  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K]["represent"] extends "data_part"
     ? K
     : never;
 }[LifecycleCardKind];
@@ -184,7 +336,7 @@ export function isLifecycleDataPartViewType(
 
 /** A lifecycle kind carried as a typed `INTERRUPT` (the run waits on it). */
 export type LifecycleInterruptKind = {
-  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "interrupt"
+  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K]["represent"] extends "interrupt"
     ? K
     : never;
 }[LifecycleCardKind];
@@ -957,6 +1109,84 @@ export type LifecycleCardBodyByKind = {
  */
 export const LIFECYCLE_ISLAND_SRC_MAX_LENGTH = 2048;
 
+/**
+ * ONE reviewed target's HEADER, as a card may draw it (cinatra#3141 item 7).
+ *
+ * WHY THE CARD NEEDS IT AT ALL. §IV of the review drawing gives every target a
+ * header that "names what is under review and fixes it in place: the artifact's
+ * display title over a mono meta line carrying its type, the pinned
+ * representation revision (shown as a mono revision id with a pinned marker),
+ * and the read-only row facts the host authorized". That header was rendered by
+ * the SERVER, inside the island document the card frames — so until that frame
+ * painted there was no header on the card at all, and past the island's bounded
+ * wait the card drew a recovery panel with none either. A pending gate on the
+ * run page could and did draw with nothing naming what was under review. The
+ * header therefore belongs to the CARD, which is drawn in every island state,
+ * and the card has to be told what it says.
+ *
+ * IT RIDES THE RESOLVE ANSWER, NEVER THE WIRE PAYLOAD — the same seam, for the
+ * same reason, as the suggestion chips, the settled outcome and the island URL
+ * above it. The persisted, model-visible DATA_PART still carries a ref and
+ * nothing else; this is composed for a reader whose run READ the resolution
+ * ladder has already granted, on the one endpoint that draws a card.
+ *
+ * EVERY FIELD IS ALREADY ON SCREEN FOR THIS READER. Title, type, pinned revision
+ * and the authorized row facts are exactly what the island's own header drew to
+ * the same reader a moment later; nothing here widens the audience or the
+ * disclosure, it only moves where the sentence is composed. `facts` arrives
+ * pre-composed as display strings so the card — which owns no artifact vocabulary
+ * — cannot word them differently from the surface that composed them.
+ */
+export type LifecycleTargetHeader = {
+  /** The artifact's display title, or its id when the row carries no title. */
+  title: string;
+  /** The type's short display label ("Email"), never a renderer identity. */
+  typeLabel: string;
+  /** The type id the mono line opens with ("@cinatra-ai/email:draft"). */
+  objectType: string;
+  /** The revision the gate PINNED — the one revision this surface may show. */
+  revisionId: string;
+  /** The authorized row facts, already worded for display. */
+  facts: string[];
+};
+
+/** Ceilings on one header. Bounded like every other field on this wire. */
+export const LIFECYCLE_TARGET_HEADER_MAX_TEXT = 200;
+/** Ceiling on the number of headers one gate may carry. */
+export const LIFECYCLE_TARGET_HEADERS_MAX = 12;
+/** Ceiling on the facts one header's mono line may carry. */
+export const LIFECYCLE_TARGET_HEADER_FACTS_MAX = 8;
+
+const boundedText = z.string().min(1).max(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
+
+export const lifecycleTargetHeaderSchema: z.ZodType<LifecycleTargetHeader> = z
+  .object({
+    title: boundedText,
+    typeLabel: boundedText,
+    objectType: z.string().max(LIFECYCLE_TARGET_HEADER_MAX_TEXT),
+    revisionId: boundedText,
+    facts: z.array(boundedText).max(LIFECYCLE_TARGET_HEADER_FACTS_MAX),
+  })
+  .strict();
+
+export const lifecycleTargetHeadersSchema = z
+  .array(lifecycleTargetHeaderSchema)
+  .max(LIFECYCLE_TARGET_HEADERS_MAX);
+
+/**
+ * The headers, read as ONE shape. `null` means the answer carried none — which
+ * is legal and is not a signal: an answer composed before this field existed, a
+ * gate whose rows could not be read, and a resolver that was not asked all say
+ * the same thing, and the card then draws no header rather than an invented one.
+ * `undefined` means the answer carried something that is not ours, and REFUSES
+ * the envelope — the same fail-closed posture the island URL takes.
+ */
+function readTargetHeaders(raw: unknown): LifecycleTargetHeader[] | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  const parsed = lifecycleTargetHeadersSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** The discriminated answer one lifecycle resolve returns. */
 export type LifecycleResolveEnvelope = {
   [K in LifecycleDataPartViewType]: {
@@ -990,7 +1220,70 @@ export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
  * A same-site host receives `null` here and keeps composing its own cookie URL.
  */
 export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
-  LifecycleResolveEnvelopeFor<K> & { islandSrc: string | null };
+  LifecycleResolveEnvelopeFor<K> & {
+    islandSrc: string | null;
+    aside: LifecycleCardAsideByKind[K] | null;
+    /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
+     * answer carried none. See {@link LifecycleTargetHeader}. */
+    targetHeaders: LifecycleTargetHeader[] | null;
+  };
+
+/**
+ * WHAT A KIND CARRIES BESIDE ITS BODY, AND WHY THERE IS SUCH A PLACE AT ALL
+ * (cinatra#3193).
+ *
+ * A card body is a VERSIONED, `.strict()` object: a version-1 parser accepts
+ * the keys it declares and refuses every other, and the version is a
+ * `z.literal`, so bumping it makes the same parser refuse every card of every
+ * state. Between them those two properties leave a shipped body with exactly
+ * one compatible shape — the one it already has. A reading the card gains
+ * afterwards therefore has nowhere to go INSIDE the body that does not blank
+ * that body on a bundle which has not reloaded.
+ *
+ * The ANSWER around the body has never been strict. `parseLifecycleResolveEnvelope`
+ * reads it by NAME — the kind, the state, the body, the island URL — and
+ * ignores every other key on it, which is precisely the tolerance a `.strict()`
+ * object does not have. `islandSrc` (cinatra#2754) was the first key to use it;
+ * this map is that road, named, so the next one is a declared per-kind shape
+ * rather than a loose key somebody remembered to read.
+ *
+ * `null` means the kind carries nothing beside its body. The answer's `aside`
+ * is `null` for an `absent` state on every kind: an absence carries nothing
+ * beside itself, for the same reason it carries no body and no island URL.
+ */
+export type LifecycleCardAsideByKind = {
+  artifact_review_gate: null;
+  verification_summary: null;
+  /**
+   * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#3174)? See the settled
+   * body's own note for why the answer is here and not in it: it is the reading
+   * "Fired, recurring — runs still to come" is drawn from, it is true for every
+   * recurring schedule that has ever run, and a version-1 body has no shape
+   * that can carry a new key without blanking itself on an older parser.
+   *
+   * ABSENT MEANS `false`, and that is what keeps the other direction open: an
+   * answer from a server that predates this reading carries no such key, and
+   * the reader below reads that as "not fired" rather than refusing the answer.
+   */
+  trigger_schedule_proposal: {
+    firedOnce: boolean;
+    /**
+     * THE ESTIMATED-DURATION LINE, ALREADY RENDERED (cinatra#3174 fix leg 1).
+     *
+     * Section VI draws the line as a duration in every one of its five
+     * pictures, and no producer ever asked for the estimate, so every settled
+     * card drew an invented "Unavailable." instead. The reading is here rather
+     * than in the settled body for exactly the reason `firedOnce` is: that body
+     * is a versioned `.strict()` object and a new key in it blanks the card on
+     * every bundle that has not reloaded.
+     *
+     * `null` — and an answer that carries no such key at all — means there is
+     * no estimate, which draws NO LINE. The drawing gives no empty reading and
+     * no wording for one.
+     */
+    durationCopy: string | null;
+  };
+};
 
 /**
  * The closed runtime registry behind the type map above. A kind with a `null`
@@ -1003,6 +1296,32 @@ const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
   verification_summary: verificationSummaryBodySchema,
   trigger_schedule_proposal: triggerScheduleProposalViewBodySchema,
 } as const satisfies Record<LifecycleDataPartViewType, z.ZodType | null>;
+
+/**
+ * How each kind reads its own aside off the answer (cinatra#3193).
+ *
+ * A closed registry over the kind set, exactly like the body schemas above, so
+ * a kind cannot gain an aside on the wire without declaring what it is.
+ *
+ * TOLERANT, WHERE THE BODY IS STRICT, AND DELIBERATELY SO. A reading beside the
+ * body exists to be added after the body shipped, so an answer that carries
+ * none — an older server, or a newer one that had nothing to say — must READ,
+ * not refuse. A missing key, and anything that is not the type declared, is the
+ * quiet default. Refusing here would re-open the exact harm the aside exists to
+ * close: a blanked card.
+ */
+const LIFECYCLE_RESOLVE_ASIDE_READERS: {
+  [K in LifecycleDataPartViewType]:
+    | ((record: Record<string, unknown>) => LifecycleCardAsideByKind[K])
+    | null;
+} = {
+  artifact_review_gate: null,
+  verification_summary: null,
+  trigger_schedule_proposal: (record) => ({
+    firedOnce: record.firedOnce === true,
+    durationCopy: typeof record.durationCopy === "string" ? record.durationCopy : null,
+  }),
+};
 
 /**
  * The server-issued island `src`, read as ONE shape: a root-relative path on
@@ -1051,28 +1370,60 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const bodyPresent = rawBody !== undefined && rawBody !== null;
     const islandSrc = readIslandSrc(record.islandSrc);
     if (islandSrc === undefined) return null;
+    const targetHeaders = readTargetHeaders(record.targetHeaders);
+    if (targetHeaders === undefined) return null;
+    // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
+    // a wrong body is. Only the review gate has a review target, so a header
+    // arriving beside a verification summary or a schedule proposal is an answer
+    // to a question that kind never asks — a shape this build cannot have
+    // composed, and therefore one it will not read.
+    if (expectedKind !== "artifact_review_gate" && targetHeaders !== null) return null;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
-      if (bodyPresent || islandSrc !== null) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc: null } as
-        LifecycleResolveAnswerFor<K>;
+      if (bodyPresent || islandSrc !== null || targetHeaders !== null) return null;
+      return {
+        kind: expectedKind,
+        state: state.data,
+        body: null,
+        islandSrc: null,
+        targetHeaders: null,
+        aside: null,
+      } as LifecycleResolveAnswerFor<K>;
     }
+
+    // THE ASIDE IS READ ONLY ONCE THE STATE ALLOWS ONE. `absent` returned
+    // above with nothing beside it; everything below is a drawn card, and a
+    // drawn card may carry the reading its kind declares.
+    const readAside = LIFECYCLE_RESOLVE_ASIDE_READERS[expectedKind];
+    const aside = readAside === null ? null : readAside(record);
 
     const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
     if (schema === null) {
       if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null, islandSrc } as
-        LifecycleResolveAnswerFor<K>;
+      return {
+        kind: expectedKind,
+        state: state.data,
+        body: null,
+        islandSrc,
+        targetHeaders,
+        aside,
+      } as LifecycleResolveAnswerFor<K>;
     }
 
     if (!bodyPresent) return null;
     const body = schema.safeParse(rawBody);
     if (!body.success) return null;
-    return { kind: expectedKind, state: state.data, body: body.data, islandSrc } as
-      LifecycleResolveAnswerFor<K>;
+    return {
+      kind: expectedKind,
+      state: state.data,
+      body: body.data,
+      islandSrc,
+      targetHeaders,
+      aside,
+    } as LifecycleResolveAnswerFor<K>;
   } catch {
     // A throwing getter is a hostile shape; it draws nothing, like every other
     // answer this parser refuses.
