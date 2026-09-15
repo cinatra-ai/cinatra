@@ -140,7 +140,22 @@ export async function readExtensionAccessPolicies(
     // read would index into the string. A schema-invalid row is treated as
     // absent (fail-closed — the caller applies the kind's default).
     const parsed = AgentAuthPolicySchema.safeParse(raw);
-    if (parsed.success) out.set(r.resource_id, parsed.data);
+    if (!parsed.success) continue;
+    // SEED-PROVENANCE MARKER (cinatra#3408). The connect-time grant seed
+    // (`registerSavedConnectionIdentity`) stores `seededDefault: true` inside
+    // the policy jsonb so a share surface can tell an UNTOUCHED seed from an
+    // explicit owner save. The canonical schema is a `z.object`, so its parse
+    // strips every key it does not name — the marker with them, which left no
+    // reader able to see an untouched seed (the Sharing tab's recommending
+    // connector drew no line and no pre-selected scope). Re-attach the marker
+    // the stored row actually carried, and ONLY that: never synthesized, only
+    // the literal `true`, so an explicitly saved policy (the save's own zod
+    // parse strips the marker durably) stays unmarked.
+    const seeded = (raw as { seededDefault?: unknown }).seededDefault === true;
+    const policy: AgentAuthPolicy & { seededDefault?: true } = seeded
+      ? { ...parsed.data, seededDefault: true }
+      : parsed.data;
+    out.set(r.resource_id, policy);
   }
   return out;
 }

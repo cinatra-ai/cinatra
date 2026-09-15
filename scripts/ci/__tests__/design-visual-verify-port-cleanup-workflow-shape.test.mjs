@@ -1,21 +1,26 @@
 // Pixel job port lifecycle (cinatra#3383, cinatra#3416): the SHAPE of the
 // shipped design-visual-verify workflow, read from the real file in this repo.
 //
-// The job starts a standalone server and must be the sole holder of the port it
-// binds. A previous job that ended without stopping its server leaves the
-// process behind on a self-hosted runner, and the next job that binds the port
-// dies at start (EADDRINUSE) — so the port is freed BEFORE the server starts
-// and the server's own pid is recorded so an always() step can stop exactly
-// that process (never a pattern kill).
+// The job starts a standalone server on ONE port. A previous job that ended
+// without stopping its server leaves the process on a self-hosted runner, and
+// the next job that binds the port dies at start (EADDRINUSE). The steps below
+// are the fix, and this file is what keeps them: the port is freed BEFORE the
+// server starts, the server's own pid is recorded so an always() step can stop
+// exactly that process (never a pattern kill), and every step reads the port
+// from the one place that sets it.
 //
-// ONE fixed port for every job was not enough (cinatra#3416). A machine that
-// hosts several runner processes runs several jobs of this workflow at once,
-// and each reclaimed the one port from a peer that was still using it: the
-// reclaiming job killed a LIVE server and took its port, and from that moment
-// the victim's Playwright step spoke to a server belonging to another run —
-// whose per-run seed capability differs, so the seeded fixtures were refused.
-// The port is therefore derived PER RUNNER SLOT and exported before the build,
-// never pinned as a job-level literal.
+// cinatra#3416 moved that place. The port used to be a job-level LITERAL, one
+// value for every runner — and a self-hosted BOX carries several runners, so
+// the freeing step took a CONCURRENT job's live server away and bound its port.
+// The port is now DERIVED FROM THE RUNNER and exported through $GITHUB_ENV, so
+// the only process that can hold it is this runner's own stale server, which is
+// the case the freeing step was written for.
+//
+// ONE port per runner slot is also ONE port per LIVE JOB — a runner process
+// runs at most one job at a time — and the derivation therefore runs ahead of
+// the BUILD as well as ahead of the free and start steps: the NEXT_PUBLIC_*
+// base URLs are baked into the client bundle at build time, so they must
+// already name the port this job will actually bind.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,35 +81,43 @@ const indexOfStep = (block, matcher) =>
 const stepMatching = (block, matcher) =>
   steps(block).find((s) => matcher.test(s.name));
 
+const DERIVE = /deriv.*port/i;
 const FREE = /free.*port/i;
 const START = /^Start standalone server$/;
 const STOP = /stop.*(standalone )?server/i;
 
-const EXPORT = /^Export this runner's design server port$/;
-
 describe("design-visual-verify.yml pixel-diff: one port per runner slot (cinatra#3416)", () => {
-  it("does NOT pin the port as a job-level literal — a shared literal is the defect", () => {
+  it("sets the port ONCE, derived from the runner rather than pinned literally", () => {
     const block = PIXEL_JOB();
+    // cinatra#3416: a job-level literal is ONE port for every runner of the
+    // box, and the freeing step below then takes a concurrent job's server.
     expect(block).not.toMatch(new RegExp(`^ {6}${PORT_ENV}:`, "m"));
+    const exported = block.match(new RegExp(`echo "${PORT_ENV}=`, "g")) ?? [];
+    expect(exported.length).toBe(1);
+    const derive = stepMatching(block, DERIVE);
+    expect(derive).toBeDefined();
+    expect(derive.text).toContain("RUNNER_NAME");
+    expect(derive.text).toMatch(/>> "\$GITHUB_ENV"/);
   });
 
-  it("derives the port from the runner slot and exports it for the later steps", () => {
-    const step = stepMatching(PIXEL_JOB(), EXPORT);
-    expect(step).toBeDefined();
-    expect(step.text).toContain("scripts/ci/design-server-port.mjs");
-    expect(step.text).toMatch(new RegExp(`${PORT_ENV}=`));
-    expect(step.text).toMatch(/>> "\$GITHUB_ENV"/);
-  });
-
-  it("exports it BEFORE the build, so the URLs baked in name the port that is bound", () => {
+  it("derives the port before the step that frees it", () => {
     const block = PIXEL_JOB();
-    const exported = indexOfStep(block, EXPORT);
+    const derive = indexOfStep(block, DERIVE);
+    const free = indexOfStep(block, FREE);
+    expect(derive).toBeGreaterThan(-1);
+    expect(free).toBeGreaterThan(-1);
+    expect(derive).toBeLessThan(free);
+  });
+
+  it("derives it BEFORE the build, so the URLs baked in name the port that is bound", () => {
+    const block = PIXEL_JOB();
+    const derive = indexOfStep(block, DERIVE);
     const build = indexOfStep(block, /^Build \(/i);
-    expect(exported).toBeGreaterThan(-1);
+    expect(derive).toBeGreaterThan(-1);
     expect(build).toBeGreaterThan(-1);
-    expect(exported).toBeLessThan(build);
-    expect(exported).toBeLessThan(indexOfStep(block, FREE));
-    expect(exported).toBeLessThan(indexOfStep(block, START));
+    expect(derive).toBeLessThan(build);
+    expect(derive).toBeLessThan(indexOfStep(block, FREE));
+    expect(derive).toBeLessThan(indexOfStep(block, START));
   });
 
   it("leaves no public URL pinned to a port literal at job level", () => {
@@ -117,12 +130,11 @@ describe("design-visual-verify.yml pixel-diff: one port per runner slot (cinatra
     ]) {
       expect(block).not.toMatch(new RegExp(`^ {6}${name}: \\S*:\\d+`, "m"));
     }
-    expect(stepMatching(block, EXPORT).text).toMatch(/NEXT_PUBLIC_APP_URL=/);
+    expect(stepMatching(block, DERIVE).text).toMatch(/NEXT_PUBLIC_APP_URL=/);
   });
 });
 
 describe("design-visual-verify.yml pixel-diff: the port is free before the server starts", () => {
-
   it("has a step that frees the port, BEFORE the step that starts the server", () => {
     const block = PIXEL_JOB();
     const free = indexOfStep(block, FREE);
@@ -176,13 +188,27 @@ describe("design-visual-verify.yml pixel-diff: one port, named by all three step
     }
   });
 
-  it("no one of the three re-declares a port number as a literal", () => {
+  it("no one of the three names a port number of its own", () => {
     const block = PIXEL_JOB();
+    // Only the derivation step may name a number; the three lifecycle steps
+    // must read whatever it exported, or they would drift apart from it.
+    //
+    // Read in PORT POSITION, not as "any four digits": a number is a port when
+    // it is bound, probed, freed or addressed as one. A blanket digit ban would
+    // reject an unrelated timeout and would still miss a five-digit port.
+    // Whole-line comments are stripped first — an issue number in prose is not
+    // a port, and a step that only TALKS about one binds nothing.
+    const code = (text) =>
+      text
+        .split("\n")
+        .filter((line) => !/^\s*#/.test(line))
+        .join("\n");
+    const PORT_POSITION =
+      /(?:PORT=|tcp:|localhost:|127\.0\.0\.1:|:)\s*"?\d{2,5}(?:\/tcp)?\b|\b\d{2,5}\/tcp\b/;
     for (const matcher of [FREE, START, STOP]) {
       const step = stepMatching(block, matcher);
       expect(step).toBeDefined();
-      // An issue reference is not a port number.
-      expect(step.text.replace(/cinatra#[0-9]+/g, "")).not.toMatch(/[0-9]{4}/);
+      expect(code(step.text)).not.toMatch(PORT_POSITION);
     }
   });
 });
