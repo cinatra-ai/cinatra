@@ -11,8 +11,8 @@
  *    the Continue control is disabled while nothing is picked and nothing
  *    pickable; the make-one road sits under the rows with the primary Continue
  *    right-aligned over the hairline control floor; the zero-content reading is
- *    the drawn empty state (dashed circle icon, 14px headline over a 12px
- *    helper, the primary action outside the panel)"
+ *    the state line, the sentence and the primary action — never just empty
+ *    text — with no dashed rectangle and no dashed circle icon"
  *
  *   "no undrawn full-width cross-run banner — the return to the waiting run is
  *    placed where section I places the run's actions; no search field on the
@@ -21,6 +21,19 @@
  *
  *   "when a child run completes with a listId, the parked run's account-scope
  *    step offers that list"
+ *
+ * THE SECOND PROOF ROUND (2026-09-15) graded this page on a REAL parked run and
+ * found two readings that §I.1 does not draw. The section's zero-content
+ * reading ("The same step with nothing left to pick") is drawn as the question
+ * over the "Nothing to pick" pill, then a `role="status"` sentence, then the
+ * make-one road — words on the page itself, with NO panel around them: no
+ * dashed rectangle and no dashed circle icon. And the question is drawn in
+ * EVERY reading, the zero-content one included, so a heading rendered from a
+ * label the step does not carry — the account-scope step carries none — left
+ * the gate opening on an empty h3. The generic Empty pattern (Components §
+ * Empty state, "a single primary action button — never just empty text") keeps
+ * its own dashed circle where it is drawn; what it never does is displace the
+ * page a section draws itself.
  *
  * The Continue control and the rail live one level up, on the run's stepper
  * panel; they are pinned in
@@ -63,6 +76,15 @@ function makeProps(
     bindingParams: { listBuilderPackage: "@cinatra-ai/list-curator-agent" },
     ...overrides,
   };
+}
+
+/** The question the heading ASKS, with the required marker the h3 appends after
+ *  it removed: the asterisk belongs to the field, not to the question, so a
+ *  required step must not change what the question reads. */
+function questionAsked(): string {
+  return (screen.getByTestId("list-picker-question").textContent ?? "")
+    .replace(/\s*\*\s*$/, "")
+    .trim();
 }
 
 const ROWS = [
@@ -128,6 +150,52 @@ describe('"the account-scope gate opens on its question heading over its state l
       ),
     );
   });
+
+  // THE STEP THAT NAMES NO QUESTION (the second proof round). The account-scope
+  // step reaches this renderer with NO resolved label — its schema titles the
+  // FIELD, not the reader's question, and the surface that mounts the gate
+  // passes no label at all — so a heading rendered from that label alone opened
+  // the gate on an EMPTY h3 over its state line. §I.1 draws the gate opening on
+  // its question in every reading, the zero-content one included.
+  it("opens on the drawn question when the step names none", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    render(<ListPickerRenderer {...makeProps({ label: undefined })} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
+        "Nothing to pick",
+      ),
+    );
+
+    const question = screen.getByTestId("list-picker-question");
+    const asked = questionAsked();
+    expect(asked, "the gate opened on an empty question heading").not.toBe("");
+    // It ASKS, and it asks about the thing this gate lists.
+    expect(asked.endsWith("?"), `not a question: ${asked}`).toBe(true);
+    expect(asked).toMatch(/list/i);
+    // Over the state line, as the section draws it.
+    const stateLine = screen.getByTestId("list-picker-state-line");
+    expect(
+      question.compareDocumentPosition(stateLine) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // A REQUIRED step reads the same way: the h3 appends the field's asterisk
+  // after the question, and the question itself still has to ask something.
+  it("reads a blank label as no question at all", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
+    render(
+      <ListPickerRenderer {...makeProps({ label: "   ", required: true })} />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+
+    const asked = questionAsked();
+    expect(asked, "the gate opened on a blank question heading").not.toBe("");
+    expect(asked.endsWith("?"), `not a question: ${asked}`).toBe(true);
+    expect(asked).toMatch(/list/i);
+  });
 });
 
 describe('"no search field on the gate-that-lists unless the drawing gives one"', () => {
@@ -156,43 +224,67 @@ describe('"the make-one road sits under the rows"', () => {
   });
 });
 
-describe('"the zero-content reading is the drawn empty state"', () => {
-  it("draws the Empty pattern — dashed circle icon, 14px headline over a 12px helper", async () => {
+describe('"the zero-content reading is the state line, the sentence and the primary action — and no frame"', () => {
+  it("draws no dashed rectangle and no dashed circle icon", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     const { container } = render(<ListPickerRenderer {...makeProps()} />);
 
     await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
 
-    const empty = container.querySelector('[data-slot="empty"]');
-    expect(empty, "the zero-content reading is not the drawn Empty pattern").not.toBeNull();
-
-    // The dashed circle the section draws.
-    const media = container.querySelector('[data-slot="empty-icon"]');
-    expect(media).not.toBeNull();
-    expect(media!.getAttribute("data-variant")).toBe("icon");
-    expect(media!.className).toContain("border-dashed");
-    expect(media!.className).toContain("rounded-full");
-
-    // The two-step scale: a 14px headline (`text-sm`) over a 12px helper
-    // (`text-xs`). A plain card carrying one grey sentence is the "just empty
-    // text" the section forbids.
-    const title = container.querySelector('[data-slot="empty-title"]');
-    const helper = container.querySelector('[data-slot="empty-description"]');
-    expect(title).not.toBeNull();
-    expect(helper).not.toBeNull();
-    expect(title!.className).toContain("text-sm");
-    expect(helper!.className).toContain("text-xs");
+    // The panel §I.1 never draws. The generic Empty pattern is a component of
+    // its own with its own drawing; this gate's zero-content reading is drawn
+    // by the section itself, on the page, with nothing framing it.
+    expect(
+      container.querySelector('[data-slot="empty"]'),
+      "the zero-content reading sits in an undrawn panel",
+    ).toBeNull();
+    // THE READING ITSELF and every box between it and the gate's root: none of
+    // them may draw a dashed border. Scoped to the reading, because that is
+    // what the grade found framed — a dashed rule drawn somewhere else on the
+    // gate would be another reading's defect, and the make-one road stays free
+    // to carry its own glyph.
+    const sentence = screen.getByTestId("list-picker-empty-reading");
+    const framing: Element[] = [];
+    for (
+      let el: Element | null = sentence;
+      el !== null && el !== container.parentElement;
+      el = el.parentElement
+    ) {
+      framing.push(el);
+    }
+    expect(
+      framing
+        .map((el) => el.getAttribute("class") ?? "")
+        .filter((cls) => /(?:^|\s)[a-z-]*border-dashed(?:\s|$)/.test(cls)),
+    ).toEqual([]);
+    // And no glyph in a dashed circle: the reading is words.
+    expect(container.querySelector('[data-slot="empty-icon"]')).toBeNull();
+    expect(sentence.querySelectorAll("svg").length).toBe(0);
   });
 
-  it("keeps the primary action OUTSIDE the panel", async () => {
+  it("states the fact in a sentence under the state line, with the road after it", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+    render(<ListPickerRenderer {...makeProps()} />);
 
-    await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
+    // The section's own zero-content sentence, announced the way it is drawn.
+    const sentence = await screen.findByRole("status");
+    expect(sentence.textContent).toMatch(/no lists yet/i);
 
-    const empty = container.querySelector('[data-slot="empty"]')!;
+    const stateLine = screen.getByTestId("list-picker-state-line");
+    expect(stateLine.textContent).toBe("Nothing to pick");
+    expect(
+      stateLine.compareDocumentPosition(sentence) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // "never just empty text": the make-one road is the reading's action, and
+    // it sits AFTER the sentence, not inside it.
     const road = screen.getByTestId("build-list-with-ai-cta");
-    expect(empty.contains(road)).toBe(false);
+    expect(sentence.contains(road)).toBe(false);
+    expect(
+      sentence.compareDocumentPosition(road) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     // And it is still offered: an empty reading with no road would leave the
     // reader nowhere to go.
     expect(road.getAttribute("href")).toContain("onCompleteRunId=run-parked");

@@ -12,14 +12,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { List } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
 import {
@@ -86,6 +78,22 @@ export function declaredListBuilderPackage(
   const trimmed = declared.trim();
   return SCOPED_PACKAGE_RE.test(trimmed) ? trimmed : null;
 }
+
+// ---------------------------------------------------------------------------
+// THE QUESTION A GATE THAT LISTS OPENS ON
+// ---------------------------------------------------------------------------
+
+/** The question this gate opens on when the step it draws NAMES NONE (Agent run
+ *  & review §I.1, which draws the gate opening on its question — "Which idea
+ *  should this run draft?" — over its state line, in every reading including
+ *  the zero-content one).
+ *
+ *  It belongs to the RENDERER'S KIND, not to any package: every binding that
+ *  raises a list-picking gate lists lists, so the question asks about a list
+ *  and names no pack (the core/extension border). A step that carries its own
+ *  question still wins — this is the floor under a step that carries none, and
+ *  the reading it replaces was an EMPTY heading. */
+export const LIST_PICKER_QUESTION = "Which list should this run use?";
 
 function formatLastUpdated(iso: string | null): string {
   if (!iso) return "—";
@@ -304,6 +312,17 @@ export function ListPickerRenderer({
       </div>
     );
 
+  // THE QUESTION THE GATE ACTUALLY OPENS ON. The step's own question wherever
+  // the gate's data carries one — the binding's resolved label — and the kind's
+  // question wherever it does not. A step whose schema titles the FIELD rather
+  // than asking the reader anything reaches this renderer with no label at all,
+  // and the heading was rendered from that label alone: the gate opened on an
+  // EMPTY h3 over its state line, which is the one reading §I.1 never draws.
+  const question =
+    typeof label === "string" && label.trim() !== ""
+      ? label
+      : LIST_PICKER_QUESTION;
+
   return (
     <div className="flex flex-col gap-3" data-conformance-id="gate-that-lists">
       {/* THE GATE OPENS ON ITS QUESTION, OVER ITS STATE LINE (Agent run &
@@ -316,7 +335,7 @@ export function ListPickerRenderer({
           className="text-sm font-semibold text-foreground"
           data-testid="list-picker-question"
         >
-          {label}
+          {question}
           {required ? " *" : ""}
         </h3>
         <p
@@ -335,23 +354,25 @@ export function ListPickerRenderer({
       ) : null}
 
       {loading ? null : lists.length === 0 ? (
-        // THE ZERO-CONTENT READING IS THE DRAWN EMPTY STATE (Components §
-        // Empty state: "centred / dashed circle icon / 14px headline · 12px
-        // helper / primary action"). It was a plain card carrying one grey
-        // sentence, which is the "just empty text" the section names. The
-        // primary action sits OUTSIDE the panel — the make-one road below —
-        // so the panel states the fact and the road answers it.
-        <Empty className="border border-dashed border-line bg-surface py-6">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <List aria-hidden="true" />
-            </EmptyMedia>
-            <EmptyTitle>No lists yet.</EmptyTitle>
-            <EmptyDescription>
-              Build one and it will be offered here.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        // THE ZERO-CONTENT READING IS THE STATE LINE, THE SENTENCE AND THE
+        // MAKE-ONE ROAD — AND NOTHING FRAMES IT (Agent run & review §I.1,
+        // drawn as "The same step with nothing left to pick": the question
+        // over the "Nothing to pick" pill, then a `role="status"` sentence
+        // stating what the reading means, then the road beneath it). It was
+        // drawn here as the generic Empty component, which put a dashed
+        // rectangle and a glyph in a dashed circle on a page the section draws
+        // with neither. The sentence is still a sentence and the road is still
+        // offered — "never just empty text" (Components § Empty state) — they
+        // are simply the page's own readings rather than a panel dropped onto
+        // it. The action stays OUTSIDE the sentence: the reading states the
+        // fact, the road answers it.
+        <p
+          role="status"
+          className="text-sm leading-relaxed text-foreground"
+          data-testid="list-picker-empty-reading"
+        >
+          No lists yet. Build one and it will be offered here.
+        </p>
       ) : (
         <div className="flex flex-col gap-2">
           {lists.map((list) => {
