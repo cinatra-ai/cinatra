@@ -2669,7 +2669,14 @@ async function handleAgentBuilderImport(
     // trigger Next.js redirects. The upsert-by-packageName path is handled inside
     // importAgentTemplate when the ZIP's agent.json carries a packageName.
     const { importAgentTemplate } = await import("../import-export-actions");
-    const result = await importAgentTemplate(zipBase64, name ?? undefined, { redirect: false });
+    const result = await importAgentTemplate(zipBase64, name ?? undefined, {
+      redirect: false,
+      // cinatra#3493 — this primitive RESTORES a draft; it does not register or
+      // publish anything, so it keeps its previous contract on an instance that
+      // has no agent runtime configured at all. The screen's supplied-install
+      // road (which does register and flip live) requires the mount.
+      requireRuntimeMount: false,
+    });
 
     return {
       templateId: result.templateId,
