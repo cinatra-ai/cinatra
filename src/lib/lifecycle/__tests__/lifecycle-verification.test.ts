@@ -114,3 +114,68 @@ describe("computeVerificationVerdict — S4 post-change verification core (cinat
     expect(v.unmetFindingIds).toEqual([]);
   });
 });
+
+describe("cinatra#3080 — a landed repair's own revision advance is not drift", () => {
+  // THE MEASURED DEFECT. `defaultRepresentationFieldProjector` projects
+  // representation IDENTITY — revision, resource, form — and a landed repair
+  // advances all three by construction. Judged against a scope manifest derived
+  // from the findings' CONTENT paths, the two axes never intersect, so every
+  // landed repair read as out-of-scope drift and reopened a second bounded gate:
+  // one Regenerate press, two pending gates on the same run.
+  const identityScope = {
+    paths: ["representation.form", "representation.resource", "representation.revision"],
+  };
+  const base = {
+    "representation.revision": "1",
+    "representation.resource": "res-old",
+    "representation.form": "file",
+  };
+  const repaired = {
+    "representation.revision": "2",
+    "representation.resource": "res-new",
+    "representation.form": "file",
+  };
+
+  it("WITHOUT the identity scope the advance reads as drift — the shape that opened the second gate", () => {
+    const v = computeVerificationVerdict({
+      // A Regenerate note is a freeform comment: no field path, so the manifest
+      // derived from the findings is empty.
+      acceptedFindings: [{ id: "note", path: null }],
+      scopeManifest: scopeManifestFromFindings([{ id: "note", path: null }]),
+      baseFields: base,
+      repairedFields: repaired,
+    });
+    expect(v.outcome).toBe("drifted");
+    expect(v.outOfScopePaths).toEqual([
+      "representation.resource",
+      "representation.revision",
+    ]);
+  });
+
+  it("WITH the projector's own axis as the scope, the same advance is verified — nothing to reopen", () => {
+    const v = computeVerificationVerdict({
+      acceptedFindings: [{ id: "note", path: null }],
+      scopeManifest: identityScope,
+      baseFields: base,
+      repairedFields: repaired,
+    });
+    expect(v.outcome).toBe("verified");
+    expect(v.outOfScopePaths).toEqual([]);
+    // The before/after record still lands — the audit reading is not lost.
+    expect(v.changedPaths).toEqual([
+      "representation.resource",
+      "representation.revision",
+    ]);
+  });
+
+  it("a genuine signal still fails: a validator failure over the same projection is not verified", () => {
+    const v = computeVerificationVerdict({
+      acceptedFindings: [{ id: "note", path: null }],
+      scopeManifest: identityScope,
+      baseFields: base,
+      repairedFields: repaired,
+      validatorFailures: ["type check failed on the repaired revision"],
+    });
+    expect(v.outcome).toBe("unmet");
+  });
+});

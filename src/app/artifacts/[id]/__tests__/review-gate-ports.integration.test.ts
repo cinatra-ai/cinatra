@@ -278,15 +278,49 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
     // Resolve it first with an approve (store commit).
     await gateStore.commitReviewDecision(resolvePlan(runId, reviewTaskId, [target]));
 
-    // A DIFFERENT decision (reject) now → the gate is resolved; fail closed.
+    // A DIFFERENT decision now → the gate is resolved; fail closed. The word is
+    // a live one (a Continue): a word the floor does not know never reaches the
+    // gate state at all, which is the test below.
     const outcome = await ports.submitReviewDecision({
-      decision: decision(runId, reviewTaskId, "reject", [target]),
+      decision: decision(runId, reviewTaskId, "approve", [target]),
       actorCtx: actorCtxFor(OWNER_ID),
     });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     // readGateState returns resolved(+different fingerprint) → gate-conflict.
     expect(["gate-conflict", "gate-not-pending"]).toContain(outcome.error.kind);
+  });
+
+  // cinatra#3080 — the floor is Comment · Regenerate · Continue, and `reject` is
+  // retired AT THE VOCABULARY. The ORDER is what this pins: the decision the
+  // binder was handed is refused for its word before the gate is read, so the
+  // answer to a retired word is the same on a pending gate and on a settled one
+  // and no retired decision reaches an effect.
+  it("SUBMIT: a retired decision word is refused as invalid-decision BEFORE the gate state", async () => {
+    const runId = await seedRun();
+    const target: Target = { artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` };
+    const reviewTaskId = await emitGate(runId, [target]);
+
+    // The gate is PENDING: nothing about its state could refuse this — the word
+    // does.
+    const onPending = await ports.submitReviewDecision({
+      decision: decision(runId, reviewTaskId, "reject", [target]),
+      actorCtx: actorCtxFor(OWNER_ID),
+    });
+    expect(onPending.ok).toBe(false);
+    if (onPending.ok) return;
+    expect(onPending.error.kind).toBe("invalid-decision");
+
+    // The gate is now RESOLVED: the same refusal, not a gate-conflict — the
+    // vocabulary check runs first.
+    await gateStore.commitReviewDecision(resolvePlan(runId, reviewTaskId, [target]));
+    const onResolved = await ports.submitReviewDecision({
+      decision: decision(runId, reviewTaskId, "reject", [target]),
+      actorCtx: actorCtxFor(OWNER_ID),
+    });
+    expect(onResolved.ok).toBe(false);
+    if (onResolved.ok) return;
+    expect(onResolved.error.kind).toBe("invalid-decision");
   });
 });
 

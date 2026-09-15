@@ -1,16 +1,21 @@
 /**
- * Markdown handler for the artifact detail page.
+ * Markdown handler — the server half of the markdown display.
  *
- * Renders TWO views side-by-side: (a) the rendered markdown HTML via the
- * `marked` package already declared at `packages/chat/package.json`,
- * (b) the raw source in `<pre>` with `whitespace-pre-wrap`. Server
- * component — reads the artifact bytes directly via the local blob
- * store (the canonical server-side path the attachment-resolver uses)
- * and parses them at request time. No client component, no chat-page
- * coupling.
+ * It reads the artifact bytes directly via the local blob store (the canonical
+ * server-side path the attachment-resolver uses) and renders them through the
+ * constrained renderer at request time, then hands both readings to
+ * `MarkdownDisplay`, which draws them as the ratified display: TWO TABS, Code
+ * and Preview, with only the active one on screen (cinatra#2934, fix leg 10).
+ *
+ * It used to draw both at once — a two-column grid, "Rendered" beside "Raw
+ * source" — which is the one thing the drawing forbids ("They are never drawn
+ * side by side, and there is no third reading"). Everywhere this handler is
+ * mounted today the display is read-only: the artifact's own page and the review
+ * target both draw the same display, and neither offers an edit here.
  */
 import "server-only";
 
+import { MarkdownDisplay } from "./markdown-display";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { renderReadmeMarkdown } from "@cinatra-ai/agents/readme-render";
@@ -75,25 +80,5 @@ export async function MarkdownHandler({
   // execute as the viewing user.
   const html = renderReadmeMarkdown(raw);
 
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <article className="soft-panel rounded-card overflow-auto p-6">
-        <h2 className="text-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">
-          Rendered
-        </h2>
-        <div
-          className="prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      </article>
-      <article className="soft-panel rounded-card overflow-auto p-6">
-        <h2 className="text-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">
-          Raw source
-        </h2>
-        <pre className="text-foreground text-sm font-mono whitespace-pre-wrap break-words">
-          {raw}
-        </pre>
-      </article>
-    </div>
-  );
+  return <MarkdownDisplay raw={raw} html={html} />;
 }

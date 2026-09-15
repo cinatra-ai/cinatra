@@ -6,6 +6,7 @@ import {
   parseUserResponseEnvelope,
   revalidateSelectedRefs,
   buildSelectionRows,
+  canonicalizeTriples,
   ContextRouteError,
 } from "@/lib/artifacts/context-route-support";
 import {
@@ -14,6 +15,10 @@ import {
   resolveCandidates,
   type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
+import {
+  effectiveSelectionMode,
+  resolveInheritedContextSelection,
+} from "@/lib/artifacts/context-repair-inheritance";
 import {
   extractContextRouteLogIds,
   recordContextRouteRejection,
@@ -77,17 +82,44 @@ export async function POST(req: Request): Promise<Response> {
     // Actor + audit-store scoping below stays on the run package (trustedPackageName).
     const slot = await loadTrustedSlot(ctx.trustedSlotPackageName, body.slotId);
 
-    // Trusted modes come from the SLOT, not the body/envelope. Validate the
-    // caller-supplied values match (defends against OAS/renderer drift), then
-    // use the slot's values for all provenance + the selection key.
-    if (body.selectionMode !== slot.selectionMode) {
+    // Re-resolve the trusted candidate set FIRST: the mode this run actually
+    // ran the slot in is decided from server-read facts, and one of them —
+    // whether a repair's inherited answer still resolves — is a reading of
+    // that set. Re-ordering a pure read changes nothing else.
+    const candidates = await resolveCandidates({
+      actor: ctx.actor,
+      slot,
+      projectId: ctx.projectId,
+    });
+
+    // Trusted modes come from the SLOT, not the body/envelope — except that a
+    // repair inheriting its own producing run's answered screen runs the slot
+    // in the flow's no-person mode (cinatra#3080). `/api/context-resolve`
+    // derives that mode from the SAME server-read facts through the SAME
+    // helper, so the value the flow carried here can be checked against it
+    // exactly as the declared mode always was: a body claiming `autonomous`
+    // for an ordinary interactive slot is still refused, because nothing a
+    // caller can say makes this run a repair with a stored answer.
+    const inherited = resolveInheritedContextSelection({
+      run: ctx.run,
+      slotId: body.slotId,
+      // Same scoping as `/api/context-resolve`, and the same value the audit
+      // rows below are written under.
+      parentPackageName: ctx.trustedPackageName,
+      candidates,
+      slotMinItems: typeof slot.minItems === "number" ? slot.minItems : 0,
+      // The slot's own declared mode, so an inherited EMPTY answer records the
+      // provenance it actually had rather than asserting a person.
+      declaredSelectionMode: slot.selectionMode,
+    });
+    const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
+    if (body.selectionMode !== selectionMode) {
       throw new ContextRouteError(
         422,
         "selection_mode_mismatch",
-        `body selectionMode '${body.selectionMode}' != slot '${slot.selectionMode}'`,
+        `body selectionMode '${body.selectionMode}' != slot '${selectionMode}'`,
       );
     }
-    const selectionMode = slot.selectionMode;
 
     // Parse the selection envelope; reject a slotId / resolutionMode that
     // disagrees with the trusted slot.
@@ -107,12 +139,6 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // Re-resolve the trusted candidate set and revalidate the submission.
-    const candidates = await resolveCandidates({
-      actor: ctx.actor,
-      slot,
-      projectId: ctx.projectId,
-    });
     const trusted = revalidateSelectedRefs({
       submitted: envelope.selectedRefs,
       candidates,
@@ -126,6 +152,29 @@ export async function POST(req: Request): Promise<Response> {
     // cannot be compensated after a partial commit, so any incoherent ref
     // aborts the whole selection. Idempotent: each ref's deterministic
     // selection id and the pin's natural key make an exact replay a no-op.
+    // AN INHERITED SELECTION IS THE INHERITED SELECTION. The child flow's
+    // autonomous node builds its envelope out of the very `selectedRefs` the
+    // resolve returned, so on the honest road these are equal by construction.
+    // Checking it is what stops the `autonomous` branch from being steerable:
+    // without this, anything able to reach the route with the repair run's
+    // binding could submit ANY other member of the trusted candidate set and
+    // have it written as the repair's context under the producing run's
+    // provenance. The refs are compared as canonical triples — the same
+    // identity the audit row is content-addressed by.
+    if (inherited) {
+      const submittedKeys = canonicalizeTriples(trusted);
+      const inheritedKeys = canonicalizeTriples(inherited.refs);
+      if (
+        submittedKeys.length !== inheritedKeys.length ||
+        submittedKeys.some((key, i) => key !== inheritedKeys[i])
+      ) {
+        throw new ContextRouteError(
+          422,
+          "inherited_selection_mismatch",
+          `submitted ${submittedKeys.length} refs != the ${inheritedKeys.length} the producing run answered`,
+        );
+      }
+    }
     const rows = buildSelectionRows({
       orgId: ctx.run.orgId!,
       parentRunId: ctx.run.id,
@@ -133,6 +182,11 @@ export async function POST(req: Request): Promise<Response> {
       slotId: body.slotId,
       selectionMode,
       trusted,
+      // An inherited pick ran with no person in THIS run, but SOMEONE made it
+      // on the producing run — so the audit row repeats VERBATIM what that
+      // run's own row said about who chose. A person's pick stays a person's;
+      // a resolver's pick is never promoted to a person's.
+      ...(inherited ? { selectedBy: inherited.selectedBy } : {}),
     });
     // epic #1785 wave A4: warm the object-type registry before finalize. The
     // finalizer is a sync store-leaf (it cannot import the heavy registrar), so

@@ -33,6 +33,29 @@ const createSemanticArtifact = vi.fn(async (input: { title?: string }) => {
     ref: { title: input.title } as never,
   };
 });
+/**
+ * THE REPAIRED REVISION IS A REVISION OF THE ARTIFACT UNDER REVIEW
+ * (cinatra#3080, fix leg 8). The fixture used to make a SECOND artifact here,
+ * which is the shape the lineage validator now refuses: Regenerate "files a new
+ * revision of the same artifact, and settles this gate superseded beneath a
+ * successor over that same artifact" (Agent run & review §VI). So the second
+ * write is the appender, and it hands back the SAME artifact id with a new pin.
+ */
+const appendSemanticArtifactRevision = vi.fn(
+  async (input: { artifactId: string }) => {
+    calls.push("appendSemanticArtifactRevision");
+    const n =
+      calls.filter((c) => c === "appendSemanticArtifactRevision").length + 1;
+    return {
+      artifactId: input.artifactId,
+      representationRevisionId: `rev-${n}`,
+      revision: n,
+      sha256: `sha-${n}`,
+      sizeBytes: 42,
+      reused: false,
+    };
+  },
+);
 const resolveUploadArtifactType = vi.fn((mime: string | undefined) =>
   mime === "application/x-nope"
     ? { ok: false as const, kind: "no_type", reason: "nothing accepts it", matched: [] }
@@ -74,6 +97,10 @@ const resolveActorGrantsForUserInOrg = vi.fn(
   },
 );
 
+vi.mock("@/lib/artifacts/artifact-revision-append", () => ({
+  appendSemanticArtifactRevision: (...a: unknown[]) =>
+    (appendSemanticArtifactRevision as unknown as (...x: unknown[]) => unknown)(...a),
+}));
 vi.mock("@/lib/artifacts/artifact-creation", () => ({
   createSemanticArtifact: (...a: unknown[]) =>
     (createSemanticArtifact as unknown as (...x: unknown[]) => unknown)(...a),
@@ -179,12 +206,15 @@ describe("the repair-verification fixture drives the shipped pipeline", () => {
       "createSemanticArtifact",
       "emitArtifactReviewGate",
       "recordChangesRequested",
-      "createSemanticArtifact",
+      // NOT a second `createSemanticArtifact` (cinatra#3080, fix leg 8): the
+      // repaired work is the next REVISION of the artifact under review.
+      "appendSemanticArtifactRevision",
       "submitRepairResponse",
       "readVerificationRecordForGate",
     ]);
     expect(result.baseArtifactId).toBe("art-1");
-    expect(result.successorArtifactId).toBe("art-2");
+    // ONE artifact, two revisions — the successor is the same piece of work.
+    expect(result.successorArtifactId).toBe("art-1");
     expect(result.successorGateId).toBe("gate-successor");
   });
 
@@ -258,7 +288,7 @@ describe("the repair-verification fixture drives the shipped pipeline", () => {
     expect(enforceReviewRunAccess).toHaveBeenCalled();
   });
 
-  it("LINKS the steps: the gate pins revision 1, the decision CASes on it, the response pins revision 2", async () => {
+  it("LINKS the steps: the gate pins revision 1, the decision CASes on it, the response pins revision 2 of the SAME artifact", async () => {
     const { seedRepairVerification } = await import("../lifecycle-seed-drivers");
     await seedRepairVerification(SUBJECT);
 
@@ -281,10 +311,18 @@ describe("the repair-verification fixture drives the shipped pipeline", () => {
 
     const responseArgs = submitRepairResponse.mock.calls.at(-1)?.[0] as unknown as {
       repairId: string;
-      response: { successorTarget: { representationRevisionId: string } };
+      response: {
+        baseTarget: { artifactId: string };
+        successorTarget: { artifactId: string; representationRevisionId: string };
+      };
     };
     expect(responseArgs.repairId).toBe("repair-1");
     expect(responseArgs.response.successorTarget.representationRevisionId).toBe("rev-2");
+    // AND THE PIN THE NINTH PROOF ROUND FOUND BROKEN: the successor names the
+    // artifact the base names, one revision on — never a second artifact.
+    expect(responseArgs.response.successorTarget.artifactId).toBe(
+      responseArgs.response.baseTarget.artifactId,
+    );
   });
 
   it("READS THE RECORD BACK — a repair that returned ok but wrote no record reports absent", async () => {
