@@ -65,6 +65,26 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
+// cinatra#3007 — the executor asks the produced-output review question BEFORE
+// every terminal write, and that question reads the store. This suite drives the
+// terminal tail with NO database, so the real seam would take its FAIL-CLOSED
+// branch (an unreachable store cannot prove the run owes no review, so no
+// terminal status is written and the unrecordable hold is a thrown, retryable
+// failure) and the tail under test would never run. Mocked inert here —
+// "nothing holds this run" — exactly as every other terminal-tail unit suite in
+// this package does. The hold's own behaviour is proven in
+// `execution-review-precedes-terminal.test.ts` (the wiring) and
+// `produced-review-ordering.integration.test.ts` (the ordering, real store).
+vi.mock("../run-produced-review-hold", () => ({
+  holdRunForProducedReview: vi.fn(async () => ({
+    held: false,
+    reason: "no-produced-output",
+  })),
+  releaseHeldRun: vi.fn(async () => ({ released: false, reason: "not-parked" })),
+  readGateRunOwner: vi.fn(async () => null),
+  listReleasableHeldRuns: vi.fn(async () => []),
+}));
+
 vi.mock("../store", () => storeMock);
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({

@@ -103,6 +103,7 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     traceId: row.traceId ?? null,
     timeoutSeconds: row.timeoutSeconds ?? null,
     streamedText: row.streamedText ?? null,
+    producedReviewPark: row.producedReviewPark ?? null,
     // per-run override; null when not set.
     // Defensive parse — see parseAuthPolicySafe definition above.
     authPolicy: parseAuthPolicySafe(row.authPolicy ?? null),

@@ -28,6 +28,12 @@ export type RunReviewSlot = {
   reviewTaskId: string | null;
   /** The run produced something whose review question is still unanswered. */
   awaiting: boolean;
+  /** The RUN itself is parked on the review of what it produced (cinatra#3046):
+   *  its row carries the terminal write its executor withheld, so the pause is a
+   *  review it is waiting on and not a question somebody has to answer. Absent
+   *  for a caller that has not read it, which reads as "not parked" — the same
+   *  answer this module gave before the fact existed. */
+  parkedOnProducedReview?: boolean;
 };
 
 /**
@@ -61,7 +67,12 @@ export function runReviewStepReading(
 ): RunReviewStepReading {
   if (!slot) return "none";
   if (slot.reviewTaskId) return "review";
-  return slot.awaiting ? "working" : "none";
+  // AND A PARK IS A REVIEW THAT HAS NOT OPENED YET (cinatra#3046). A run held on
+  // its produced output's review before the gate row exists has an outbox row to
+  // say so — but a hold that failed CLOSED has none, and it is still a run
+  // waiting on a review. The placeholder is what that window draws; answering
+  // `none` there would close the step on a run that is parked on it.
+  return slot.awaiting || slot.parkedOnProducedReview === true ? "working" : "none";
 }
 
 /**

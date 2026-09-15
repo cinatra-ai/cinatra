@@ -1,19 +1,35 @@
 /**
- * Markdown handler for the artifact detail page.
+ * Markdown handler — THE HOST'S MARKDOWN DISPLAY.
  *
- * Renders TWO views side-by-side: (a) the rendered markdown HTML via the
- * `marked` package already declared at `packages/chat/package.json`,
- * (b) the raw source in `<pre>` with `whitespace-pre-wrap`. Server
- * component — reads the artifact bytes directly via the local blob
- * store (the canonical server-side path the attachment-resolver uses)
- * and parses them at request time. No client component, no chat-page
- * coupling.
+ * Server component: it reads the artifact bytes directly via the local blob
+ * store (the canonical server-side path the attachment-resolver uses), applies
+ * the size cap, and renders them through the constrained sanitising renderer at
+ * request time.
+ *
+ * IT DRAWS ONE PANEL UNDER A CODE / PREVIEW STRIP (cinatra#3046, fix leg 17;
+ * cinatra#3295). It used to draw TWO panels side by side, headed "Rendered" and
+ * "Raw source" — both readings at once. The ratified drawing gives this display
+ * a two-tab strip over a single body ("A kind written as text is drawn through
+ * the markdown display on its Code and Preview tabs"), and the thirteenth graded
+ * reading measured the strip's absence on the resolved review display in both
+ * palettes. The strip itself is `MarkdownCodePreview` beside this file, because
+ * choosing a reading is the one interactive thing here; the bytes, the cap and
+ * the sanitiser stay on this side and are untouched.
+ *
+ * AND THAT IS WHY ONE EDIT REACHES THREE SURFACES. This display is drawn on the
+ * artifact's own page, in the review step on the run page, and on the review
+ * card in a conversation — "a display's chrome travels with it: what it carries
+ * here it carries there" — so the strip lands on the pending and the settled
+ * review from this one definition. It is the HOST's own form-rendering rung, not
+ * an extension renderer, so no package is special-cased to get it.
  */
 import "server-only";
 
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { renderReadmeMarkdown } from "@cinatra-ai/agents/readme-render";
+
+import { MarkdownCodePreview } from "./markdown-code-preview";
 
 const MAX_MARKDOWN_BYTES = 10 * 1024 * 1024; // mirror preview byte cap
 
@@ -75,25 +91,5 @@ export async function MarkdownHandler({
   // execute as the viewing user.
   const html = renderReadmeMarkdown(raw);
 
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <article className="soft-panel rounded-card overflow-auto p-6">
-        <h2 className="text-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">
-          Rendered
-        </h2>
-        <div
-          className="prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      </article>
-      <article className="soft-panel rounded-card overflow-auto p-6">
-        <h2 className="text-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">
-          Raw source
-        </h2>
-        <pre className="text-foreground text-sm font-mono whitespace-pre-wrap break-words">
-          {raw}
-        </pre>
-      </article>
-    </div>
-  );
+  return <MarkdownCodePreview html={html} raw={raw} />;
 }

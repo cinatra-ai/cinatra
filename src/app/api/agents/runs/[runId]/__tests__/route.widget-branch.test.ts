@@ -77,6 +77,19 @@ import {
 // secret, which no unit tree holds).
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   readRunReviewSlot: (runId: string) => readRunReviewSlot(runId),
+  // cinatra#3046 — the seed reads the run's produced-review park off the run row
+  // it has already read, through the same module it reads the slot through. The
+  // real one is a pure predicate over two columns; no run in this file is parked,
+  // so the honest stand-in is the predicate itself.
+  isParkedOnProducedReview: (run: { status?: unknown; stepResults?: unknown }) =>
+    run?.status === "pending_approval" &&
+    Array.isArray(run?.stepResults) &&
+    run.stepResults.some(
+      (e) =>
+        typeof e === "object" &&
+        e !== null &&
+        "lifecycle_review_withheld_terminal" in (e as object),
+    ),
 }));
 vi.mock("@/lib/lifecycle/lifecycle-card-ref", () => ({
   encodeLifecycleGateRef: (p: { runId: string; reviewTaskId: string }) =>

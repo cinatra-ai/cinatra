@@ -23,6 +23,24 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+
+// cinatra#3007 — the executor asks the produced-review question before every
+// terminal write. This suite is about the resume-outbox delivery sweep, drives the tail with no
+// database, and would otherwise exercise the hold's FAIL-CLOSED branch (an
+// unreachable store cannot prove the run owes no review, so no terminal status
+// is written). Mocked inert here — "nothing holds this run" — so the tail under
+// test behaves exactly as it did. The hold itself is proven in
+// `execution-review-precedes-terminal.test.ts` (the wiring) and
+// `produced-review-ordering.integration.test.ts` (the ordering, real store).
+vi.mock("../run-produced-review-hold", () => ({
+  holdRunForProducedReview: vi.fn(async () => ({
+    held: false,
+    reason: "no-produced-output",
+  })),
+  releaseHeldRun: vi.fn(async () => ({ released: false, reason: "not-parked" })),
+  readGateRunOwner: vi.fn(async () => null),
+  listReleasableHeldRuns: vi.fn(async () => []),
+}));
 // cinatra#2485 C: the delivery now rechecks the agent's install scope at SEND
 // time (the intent's own authorization is as old as the intent). The gate reads
 // agent_runs / agent_templates straight from the DB; this suite mocks the

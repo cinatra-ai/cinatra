@@ -47,6 +47,7 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 
 // The spinner is the design system's. Kept REAL (not stubbed) so the pin reads
 // the shipped component's own class on the shipped markup.
@@ -264,8 +265,11 @@ describe("while the agent works, the card is the placeholder", () => {
         "working",
       );
       // The card's own name is at its head — the drawn placeholder's first
-      // child, fixed on every run.
-      expect(screen.queryByText("Agentic Run Progress")).not.toBeNull();
+      // child, fixed on every run. It is the CARD's name, not the run-progress
+      // arm's heading, so it is read off the placeholder rather than by role.
+      expect(
+        document.querySelector('[data-conformance-id="review-gate-placeholder"]')?.textContent,
+      ).toContain("Agentic Run Progress");
       // And nothing the words do not allow.
       expect(screen.queryByText(/No messages yet/i)).toBeNull();
       expect(screen.queryByText(/Waiting to start/i)).toBeNull();
@@ -335,7 +339,7 @@ describe("the placeholder is replaced, in place, by the review screen", () => {
       expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
       expect(screen.queryByText(/Review requested/i)).not.toBeNull();
       // And the progress card it replaced is not beside it.
-      expect(screen.queryByText(/Agentic Run Progress/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
       expect(document.querySelector("[data-run-completion]")).toBeNull();
     },
     15_000,
@@ -618,7 +622,7 @@ describe("the readings the request does not cover are untouched", () => {
     );
     expect(document.querySelector(PLACEHOLDER)).toBeNull();
     expect(document.querySelector(REVIEW_CARD)).toBeNull();
-    expect(screen.queryByText(/Agentic Run Progress/i)).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).not.toBeNull();
   });
 
   it("a run still waiting for its review keeps the placeholder up, not a completion notice", async () => {
@@ -722,5 +726,330 @@ describe("the readings the request does not cover are untouched", () => {
     await waitFor(() => expect(document.querySelector("#field-idea")).not.toBeNull());
     expect(document.querySelector(REVIEW_CARD)).toBeNull();
     expect(document.querySelector(PLACEHOLDER)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW (cinatra#3046).
+//
+// cinatra#3007 stops a run whose output opened a review from reaching a terminal
+// status before that review is decided, so such a run waits in `pending_approval`
+// — with NO marked artifact-review interrupt, because the park withholds the
+// terminal write on the run rather than minting a redirect gate.
+//
+// Measured on real runs at the gate's mint, in both palettes, on this branch's
+// previous head: `[data-run-review-slot]` 0, placeholder 0, review card 0,
+// decision bar 0 — in the conversation AND on the run page — while the turn
+// redrew the run's ALREADY-ANSWERED input gate with a live Continue. The panel
+// read only the shape of the pause, so it read a review park as a question.
+//
+// Two things are pinned here, per surface:
+//
+//   1. THE SLOT CARRIES THE PARK'S REVIEW — the working placeholder while the
+//      gate row is not there yet, then the review card IN THE SAME SLOT, the
+//      same reading a marked interrupt gets. Then the decision releases the run
+//      and the same slot draws the decided reading.
+//   2. THE ANSWERED QUESTION IS GONE — no form, no live Continue, and nothing
+//      published to the chat composer that would put one in the prompt window.
+// ---------------------------------------------------------------------------
+describe("a run parked on its produced output's review draws it in the slot", () => {
+  /** The interrupt such a run really carries: the LAST question it was asked,
+   *  which the person answered minutes ago and the run has moved past. */
+  const ANSWERED_INPUT_GATE = {
+    xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+    childRunId: null,
+    reviewTaskId: `setup-${RUN_ID}`,
+    inputSchema: {
+      type: "object",
+      title: "idea",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      "x-object-text-property": "title",
+    },
+    currentValues: {},
+    fieldName: "idea",
+  };
+
+  /** The park before its gate row exists, and after. */
+  const PARK_WITHOUT_GATE = { ref: null, awaiting: true, producedReviewPark: true };
+  const PARK_WITH_GATE = {
+    ref: "lcr-park-gate",
+    awaiting: false,
+    producedReviewPark: true,
+  };
+
+  /** The two surfaces, mounted the way each really mounts this panel: the
+   *  conversation inside its own host, the run page with none. */
+  const SURFACES = [
+    [
+      "conversation",
+      "chat" as const,
+      (node: React.ReactNode) => (
+        <LifecycleCardSurfaceProvider host="chat_thread">{node}</LifecycleCardSurfaceProvider>
+      ),
+    ],
+    ["run page", "agent-detail" as const, (node: React.ReactNode) => node],
+  ] as const;
+
+  const noContinue = () => {
+    // The answered gate's own form, and the press that would resume it.
+    expect(document.querySelector("#field-idea")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+  };
+
+  it.each(SURFACES)(
+    "%s — the placeholder, then the review card in the SAME slot, and no live Continue",
+    async (_name, surface, wrap) => {
+      let body = seedBody({
+        status: "pending_approval",
+        hitlContext: ANSWERED_INPUT_GATE,
+        reviewGate: PARK_WITHOUT_GATE,
+      });
+      stubFetch(() => body);
+      const published: Array<unknown> = [];
+      const { AgenticRunPanel } = await import("../agentic-run-panel");
+      render(
+        wrap(
+          <AgenticRunPanel
+            {...panelProps({
+              surface,
+              initialStatus: "pending_approval",
+              initialHitlContext: ANSWERED_INPUT_GATE,
+              initialReviewGate: PARK_WITHOUT_GATE,
+              onActiveGateChange: (_runId: string, gate: unknown) => {
+                published.push(gate);
+              },
+            })}
+          />,
+        ),
+      );
+
+      // THE PARK'S FIRST READING: the slot is there, and it is the placeholder.
+      const placeholder = await waitFor(() => {
+        const el = document.querySelector(PLACEHOLDER);
+        if (!el) throw new Error("no placeholder");
+        return el;
+      });
+      expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
+        "working",
+      );
+      expect(document.querySelector(SLOT)?.contains(placeholder)).toBe(true);
+      expect(document.querySelector(REVIEW_CARD)).toBeNull();
+      // The answered question is not redrawn, here or in the prompt window.
+      noContinue();
+      expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
+      await waitFor(() => expect(published.length).toBeGreaterThan(0));
+      expect(published.every((g) => g === null)).toBe(true);
+
+      // THE GATE ROW LANDS. Nobody asked, and no new turn happened.
+      body = seedBody({
+        status: "pending_approval",
+        hitlContext: ANSWERED_INPUT_GATE,
+        reviewGate: PARK_WITH_GATE,
+      });
+      const card = await waitFor(
+        () => {
+          const el = document.querySelector(REVIEW_CARD);
+          if (!el) throw new Error("the review screen did not arrive");
+          return el;
+        },
+        { timeout: 20_000 },
+      );
+
+      // THE SAME SLOT, now reading `review`, with the placeholder replaced.
+      expect(document.querySelectorAll(SLOT).length).toBe(1);
+      expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
+        "review",
+      );
+      expect(document.querySelector(SLOT)?.contains(card)).toBe(true);
+      expect(document.querySelector(PLACEHOLDER)).toBeNull();
+      expect(card.getAttribute("data-lifecycle-card")).toBe("artifact_review_gate");
+      expect(
+        document.querySelectorAll('[data-lifecycle-card="artifact_review_gate"]').length,
+      ).toBe(1);
+      // Still no question, and still nothing published for one.
+      noContinue();
+      expect(published.every((g) => g === null)).toBe(true);
+      // The card is addressed by the SLOT's own server-minted ref — the park has
+      // no interrupt to carry one.
+      const asked = (vi.mocked(globalThis.fetch).mock.calls as unknown[][])
+        .filter((c) => !String(c[0]).includes("/api/agents/runs/"))
+        .map((c) => String((c[1] as { body?: unknown } | undefined)?.body ?? ""));
+      expect(asked.some((b) => b.includes("lcr-park-gate"))).toBe(true);
+    },
+    40_000,
+  );
+
+  it.each(SURFACES)(
+    "%s — the decision releases the run, and the SAME slot draws the decided reading",
+    async (_name, surface, wrap) => {
+      let body = seedBody({
+        status: "pending_approval",
+        hitlContext: ANSWERED_INPUT_GATE,
+        reviewGate: PARK_WITH_GATE,
+      });
+      stubFetch(() => body);
+      const { AgenticRunPanel } = await import("../agentic-run-panel");
+      render(
+        wrap(
+          <AgenticRunPanel
+            {...panelProps({
+              surface,
+              initialStatus: "pending_approval",
+              initialHitlContext: ANSWERED_INPUT_GATE,
+              initialReviewGate: PARK_WITH_GATE,
+            })}
+          />,
+        ),
+      );
+
+      await waitFor(() => expect(document.querySelector(REVIEW_CARD)).not.toBeNull());
+
+      // The decision on the card's own bar releases the run through the hold's
+      // existing path: the withheld terminal write is performed, so the row the
+      // panel reads next is `completed`, no longer parked, with its gate named.
+      const runReads = () =>
+        (vi.mocked(globalThis.fetch).mock.calls as unknown[][]).filter((c) =>
+          String(c[0]).includes("/api/agents/runs/"),
+        ).length;
+      const atRelease = runReads();
+      body = seedBody({
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        hitlContext: null,
+        reviewGate: { ref: "lcr-park-gate", awaiting: false, producedReviewPark: false },
+      });
+
+      // TWO more reads before this is believed: the panel's own tick, which is
+      // what learns the released status, and the slot's re-read under it — the
+      // answer from the parked status does not carry over, by the shared
+      // reader's own freshness rule.
+      await waitFor(
+        () => {
+          if (document.querySelector("[data-run-completion]")) {
+            throw new Error("the completion notice replaced the review");
+          }
+          if (!document.querySelector(REVIEW_CARD)) throw new Error("no review card");
+          if (runReads() < atRelease + 2) throw new Error("not read again yet");
+        },
+        { timeout: 25_000 },
+      );
+
+      // The released run keeps the review in the SAME slot — the card draws its
+      // own settled reading from its own ladder — and the run's terminal
+      // rendering never stands in front of it.
+      expect(document.querySelectorAll(SLOT).length).toBe(1);
+      expect(document.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe(
+        "review",
+      );
+      expect(document.querySelector("[data-run-completion]")).toBeNull();
+      noContinue();
+    },
+    45_000,
+  );
+
+  it("a park with NO gate yet is not a completion notice and not a question", async () => {
+    stubFetch(() =>
+      seedBody({
+        status: "pending_approval",
+        hitlContext: ANSWERED_INPUT_GATE,
+        reviewGate: PARK_WITHOUT_GATE,
+      }),
+    );
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        {...panelProps({
+          initialStatus: "pending_approval",
+          agentId: "cinatra-ai/blog-draft-writer-agent",
+          initialHitlContext: ANSWERED_INPUT_GATE,
+          initialReviewGate: PARK_WITHOUT_GATE,
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(document.querySelector(PLACEHOLDER)).not.toBeNull());
+    expect(document.querySelector("[data-run-completion]")).toBeNull();
+    expect(document.querySelector("#field-idea")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+  });
+
+  // THE DISCRIMINATOR, from the other side. A run parked on a QUESTION carries no
+  // withheld terminal write, so it is not a produced-review park however many
+  // gates it has on file — and it must keep drawing the question. This is the
+  // line the fix must not cross, and the sibling pin above it
+  // ("a gate that needs INPUT still draws its form") is the same rule stated for
+  // the unflagged slot.
+  // THE READER'S OWN BEHAVIOUR UNDER A PARK, pinned where it lives rather than
+  // through a panel. A park is the one state whose facts change while the run's
+  // status does NOT: the gate is minted (or repaired) minutes after the park, and
+  // the status is the reader's only other freshness signal. An answer taken once
+  // and believed for the whole park is what leaves a fail-closed park spinning at
+  // a review that never arrives.
+  it("keeps looking while the run is PARKED, so a late gate is found without a status change", async () => {
+    const { useRunReviewSlot } = await import("../lifecycle-card-runtime");
+    let answer: {
+      ref: string | null;
+      awaiting: boolean;
+      producedReviewPark: boolean;
+    } = { ref: null, awaiting: false, producedReviewPark: true };
+    const read = vi.fn(async () => answer);
+
+    function Probe() {
+      const { slot, mayStillOpen } = useRunReviewSlot({
+        status: "pending_approval",
+        initial: { ref: null, awaiting: false, producedReviewPark: true },
+        read,
+      });
+      return (
+        <div data-probe-ref={slot.ref ?? ""} data-probe-may={String(mayStillOpen)} />
+      );
+    }
+    render(<Probe />);
+    const may = () =>
+      document.querySelector("[data-probe-may]")?.getAttribute("data-probe-may");
+    const ref = () =>
+      document.querySelector("[data-probe-ref]")?.getAttribute("data-probe-ref");
+
+    // The park holds the placeholder from the first paint — no gate, and nothing
+    // finished to fall back to. (It is held on the same 30-read belt as every
+    // other reading, which is asserted by construction rather than by waiting out
+    // three and a half minutes of backoff here.)
+    expect(may()).toBe("true");
+    // …and one successful answer does NOT end the looking, though it would for a
+    // finished run.
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(1), {
+      timeout: 15_000,
+    });
+    expect(may()).toBe("true");
+
+    // The gate lands LATER, with the run's status unmoved, and the same reader
+    // finds it.
+    answer = { ref: "lcr-late-gate", awaiting: false, producedReviewPark: true };
+    await waitFor(() => expect(ref()).toBe("lcr-late-gate"), { timeout: 20_000 });
+  }, 45_000);
+
+  it("a run parked on a QUESTION is untouched — the park's flag is what decides", async () => {
+    stubFetch(() =>
+      seedBody({
+        status: "pending_approval",
+        hitlContext: ANSWERED_INPUT_GATE,
+        reviewGate: { ref: "lcr-earlier", awaiting: false, producedReviewPark: false },
+      }),
+    );
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        {...panelProps({
+          initialStatus: "pending_approval",
+          initialHitlContext: ANSWERED_INPUT_GATE,
+          initialReviewGate: { ref: "lcr-earlier", awaiting: false, producedReviewPark: false },
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(document.querySelector("#field-idea")).not.toBeNull());
+    expect(document.querySelector(REVIEW_CARD)).toBeNull();
+    expect(document.querySelector(SLOT)).toBeNull();
   });
 });
