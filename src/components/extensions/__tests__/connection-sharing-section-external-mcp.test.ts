@@ -68,13 +68,13 @@ vi.mock("@/components/extension-permissions-client", () => ({
   ExtensionPermissionsClient: () => null,
 }));
 
-vi.mock("@/components/extensions/connector-sharing-panels", () => ({
+vi.mock("@cinatra-ai/sdk-ui/connector-sharing-panels", () => ({
   CONNECTOR_SHARING_INTRO: "Choose who can use each of your saved connections.",
   ConnectorSharingPanels: () => null,
 }));
 
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
-import { ConnectorSharingPanels } from "@/components/extensions/connector-sharing-panels";
+import { ConnectorSharingPanels } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";

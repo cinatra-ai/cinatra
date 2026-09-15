@@ -178,7 +178,7 @@ import { ConnectionSharingSection } from "@/components/extensions/connection-sha
 import {
   ConnectorSharingPanels,
   type ConnectorSharingPanelsProps,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 /** The pointer records the fake gateway persisted (the pre-#3460 behaviour). */
 const savedPointerRecords: Array<{ connectorKey: string; connectionId: string }> = [];
