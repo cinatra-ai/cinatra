@@ -759,6 +759,23 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/blog-pipeline-install-record-heal.integration.test.ts
 
+      # cinatra#3462. The development boot's git-file import road must reach the
+      # declared-tables ACTIVATION — the extension database role and every table
+      # the package's manifest declares — on a database created from nothing,
+      # and it must reach it even when the template import is skipped as already
+      # up to date. That is a claim about pg_roles and information_schema rows
+      # after a real import pass, so a mock proves nothing: this drives the real
+      # loader against this job's service Postgres and asserts the role and the
+      # declared table exist afterwards. It is an `*.integration.test.ts`,
+      # config-excluded from the default vitest run, so without this step the
+      # contract could regress without reddening a single check. Own vitest
+      # invocation (own process) so its SUPABASE_DB_URL/pool lifecycle never
+      # touches the steps above.
+      - name: Dev-boot declared-tables activation DB test (cinatra#3462)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/extension-declared-tables-boot-activation.integration.test.ts
+
       # cinatra#2092 (epic #2086 S5). The upload-on-install CRASH WINDOW is a
       # claim about what survives in Postgres between COMMIT and the worker run,
       # so a mock cannot prove it: this drives the REAL catalog-transaction tail
@@ -2174,6 +2191,23 @@ jobs:
       # cloned-back extension tree (this job clones it above).
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
+
+      # Self-rendering extensions border gate (cinatra#3471, epic #2926 —
+      # decision 407 of 2026-09-13: connectors render the setup page themselves,
+      # artifacts render the artifact view themselves, and the host shares its
+      # primitives with extension bundles at RUN TIME). SHRINK-ONLY ratchet over
+      # the design-primitive BYTE COPIES a kind:connector / kind:artifact package
+      # still carries under src/components/ui/: a NEW copy fails immediately, a
+      # removed one must ratchet the committed baseline down (no silent headroom),
+      # and ANY direct reach into the product's @/components/ui/*, @/lib/utils or
+      # src/components/ui fails. The baseline is the only record of those copies
+      # now that the vendoring manifest has retired both kinds (decision 407 A).
+      # Requires the cloned-back extension tree (this job clones it above).
+      - name: Self-rendering extensions border gate (shrink-only ratchet)
+        run: node scripts/extensions/self-rendering-extensions-border-gate.mjs
+
+      - name: Self-rendering extensions border gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/self-rendering-extensions-border-gate.test.mjs
 
       # Build-config consistency check. config/build-config.manifest.json
       # is the single source of truth for the tsconfig.json @cinatra-ai/* path

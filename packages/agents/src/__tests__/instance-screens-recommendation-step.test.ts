@@ -318,7 +318,29 @@ describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps,
     ).toBe(false);
   });
 
-  it("the stepper branch's own live column is still the ONE rail", () => {
+  it("the stepper branch's own live column is still the ONE rail — where the frame draws none", () => {
+    // The 2026-08-14 answer, unchanged on the branch it was made for: the run
+    // panel raises a column of its own and the page's rows travel down into it
+    // as `railExtras`, so this rail stands down.
+    expect(
+      screenDrawsPageRail({
+        ...BASE_RAIL,
+        runStatus: "running",
+        gateStepCount: 0,
+        panel: "stepper",
+        stepperStepCount: 4,
+      }),
+    ).toBe(false);
+  });
+
+  it("and the page's rows are drawn where the FRAME draws a column (cinatra#3478)", () => {
+    // A rail step handed to the run surface's frame — a gate the run is stopped
+    // at, a schedule, an input form, the run's own record — makes the frame draw
+    // a rail COLUMN, and that column is not the page-level rail the answer above
+    // stands down. Both used to draw: the frame's column at the left, the run
+    // panel's beside it, and the run's work steps in neither list the reader
+    // could read as one. The frame's column is the rail that survives, so these
+    // rows are mounted inside it and the panel's column stands down instead.
     expect(
       screenDrawsPageRail({
         ...BASE_RAIL,
@@ -327,7 +349,7 @@ describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps,
         panel: "stepper",
         stepperStepCount: 4,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("an executing run is unchanged by any of this", () => {
@@ -339,7 +361,12 @@ describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps,
 
   it("the screen asks the predicate rather than restating it inline", () => {
     expect(SCREEN_SRC).toContain("const railDraws = screenDrawsPageRail({");
-    expect(SCREEN_SRC).toMatch(/gateStepCount: railSteps\.length,/);
+    // The count is every row the frame draws (cinatra#3478): the rows already
+    // pushed, plus the run's own record, which is composed after this answer and
+    // makes the frame draw a column just as they do.
+    expect(SCREEN_SRC).toMatch(
+      /gateStepCount: railSteps\.length \+ \(railCarriesMadeStep \? 1 : 0\),/,
+    );
     expect(SCREEN_SRC).not.toMatch(/run\.status !== "pending_input" &&/);
   });
 });

@@ -112,6 +112,33 @@ export const LIFECYCLE_HITL_SCREEN_SUBMIT_PATH =
 const LifecycleCardSurfaceContext = createContext<LifecycleCardHost | null>(null);
 
 /**
+ * INSIDE A CONVERSATION — true anywhere under a `chat_thread` declaration, the
+ * card's own host included and a NESTED declaration's subtree included
+ * (cinatra#3481).
+ *
+ * WHY CONTAINMENT AND NOT THE HOST. The drawing's sentence is about the place a
+ * reader is in, not about the prop the nearest mount happened to pass: "No
+ * prompt window is drawn inside a conversation — the prompt window is the box
+ * outside the chat" (`app-lifecycle-cards.html` §II). The inline run panel
+ * mounts the review card under its own `run_card` declaration, and that panel
+ * is drawn INSIDE the thread, so a host read alone would answer "run card" for
+ * a card the reader sees between the thread's turns and its composer — the very
+ * second box the sentence forbids. This flag is inherited rather than
+ * recomputed, so a nested declaration cannot step outside the conversation it
+ * is drawn in.
+ *
+ * `site_widget` is NOT named here: the ruling is the conversation's sentence and
+ * the widget keeps the window §IX gives it. Widening this is a deliberate act
+ * with its own reading.
+ */
+const InsideConversationContext = createContext<boolean>(false);
+
+/** True when the subtree is drawn inside a conversation — see the context. */
+export function useInsideConversation(): boolean {
+  return useContext(InsideConversationContext);
+}
+
+/**
  * How a host proves who is asking, when a cookie cannot (cinatra#2577, epic
  * #2564 S8d). Returns the headers to put on the resolve request and the
  * credentials mode to send it with.
@@ -228,6 +255,10 @@ export function LifecycleCardSurfaceProvider({
   frame?: LifecycleCardFrame;
   children: ReactNode;
 }): ReactElement {
+  // The conversation this subtree is drawn in, if any — inherited, so a nested
+  // declaration (the inline run panel's `run_card`) stays inside the thread it
+  // is drawn in (cinatra#3481).
+  const outerInsideConversation = useContext(InsideConversationContext);
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
   const credentialOk = cookieHost
     ? auth === undefined
@@ -251,7 +282,13 @@ export function LifecycleCardSurfaceProvider({
           {/* TRUE only for a well-formed cookie-session declaration — see the
               context's own note for why "no auth" is not the same question. */}
           <LifecycleCardCookieSessionContext.Provider value={cookieHost && credentialOk}>
-            {children}
+            {/* A refused declaration draws no card at all, so only a well-formed
+                one opens a conversation; an inherited TRUE is never dropped. */}
+            <InsideConversationContext.Provider
+              value={outerInsideConversation || (credentialOk && host === "chat_thread")}
+            >
+              {children}
+            </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
         </LifecycleCardFrameContext.Provider>
       </LifecycleCardAuthContext.Provider>
