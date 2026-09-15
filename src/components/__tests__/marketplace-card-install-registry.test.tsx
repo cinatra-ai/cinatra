@@ -71,7 +71,7 @@ vi.mock("@/lib/cinatra-toast", () => ({
 // ---------------------------------------------------------------------------
 
 const REGISTRY_ARTIFACT: MarketplaceCardData = {
-  packageName: "@cinatra-ai/blog-ideas-artifact",
+  packageName: "@example-vendor/sample-ideas-artifact",
   packageVersion: "0.1.0",
   displayName: "Blog Ideas",
   description: "A display of blog ideas, grouped by campaign.",
@@ -80,7 +80,7 @@ const REGISTRY_ARTIFACT: MarketplaceCardData = {
   badge: { text: "Free", variant: "free" },
   freshnessAt: "2026-09-01T00:00:00.000Z",
   rating: null,
-  detailHref: "/configuration/marketplace/cinatra-ai/blog-ideas-artifact",
+  detailHref: "/configuration/marketplace/example-vendor/sample-ideas-artifact",
   installCount: null,
   manifestLogoUrl: null,
   iconSlug: null,
@@ -92,23 +92,23 @@ const REGISTRY_ARTIFACT: MarketplaceCardData = {
 
 const REGISTRY_SKILL: MarketplaceCardData = {
   ...REGISTRY_ARTIFACT,
-  packageName: "@cinatra-ai/blog-editorial-skills",
+  packageName: "@example-vendor/sample-editorial-skills",
   packageVersion: "0.1.0",
   displayName: "Blog editorial bundle",
   description: "The blog editorial skills, as one bundle.",
   kindSlug: "skill",
   kindLabel: "Skill",
-  detailHref: "/configuration/marketplace/cinatra-ai/blog-editorial-skills",
+  detailHref: "/configuration/marketplace/example-vendor/sample-editorial-skills",
 };
 
 /** A listing the host BUNDLES — same kind, manifest tiers resolved. */
 const BUNDLED_ARTIFACT: MarketplaceCardData = {
   ...REGISTRY_ARTIFACT,
-  packageName: "@cinatra-ai/chart-artifact",
+  packageName: "@example-vendor/sample-chart-artifact",
   displayName: "Chart",
   manifestLogoUrl: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>",
   iconSlug: "chart-artifact",
-  detailHref: "/configuration/marketplace/cinatra-ai/chart-artifact",
+  detailHref: "/configuration/marketplace/example-vendor/sample-chart-artifact",
 };
 
 const INSTALL_TARGETS: InstallPanelScopeContextValue["installTargets"] = [
@@ -277,7 +277,7 @@ describe("cinatra#3494 — with the road open, a registry-offered listing instal
 
     await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(1));
     expect(action).toHaveBeenCalledWith({
-      packageName: "@cinatra-ai/blog-ideas-artifact",
+      packageName: "@example-vendor/sample-ideas-artifact",
       packageVersion: "0.1.0",
       accessTarget: { level: "workspace", id: "org-1" },
     });
@@ -291,7 +291,7 @@ describe("cinatra#3494 — with the road open, a registry-offered listing instal
 
     await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(1));
     expect(action).toHaveBeenCalledWith({
-      packageName: "@cinatra-ai/blog-editorial-skills",
+      packageName: "@example-vendor/sample-editorial-skills",
       packageVersion: "0.1.0",
     });
   });
