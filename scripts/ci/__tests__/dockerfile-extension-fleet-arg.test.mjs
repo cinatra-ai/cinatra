@@ -95,6 +95,59 @@ describe("Dockerfile — the CINATRA_EXTENSION_FLEET build argument", () => {
     );
   });
 
+  // ── the image tells the boot which fleet it carries (engineering#666) ─────
+  //
+  // Neither the OAS seed manifest nor the bundled-digest record can distinguish
+  // the two trees, so the fleet block writes a marker naming the fleet. The
+  // three properties below are the ones the boot decision rests on: the marker
+  // is written from the SAME build argument that selected the road, it is
+  // written on BOTH roads (so an absent marker always means a pre-marker image
+  // and never a road that skipped it), and it reaches the runtime stage.
+  it("records the fleet from the SAME build argument, in the fleet block", () => {
+    const record = indexOfMatch(/^RUN\s+node\s+scripts\/extensions\/record-extension-fleet\.mjs\b/);
+    expect(record).toBeGreaterThan(-1);
+    const step = lines.slice(record, record + 3).join("\n");
+    expect(step).toContain("--fleet");
+    expect(step).toContain("$CINATRA_EXTENSION_FLEET");
+    expect(step).toContain("/app/.cinatra-extension-fleet.json");
+  });
+
+  it("writes the marker unconditionally — the required-only image records `required` too", () => {
+    const record = indexOfMatch(/^RUN\s+node\s+scripts\/extensions\/record-extension-fleet\.mjs\b/);
+    const acquire = indexOfLine(ACQUIRE_PROD);
+    const installs = indicesOfLine(FROZEN_INSTALL);
+    // In the fleet block: after the required acquisition, before the second
+    // frozen install. No shell conditional guards it.
+    expect(record).toBeGreaterThan(acquire);
+    expect(record).toBeLessThan(installs[1]);
+    const step = lines.slice(record, record + 3).join("\n");
+    expect(step).not.toMatch(/\bif\b|&&|\|\|/);
+  });
+
+  it("bakes the marker into the runtime stage, beside the seed and the digests", () => {
+    expect(dockerfile).toContain(
+      "COPY --from=build /app/.cinatra-extension-fleet.json ./.cinatra-extension-fleet.json",
+    );
+  });
+
+  it("keeps a context copy of the marker OUT of the build — `COPY . .` must not clobber it", () => {
+    // The marker is written INSIDE the build (above), but `COPY . .` runs
+    // later: a local `.cinatra-extension-fleet.json` in the build context would
+    // overwrite the image-owned one and a required-only image would boot
+    // claiming the dev fleet. The OAS seed is excluded for exactly this reason;
+    // the marker has to be excluded with it.
+    const dockerignore = readFileSync(path.join(repoRoot, ".dockerignore"), "utf8");
+    const entries = dockerignore
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    expect(entries).toContain(".cinatra-extension-fleet.json");
+    // The hazard is real only because the context copy lands after the write.
+    const record = indexOfMatch(/^RUN\s+node\s+scripts\/extensions\/record-extension-fleet\.mjs\b/);
+    const contextCopy = indexOfLine("COPY . .");
+    expect(contextCopy).toBeGreaterThan(record);
+  });
+
   it("says in the file itself that the dev road is never a real deployment's road", () => {
     const comments = lines.filter((l) => l.trimStart().startsWith("#")).join("\n");
     expect(comments).toMatch(/dev ROAD IS NEVER A REAL DEPLOYMENT'S ROAD/);
