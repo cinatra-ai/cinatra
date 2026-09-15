@@ -835,7 +835,12 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 339
+      "line": 838
+    },
+    {
+      "primitiveName": "lifecycle_bound_screen_fill",
+      "file": "src/lib/lifecycle/bound-screen-fill-mcp.ts",
+      "line": 279
     },
     {
       "primitiveName": "linkedin_accounts_list",

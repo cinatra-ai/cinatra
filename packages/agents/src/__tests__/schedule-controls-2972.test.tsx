@@ -35,6 +35,7 @@ import type {
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ScheduleProposalCard } from "../schedule-proposal-card";
+import { SAVE_SCHEDULE_REFUSALS, frozenScheduleReason } from "../trigger-recurrence";
 
 afterEach(() => {
   cleanup();
@@ -204,7 +205,7 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
     ["Run right after setup", BODIES.immediateFired],
     ["Schedule for later", BODIES.oneOffFired],
   ] as const) {
-    it(`${name}, after it fired: read-only rows and NO controls, on every host`, async () => {
+    it(`${name}, after it fired: read-only rows and NO floor, on every host`, async () => {
       for (const host of [
         "chat_thread",
         "site_widget",
@@ -213,13 +214,28 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
       ] as const) {
         const view = mount(body, host);
         await waitFor(() => expect(rows(view.container)).not.toBeNull());
-        // The whole floor is gone — not a disabled control in it.
+        // NO FLOOR AT ALL (cinatra#2934, the FOURTH graded capture). The
+        // ratified drawing at the pin this pull request records gives this
+        // exact state no floor, no hairline and nothing to press, and plan (A)
+        // §7.2 says the surface "shows the same form and nothing else — no
+        // summary box, no status label". The reader is not left in silence for
+        // it: the prompt window below the scheduler stays present and disabled
+        // and answers there, which is what the sibling suite pins.
         expect(floor(view.container), `${name}/${host}`).toBeNull();
         expect(save(view.container), `${name}/${host}`).toBeNull();
         expect(cancel(view.container), `${name}/${host}`).toBeNull();
-        expect(view.container.textContent, `${name}/${host}`).not.toContain("Save changes");
         expect(view.container.textContent, `${name}/${host}`).not.toContain("Cancel schedule");
-        // And no status label stands in for the withheld controls.
+        // AND NO STATUS LABEL INSIDE THE FORM either — the state's own sentence
+        // belongs to the window below the scheduler and is drawn there once.
+        expect(view.container.textContent, `${name}/${host}`).not.toContain(
+          frozenScheduleReason({
+            // The two rows of this loop are both released non-recurring
+            // schedules; which sentence each draws is the one thing that
+            // differs, and it follows the trigger type.
+            triggerType: name === "Schedule for later" ? "scheduled" : "immediate",
+            released: true,
+          }),
+        );
         expect(
           view.container.querySelector('[data-conformance-id="schedule-released"]'),
           `${name}/${host}`,
@@ -231,19 +247,28 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
   }
 
   it("the rows of a fired one-off are read-only, showing the schedule that fired", async () => {
+    // AMENDED BY THE FIFTH GRADED CAPTURE (cinatra#2934). This assertion used
+    // to look for a DISABLED picker holding the armed moment, and a disabled
+    // picker is not what the drawing draws here: "the rows go read-only — the
+    // values still legible, the PICKERS GONE". A dead picker is the reading for
+    // a reader who may not act on a live schedule; this schedule is over. So
+    // the same fact is now read where the drawing puts it — the value as text,
+    // with no control holding it.
     const { container } = mount(BODIES.oneOffFired, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
     // THE ROWS GO READ-ONLY, NOT DEAD (cinatra#3174 fix leg 1). §VI: "the rows
     // go read-only — the values still legible, the pickers gone". A disabled
     // picker is still a picker, and the first graded proof round photographed
-    // exactly that. The value stands where the field stood.
+    // exactly that. The value stands where the field stood, in the named
+    // reading box the fifth graded proof set pinned (cinatra#2934).
     expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
     expect(container.querySelectorAll("input")).toHaveLength(0);
     // The MOMENT, in the reader's own locale — the same reading the picker drew
     // a moment earlier, never the wire's naive wall clock (cinatra#3174 fix leg
     // 1). Asserted on the parts, because the locale is the reader's.
-    const readAt = rows(container)?.textContent ?? "";
-    expect(readAt).toContain(
+    expect(
+      container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
+    ).toContain(
       // The whole wall clock, in the reader's locale — see the note in
       // schedule-card-readings-per-drawing-3193-fix1: the year and the hour
       // alone would pass a formatter that moved the day (converge round).
@@ -380,16 +405,24 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     expect(sent[0]).toMatchObject({ op: "cancel", ref: "run-scoped-ref" });
   });
 
-  it("AFTERWARDS the scheduler is non-editable — the stopped card has no floor", async () => {
+  it("AFTERWARDS the scheduler is non-editable — the stopped card carries no floor", async () => {
     const { container } = mount(BODIES.recurringStopped, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
+    // NO FLOOR AT ALL (cinatra#2934, the fourth graded capture; the drawing at
+    // the pin and plan (A) §7.2). The rows stand locked and the window below
+    // the scheduler is where this state says anything.
     expect(floor(container)).toBeNull();
     expect(save(container)).toBeNull();
     expect(cancel(container)).toBeNull();
+    expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     // The schedule is still DRAWN — stopping it is not deleting it — and it is
-    // drawn as the record it now is (cinatra#3174 fix leg 1): the values stand
-    // where the pickers were.
+    // drawn as the record it now is (cinatra#3174 fix leg 1) the way the fifth
+    // graded proof set reads it (cinatra#2934): the value legible in its named
+    // box, the picker gone, rather than a picker standing there dead.
     expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(
+      container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
+    ).toBe("Europe/Berlin");
     expect(rows(container)?.textContent).toContain("Europe/Berlin");
   });
 });

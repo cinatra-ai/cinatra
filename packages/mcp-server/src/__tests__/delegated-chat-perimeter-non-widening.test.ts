@@ -108,6 +108,18 @@ const CALLABLE_BEFORE_2817: readonly string[] = [
   // non-widening. The swap still adds nothing of its own: the branch-side delta
   // against this list is still empty in both directions.
   "lifecycle_bound_card_decide",
+  // ADDED DELIBERATELY, AND BY THIS BRANCH — stated here rather than absorbed
+  // somewhere quieter. The fill is reach this slice GRANTS (cinatra#2934,
+  // lifecycle-b W5c): it is how an agent's waiting screen is filled from the
+  // conversation, which is the whole of what the slice is for, so a delegated
+  // chat must be able to see and call it. What it does not do is decide
+  // anything — it presses no control, resumes no run and writes no value the
+  // run reads, and its handler refuses unless the frame carries a verified
+  // grant naming the person, the organization and that one card. This literal
+  // is the callable baseline the security review reads, so a deliberate grant
+  // belongs in it, named; leaving it out would make the gate assert that this
+  // slice must WITHDRAW the primitive it exists to add.
+  "lifecycle_bound_screen_fill",
   "linkedin_accounts_list",
   "media_feeds_list",
   "metric_cost_budget_get",
@@ -156,13 +168,14 @@ describe("the perimeter swap did not change what is callable", () => {
 
   // 83 names when this branch was cut, 84 after main's cinatra#2988 added the
   // lent action to its own allowlist — see the entry itself for why it counts
-  // as reach that already existed rather than reach this swap granted — and 85
+  // as reach that already existed rather than reach this swap granted — 85
   // after cinatra#2368 granted the appointment-schedule add flow the chat reach
-  // its own acceptance criterion requires. See that entry for why it is a
-  // genuine widening rather than a restatement of reach that already existed.
-  it("the frozen list is the real one (85 names), not an empty set passing vacuously", () => {
-    expect(CALLABLE_BEFORE_2817).toHaveLength(85);
-    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(85);
+  // its own acceptance criterion requires, and 86 with the fill this branch
+  // grants. Each of the last two carries its own comment above saying which it
+  // is: reach that already existed, or reach granted here on purpose.
+  it("the frozen list is the real one (86 names), not an empty set passing vacuously", () => {
+    expect(CALLABLE_BEFORE_2817).toHaveLength(86);
+    expect(new Set(CALLABLE_BEFORE_2817).size).toBe(86);
     expect([...CALLABLE_BEFORE_2817]).toEqual([...CALLABLE_BEFORE_2817].sort());
   });
 });

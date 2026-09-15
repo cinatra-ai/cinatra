@@ -190,6 +190,12 @@ const assistantChatBodySchema = z.object({
     .object({
       refs: z.array(z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH)).max(10),
       focused: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH).nullish(),
+      // cinatra#2934 — the RUNS whose waiting screen the composer sits under. A
+      // screen carries no ref on any client, so the page names the run and the
+      // server mints the ref from the run's own durable row, under the reader's
+      // access. Bounded here for the same reason `refs` is: an unbounded list
+      // would be the client choosing how much resolve work the server does.
+      screenRunIds: z.array(z.string().min(1).max(200)).max(4).optional(),
     })
     .strict()
     .optional(),
@@ -594,6 +600,9 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     ? {
         candidateRefs: parsed.data.boundCard.refs,
         focusedRef: parsed.data.boundCard.focused ?? null,
+        ...(parsed.data.boundCard.screenRunIds
+          ? { screenRunIds: parsed.data.boundCard.screenRunIds }
+          : {}),
       }
     : null;
   const runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"] = (
@@ -703,6 +712,9 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     ? {
         candidateRefs: parsed.data.boundCard.refs,
         focusedRef: parsed.data.boundCard.focused ?? null,
+        ...(parsed.data.boundCard.screenRunIds
+          ? { screenRunIds: parsed.data.boundCard.screenRunIds }
+          : {}),
       }
     : null;
   const { threadId } = parsed.data;
