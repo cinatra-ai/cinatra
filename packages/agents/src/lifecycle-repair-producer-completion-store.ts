@@ -264,10 +264,11 @@ export async function completeDispatchedProducerRepairs(opts?: {
   //
   // So the LIMIT now bounds the work this pass DOES, not the rows it looks at: a
   // wider window is read, a row that is not this drain's costs a cheap ownership
-  // read and no budget, and the pass stops when it has spent its budget on rows
-  // it owns. The window is still bounded (never a full-table scan), and the
-  // ordering is unchanged — oldest first, so nothing this drain owns is
-  // reordered around anything else it owns.
+  // read and no budget, and the pass stops when it has spent its budget on the
+  // rows it can actually COMPLETE (the decrement below). The window is still
+  // bounded (never a full-table scan), and the ordering is unchanged — oldest
+  // first, so nothing this drain owns is reordered around anything else it
+  // owns.
   const candidates = await db
     .select({ id: lifecycleRepair.id })
     .from(lifecycleRepair)
@@ -297,7 +298,6 @@ export async function completeDispatchedProducerRepairs(opts?: {
         else summary.skippedUnknownOwner += 1;
         continue;
       }
-      budget -= 1;
 
       const runId = repairRunId(repair.id);
 
@@ -368,6 +368,28 @@ export async function completeDispatchedProducerRepairs(opts?: {
         summary.unresolved += 1;
         continue;
       }
+
+      // THE BUDGET IS SPENT ON THE WORK, NOT ON THE LOOKING (cinatra#3080, the
+      // fix leg for the three carried defects).
+      //
+      // The decrement used to sit immediately after the ownership read, BEFORE
+      // this pass had looked at the run, the production or the delivered
+      // request — so a repair that cannot complete AT ALL (no repair run,
+      // nothing produced, a membership that no longer verifies) spent a unit of
+      // budget anyway, and spent it again on every later pass: such a row stays
+      // `dispatched`, so it sorts oldest-first again, and the next pass buys the
+      // same nothing with the same budget. A run of them at the head of the
+      // queue as long as the limit starves every completable repair behind it,
+      // indefinitely — the same starvation the candidate window above closes for
+      // the OTHER completer's rows, reached from inside this drain's own set.
+      //
+      // So the budget is spent HERE, where the pass has decided this repair CAN
+      // be completed and is about to do the completing work (the re-file and the
+      // typed response). Everything above it is a bounded read that leaves the
+      // row exactly as it found it, and the pass stays bounded both ways: by the
+      // candidate window on what it looks at, and by the limit on what it
+      // finishes.
+      budget -= 1;
 
       const currentBaseRevisionId = await resolveCurrentBaseRevisionId(
         repair.orgId,

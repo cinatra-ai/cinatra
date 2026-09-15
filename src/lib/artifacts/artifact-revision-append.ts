@@ -806,11 +806,41 @@ function envelopePatch(input: {
 }): string {
   return JSON.stringify({
     latestRepresentationRevisionId: input.representationRevisionId,
-    ...(input.digest !== null ? { latestDigest: input.digest } : {}),
+    // THE TWO POINTER FIELDS MOVE TOGETHER (cinatra#3080, the fix leg for the
+    // three carried defects). `latestDigest` is written UNCONDITIONALLY — this
+    // revision's digest where the writer knows it, an explicit null where it
+    // does not. The key used to be OMITTED when the digest was null, and the
+    // envelope update MERGES this patch (`data = data || patch`), so an omitted
+    // key left the PREVIOUS revision's digest standing beside the new
+    // `latestRepresentationRevisionId`: the row then said the new revision's
+    // substance carried the old revision's fingerprint, and every reader that
+    // compares digests to decide whether anything changed read "nothing
+    // changed" across a regeneration. A key that is always present cannot say
+    // that — it either names this revision's digest or says plainly there is
+    // none.
+    latestDigest: input.digest,
     mime: input.mime,
     size: input.sizeBytes,
     ...(input.title !== undefined ? { title: input.title } : {}),
   });
+}
+
+/**
+ * THE BLOB FINGERPRINT A `resource` ROW CARRIES IN ITS SUBSTANCE KEY —
+ * `deriveSubstanceKey`'s own `blob:<sha256>` shape, read back.
+ *
+ * A re-file binds the SAME `resource` row the source revision binds, so that
+ * row's substance key IS the new revision's digest; nothing is hashed again and
+ * no byte is read. A substance that is not a blob (a connector ref, a dashboard)
+ * carries no such fingerprint and answers null, which the envelope patch writes
+ * as "this revision records no digest" rather than leaving the previous
+ * revision's standing.
+ */
+function blobDigestOfSubstanceKey(substanceKey: string): string | null {
+  const prefix = "blob:";
+  if (!substanceKey.startsWith(prefix)) return null;
+  const digest = substanceKey.slice(prefix.length);
+  return digest.length > 0 ? digest : null;
 }
 
 /**
@@ -1026,7 +1056,7 @@ export function refileRevisionOntoArtifact(
     connectionString: conn,
     queries: [
       {
-        text: `SELECT r.id, r.resource_id, res.mime, res.size_bytes
+        text: `SELECT r.id, r.resource_id, res.mime, res.size_bytes, res.substance_key
   FROM "${schema}"."representation" r
   JOIN "${schema}"."resource" res ON res.id = r.resource_id AND res.org_id = r.org_id
  WHERE r.id = $1::text AND r.org_id = $2::text AND r.artifact_id = $3::text
@@ -1048,6 +1078,9 @@ export function refileRevisionOntoArtifact(
   const resourceId = String(source.resource_id);
   const mime = String(source.mime);
   const sizeBytes = Number(source.size_bytes ?? 0);
+  // The re-filed revision's OWN digest: the fingerprint of the substance it
+  // binds, taken off the `resource` row already read above.
+  const digest = blobDigestOfSubstanceKey(String(source.substance_key ?? ""));
 
   const representationRevisionId = randomUUID();
   const results = runPostgresQueriesSync({
@@ -1132,7 +1165,7 @@ RETURNING id, revision`,
         values: [
           envelopePatch({
             representationRevisionId,
-            digest: null,
+            digest,
             mime,
             sizeBytes,
           }),

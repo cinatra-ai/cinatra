@@ -317,6 +317,44 @@ describe.skipIf(!HAS_REAL_DB)("§VI — the successor's pins, read out of a real
     expect(again.reused).toBe(true);
   });
 
+  it("RE-FILES THE FINGERPRINT TOO — the envelope never keeps the PREVIOUS revision's digest", async () => {
+    // THE CARRIED DEFECT (cinatra#3080, the fix leg). The re-file moved
+    // `latestRepresentationRevisionId` onto the new revision and left
+    // `latestDigest` alone: the writer passed no digest, the patch OMITTED the
+    // key, and the envelope update MERGES the patch onto the row it already has.
+    // The artifact then claimed the regenerated substance carried the reviewed
+    // revision's fingerprint — and a reader that compares digests to decide
+    // whether anything changed reads "nothing changed" across a regeneration.
+    const reviewed = seedArtifact();
+    const produced = seedArtifact();
+
+    // What the reviewed row carried before the regeneration landed on it, and
+    // the fingerprint of the substance the re-file actually binds — `seedArtifact`
+    // writes the substance key in the store's own `blob:<digest>` shape.
+    const before = sql(`SELECT data FROM "${S()}"."objects" WHERE id=$1`, [reviewed.artifactId]);
+    const digestBefore = (before.rows?.[0] as { data: Record<string, unknown> }).data.latestDigest;
+    expect(digestBefore).toBe("seed-digest");
+    const refiledDigest = `seed-${produced.artifactId}`;
+
+    const refiled = appendMod.refileRevisionOntoArtifact({
+      orgId: ORG,
+      targetArtifactId: reviewed.artifactId,
+      sourceArtifactId: produced.artifactId,
+      sourceRepresentationRevisionId: produced.revisionId,
+      createdByRunId: `run-repair-digest-${randomUUID()}`,
+    });
+
+    const envelope = sql(`SELECT data FROM "${S()}"."objects" WHERE id=$1`, [reviewed.artifactId]);
+    const data = (envelope.rows?.[0] as { data: Record<string, unknown> }).data;
+
+    // The two pointer fields moved TOGETHER.
+    expect(data.latestRepresentationRevisionId).toBe(refiled.representationRevisionId);
+    expect(data.latestDigest).toBe(refiledDigest);
+    // Said the other way round, because this is the defect itself: never the
+    // fingerprint of the revision the re-file advanced past.
+    expect(data.latestDigest).not.toBe(digestBefore);
+  });
+
   it("REFUSES a tombstoned target — the row's own deleted_at, not a payload flag", async () => {
     const seed = seedArtifact();
     sql(`UPDATE "${S()}"."objects" SET deleted_at = now() WHERE id=$1`, [seed.artifactId]);
