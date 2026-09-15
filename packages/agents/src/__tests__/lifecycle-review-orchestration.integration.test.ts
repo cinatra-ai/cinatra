@@ -36,10 +36,11 @@ import {
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2039";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2039-orchestration";
 
@@ -92,6 +93,37 @@ async function produce(
   await insertObject(ev.artifactId, type, ev.orgId);
   await outboxStore.emitArtifactProduced(ev, dbMod.db);
   return ev;
+}
+
+/** Record in the materialization ledger HOW one produced write was made
+ *  (cinatra#3476): the ledger row is the only half that tells a write produced
+ *  through a declared binding from one the default road filed. */
+async function seedMaterialization(ev: ArtifactProducedEvent, path: string) {
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_materializations"
+       (id, org_id, run_id, output_id, path, extension, content_hash,
+        artifact_id, representation_revision_id, phase)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'finalized')`,
+    [
+      `mat-${randomUUID()}`,
+      ev.orgId,
+      ev.producerRunId,
+      "ideas",
+      path,
+      "@cinatra-ai/json-artifact",
+      `hash-${randomUUID()}`,
+      ev.artifactId,
+      ev.representationRevisionId,
+    ],
+  );
+}
+
+async function countGates(taskId: string) {
+  const r = await pool(
+    `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE review_task_id = $1`,
+    [taskId],
+  );
+  return (r.rows[0] as { n: number }).n;
 }
 
 async function readGate(runId: string, taskId: string) {
@@ -191,6 +223,38 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       [taskId],
     );
     expect((count.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("PER ARTIFACT (cinatra#3476): the write the DEFAULT ROAD recorded reaches NO gate; the declared binding's write still does", async () => {
+    // The two writes are indistinguishable at the template: the same producing
+    // shape, the same declarations, the same artifact type. What tells them
+    // apart is each write's OWN ledger row — the road it took.
+    const road = await produce("document");
+    await seedMaterialization(road, "default_road");
+    const declared = await produce("document");
+    await seedMaterialization(declared, "end_node_binding");
+
+    await orch.sweepReviewOrchestration();
+
+    // The default road's write: settled, pinned by nothing, gating nothing.
+    const roadTask = autoReviewTaskId(road.eventId);
+    expect(await countGates(roadTask)).toBe(0);
+    const roadRow = await readEventRow(road.eventId);
+    expect(roadRow?.status).toBe("processed");
+    expect(roadRow?.continuation_address).toBeNull();
+
+    // The declared binding's write is a target exactly as before.
+    const declaredGate = await readGate(
+      declared.producerRunId!,
+      autoReviewTaskId(declared.eventId),
+    );
+    expect(declaredGate).not.toBeNull();
+    expect(declaredGate!.pinnedTargets).toEqual([
+      {
+        artifactId: declared.artifactId,
+        representationRevisionId: declared.representationRevisionId,
+      },
+    ]);
   });
 
   it("SURFACE: an auto-gate is consumed by the S12 review surface's read PORTS exactly like a flow-authored gate", async () => {

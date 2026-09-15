@@ -2129,6 +2129,65 @@ describe("direction 3 — round-8 fail-open closures", () => {
     ).toEqual([]);
   });
 
+  it("READS the variable-driven fromJSON runs-on form by the expression's DEFAULT literal", () => {
+    const job = (value) => ["jobs:", "  a:", "    runs-on: " + value, "    steps:", "      - run: x"];
+    // The plain scalar is the reference classification every other spelling of
+    // the same runner has to match.
+    expect(jobRunsOnLinux(job("ubuntu-latest"), 4)).toBe(true);
+    // `runs-on: ${{ fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') }}` routes the
+    // job through a repository variable, and the literal CI falls back to when
+    // that variable is unset is written right there in the expression. A quoted
+    // label default names the runner exactly as the scalar it stands for.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }}"), 4)).toBe(true);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_GATE || '\"ubuntu-24.04\"') }}"), 4)).toBe(true);
+    // A JSON label ARRAY default is read the same way — the labels are joined
+    // and classified exactly as a `runs-on:` list of the same labels would be.
+    expect(
+      jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_HEAVY || '[\"self-hosted\",\"linux\",\"x64\",\"cinatra-ci\"]') }}"), 4),
+    ).toBe(true);
+    // …and the default still has to NAME linux/ubuntu. A self-hosted array that
+    // does not is refused, because nothing there says which shell CI gets.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '\"windows-latest\"') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '[\"self-hosted\",\"windows\"]') }}"), 4)).toBe(false);
+    // No readable default literal ⇒ the value stays an unreadable expansion.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL) }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ inputs.runner }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '{not json') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }} ${{ steps.x.outputs.y }}"), 4)).toBe(false);
+    // Only the DOCUMENTED routing variables are read. Any other `vars.` name is
+    // outside the contract this parser is allowed to assume, so it stays refused.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.MY_RUNNER || '\"ubuntu-latest\"') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_BUILD_RUNNER || '\"ubuntu-latest\"') }}"), 4)).toBe(false);
+    // …and only a literal that actually NAMES labels is read as one.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[]') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[\"ubuntu-latest\",3]') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '{\"labels\":[\"ubuntu-latest\"]}') }}"), 4)).toBe(false);
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '7') }}"), 4)).toBe(false);
+    // A label is read LABEL BY LABEL, never as one joined string: a label only
+    // names Linux when it IS `linux`/`ubuntu` or is a variant spelled off one of
+    // them. A vendor label that merely CONTAINS the word proves nothing about
+    // the shell, so it is refused rather than credited.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '\"windows-linux-tools\"') }}"), 4)).toBe(false);
+    expect(
+      jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_E2E || '[\"self-hosted\",\"windows-linux-tools\",\"x64\"]') }}"), 4),
+    ).toBe(false);
+    // …while the real spellings of a Linux label all still read as Linux.
+    expect(jobRunsOnLinux(job("${{ fromJSON(vars.CI_RUNNER_POOL || '[\"self-hosted\",\"linux-arm64\"]') }}"), 4)).toBe(true);
+    // The JOB is recognised, so the wholesale package run inside it is enforcing
+    // — the same verdict the plain `ubuntu-latest` scalar earns. Both default
+    // shapes are asserted end to end, not just at the classifier.
+    expect(
+      wf("jobs:\n  a:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '\"ubuntu-latest\"') }}\n    steps:\n      - run: cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+    expect(
+      wf("jobs:\n  a:\n    runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '[\"self-hosted\",\"linux\",\"x64\",\"cinatra-ci\"]') }}\n    steps:\n      - run: cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+    expect(wf("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+    // The routing DEFAULT is the repository's declared floor, not proof of what a
+    // SET variable resolves to — a fact no text parser can read. Held narrow (the
+    // documented variables and label shapes only) and recorded here on purpose.
+  });
+
   it("reads a QUOTED `run:` key", () => {
     const blocks = extractRunBlocks("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - \"run\": pnpm exec vitest run\n");
     expect(blocks.length).toBe(1);

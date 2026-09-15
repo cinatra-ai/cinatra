@@ -60,10 +60,10 @@ import {
 } from "../../../../src/app/design-fixtures/conformance/lifecycle-review-target-header-fixture-data";
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
+import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
 import {
   reviewRevisionMarker,
   reviewTargetRowFacts,
-  reviewTypeLabel,
 } from "../../../../src/lib/artifacts/review-surface-model";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
@@ -132,6 +132,24 @@ import {
   CONNECTOR_SETUP_INSTALL_ID,
   CONNECTOR_SETUP_LOADING_LABEL,
 } from "../../../../src/app/design-fixtures/conformance/connector-setup-seed";
+import {
+  CONNECTOR_SHARING_ACCESS_HELPER,
+  CONNECTOR_SHARING_CANDIDATE,
+  CONNECTOR_SHARING_CO_OWNER,
+  CONNECTOR_SHARING_CONNECTION,
+  CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,
+  CONNECTOR_SHARING_LOCKED_SCOPES,
+  CONNECTOR_SHARING_LOCKED_VALUE,
+  CONNECTOR_SHARING_LOCKED_VALUE_LABEL,
+  CONNECTOR_SHARING_LOCK_NOTE,
+  CONNECTOR_SHARING_OWNER,
+  CONNECTOR_SHARING_OWNER_SCOPE_LABEL,
+  CONNECTOR_SHARING_OWNERSHIP_HELPER,
+  CONNECTOR_SHARING_PANEL_COUNT,
+  CONNECTOR_SHARING_RECOMMENDATION_NOTE,
+  CONNECTOR_SHARING_SEARCH_QUERY,
+  CONNECTOR_SHARING_SELECTED_SCOPE_LABEL,
+} from "../../../../src/app/design-fixtures/conformance/connector-sharing-seed";
 
 export const HARNESS_PATH = "/design-fixtures/conformance";
 
@@ -576,7 +594,7 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
-//     `reviewTypeLabel` from the row's type id), the type id on the meta line,
+//     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
 //     the pinned revision (addressed by the exact id, read as the elided marker
 //     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
@@ -676,7 +694,7 @@ export function reviewTargetHeaderDriver(
         await expect(header).toContainText(seed.title);
         // "… over a mono meta line carrying its type …". The TAG carries the
         // label, the line carries the id. The expected label is derived by the
-        // PRODUCT's own `reviewTypeLabel` from the row's type id — the call the
+        // PRODUCT's own `artifactKindLabelFor` from the row's type id — the call the
         // server-side composer makes — so a harness that ever worded a label of
         // its own is red here, and the tag is asserted on BOTH readings: the
         // attribute value and the text a reader actually sees.
@@ -684,9 +702,9 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveCount(1);
         await expect(tag).toHaveAttribute(
           "data-review-target-type",
-          reviewTypeLabel(seed.objectType),
+          artifactKindLabelFor(seed.objectType),
         );
-        await expect(tag).toHaveText(reviewTypeLabel(seed.objectType));
+        await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
         // with a pinned marker) …". Addressed by the EXACT revision the gate
@@ -870,14 +888,39 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
         await expect(scheduleFloor(root).locator(SAVE_CONTROL)).toBeDisabled();
         await expect(scheduleFloor(root).locator(CONFIRM_CONTROL)).toHaveCount(0);
       }
-      // "It is the only control." The floor carries exactly ONE thing to press
-      // on every drawn reading — this is also what pins the deferral named
-      // below: Cancel schedule is absent in the conversation rather than
-      // disabled, on the fired-recurring floor as much as anywhere else.
-      await expect(scheduleFloor(root).getByRole("button")).toHaveCount(1);
-      await expect(
-        scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
-      ).toHaveCount(0);
+      // WHAT THE FIRED-RECURRING FLOOR REALLY CARRIES (cinatra#3174 fix leg 8).
+      // This assertion used to read "the floor carries exactly ONE thing to
+      // press on every drawn reading", and it said so of the fired-recurring
+      // floor too — which contradicts the ratified drawing this whole suite
+      // exists to measure. Section VI: "A recurring schedule is never spent by
+      // firing: … it keeps editable rows over Save changes, and gains Cancel
+      // schedule beside them", and "Cancel schedule appears only where the
+      // schedule is recurring, and it stops the recurring schedule and then
+      // leaves the rows no longer editable." So the drawing puts TWO controls on
+      // this one floor and one on every other, and a contract asserting one here
+      // was asserting exactly the absence the second graded proof round already
+      // failed the product for. The drawing is the source of truth, so the
+      // contract moves to it rather than the other way round.
+      if (reading === "fired-recurring") {
+        await expect(scheduleFloor(root).getByRole("button")).toHaveCount(2);
+        await expect(
+          scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
+        ).toBeVisible();
+      } else {
+        // "It is the only control." Everywhere else the floor still carries
+        // exactly one thing to press, and the narrowing is the drawing's own —
+        // "Cancel schedule appears only where the schedule is recurring" — so
+        // over a one-off, and over a schedule that has not fired, the control is
+        // ABSENT rather than disabled. The reading AFTER the stop is not one of
+        // the five these rows draw: the section leaves "the rows no longer
+        // editable", which is the floorless read-only card the `fired` branch
+        // above already measures, and no stopped row exists here to assert it
+        // on. Adding that row is its own change with its own proof.
+        await expect(scheduleFloor(root).getByRole("button")).toHaveCount(1);
+        await expect(
+          scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]'),
+        ).toHaveCount(0);
+      }
     },
     fields: {},
     actions: {},
@@ -951,18 +994,25 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-save-floor":
     case "schedule-card-fired-recurring-floor":
-      // NO `cancel-schedule` DRIVER, AND NOT BECAUSE ONE WAS SKIPPED. The
-      // fired-recurring floor is annotated with a SECOND act, and the shipped
-      // card draws that control only where the plan puts it: Cancel schedule is
-      // the page step's and the run card's, never the conversation's, so on the
-      // in-thread host the card draws no such control at all — absent by rule
-      // rather than disabled. A driver wave cannot settle that: either the
-      // drawing gives the in-conversation floor an act the product deliberately
-      // withholds there, or the product withholds an act the drawing grants. It
-      // is named on the wave's readiness list for the drawing to answer, and it
-      // is NOT approximated through the run-card host — these nine surfaces are
-      // the conversation's readings, and asserting one of them on another host
-      // would prove something the drawing never said.
+      // NO `cancel-schedule` DRIVER — AND THE REASON CHANGED (cinatra#3174 fix
+      // leg 5). It used to be that the shipped card drew that control only on
+      // the two page hosts, so the in-conversation floor had no such control to
+      // drive. That is no longer the product: the ratified drawing's own
+      // fired-recurring example draws the card IN A CHAT THREAD with "Save
+      // changes" and "Cancel schedule" side by side, and the second graded proof
+      // round failed the floor against it, so the host map was retired and the
+      // control is now drawn wherever `canCancel` says the schedule is
+      // recurring — this host included.
+      //
+      // What is missing now is the HARNESS's half, not the product's: a fixture
+      // row declares ONE answer for its decision endpoint, and this row's is
+      // `saved`, so a cancel press here could only ever be answered with the
+      // outcome of a save. Giving the row a per-op answer is its own change with
+      // its own proof, and this leg is a forward-merge; the act stays on the
+      // wave's readiness list, now for the harness to answer rather than the
+      // drawing. It is still NOT approximated through the run-card host — these
+      // nine surfaces are the conversation's readings, and asserting one of them
+      // on another host would prove something the drawing never said.
       driver.actions["save-schedule"] = {
         outcome: "rearmed",
         run: async (_page, root) => {
@@ -1105,6 +1155,24 @@ async function clickUntil(
 ): Promise<void> {
   await expect(async () => {
     await target.click();
+    await reacted();
+  }).toPass({ timeout: 30_000 });
+}
+
+/**
+ * Retry a hydration-sensitive click-and-type until `reacted` observes the
+ * outcome. A keystroke that lands before the island hydrates is dropped and
+ * React re-renders the controlled input back to its state value, so the whole
+ * interaction — not only the assertion — has to be retried.
+ */
+async function fillUntil(
+  target: Locator,
+  value: string,
+  reacted: () => Promise<void>,
+): Promise<void> {
+  await expect(async () => {
+    await target.click();
+    await target.fill(value);
     await reacted();
   }).toPass({ timeout: 30_000 });
 }
@@ -4696,6 +4764,299 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// §II SHARING-tab drivers (cinatra#3374) — the three surfaces the published
+// app-connectors manifest gained: connector-sharing (one panel per owned
+// connection), connector-sharing-rollup (the roll-up card above the list) and
+// connector-sharing-locked (a declared ceiling, or a recommended scope).
+//
+// Each driver asserts against the conformance id the PRODUCT component emits
+// (`ConnectorSharingPanels`, and the `PermissionsForm` it mounts beneath each
+// row) — the harness `data-surface-id` wrapper only selects WHICH mount, so a
+// driver can never pass against harness-only chrome. Field values are the
+// anti-lookalike seeds of connector-sharing-seed.ts, so a wrong-source read
+// reds.
+// ---------------------------------------------------------------------------
+
+/** The Sharing-tab mount, by variant. */
+const sharingMount = (variant: string) =>
+  `[data-surface-id="connector-sharing"][data-variant="${variant}"]`;
+/** One connection panel (the product's own surface id). */
+const SHARING_PANEL = '[data-conformance-id="connector-sharing"]';
+/** The permissions card's scope note — the lock line beneath the picker. */
+const SHARING_SCOPE_NOTE = "p.text-xs.text-muted-foreground";
+
+/** The access picker's trigger inside one panel. */
+function accessTrigger(root: Locator): Locator {
+  return root.locator('[role="combobox"]').first();
+}
+
+const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator(`${sharingMount("populated")} ${SHARING_PANEL}`).first(),
+  present: async (page, root) => {
+    // The tab is a LIST of panels — exact cardinality, so a panel that failed
+    // to render (or one rendered twice) reds.
+    await expect(page.locator(`${sharingMount("populated")} ${SHARING_PANEL}`)).toHaveCount(
+      CONNECTOR_SHARING_PANEL_COUNT,
+    );
+    // Each panel is a connection row with the shared permissions card beneath
+    // it — the same two controls the permissions surface draws.
+    await expect(root.locator('[data-slot="connection-row"]')).toBeVisible();
+    await expect(root.getByRole("button", { name: "Save changes" })).toBeVisible();
+    // The row carries NO status badge and NO per-row action: a saved identity
+    // is not a claim that the connection still answers.
+    await expect(
+      root.locator('[data-slot="connection-row"] [data-slot="connection-status-badge"]'),
+    ).toHaveCount(0);
+    await expect(
+      root.locator('[data-slot="connection-row"]').getByRole("button"),
+    ).toHaveCount(0);
+    // The helper lines the drawing words for THIS surface.
+    await expect(root).toContainText(CONNECTOR_SHARING_ACCESS_HELPER);
+    await expect(root).toContainText(CONNECTOR_SHARING_OWNERSHIP_HELPER);
+  },
+  fields: {
+    name: {
+      source: "connection.connectionId",
+      assert: async (_page, root) => {
+        await expect(root.locator('[data-slot="connection-row"]')).toContainText(
+          CONNECTOR_SHARING_CONNECTION.name,
+        );
+      },
+    },
+    url: {
+      source: "connection.connectorKey",
+      assert: async (_page, root) => {
+        // The mono secondary line, not the name line.
+        await expect(
+          root.locator('[data-slot="connection-row"] .font-mono'),
+        ).toHaveText(CONNECTOR_SHARING_CONNECTION.url);
+      },
+    },
+    access: {
+      source: "policy.runListVisibility",
+      assert: async (_page, root) => {
+        // The picker opens on the STORED grant — `policy.runListVisibility`,
+        // seeded to a scope that is neither the owner floor the other two
+        // visibility fields carry nor any override — rendered as the picker's
+        // own `Type: Name` label, never a token echoed back.
+        await expect(accessTrigger(root)).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+        );
+      },
+    },
+    "co-owners": {
+      source: "connection.coOwners",
+      assert: async (_page, root) => {
+        // The owner who connected it, and the co-owner — each with a name and
+        // an address. The connecting owner carries NO remove button (this
+        // surface hands out no way to remove that owner); the co-owner does.
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.name);
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.email);
+        await expect(root).toContainText(CONNECTOR_SHARING_CO_OWNER.name);
+        await expect(root).toContainText(CONNECTOR_SHARING_CO_OWNER.email);
+        await expect(
+          root.getByRole("button", { name: `Remove ${CONNECTOR_SHARING_OWNER.name}` }),
+        ).toHaveCount(0);
+        await expect(
+          root.getByRole("button", { name: `Remove ${CONNECTOR_SHARING_CO_OWNER.name}` }),
+        ).toBeVisible();
+      },
+    },
+  },
+  actions: {
+    // select-scope -> scopes-selected: the multi-select picker moves this
+    // connection's access to a BROADER scope, and the trigger says so.
+    "select-scope": {
+      outcome: "scopes-selected",
+      run: async (page, root) => {
+        const trigger = accessTrigger(root);
+        await expect(trigger).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_INITIAL_SCOPE_LABEL),
+        );
+        await clickUntil(trigger, async () => {
+          await expect(
+            page.getByRole("option", { name: /All/ }).first(),
+          ).toBeVisible({ timeout: 5_000 });
+        });
+        await page
+          .getByRole("option", { name: typeNamePairPattern(CONNECTOR_SHARING_SELECTED_SCOPE_LABEL) })
+          .first()
+          .click();
+        await page.keyboard.press("Escape");
+        await expect(trigger).toHaveText(
+          typeNamePairPattern(CONNECTOR_SHARING_SELECTED_SCOPE_LABEL),
+        );
+      },
+    },
+    // search-people -> people-listed: the ownership card's search field lists
+    // the people that answer the query (it does not add anyone by itself).
+    "search-people": {
+      outcome: "people-listed",
+      run: async (page, root) => {
+        const search = root.getByPlaceholder("Search by name or email…");
+        // Hydration-sensitive: under a loaded box the click and the keystrokes
+        // can land before this island hydrates, and React then re-renders the
+        // controlled field back to empty with the popover shut, so the typing
+        // is retried until the listbox answers (the same road as `clickUntil`).
+        await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
+          // The listbox is portalled, so it is asserted at the page level.
+          await expect(
+            page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.name) }),
+          ).toBeVisible({ timeout: 5_000 });
+        });
+        await expect(
+          page.getByRole("option", { name: new RegExp(CONNECTOR_SHARING_CANDIDATE.email) }),
+        ).toBeVisible();
+        await page.keyboard.press("Escape");
+      },
+    },
+    // remove-co-owner -> co-owner-removed: the co-owner's row goes, and the
+    // owner's row stays (the last owner cannot be removed).
+    "remove-co-owner": {
+      outcome: "co-owner-removed",
+      run: async (_page, root) => {
+        const removeButton = root.getByRole("button", {
+          name: `Remove ${CONNECTOR_SHARING_CO_OWNER.name}`,
+        });
+        await clickUntil(removeButton, async () => {
+          await expect(removeButton).toHaveCount(0, { timeout: 5_000 });
+        });
+        await expect(root).not.toContainText(CONNECTOR_SHARING_CO_OWNER.email);
+        await expect(root).toContainText(CONNECTOR_SHARING_OWNER.email);
+      },
+    },
+    // save-access -> access-saved: nothing is shared until Save changes is
+    // pressed, and pressing it writes the Access choice.
+    "save-access": {
+      outcome: "access-saved",
+      run: async (page, root) => {
+        const save = root.getByRole("button", { name: "Save changes" });
+        await clickUntil(save, async () => {
+          await expect(page.getByText("Access policy saved.")).toBeVisible({
+            timeout: 10_000,
+          });
+        });
+      },
+    },
+  },
+  states: {
+    // The panel's own loading treatment — never a silently blank tab.
+    loading: async (page) => {
+      const root = page.locator(
+        `${sharingMount("loading")} ${SHARING_PANEL}[data-state="loading"]`,
+      );
+      await expect(root.locator('[data-slot="connector-sharing-loading"]')).toBeVisible();
+      await expect(root.locator('[data-slot="connection-row"]')).toHaveCount(0);
+    },
+  },
+};
+
+const CONNECTOR_SHARING_ROLLUP_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${sharingMount("populated")} [data-conformance-id="connector-sharing-rollup"]`),
+  present: async (page, root) => {
+    // The Connections status card of the Setup tab — one count badge per status
+    // in play, counting the list that is directly beneath it.
+    await expect(root).toBeVisible();
+    await expect(root).toContainText("Connections status");
+    await expect(
+      root.locator('[data-slot="connection-status-badge"][data-status="connected"]'),
+    ).toContainText(String(CONNECTOR_SHARING_PANEL_COUNT));
+    // …with NO Check and NO "All connections" link: this list is directly
+    // beneath it, so there is no other tab to open.
+    await expect(root.getByRole("button")).toHaveCount(0);
+    await expect(root.getByRole("link")).toHaveCount(0);
+    await expect(root).not.toContainText("Check");
+    await expect(root).not.toContainText("All connections");
+    // ABOVE the list it counts.
+    const mount = page.locator(sharingMount("populated"));
+    const rollupBox = await root.boundingBox();
+    const firstPanelBox = await mount.locator(SHARING_PANEL).first().boundingBox();
+    expect(rollupBox && firstPanelBox).toBeTruthy();
+    expect(rollupBox!.y).toBeLessThan(firstPanelBox!.y);
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
+const CONNECTOR_SHARING_LOCKED_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(
+      `${sharingMount("locked")} [data-conformance-id="connector-sharing-locked"]`,
+    ),
+  present: async (page, root) => {
+    // A ceiling: the picker renders every option ABOVE it locked, each carrying
+    // this one sentence as its reason…
+    const trigger = accessTrigger(root);
+    await expect(trigger).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_LOCKED_VALUE_LABEL),
+    );
+    await clickUntil(trigger, async () => {
+      await expect(page.locator('[role="option"][aria-disabled="true"]').first()).toBeVisible({
+        timeout: 5_000,
+      });
+    });
+    const lockedOptions = page.locator('[role="option"][aria-disabled="true"]');
+    await expect(lockedOptions).toHaveCount(CONNECTOR_SHARING_LOCKED_SCOPES.length);
+    // WHICH options are locked, not merely how many: every scope above the
+    // ceiling is identified by its own value, is drawn non-selectable, and
+    // carries the ceiling sentence as its reason. The sentence is the
+    // product's own composition and carries a literal double quote, so it can
+    // never be spliced into a raw CSS attribute selector: it travels as DATA
+    // through the framework's own title road instead.
+    for (const scope of CONNECTOR_SHARING_LOCKED_SCOPES) {
+      const option = page.locator(`[role="option"][data-value="${scope}"]`);
+      await expect(option).toHaveAttribute("aria-disabled", "true");
+      await expect(
+        page
+          .getByTitle(CONNECTOR_SHARING_LOCK_NOTE, { exact: true })
+          .filter({ has: page.locator(`[role="option"][data-value="${scope}"]`) }),
+      ).toHaveCount(1);
+    }
+    // The ceiling value itself, and the narrower personal floor, stay open —
+    // a ceiling narrows the choice, it does not freeze the picker.
+    await expect(
+      page.locator(`[role="option"][data-value="${CONNECTOR_SHARING_LOCKED_VALUE}"]`),
+    ).toHaveAttribute("aria-disabled", "false");
+    // …and a locked option cannot be taken: pressing one leaves the value where
+    // it was.
+    await page
+      .locator(`[role="option"][data-value="${CONNECTOR_SHARING_LOCKED_SCOPES[0]}"]`)
+      .click({ force: true });
+    await expect(trigger).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_LOCKED_VALUE_LABEL),
+    );
+    await page.keyboard.press("Escape");
+    // …and the same sentence sits under the picker with a lock.
+    const note = root.locator(SHARING_SCOPE_NOTE).filter({
+      hasText: CONNECTOR_SHARING_LOCK_NOTE,
+    });
+    await expect(note).toBeVisible();
+    await expect(note.locator("svg")).toHaveCount(1);
+    // Where the connector only RECOMMENDS a scope the line reads instead
+    // "This connector recommends sharing with your organization — nothing is
+    // shared until you save. Currently: only you.", and nothing is shared by
+    // that line on its own: the grant is written when Save changes is pressed.
+    const recommended = page.locator(
+      `${sharingMount("recommended")} [data-conformance-id="connector-sharing-locked"]`,
+    );
+    await expect(recommended).toContainText(CONNECTOR_SHARING_RECOMMENDATION_NOTE);
+    await expect(accessTrigger(recommended)).toHaveText(
+      typeNamePairPattern(CONNECTOR_SHARING_OWNER_SCOPE_LABEL),
+    );
+    await expect(recommended.getByRole("button", { name: "Save changes" })).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {},
+};
+
 // ---------------------------------------------------------------------------
 // extension-install-panel (cinatra#2373, design spec §I.1).
 //
@@ -6825,6 +7186,9 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "connector-config-tab": CONNECTOR_CONFIG_TAB_DRIVER,
   "connector-multi-setup": CONNECTOR_MULTI_SETUP_DRIVER,
   "connector-connections": CONNECTOR_CONNECTIONS_DRIVER,
+  "connector-sharing": CONNECTOR_SHARING_DRIVER,
+  "connector-sharing-rollup": CONNECTOR_SHARING_ROLLUP_DRIVER,
+  "connector-sharing-locked": CONNECTOR_SHARING_LOCKED_DRIVER,
   "notifications-list": NOTIFICATIONS_LIST_DRIVER,
   "notifications-filters": NOTIFICATIONS_FILTERS_DRIVER,
   "notification-row": NOTIFICATION_ROW_DRIVER,

@@ -42,8 +42,6 @@
 import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
-  createContext,
-  useContext,
   useState,
   type ReactElement,
   type ReactNode,
@@ -51,6 +49,14 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+// THE FRAME STATES THAT IT DRAWS THE RAIL (cinatra#3478) -- see the
+// declaration beside the rail vocabulary in ./run-step-rail-extra-entry.
+import {
+  RUN_RAIL_MARK_CLASS,
+  RunStepSelectionProvider,
+  RunSurfaceRailFrameProvider,
+  useRunStepSelection,
+} from "./run-step-rail-extra-entry";
 
 // THE STEP AND WHETHER IT OPENS ARE NOT DECLARED HERE, for the same reason the
 // labels are not: `instance-screens.tsx` is a SERVER component and it composes
@@ -84,11 +90,6 @@ export type { RunStepSelection, RunSurfaceRailStep, RunSurfaceRailStepKey };
 // plain value instead. The components stay here — a component is exactly what
 // the boundary is built to carry.
 
-const RunStepSelectionContext = createContext<{
-  selected: RunStepSelection;
-  select: (next: RunStepSelection) => void;
-} | null>(null);
-
 /**
  * The selection, for a rail row drawn by the rail BESIDE this frame.
  *
@@ -98,10 +99,15 @@ const RunStepSelectionContext = createContext<{
  * property, not any one row's. `null` when there is no gate step on the page at
  * all, which is how a rail keeps its inert shape unchanged for a run that has
  * none.
+ *
+ * DECLARED BESIDE THE RAIL'S OTHER VOCABULARY (cinatra#3478, the click leg) and
+ * re-exported here, where its readers already import it: the run page's own
+ * rail rows read the selection too — the gate the run is parked on opens as a
+ * step of this frame rather than as a page of its own — and a row reaching back
+ * into this module for the context would close a cycle with it. See the
+ * declaration in `run-step-rail-extra-entry`.
  */
-export function useRunStepSelection() {
-  return useContext(RunStepSelectionContext);
-}
+export { useRunStepSelection };
 
 /**
  * THE ROW VOCABULARY, shared so the rail's rows cannot drift apart.
@@ -125,16 +131,24 @@ export function useRunStepSelection() {
  * drawing's `.rail .step` carries none. THE ROW KEEPS ITS FOCUS INDICATOR --
  * the base's `focus-visible:ring-3` ring is what draws focus on this control,
  * and a 1px border that is transparent at rest never drew it.
+ *
+ * AND THE CIRCLE IS CENTRED IN THE ROW'S OWN BOX (cinatra#3225 item 3, fix leg
+ * 10), which is the drawing's own ".rail .step { align-items: center }". These
+ * rows wrap in the same 208px column as the panel rail's (cinatra#3226), so
+ * `items-start` is the same first-line reading the page's own rows carried and
+ * the sixth proof round measured 27px off the row's centre. ONE RAIL, one
+ * rule: the two row declarations state the same alignment, and the mark between
+ * them is graded against both.
  */
 export const RUN_SURFACE_RAIL_ROW_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
+  "h-auto items-center justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent";
 
 /**
  * The same row, for one that cannot be opened: neither the hover affordance nor
  * the press animation of a row that does something (cinatra#2970).
  */
 export const RUN_SURFACE_RAIL_ROW_CLOSED_CLASS =
-  "h-auto justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
+  "h-auto items-center justify-start gap-2 rounded-control border-0 px-0 py-0.5 text-left whitespace-normal hover:bg-transparent dark:hover:bg-transparent cursor-default hover:opacity-100 active:not-aria-[haspopup]:translate-y-0";
 
 /**
  * The circle. `filled` carries the rail's own two states — the tokens
@@ -185,7 +199,16 @@ export function runSurfaceRailIndicatorClass(filled: boolean, settled = false) {
 // graph of four route-budgeted routes and the route-graph ratchet refused it.
 /** The title, in the same two states the rail's own titles carry. */
 export function runSurfaceRailTitleClass(selected: boolean) {
-  return cn("text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground");
+  // THE DRAWING'S OWN LINE BOX, AND NO NUDGE (cinatra#3225 item 3, fix leg 10).
+  // ".rail .step" states "font-size: 14px; line-height: 1.15", so each line box
+  // is 16.1px here exactly as it is on the page's own rail rows -- one rail,
+  // one line box, whichever module drew the row. `mt-0.5` is GONE with leg 8's
+  // first-line reading: the row above centres the circle in its own box, and a
+  // nudge on the label only moves the box's centre away from the line it names.
+  return cn(
+    "text-sm leading-[1.15] font-medium",
+    selected ? "text-foreground" : "text-muted-foreground",
+  );
 }
 
 /**
@@ -378,7 +401,9 @@ export function RunSurfaceRailSeparator(): ReactElement {
       aria-hidden="true"
       data-run-surface-rail-separator=""
       data-conformance-id="run-step-rail-separator"
-      className="my-1 ml-[11px] h-2 w-0.5 shrink-0 rounded-[1px] bg-line"
+      // ONE definition for both rails (cinatra#3225), declared with the rest
+      // of the rail vocabulary in `run-step-rail-extra-entry`.
+      className={RUN_RAIL_MARK_CLASS}
     />
   );
 }
@@ -404,11 +429,18 @@ export function RunSurfaceRail({
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
   );
-  // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken inside a gate step calls `router.refresh()`,
-  // which re-renders the server tree WITHOUT remounting this client component —
-  // so a selection kept only from the first paint would leave the reader parked
-  // on the settled gate after deciding it, when "the run detail returns to what
-  // the run page otherwise shows" is the whole point of the settled reading.
+  // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken
+  // inside a gate step calls `router.refresh()`, which re-renders the server tree
+  // WITHOUT remounting this client component — so a selection kept only from the
+  // first paint would leave the reader parked on the gate they had just decided.
+  //
+  // WHAT ANSWERING A GATE DOES (cinatra#3184 item 4). Stated as the behaviour,
+  // not as a citation: no sentence of the ratified drawing settles the timing,
+  // and the wording this comment used to carry read as though one did. Pressing
+  // Continue ADVANCES the run detail off the gate — the server re-computes which
+  // step the detail opens on and this component takes that answer — and the
+  // decided gate KEEPS its row on the rail, still selectable, so a reader may
+  // press it and be shown the settled card again.
   //
   // Adjusted DURING render against the previous prop rather than in an effect:
   // that is React's own shape for state derived from props, and it means the
@@ -421,6 +453,11 @@ export function RunSurfaceRail({
     setSelected(resolveRunSurfaceSelection(steps, detail, initialSelection));
   }
   const open = steps.find((step) => step.key === selected) ?? null;
+  // The rows that HEAD the rail, and the one that CLOSES it — see
+  // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
+  // the ROWS moves nothing about what can be opened.
+  const headSteps = steps.filter((step) => !step.tail);
+  const tailSteps = steps.filter((step) => step.tail);
 
   // THE ONE PLACE A SELECTION CHANGES, so it is the one place that can refuse
   // one (cinatra#2970). A row drawn by any module reaches this; a key naming a
@@ -432,7 +469,20 @@ export function RunSurfaceRail({
   };
 
   return (
-    <RunStepSelectionContext.Provider value={{ selected, select }}>
+    <RunStepSelectionProvider value={{ selected, select }}>
+      {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
+
+          A run panel drawn inside this detail raises a live rail column of
+          its own (`StepperColumn`), and nothing stood it down: the frame's
+          column and the panel's drew side by side, two rails on one run
+          page. The drawing gives one — "a step rail down the left names the
+          run's ordered steps, and the run detail on the right". The frame's
+          column is the one that survives, because the rail cannot live in
+          the slot the detail occupies: selecting a step with a surface of
+          its own REPLACES that slot, and a rail drawn inside it would leave
+          with it. The panel's rows come back through the page-level rail
+          the screen mounts in this column (`screenDrawsPageRail`). */}
+      <RunSurfaceRailFrameProvider value={true}>
       {/* THE LEFT COLUMN — the rail. The gate rows, then the page's own rows,
           with the drawing's separator standing between adjacent entries.
 
@@ -446,18 +496,44 @@ export function RunSurfaceRail({
         data-run-step-rail-column=""
         className="flex shrink-0 flex-col pt-1"
       >
-        {steps.map((step, index) => (
+        {/* ROW, MARK, ROW — SIBLINGS IN NORMAL FLOW (cinatra#3225 items 2 and
+            3, fix leg 10). That is how the drawing composes the rail, and the
+            mark's own "margin: 4px 0 4px 11px" is what states the gap either
+            side of it. Leg 9 wrapped each row and its mark in a pair box that
+            reserved a 16px slot instead; the drawing draws no such slot, and on
+            a row whose label wrapped the mark ended up inside the row's own box.
+            The page's own rows are one more entry after these, so the last row
+            carries a mark too whenever they follow; they carry their own marks
+            inside (`RunStepRailPanel`), which is why only the join is drawn
+            here. */}
+        {headSteps.map((step, index) => {
+          const markBelow =
+            index < headSteps.length - 1 ||
+            runSurfaceNodeExists(rail) ||
+            tailSteps.length > 0;
+          return (
+            <Fragment key={step.key}>
+              {step.row}
+              {markBelow ? <RunSurfaceRailSeparator /> : null}
+            </Fragment>
+          );
+        })}
+        {rail}
+        {/* AND THE RUN'S OWN RECORD CLOSES THE RAIL (cinatra#3029, fix leg 2).
+            "The rail's last entry is the run's own record" — so a step the page
+            marked `tail` is drawn after the page's own rows rather than above
+            them. The mark above it is drawn HERE because the page's rows carry
+            their own marks only BETWEEN themselves (`RunStepRailPanel` draws
+            none under its last row), so the join is this column's to draw, on
+            either side. */}
+        {tailSteps.map((step, index) => (
           <Fragment key={step.key}>
-            {index > 0 ? <RunSurfaceRailSeparator /> : null}
+            {index > 0 || headSteps.length > 0 || runSurfaceNodeExists(rail) ? (
+              <RunSurfaceRailSeparator />
+            ) : null}
             {step.row}
           </Fragment>
         ))}
-        {/* The page's own rows are one more entry after the gate rows, so the
-            mark stands before them too. They carry their own separators
-            inside (`RunStepRailPanel`), which is why only the join is drawn
-            here. */}
-        {runSurfaceNodeExists(rail) && steps.length > 0 ? <RunSurfaceRailSeparator /> : null}
-        {rail}
       </div>
 
       {/* THE RIGHT COLUMN — the run detail, showing the selected step. */}
@@ -480,6 +556,7 @@ export function RunSurfaceRail({
             produce. */}
         {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
       </div>
-    </RunStepSelectionContext.Provider>
+      </RunSurfaceRailFrameProvider>
+    </RunStepSelectionProvider>
   );
 }

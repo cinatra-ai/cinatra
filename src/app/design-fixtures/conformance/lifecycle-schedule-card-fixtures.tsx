@@ -23,10 +23,13 @@
 // one: the host frame, the card's own attributes and the phase router are all
 // the owner module's, and nothing about the card is reimplemented around them.
 //
-// WHAT THE HARNESS SUPPLIES, AND WHY IT IS NOT A PRESENTATION. Two things a
-// server would have said, both in the protocol's own types: the resolved STATE
-// and BODY the card is drawn from, and the ONE ANSWER its decision endpoint
-// gives. That is the whole substitution — the transport, never the composition.
+// WHAT THE HARNESS SUPPLIES, AND WHY IT IS NOT A PRESENTATION. Three things a
+// server would have said, all in the protocol's own types: the resolved STATE
+// and BODY the card is drawn from, the two halves of the ANSWER that travel
+// beside the body rather than inside it (the firing the fired readings are
+// elected by, and the rendered estimated-duration line), and the ONE ANSWER its
+// decision endpoint gives. That is the whole substitution — the transport, never
+// the composition.
 // The harness computes nothing from an answer and re-derives no body from it:
 // which phase is drawn, which controls the floor offers, what they are named,
 // when they go quiet, what the card says in flight, what it says once a save
@@ -101,6 +104,8 @@ function ScheduleCardFixture({
         <ScheduleProposalCardBody
           state={fixture.state}
           body={fixture.body}
+          firedOnce={fixture.firedOnce}
+          durationCopy={fixture.durationCopy}
           onDecide={(op, schedule) => answer(op, schedule)}
           onAdjustAndConfirm={(schedule) => answer("adjust-and-confirm", schedule)}
           onRepropose={(schedule) => answer("repropose", schedule)}

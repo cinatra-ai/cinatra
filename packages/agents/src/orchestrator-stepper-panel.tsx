@@ -46,7 +46,7 @@ import {
   StepperTrigger,
 } from "@/components/reui/stepper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { StatusPill } from "@/components/ui/status-pill";
 import {
   Tooltip,
   TooltipContent,
@@ -113,7 +113,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { runStatusBadgeLabel, statusBadgeVariant } from "./run-surface-status";
+import { runStatusBadgeLabel, runStatusPillStatus } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -122,11 +122,15 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
+// DOES THE RUN SURFACE'S FRAME ALREADY DRAW THE RAIL (cinatra#3478)? Asked of
+// the composition itself, so this column and the frame's can never both draw.
 import {
+  electRunRailActiveStep,
   RailExtraEntry,
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
@@ -141,7 +145,7 @@ const EMPTY_SUBMISSION_ENTRIES: SubmissionMapEntries = [];
 // every render would be a new prop identity each time.
 const EMPTY_RAIL_EXTRAS: readonly RunStepRailEntry[] = [];
 
-// statusBadgeVariant is shared with AgenticRunPanel — see ./run-surface-status.
+// runStatusPillStatus is shared with AgenticRunPanel — see ./run-surface-status.
 
 // `pickLegacyResumeText` / `applyAttachmentEnvelope` live in the leaf module
 // `./attachment-envelope-payload` so the precedence rules can be unit-tested
@@ -1101,9 +1105,11 @@ function HitlApprovalCard({
       promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
       onSubmit={handlePromptSubmit}
-      // Opt in to paperclip attachments. Setup gates hide the paperclip because
-      // the setup-loop server omits userResponse.
-      enableAttachments={!isSetupGateTaskId(interruptContext.reviewTaskId)}
+      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
+      // drawing's §X names the window's parts — the panel, the field, the send
+      // control, the placement, the access rule — and a leading control is not
+      // among them: "Nothing else about the window changes from one reading to
+      // the next." This mount used to opt the field into one; no reading does.
     />
     </div>
     </>
@@ -1322,6 +1328,15 @@ function StepperColumn({
                   completed={isCompleted}
                   loading={isLoading}
                   disabled={devStepperMode ? false : s.index > activeStep}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
                   className="items-start !flex-none"
                 >
                   <div
@@ -1390,6 +1405,15 @@ function StepperColumn({
                   step={displayStep}
                   completed={entry.status === "completed" || entry.status === "resolved"}
                   data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
+                  // NOTHING RESERVES A SLOT FOR THE MARK (cinatra#3225 items 2
+                  // and 3, fix leg 10). The mark stands between two rows as a
+                  // sibling in normal flow, carrying the drawing's own 4px above
+                  // and 4px below; leg 9's pair box reserved a 16px slot the
+                  // drawing does not draw, and on a wrapped row the mark landed
+                  // inside the row's own box. `items-start` is the COLUMN's
+                  // cross axis — the row and the mark line up on the left — and
+                  // is not the row's own `align-items`, which the shared row
+                  // class states as the drawing does.
                   className="items-start !flex-none"
                 >
                   <RailExtraEntry
@@ -1602,6 +1626,24 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     inputStepInRail = false,
     railDrawsTheFrame = false,
   } = props;
+
+  // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
+  //
+  // `StepperColumn` below is THE step rail on this branch (cinatra#2739), and
+  // it was drawn unconditionally. The run surface's own frame draws a rail
+  // column too — whenever the screen hands it a rail step: a schedule, an
+  // input form, the gate the run is stopped at, the run's own record — and
+  // that column is NOT the page-level rail the 2739 answer stands down. So a
+  // run carrying any of those drew two live rail columns side by side, which
+  // is what three run pages photographed on 2026-09-13.
+  //
+  // THE FRAME'S COLUMN IS THE ONE THAT SURVIVES, and it is not a preference:
+  // the frame swaps its right-hand slot for the surface of a step that owns
+  // one, so a rail drawn inside that slot — this one — disappears the moment
+  // such a step is selected. The rows this column would have drawn are drawn
+  // in the frame's column by the page-level rail, which the screen mounts
+  // there for exactly this branch (`screenDrawsPageRail`).
+  const railFrameDrawsTheRail = useRunSurfaceRailFrame();
 
   const router = useRouter();
 
@@ -1882,22 +1924,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stepperSteps.find((s) => s.stepNumber === policyStepNum)?.index ?? policyStepNum;
 
   const activeStep = (() => {
-    if (status === "pending_input" || status === "queued") return 1;
-    if (status === "pending_approval" && currentStepNumber !== null) {
-      if (awaitingNextStep) return toDisplayIndex(currentStepNumber) + 1;
-      return toDisplayIndex(currentStepNumber);
-    }
-    if (status === "running") {
-      return toDisplayIndex(highestStepNumberRef.current || 0) + 1;
-    }
-    if (status === "completed" || status === "stopped") {
-      return stepperSteps.length + 1;
-    }
-    if (status === "failed") {
-      // Show the step that was active when the run failed, not "all done".
-      return toDisplayIndex(highestStepNumberRef.current) || 1;
-    }
-    return 1;
+    // THE STEP THE RUN IS PAUSED ON IS HIGHLIGHTED (cinatra#3221). The election
+    // lives in `run-step-rail-extra-entry.tsx`, pure, and is read against the
+    // ratified
+    // drawing there: a gate the run is parked on — on the spine or as one of
+    // the trailing rows below — is the one highlighted entry, and a rail with
+    // nothing pending highlights none. The display indices are the rail's own:
+    // the spine takes 1..N and the trailing rows continue from N+1.
+    return electRunRailActiveStep({
+      status,
+      currentStepNumber,
+      awaitingNextStep,
+      highestStepNumber: highestStepNumberRef.current,
+      spine: stepperSteps,
+      railExtras,
+    });
   })();
 
   // ---------------------------------------------------------------------------
@@ -2053,6 +2094,63 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     read: slotReader,
   });
 
+  // -------------------------------------------------------------------------
+  // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
+  // (cinatra#3423).
+  //
+  // The tab that presses Continue and loses the race is answered: the decision
+  // road refuses it with the typed no-longer-pending outcome and the submit
+  // paths above draw the blocked state from it. The tab that was ASLEEP while
+  // the gate was decided somewhere else is answered by nobody. It wakes holding
+  // a gate that is gone, its own gate read comes back empty, and the surface had
+  // nothing to draw for "parked, with no gate": the reader is left in front of a
+  // region that says nothing and never resolves.
+  //
+  // So the surface re-reads on RESUME — the two events that mean the reader came
+  // back, a window focus and a visibility change — and when the answer is still
+  // "no gate" it draws the state the surface already draws for a gate that is no
+  // longer open, ratified copy and Refresh and all.
+  //
+  // A tab that never slept fires neither event, so the ordinary flicker of the
+  // gate context (the poll tick that briefly nulls it while the stream re-derives
+  // state) is never mistaken for a decided gate; and the moment a gate is
+  // drawable again the reading is released.
+  //
+  // AND ONLY FOR A TAB THAT ACTUALLY HELD THE GATE. A null interrupt context does
+  // not mean "there is no gate": the server synthesizes a context for every
+  // paused run, so a surface holding null was told NOTHING YET — the state of
+  // every healthy first paint, and of the tick between one gate being answered
+  // and the next one arriving. Those keep the waiting spinner they have always
+  // had: a gate that has not ARRIVED is not a gate that "was already settled or
+  // the run moved on", and drawing the settled state over one would be the stale
+  // reading the drawing's section IV exists to prevent. So the resume reading is
+  // armed only once this surface has actually drawn a gate for this run.
+  const heldAGateRef = useRef(false);
+  useEffect(() => {
+    if (effectiveInterruptContext !== null) heldAGateRef.current = true;
+  }, [effectiveInterruptContext]);
+  const parkedWithNoGate =
+    status === "pending_approval" &&
+    effectiveInterruptContext === null &&
+    heldAGateRef.current;
+  const [gateGoneOnResume, setGateGoneOnResume] = useState(false);
+  useEffect(() => {
+    if (!parkedWithNoGate) {
+      setGateGoneOnResume(false);
+      return;
+    }
+    const onResume = () => {
+      if (document.visibilityState === "hidden") return;
+      setGateGoneOnResume(true);
+    };
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+    return () => {
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+    };
+  }, [parkedWithNoGate]);
+
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
@@ -2135,6 +2233,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         embedMode={embedMode}
       />
     );
+  } else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {
+    // cinatra#3423 — the reader came back to a gate this surface was holding and
+    // that is no longer here. Drawn INSTEAD of the waiting spinner below, whose
+    // "Processing response…" says "working" about a gate nobody is going to
+    // answer and which therefore never resolves. `awaitingNextStep` is excluded
+    // because that is this tab's OWN answer being processed, which the spinner is
+    // right about.
+    stageCard = (
+      <Card>
+        <CardContent className="p-6">
+          <ReviewGateBlocked reason="no-longer-pending" />
+        </CardContent>
+      </Card>
+    );
   } else if (
     awaitingNextStep ||
     status === "queued" ||
@@ -2185,6 +2297,17 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     //
     // The completion notice stays for the reading the request does not cover: a
     // run that finished with nothing reviewable.
+    //
+    // AND THE DRAWING KEEPS IT THAT WAY (cinatra#3002 fix leg 1). A completed
+    // run whose gates were decided draws the review's own page here, not a
+    // completion notice over it: "One page per gate — the step's own card, and
+    // nothing else. Selecting a step opens that step's page in the run detail,
+    // and the page carries the one card of the step it belongs to". What the drawing gives a
+    // finished run INSTEAD is a step of its own — "A finished run says what it
+    // made. The rail's last entry is the run's own record, and its page lists
+    // the run's work" — an entry this surface does not carry yet. That entry is
+    // the run's completion reading here; this card is not, and mounting it in
+    // the review's place would stack two readings in one detail.
     stageCard =
       status === "completed" ? (
         reviewSlot.ref ? (
@@ -2232,9 +2355,14 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
           {/* A setup-field INPUT pause must not read as "pending approval" —
               the discriminator is the interrupt itself, never the status. */}
-          <Badge variant={statusBadgeVariant(status)}>
+          {/* The design system's status-pill family, with the dot the ratified
+              drawing draws on the run detail (cinatra#3002, fix leg 3). This is
+              the SAME header AgenticRunPanel draws on the other run-detail
+              branch, so it takes the same shared mapping — two run-detail hosts
+              can never drift into two pill families again. */}
+          <StatusPill status={runStatusPillStatus(status)} glyph="dot">
             {runStatusBadgeLabel(status, effectiveInterruptContext)}
-          </Badge>
+          </StatusPill>
         </div>
         {status === "pending_approval" && effectiveInterruptContext !== null && (
           <Separator />
@@ -2313,6 +2441,28 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else {
     rightColumn = stageCard;
+  }
+
+  // ONE RAIL ON THE RUN PAGE (cinatra#3478). Inside the run surface's frame the
+  // rail is the frame's column, so this panel is the run DETAIL and nothing
+  // else — the same handover `embedMode` and the step-less branch above already
+  // make, for the same reason: the chrome belongs to whoever draws the frame.
+  //
+  // AND WHAT DOES NOT TRAVEL WITH THE ROWS, WRITTEN DOWN WHERE IT IS LOST.
+  // The rows come back in the frame's column from the page-level rail, which is
+  // SERVER-rendered and reaches the frame as a fixed node — so on this branch
+  // the rail no longer carries this column's client affordances: the
+  // completed-step replay click, the active-step exit-replay click, the dev
+  // stepper click, the per-step tooltip, the pause glyph, and a highlight that
+  // follows the live run stream (it follows the server's `activeOrdinal`, i.e.
+  // the next server render). Carrying them across would mean the rail's rows
+  // becoming client-fed data rather than a node the frame is handed — a change
+  // to the rail's own composition, which cinatra#3478 does not ask for. Every
+  // branch where the frame draws no rows keeps this column exactly as
+  // cinatra#2739 left it, and the gates stay reachable on both (their rows are
+  // deep links, drawn by the same shared row component).
+  if (railFrameDrawsTheRail) {
+    return <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>;
   }
 
   return (

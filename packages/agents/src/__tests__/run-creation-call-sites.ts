@@ -11,7 +11,12 @@
 //
 //   * `snapshot` — where the run's immutable assignment-scope snapshot comes
 //     from at this call site;
-//   * `launchAnchor` — which launch the site is anchored to.
+//   * `launchAnchor` — which launch the site is anchored to;
+//   * `anchor` + `anchorWhy` — whether the run created here carries a
+//     LAUNCH SCOPE ANCHOR (cinatra#2809, epic #2806), or deliberately carries
+//     none. Added by the per-scope-surfaces slice as a FIELD on this one
+//     inventory rather than as a second list, because the issue that needs it
+//     says so: "no second inventory is permitted".
 //
 // A NEW writer that calls a run-creation primitive without appearing here
 // fails `run-creation-call-sites.test.ts`. That is the whole point: the
@@ -35,6 +40,20 @@ export type SnapshotDisposition =
   /** The call site computes and supplies it explicitly. */
   | "supplied_by_caller";
 
+/**
+ * Whether a run created at this site carries a launch scope anchor
+ * (cinatra#2809): the vantage the launch was made from, which decides the
+ * run's one canonical address.
+ */
+export const ANCHOR_DISPOSITIONS = Object.freeze([
+  /** The launch fence threads the anchor the launching ROUTE decided. */
+  "threaded_from_launch",
+  /** This site launches from no vantage of ours and persists NO anchor. */
+  "explicitly_unanchored",
+] as const);
+
+export type AnchorDisposition = (typeof ANCHOR_DISPOSITIONS)[number];
+
 export type RunCreationCallSite = {
   /** The run-creation primitive this site calls. */
   readonly entry: "createAgentRun" | "createAgentRunPendingInput";
@@ -44,6 +63,10 @@ export type RunCreationCallSite = {
   readonly snapshot: SnapshotDisposition;
   /** The launch this site is anchored to. Never empty. */
   readonly launchAnchor: string;
+  /** Whether the created run carries a launch scope anchor (cinatra#2809). */
+  readonly anchor: AnchorDisposition;
+  /** One line: WHY that disposition. Never empty. */
+  readonly anchorWhy: string;
   /** One line: what this call site is for. */
   readonly what: string;
 };
@@ -54,6 +77,9 @@ export const RUN_CREATION_CALL_SITES: readonly RunCreationCallSite[] = Object.fr
     module: "packages/agents/src/lifecycle-coordinator.ts",
     snapshot: "derived_at_store",
     launchAnchor: "launchAgentRun (create.kind: pre_dispatch)",
+    anchor: "threaded_from_launch",
+    anchorWhy:
+      "the fence passes LaunchInput.launchScopeAnchor straight through to the primitive; a producer that launched from no vantage of ours omits it and the run stays unanchored, which is the honest record rather than an inferred home",
     what: "the pre-dispatch half of the launch fence — a run created and left waiting for its trigger or its Run button",
   },
   {
@@ -61,6 +87,9 @@ export const RUN_CREATION_CALL_SITES: readonly RunCreationCallSite[] = Object.fr
     module: "packages/agents/src/lifecycle-coordinator.ts",
     snapshot: "derived_at_store",
     launchAnchor: "launchAgentRun (create.kind: full)",
+    anchor: "threaded_from_launch",
+    anchorWhy:
+      "the same single fence, on the create-and-start half — so a composed or recurring descendant inherits its parent's anchor by handing the parent's value back in here",
     what: "the create-and-start half of the launch fence — every producer that starts a run now",
   },
 ]);

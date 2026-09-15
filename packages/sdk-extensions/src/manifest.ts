@@ -6,6 +6,16 @@
 // `kind`, `apiVersion`, and the dependency fields already ship today; the
 // loader/ABI fields below are additive (`serverEntry`, `configSchema`,
 // `requestedHostPorts`, `sdkAbiRange`, `migrationsDir`, `uiSurface`).
+//
+// ADDITIONS ARE FIELDS, NEVER SHAPE CHANGES. cinatra#2926 / #3023 (the
+// core/extension border) reads the artifact KIND label off the pack instead of
+// deriving it in the host. That addition mints NO new key and changes NO type:
+// `cinatra.displayName` below already carries it, is already admitted for
+// `kind:"artifact"` (`ARTIFACT_ALLOWED_CINATRA_KEYS` in `./artifact-contract`)
+// and is already emitted on every record — so the ABI is untouched and
+// `SDK_EXTENSIONS_ABI_VERSION` does not move. What is new is the SHAPE RULE the
+// SDK states for reading that field as a kind name (`artifactKindLabelIssues`
+// in `./artifact-contract`), which is advisory in the same way `vendor` is.
 
 import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
@@ -122,7 +132,21 @@ export type CinatraManifest = {
    */
   declaredTables?: DeclaredTableDeclaration[];
   // ---- self-describing card identity (additive) ----
-  /** User-facing card label. Falls back to the host catalog when absent. */
+  /**
+   * User-facing card label. Falls back to the host catalog when absent.
+   *
+   * ALSO THE ARTIFACT KIND LABEL (cinatra#2926 / #3023). For a
+   * `kind:"artifact"` pack this string is what the product calls the kind of
+   * thing the pack holds — the library facet and claim chip, the review line,
+   * and the artifact page header all read it. It is declared here, WITH the
+   * pack, because identity belongs to the extension: the host keeps no roster
+   * and its package-id derivation is only the never-blank floor for a pack that
+   * declares nothing (`src/lib/artifacts/artifact-kind-label.ts`). Write the
+   * kind, not the package — "Archive", never "Zip Artifact"; the shape rule is
+   * `artifactKindLabelIssues` in `./artifact-contract`, advisory here and
+   * enforced by the companion repo's own publish / conformance gate, so the
+   * host never overrules a declared spelling.
+   */
   displayName?: string;
   /**
    * Package-relative path to a small SVG logo asset (e.g. `./logo.svg`). The
@@ -338,6 +362,11 @@ export type NormalizedExtensionRecord = {
    * (bounded + script/event/external-ref-stripped). Both null when the package
    * declares neither — the host falls back to its static catalog/icon map. Lets a
    * connector render its own card without a host catalog edit.
+   *
+   * For a `kind:"artifact"` record `displayName` is ALSO the declared artifact
+   * KIND label (cinatra#2926 / #3023): the generator carries it into the
+   * import-free `src/lib/generated/artifact-kind-labels.ts` map that the host's
+   * one label function reads before it falls back to its package-id floor.
    */
   displayName: string | null;
   logo: string | null;

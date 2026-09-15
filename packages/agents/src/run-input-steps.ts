@@ -359,30 +359,69 @@ export function buildRunInputSteps(params: {
   // THE PER-FIELD PATH — the sequence the person actually walks. The loop asks
   // one field at a time, so each is its own form and its own step, in the order
   // the template declares them.
+  //
+  // AND A FORM THAT DECLARES NO NAME OF ITS OWN IS NOT A STEP OF ITS OWN
+  // (cinatra#3478). `declaredTitle` refuses a title that is only the field's own
+  // key restated — which is what `oas-compiler.ts` writes for every field an
+  // agent maps no `inputTitles` entry to — and the caller then took
+  // `RUN_INPUT_STEP_FALLBACK_LABEL`, the name of the run's setup. For ONE such
+  // form that is the right reading; for two it wrote the SAME name twice, and
+  // the run page drew two rows reading `Setup` one above the other. The
+  // ratified drawing gives one list — "The rail lists the run's steps in order"
+  // — and the issue asks for no duplicated entry.
+  //
+  // So the nameless forms the loop asks one after the other are ONE step: the
+  // run's setup, which already has that name and already draws a single entry
+  // where the agent opts into the grouped form above. The fields stay in the
+  // order the loop asks them, the entry is open while any of them is the form
+  // being asked, and its settled reading records every answer it took. A form
+  // that declares a real name is its own step exactly as before — nothing is
+  // merged across one, so the rail still reads in the run's own order.
   const firstPending = pending[0] ?? null;
-  return visible.map((fieldName, index) => {
-    const answered = answeredField(fieldName);
-    const open = atInputMoment && fieldName === firstPending;
-    // SETTLED is the narrower fact: the run carries a value AND that value is
-    // the one its own field declares (see `recordsADeclaredAnswer`).
+  const forms: { label: string; named: boolean; fields: string[] }[] = [];
+  for (const fieldName of visible) {
+    const title = declaredTitle(properties[fieldName], fieldName);
+    const previous = forms[forms.length - 1];
+    if (title === null && previous !== undefined && !previous.named) {
+      previous.fields.push(fieldName);
+      continue;
+    }
+    forms.push({
+      label: title ?? RUN_INPUT_STEP_FALLBACK_LABEL,
+      named: title !== null,
+      fields: [fieldName],
+    });
+  }
+  return forms.map((form, index) => {
+    const answered = form.fields.every(answeredField);
+    // THE OPEN STEP IS THE ONE HOLDING THE FORM THE LOOP IS ASKING — the same
+    // fact as before, asked of the fields this entry stands for.
+    const open = atInputMoment && firstPending !== null && form.fields.includes(firstPending);
+    // SETTLED is the narrower fact: the run carries a value for every field this
+    // entry asked AND each value is the one its own field declares (see
+    // `recordsADeclaredAnswer`).
     const settled =
-      answered && recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]);
+      answered &&
+      form.fields.every((fieldName) =>
+        recordsADeclaredAnswer(inputParams[fieldName], properties[fieldName]),
+      );
     return {
       key: `input:${index}` as RunInputStepKey,
-      label: declaredTitle(properties[fieldName], fieldName) ?? RUN_INPUT_STEP_FALLBACK_LABEL,
-      fields: [fieldName],
+      label: form.label,
+      fields: [...form.fields],
       answered,
       open,
-      reached: answered || open,
+      // REACHED is "the person has been asked this": the open form, and a form
+      // any of whose fields the run already carries an answer for. For a form of
+      // one field — every form before this merge — that is the reading it had.
+      reached: open || form.fields.some(answeredField),
       settled,
       answers: settled
-        ? [
-            {
-              field: fieldName,
-              label: declaredTitle(properties[fieldName]) ?? fieldName,
-              value: answerText(inputParams[fieldName], properties[fieldName]),
-            },
-          ]
+        ? form.fields.map((fieldName) => ({
+            field: fieldName,
+            label: declaredTitle(properties[fieldName]) ?? fieldName,
+            value: answerText(inputParams[fieldName], properties[fieldName]),
+          }))
         : [],
     };
   });
@@ -436,11 +475,44 @@ export function runHasAnsweredInputStep(steps: readonly RunInputStep[]): boolean
   return steps.some((step) => step.settled);
 }
 
+/**
+ * AND THE HANDOFF BETWEEN TWO SETUP QUESTIONS IS STILL THE RUN'S INPUT SPAN
+ * (cinatra#3184 fix leg 4).
+ *
+ * THE LIVE READING THIS LEG WAS SHOT ON. Answering the skills question releases
+ * the run, the release DISPATCHES it, and the decision's own round trip returns
+ * the moment that dispatch lands. The page the reader is handed next is
+ * therefore rendered from the run row in the second or two between the question
+ * just answered and the question the run is walking to: a row that reads
+ * `queued` and carries no step result, no run message and no streamed text. On
+ * the boot the run page's own render read the run at 05:55:13.4Z with that
+ * status, 1.9s before the row moved on, and nothing re-rendered the page after.
+ *
+ * BOTH CLAUSES ABOVE ANSWER NO FOR THAT ROW: the run is not at its input moment
+ * (no form is being asked yet, so there is no interrupt to read) and it has
+ * answered no form yet either. So the rail dropped the run's own input row from
+ * exactly the place the drawing keeps it -- "steps still to come" below the
+ * entry just settled -- and the run's whole lifecycle read three rows, or one
+ * where the agent's later steps had gone with it.
+ *
+ * A RUN THAT HAS PRODUCED NOTHING HAS NOT LEFT ITS FIRST STEP BEHIND, which is
+ * the clause the paragraph above is written against; the handoff is inside that
+ * span, not past it. The row rides UNANSWERED and UNOPENED, because
+ * `atInputMoment` still decides WHICH form is open and it is still false here.
+ * The rail names the form the run is about to ask, and nothing draws it.
+ */
 export function runCarriesInputSteps(
   steps: readonly RunInputStep[],
   atInputMoment: boolean,
+  /**
+   * The run has been released and dispatched and has produced nothing yet --
+   * `runInDispatchHandoff` on the run page. Defaults to `false`, so a caller
+   * that cannot be in that span reads exactly as it always has.
+   */
+  inDispatchHandoff = false,
 ): boolean {
   if (atInputMoment) return runOwesInputStep(steps);
+  if (inDispatchHandoff) return runOwesInputStep(steps) || runHasAnsweredInputStep(steps);
   return runHasAnsweredInputStep(steps);
 }
 

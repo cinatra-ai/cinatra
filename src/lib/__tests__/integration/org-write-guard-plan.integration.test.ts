@@ -12,12 +12,13 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { guardQueryFor } from "@cinatra-ai/org-write-kernel";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
   dbUrl !== "" &&
-  !dbUrl.includes("unused:unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const NO_SUCH_ORG = "00000000-0000-0000-0000-000000000000";
 

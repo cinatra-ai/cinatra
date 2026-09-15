@@ -48,7 +48,7 @@ describe("the harness mounts for the drawing's one-off surfaces", () => {
     const header = root!.querySelector('[data-conformance-id="review-target-header"]');
     expect(header).not.toBeNull();
     // name = type.displayName. The harness writes no label: it hands the header
-    // the artifact's TYPE ID and the shipped `reviewTypeLabel` derives the
+    // the artifact's TYPE ID and the shipped `artifactKindLabelFor` derives the
     // short display name from it. This is the expectation that derivation is
     // reconciled against — a change to the rule reds here first.
     const typeTag = header!.querySelector("[data-review-target-type]");

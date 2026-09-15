@@ -22,19 +22,19 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  IDEA_RELATION_TABLE,
+  ideaRelationTableFor,
   offerStoredIdeas,
   parseOfferedIdeas,
   resolveIdeaPick,
   titleFromIdeaText,
-} from "@/lib/blog/stored-ideas-gate";
+} from "@/lib/stored-ideas-gate";
 import {
   completeIdeaRelation,
   prepareStoredIdeas,
   releaseIdeaReservation,
   reserveStoredIdea,
   type StoredIdeasPorts,
-} from "@/lib/blog/stored-ideas-gate-runner";
+} from "@/lib/stored-ideas-gate-runner";
 
 const IDEA_A = {
   artifactId: "idea-a",
@@ -314,8 +314,14 @@ describe("W11 — the reservation row and its uniqueness rule", () => {
     expect(rows[0]).toMatchObject({ state: "drafted", draft_artifact_id: "draft-1" });
   });
 
-  it("names the table under the pipeline extension's own prefix", () => {
-    expect(IDEA_RELATION_TABLE).toBe("ext_cinatra_ai_blog_pipeline_agent_idea_drafts");
+  it("names the relation under the DECLARING extension's own prefix, derived and not written", () => {
+    // The physical name is a derivation of the declaring package's own
+    // declaration: any extension that declares this relation gets its own table,
+    // and the host spells none of them.
+    expect(ideaRelationTableFor("@acme/example-pack")).toBe("ext_acme_example_pack_idea_drafts");
+    expect(ideaRelationTableFor("@cinatra-ai/blog-pipeline-agent")).toBe(
+      "ext_cinatra_ai_blog_pipeline_agent_idea_drafts",
+    );
   });
 
   it("ends a run with a stated reason when the organisation has no stored idea at all", async () => {

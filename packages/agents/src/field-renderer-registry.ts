@@ -121,3 +121,70 @@ class FieldRendererRegistryImpl {
 }
 
 export const fieldRendererRegistry = new FieldRendererRegistryImpl();
+
+// ---------------------------------------------------------------------------
+// AN OFFERED ARTIFACT CHOICE — the generic shape every "pick one of these
+// artifacts" renderer reads (cinatra#3035, epic #3023 W11).
+// ---------------------------------------------------------------------------
+//
+// A gate that offers artifacts offers REFERENCES: an artifact id and the exact
+// representation revision the list was drawn from. That pair is what a pick is
+// committed as, because it is what the run records the choice by — a title is
+// not an identity: two entries may share one, and rewriting the artifact
+// changes it. An entry that names no such pair is not offerable at all, since
+// committing it could only fail at the gate.
+//
+// Nothing here knows which extension offered the list or what the artifacts are
+// about: the shape is the host's, the meaning is the declaring pack's. It sits
+// on the generic renderer road every chooser in this package already reaches,
+// and not in a module beside them, because the app routes that reach those
+// renderers are ratcheted on their reachable first-party graph and that graph
+// may only shrink.
+
+/** One entry of an offer, as it arrives on the render input. */
+export type OfferedChoice = {
+  artifactId?: unknown;
+  representationRevisionId?: unknown;
+  title?: unknown;
+  text?: unknown;
+  [extraKey: string]: unknown;
+};
+
+/** The pair a pick is committed as. */
+export type ChoiceReference = { artifactId: string; representationRevisionId: string };
+
+/** The reference an entry names, or null when it names none. */
+export function choiceReference(choice: OfferedChoice): ChoiceReference | null {
+  const artifactId = choice.artifactId;
+  const representationRevisionId = choice.representationRevisionId;
+  if (typeof artifactId !== "string" || artifactId.length === 0) return null;
+  if (typeof representationRevisionId !== "string" || representationRevisionId.length === 0) {
+    return null;
+  }
+  return { artifactId, representationRevisionId };
+}
+
+/** Every entry of an offer that can actually be committed. */
+export function offerableChoices(value: unknown): OfferedChoice[] {
+  if (!Array.isArray(value)) return [];
+  return (value as OfferedChoice[]).filter((choice) => choiceReference(choice) !== null);
+}
+
+/** The entry's declared title, else a positional one so a row is never nameless. */
+export function choiceTitle(choice: OfferedChoice, index: number, fallbackNoun = "Item"): string {
+  return typeof choice.title === "string" && choice.title.trim().length > 0
+    ? choice.title
+    : `${fallbackNoun} ${index + 1}`;
+}
+
+/** The entry's own words BELOW its title: an offered piece of text is one block
+ *  whose first line is the title, so the body is the rest of it. */
+export function choiceBody(choice: OfferedChoice): string {
+  const text = typeof choice.text === "string" ? choice.text : "";
+  return text.split(/\r?\n/).slice(1).join("\n").trim();
+}
+
+/** The run-ending sentence an offer carries instead of entries, when it has one. */
+export function statedReason(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}

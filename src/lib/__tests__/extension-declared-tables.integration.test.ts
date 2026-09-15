@@ -43,9 +43,10 @@ import { Client } from "pg";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const IN_DEDICATED_LANE = process.env.CINATRA_EXTENSION_TABLES_REALDB === "1";
 
 if (IN_DEDICATED_LANE && !HAS_DB) {

@@ -34,9 +34,10 @@ import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { projectsPool } from "@/lib/projects-store";
 import { __resetPooledDbForTests } from "@/lib/db/pooled";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const BASE_DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_REAL_DB = BASE_DB_URL !== "" && !BASE_DB_URL.includes("unused:unused@");
+const HAS_REAL_DB = BASE_DB_URL !== "" && !isPlaceholderDbUrl(BASE_DB_URL);
 
 const LANE_DB = `verify_pa2064_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 const SAFE_LANE_DB = /^verify_pa2064_[a-z0-9_]+$/;

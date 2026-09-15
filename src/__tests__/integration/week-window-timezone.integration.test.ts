@@ -60,7 +60,7 @@ const SHARED_SCHEMAS = new Set([
 ]);
 const HAS_REAL_DB =
   RAW_DB_URL !== "" &&
-  !RAW_DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(RAW_DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
@@ -121,6 +121,7 @@ if (HAS_REAL_DB) {
 import { db } from "../../../packages/metric-cost-api/src/db";
 import { insertUsageEvent, readCostSummary } from "../../../packages/metric-cost-api/src/store";
 import { sql } from "drizzle-orm";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const USAGE_EVENTS_DDL = `
   CREATE TABLE "%SCHEMA%"."usage_events" (

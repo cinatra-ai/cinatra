@@ -14,6 +14,47 @@ import type { ExtensionKind as DependencyEdgeKind } from "@cinatra-ai/sdk-extens
 export const EXTENSION_KINDS = ["agent", "connector", "artifact", "skill", "workflow"] as const;
 export type ExtensionKind = (typeof EXTENSION_KINDS)[number];
 
+/**
+ * THE PER-KIND EXECUTION BOUNDARY (cinatra#3204 criterion 27).
+ *
+ * Of the live kinds, exactly ONE runs code from the installed package inside
+ * the host process, and it does so at exactly one call (`register(ctx)` in
+ * `activateExtensionModule`). The other three are projected from metadata the
+ * host reads: their install writes rows and files, and nothing in the package
+ * is imported, evaluated or spawned.
+ *
+ * Writing that down as a value — rather than leaving it implied by which kind
+ * happens to be in which routing set — is what criterion 27 asks for. It is the
+ * ONE declaration the boundary tests assert against, and it is cross-checked
+ * against the two seams that already encode the same fact from their own side
+ * (the dispatcher's `KINDS_USING_ACTIVATE_HOOK`, and the host store's
+ * `METADATA_ONLY_STORE_KINDS`), so the three can never drift apart silently.
+ *
+ * `workflow` is RETIRED: no workflow package is installed at all, so it has no
+ * execution boundary rather than a permissive one. It is spelled out here so a
+ * kind can never gain an unstated boundary by being added to the kind list.
+ */
+export const KIND_EXECUTION_BOUNDARY = {
+  agent: "metadata-only",
+  skill: "metadata-only",
+  artifact: "metadata-only",
+  connector: "in-process-code",
+  workflow: "retired",
+} as const satisfies Record<ExtensionKind, "metadata-only" | "in-process-code" | "retired">;
+
+/**
+ * Does installing/activating this kind run code that came from the package,
+ * in this process? Fails CLOSED for anything unrecognized: an unknown kind is
+ * never treated as inert.
+ */
+export function kindExecutesPackageCode(kind: unknown): boolean {
+  if (typeof kind !== "string") return true;
+  // Only a kind DECLARED metadata-only is inert. A retired kind and an
+  // unrecognized one both answer true, so the safe reading is never the
+  // permissive one.
+  return (KIND_EXECUTION_BOUNDARY as Record<string, string>)[kind] !== "metadata-only";
+}
+
 export const EXTENSION_LIFECYCLE_STATUSES = ["active", "archived", "locked"] as const;
 export type ExtensionLifecycleStatus = (typeof EXTENSION_LIFECYCLE_STATUSES)[number];
 
@@ -82,18 +123,62 @@ export type ExtensionSourceVerdaccio = {
   activeDigest?: string;
 };
 
+/**
+ * `contentDigest` — the SUPPLIED-package content digest (cinatra#3204 D2),
+ * shared by BOTH non-registry source types below.
+ *
+ * A supplied package has no registry attestation, so `verdaccio.integrity` (the
+ * sha512 SRI root of trust) has no counterpart on these rows. What it does have
+ * is the bytes the operator delivered — and this field is the hash over exactly
+ * those: hex sha256 of the canonical delivered-tree encoding defined in
+ * `@cinatra-ai/extension-types` (`computeContentDigest` /
+ * `encodeCanonicalTree`, encoding id `cinatra-extension-tree-v1`).
+ *
+ * DISTINCT FROM A GIT COMMIT SHA, deliberately. `github.resolvedSha` and
+ * `local.resolvedCommitOrTreeHash` are REVISION identifiers: they say which
+ * commit the package was taken from. They do not say which bytes arrived — a
+ * moved tag or a retagged release points the same revision string at different
+ * content, and a tree that never lived in Git has no revision at all. The
+ * content digest answers the question the install road actually needs: are these
+ * the bytes that were previewed and approved?
+ *
+ * OPTIONAL, and it must stay optional: rows written before #3204 carry none,
+ * and a placeholder would be worse than an absent field. But absence is not
+ * neutral — the host's supplied install entry drives ONLY a source that carries
+ * a well-formed digest, so a row without one keeps exactly the behaviour it had
+ * (the handler owns it; the pipeline refuses it). When present it must satisfy
+ * SUPPLIED_SOURCE_CONTENT_DIGEST_RE.
+ *
+ * NEVER presented as registry-attested. The digest proves byte integrity between
+ * preview and install; it authenticates no publisher.
+ */
 export type ExtensionSourceGithub = {
   type: "github";
   repo: string;
   ref: string;
   resolvedSha: string;
   path?: string;
+  /** See the `contentDigest` contract above. */
+  contentDigest?: string;
+  /**
+   * The DB-authoritative ACTIVE store digest, the supplied-source twin of
+   * `verdaccio.activeDigest` (cinatra#792) and written at the same outcome
+   * seam. It is the store's `<digest>` path segment (sha512 over the tarball
+   * bytes), NOT `contentDigest` — the two answer different questions and the
+   * pipeline's finalize cross-check reads THIS one, exactly as it does for a
+   * registry install. Absent on rows written before cinatra#3204.
+   */
+  activeDigest?: string;
 };
 
 export type ExtensionSourceLocal = {
   type: "local";
   path: string;
   resolvedCommitOrTreeHash: string;
+  /** See the `contentDigest` contract above. */
+  contentDigest?: string;
+  /** See `ExtensionSourceGithub.activeDigest`. */
+  activeDigest?: string;
 };
 
 /**
@@ -138,6 +223,43 @@ export type ExtensionSource =
  * — do not change one without the other.
  */
 export const BUNDLED_SOURCE_DIGEST_RE = /^[0-9a-f]{64,128}$/;
+
+/**
+ * The SUPPLIED `contentDigest` grammar (cinatra#3204 D2) — a LITERAL MIRROR of
+ * `CONTENT_DIGEST_RE` in `@cinatra-ai/extension-types`: hex
+ * sha256, exactly 64 characters.
+ *
+ * NARROWER than BUNDLED_SOURCE_DIGEST_RE on purpose. That one admits any hex
+ * sha256..sha512 because it mirrors the store's `<digest>` path segment (a
+ * sha512 over the tarball framing). The content digest is one algorithm over one
+ * encoding, so accepting a second output length would only make it possible to
+ * store a value nothing computes.
+ *
+ * Mirrored rather than imported so canonical-types keeps its zero-runtime-import
+ * shape — the mirror is parity-tested against the leaf
+ * (packages/extensions/src/__tests__/canonical-types-source-validators.test.ts).
+ * Do not change one without the other.
+ */
+export const SUPPLIED_SOURCE_CONTENT_DIGEST_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * True when a source is a SUPPLIED one (local / github) carrying a well-formed
+ * content digest — the single predicate every "may the install pipeline drive
+ * this row?" decision reads.
+ *
+ * It exists so that opening the pipeline to supplied packages can never widen
+ * silently: a local/github row WITHOUT a digest answers false here and keeps its
+ * pre-#3204 handling exactly, and `bundled` / `verdaccio` are not supplied
+ * sources at all.
+ */
+export function isSuppliedDigestSource(
+  source: unknown,
+): source is (ExtensionSourceGithub | ExtensionSourceLocal) & { contentDigest: string } {
+  if (!source || typeof source !== "object") return false;
+  const v = source as Record<string, unknown>;
+  if (v.type !== "github" && v.type !== "local") return false;
+  return typeof v.contentDigest === "string" && SUPPLIED_SOURCE_CONTENT_DIGEST_RE.test(v.contentDigest);
+}
 
 export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;
 export type DependencyEdgeType = (typeof DEPENDENCY_EDGE_TYPES)[number];
@@ -390,9 +512,25 @@ export function isExtensionSource(value: unknown): value is ExtensionSource {
         (v.activeDigest === undefined || str(v.activeDigest))
       );
     case "github":
-      return str(v.repo) && str(v.ref) && str(v.resolvedSha);
+      // `contentDigest` is OPTIONAL (pre-#3204 rows carry none) — but when
+      // present it must be a real content digest, never a placeholder or a
+      // truncated value: the supplied install entry treats it as a trust input.
+      return (
+        str(v.repo) &&
+        str(v.ref) &&
+        str(v.resolvedSha) &&
+        (v.contentDigest === undefined ||
+          (typeof v.contentDigest === "string" &&
+            SUPPLIED_SOURCE_CONTENT_DIGEST_RE.test(v.contentDigest)))
+      );
     case "local":
-      return str(v.path) && str(v.resolvedCommitOrTreeHash);
+      return (
+        str(v.path) &&
+        str(v.resolvedCommitOrTreeHash) &&
+        (v.contentDigest === undefined ||
+          (typeof v.contentDigest === "string" &&
+            SUPPLIED_SOURCE_CONTENT_DIGEST_RE.test(v.contentDigest)))
+      );
     case "bundled":
       // `digest` is OPTIONAL (dev boots and pre-#795 rows carry none) — but
       // when present it must satisfy the store digest-segment grammar: #795
@@ -440,10 +578,30 @@ export function validateExtensionSource(value: unknown): string[] {
       if (!str(v.repo)) errors.push("github.repo");
       if (!str(v.ref)) errors.push("github.ref");
       if (!str(v.resolvedSha)) errors.push("github.resolvedSha");
+      // `contentDigest` is OPTIONAL (cinatra#3204 D2); when present it must be a
+      // well-formed content digest — see SUPPLIED_SOURCE_CONTENT_DIGEST_RE.
+      if (
+        v.contentDigest !== undefined &&
+        !(
+          typeof v.contentDigest === "string" &&
+          SUPPLIED_SOURCE_CONTENT_DIGEST_RE.test(v.contentDigest)
+        )
+      ) {
+        errors.push("github.contentDigest");
+      }
       break;
     case "local":
       if (!str(v.path)) errors.push("local.path");
       if (!str(v.resolvedCommitOrTreeHash)) errors.push("local.resolvedCommitOrTreeHash");
+      if (
+        v.contentDigest !== undefined &&
+        !(
+          typeof v.contentDigest === "string" &&
+          SUPPLIED_SOURCE_CONTENT_DIGEST_RE.test(v.contentDigest)
+        )
+      ) {
+        errors.push("local.contentDigest");
+      }
       break;
     case "bundled":
       if (!str(v.packageName)) errors.push("bundled.packageName");

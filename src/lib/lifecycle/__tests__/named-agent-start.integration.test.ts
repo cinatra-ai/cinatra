@@ -49,10 +49,11 @@ import { randomUUID } from "node:crypto";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import { launchAgentRun } from "@cinatra-ai/agents/lifecycle-coordinator";
 import { buildStartActorEnvelope } from "@/lib/lifecycle/named-agent-start-mcp";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
-  DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
+  DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const describeDb = HAS_DB ? describe : describe.skip;
 
 const IN_DEDICATED_LANE = process.env.CINATRA_NAMED_AGENT_START_REALDB === "1";

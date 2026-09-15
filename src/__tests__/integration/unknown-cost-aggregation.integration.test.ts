@@ -65,7 +65,7 @@ const SHARED_SCHEMAS = new Set([
 ]);
 const HAS_REAL_DB =
   DB_URL !== "" &&
-  !DB_URL.includes("unused:unused@") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   SAFE_LANE_SCHEMA.test(SCHEMA) &&
   !SHARED_SCHEMAS.has(SCHEMA.toLowerCase());
 
@@ -105,6 +105,7 @@ import {
   createDrizzleCubeAdapter,
   createLlmUsageCube,
 } from "@cinatra-ai/sdk-dashboard/adapters/drizzle-cube";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // ---------------------------------------------------------------------------
 // Fixture

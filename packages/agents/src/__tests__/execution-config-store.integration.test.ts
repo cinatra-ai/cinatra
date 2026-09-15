@@ -21,12 +21,13 @@
 // suites in this directory).
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 const baseSeed = (id: string, packageName: string) => ({
   id,

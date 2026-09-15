@@ -78,8 +78,17 @@ describe("the sentence over a fired one-off follows the drawing", () => {
       runId: RUN.runId,
     });
     expect(waiting).toContain(RUN_START_SCHEDULE_WAIT_CLAUSE);
+    // THE TURN'S OWN SCHEDULE RUNS ARE NAMED HERE (cinatra#3174 fix leg 1). The
+    // corrected wait line no longer carries the run id — §VI draws no token —
+    // so this second pass reaches it through the standing clause, which refuses
+    // unless the caller can prove whose line it is. Both production callers do;
+    // this case is that road, so it names them too.
     expect(
-      correctRunStartSentenceForFiredSchedule({ text: waiting, runId: RUN.runId }),
+      correctRunStartSentenceForFiredSchedule({
+        text: waiting,
+        runId: RUN.runId,
+        scheduleRunIds: [RUN.runId],
+      }),
     ).toBe(DRAWN);
   });
 

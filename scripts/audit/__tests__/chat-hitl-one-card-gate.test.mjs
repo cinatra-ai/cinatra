@@ -591,6 +591,59 @@ describe("R6 — the owner consumes its authorized body", () => {
   });
 });
 
+describe("R6 — a retired reading leaves the authorized list, and stays on the wire (cinatra#3174)", () => {
+  // WHY THIS PAIR EXISTS. Fix leg 1 stopped keying any reading on `released`:
+  // it marks the side-effect gate OPENING, not the firing, and §VI's five
+  // readings — first shown, configured, expired, fired one-off, fired
+  // recurring — are keyed on the phase and on whether the schedule has fired,
+  // never on the gate. §VI is explicit that nothing else may stand in for a
+  // reading ("No summary box is ever drawn, no status label, and nothing
+  // stands between the reader and the form — the rows are the reading"), so the
+  // status label that was the field's last reader is gone and no drawn reading
+  // replaces it. An authorized body field is a field a drawing reads, so it
+  // leaves the list — exactly the road `canRelease` took when the same section
+  // withdrew Run now (cinatra#2972).
+  //
+  // The two tests below are the two ways that retirement could become a lie.
+  // Delisting is honest only while the card really has stopped reading the
+  // field, and only while the producer really goes on SENDING it: a stale
+  // bundle's own copy of the settled schema declares `released` a REQUIRED key
+  // and fails the parse without it, so dropping the emission would blank every
+  // settled schedule card on such a tab — a wider harm than one dead boolean on the wire, and the
+  // reason the pruning is a wire change with its own version story rather than
+  // part of this leg.
+  const SCHEDULE = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal;
+
+  it("'released' is NOT an authorized body field — no §VI reading is keyed on the gate opening", () => {
+    expect(SCHEDULE.body.fields).not.toContain("released");
+  });
+
+  it("it is delisted because the card REALLY stopped reading it — put it back and R6 fires", () => {
+    // The matcher is the gate's own, over the live owner module, so this cannot
+    // pass by agreeing with a list. If a reading ever comes back, this test
+    // goes green-the-wrong-way and the field has to rejoin the list with it.
+    const restored = {
+      ...SCHEDULE,
+      body: { ...SCHEDULE.body, fields: [...SCHEDULE.body.fields, "released"] },
+    };
+    const hits = scanOwnerModule("trigger_schedule_proposal", restored, {
+      [SCHEDULE.owner]: read(SCHEDULE.owner),
+    });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(
+      /body field 'released' is never consumed/,
+    );
+  });
+
+  it("the producer still SENDS it — a retired reading may not blank a stale tab", () => {
+    expect(
+      read("packages/agent-ui-protocol/src/renderable-views/trigger-schedule-proposal-view.ts"),
+    ).toMatch(/\n\s*released: z\.boolean\(\),/);
+    expect(read("src/lib/lifecycle/trigger-schedule-proposal-card.ts")).toMatch(
+      /\n\s*released: resolved\.released,/,
+    );
+  });
+});
+
 describe("R7 — the owner emits its ratified anchors, from code that runs", () => {
   it("REJECTS an EMPTY STUB owner", () => {
     const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own("export function ProperCard() {}"));

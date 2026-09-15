@@ -4317,6 +4317,27 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
 
   // The connector gateway is the other URL this launcher echoes by address, and
   // a hosted Nango is the shape most likely to carry userinfo.
+  //
+  // THE SAME URL IS STATED IN THE SHELL TOO, AND THAT IS NOT A DUPLICATE — it
+  // is the only thing that keeps this case off the TEST HOST, the discipline
+  // this whole file otherwise holds (see `reserveClosedPort` above, and the
+  // end-to-end describe, which pins `NANGO_SERVER_URL` to a reserved closed
+  // port for this exact reason). `runNangoHealthPreflight` reads
+  // NANGO_SERVER_URL from the SHELL or the REPO ROOT's `.env.local` — never
+  // from this fixture directory — so with the value stated only in the file
+  // below, the launcher's own /health probe fell back to the bundled DEFAULT
+  // `http://127.0.0.1:3003` and MEASURED THE HOST: on a machine with a Nango
+  // answering there (a self-hosted CI runner sharing a Docker daemon with a
+  // concurrent e2e job) the probe returned 200, the preflight went silent, and
+  // the redacted address this case exists to pin was never printed at all.
+  // Stating it in the shell pins the probe to a host RFC 2606 guarantees will
+  // not resolve, so the launcher takes its remote-Nango branch — the branch
+  // this case is named for — on every machine.
+  //
+  // The value is IDENTICAL to the file's, so the compose host-port plan is
+  // unchanged: `resolveComposeHostPortPlan` reads the shell first and the file
+  // second, and both say the same remote URL, so nango-server is stood down
+  // exactly as before and no docker call is added or removed.
   it("never prints the password out of a remote NANGO_SERVER_URL", () => {
     const result = runLauncher(
       [
@@ -4328,6 +4349,7 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
         `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
         "",
       ].join("\n"),
+      { shellEnv: { NANGO_SERVER_URL: `https://${FAKE_USERINFO}@nango.example.invalid` } },
     );
     const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
     expect(out).not.toContain(FAKE_SECRET);

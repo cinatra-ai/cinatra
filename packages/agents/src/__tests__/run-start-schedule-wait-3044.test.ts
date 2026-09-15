@@ -62,9 +62,16 @@ describe("the start's own sentence for a run that parks at its schedule", () => 
     // pictures caught, so it is not printed at all over a pending card.
     expect(parked).not.toContain("status:");
     expect(parked).not.toContain("queued");
-    // It is still the line that names the run beside the card.
-    expect(parked).toContain(RUN.packageName);
-    expect(parked).toContain(RUN.runId);
+    // AND THE DISPATCH HEAD IS GONE TOO (cinatra#3174 fix leg 1). This pin used
+    // to require the package and the run id in the line, which is how the head
+    // survived the token: the first graded proof round photographed two
+    // monospace code chips over a card the ratified drawing's section VI draws
+    // with plain prose above it, in all five of its pictures. The reading is
+    // the clause, whole.
+    expect(parked).toBe(RUN_START_SCHEDULE_WAIT_CLAUSE);
+    expect(parked).not.toContain(RUN.packageName);
+    expect(parked).not.toContain(RUN.runId);
+    expect(parked).not.toContain("`");
   });
 
   it("a run that is NOT waiting keeps the sentence its own status earns", () => {

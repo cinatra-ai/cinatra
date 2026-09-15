@@ -80,11 +80,22 @@ function TabsContent({
 // `gap-7` (28px), which punched a visible hole between the last tab and
 // the start of the rule, so the row read as two separate marks instead
 // of one continuous line. Neither §Dividers nor §Tabs allows a gap.
+//
+// cinatra#3228 — `trailingRule={false}` omits the rule. Spec §Toolbar: "The
+// toolbar sits directly below the page header and replaces the section rule
+// for that view — never stack a toolbar and the etched paired rule." A view
+// that mounts a Toolbar directly beneath this row hands the rule's place to
+// the toolbar; every other view keeps the rule (the default).
 function TabsListRow({
   className,
   children,
+  trailingRule = true,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.List>) {
+}: React.ComponentProps<typeof TabsPrimitive.List> & {
+  /** Draw the trailing etched rule (default). Pass false when a Toolbar is
+   *  mounted directly beneath the row and takes the rule's place. */
+  trailingRule?: boolean
+}) {
   return (
     <div className='grid grid-cols-[auto_1fr] items-end'>
       <TabsList className={cn('border-b-0', className)} {...props}>
@@ -97,7 +108,7 @@ function TabsListRow({
           baseline, so it read as a second horizontal mark floating above the
           active tab's underline instead of continuing it. Position only — the
           etched paired-line paint is unchanged. */}
-      <Separator major decorative className='self-end' />
+      {trailingRule ? <Separator major decorative className='self-end' /> : null}
     </div>
   )
 }

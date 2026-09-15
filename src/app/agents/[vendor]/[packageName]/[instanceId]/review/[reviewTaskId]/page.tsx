@@ -48,6 +48,7 @@ import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
+import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
 import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
@@ -110,7 +111,13 @@ async function loadRunStepsContext(
       templateId = run.templateId ?? null;
       const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
       const policySteps = (template?.approvalPolicy?.steps ?? []) as ReadonlyArray<RunStepperPolicyStep>;
-      runSteps = buildRunStepperSteps(policySteps).map((s) => ({ index: s.index, label: s.label }));
+      // The run's own record of each step, as the run page hands it over
+      // (cinatra#3226): the two surfaces project ONE list, so a step the run
+      // page names by its work is named the same here.
+      runSteps = buildRunStepperSteps(policySteps, { stepResults: run.stepResults ?? null }).map((s) => ({
+        index: s.index,
+        label: s.label,
+      }));
     }
   } catch {
     runSteps = [];
@@ -188,7 +195,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     );
   }
 
-  const surface = await loadReviewGateSurface({ runId, reviewTaskId, actorCtx });
+  const surface = await loadReviewGateSurface({
+    runId,
+    reviewTaskId,
+    actorCtx,
+    // WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091): the
+    // content channel, so "the json, cms-snapshot and text displays draw
+    // through the content channel on EVERY host" — this one included. The byte
+    // road stays the session routes here: they work under a cookie and they are
+    // the narrower grant.
+    roads: firstPartyReviewSurfaceRoads(),
+  });
 
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;

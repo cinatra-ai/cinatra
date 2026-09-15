@@ -54,7 +54,7 @@ vi.mock("@/lib/llm-credential-fingerprint", () => ({
 }));
 // The receipt seam the commit module imports (unused by the route's path).
 vi.mock("@/lib/setup-readiness-saga", () => ({
-  readSetupReadinessState: () => ({ ready: false, receipt: null }),
+  readSetupReadinessState: async () => ({ ready: false, receipt: null }),
   readSetupReadinessReceipt: () => null,
   // S4 (cinatra#2389): imported by setup-provider-commit's fresh derivation;
   // this route's own paths never reach it — shimmed per the cinatra#850

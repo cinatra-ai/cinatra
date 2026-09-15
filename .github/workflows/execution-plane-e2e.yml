@@ -96,6 +96,14 @@ on:
       - 'scripts/ci/execution-plane-e2e-matrix.mjs'
       - 'scripts/ci/vitest-tier-coverage.mjs'
       - '.github/workflows/execution-plane-e2e.yml'
+  # THE QUEUE EVENT CARRIES NO `paths:` FILTER (engineering#658 item 1).
+  # GitHub fires every merge_group-triggered workflow on every candidate, so
+  # the `select` job below answers the path question inside the workflow, over
+  # the group's own base..head range and against the pull_request list above
+  # (read out of this file — not copied into a third place). The verdict job
+  # concludes either way: a skipped job would leave a required context waiting
+  # forever.
+  merge_group:
   schedule:
     # Nightly 04:19 UTC — an off-minute away from the on-the-hour spikes and
     # ahead of the 05:23 extension canary, so the plane's batteries and the
@@ -118,12 +126,50 @@ concurrency:
 
 jobs:
   # -------------------------------------------------------------------------
+  # select — the path question, answered inside the workflow for a merge-queue
+  # candidate (engineering#658 item 1). On every other event this job is a
+  # formality: the `paths:` filters above already decided, and it says so.
+  # -------------------------------------------------------------------------
+  select:
+    name: Queue path selection
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    outputs:
+      applies: ${{ steps.select.outputs.applies }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The group's base commit has to be in the checkout for the range
+          # diff; the selector fetches it by SHA if it is not, and selects the
+          # suite when it cannot.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: select
+        name: Does this group touch the execution plane?
+        env:
+          MERGE_GROUP_SELECT_WORKFLOW: .github/workflows/execution-plane-e2e.yml
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: node scripts/ci/merge-group-path-select.mjs
+
+  # -------------------------------------------------------------------------
   # discover — one matrix leg per battery found on disk. No checkout cost worth
   # optimising (a few seconds) and it keeps the battery list out of this file.
   # -------------------------------------------------------------------------
   discover:
     name: Discover batteries
-    runs-on: ubuntu-latest
+    needs: select
+    # The batteries do not run on a queue candidate that touches none of this
+    # workflow's paths. The verdict job below still concludes green for it —
+    # this `if` may never become the thing that reports.
+    if: ${{ needs.select.outputs.applies == 'true' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
@@ -154,7 +200,7 @@ jobs:
     # tolerated a zero-battery selection would skip this job silently, and a
     # skipped job is exactly the shape that reads as "nothing to do" rather than
     # "nothing was proven". (Codex round 1, MUST-FIX.)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -171,6 +217,30 @@ jobs:
       # failure and costs an hour to diagnose. Best-effort — a prune hiccup
       # never fails the job (identical shape to build-image.yml's `build` job).
       - name: Free runner disk for the image builds
+        # GitHub-hosted runners ONLY, and this guard is the whole of the
+        # cinatra#3327 fix. The step deletes shared toolchains and prunes ALL
+        # docker state. On a hosted runner that is free: the machine is this
+        # job's own and is thrown away after it. On a self-hosted runner the
+        # matrix legs of this very job run CONCURRENTLY against ONE docker
+        # daemon, and unguarded the prune of whichever leg reached this step
+        # last removed the images another job had just BUILT — the worker
+        # image, the L0 sandbox image and the broker bundle, all built by the
+        # harness before `compose up`. Compose then found the tags gone, fell
+        # back to a registry pull of a bare name, and all four legs died with
+        # "pull access denied for cinatra-exec-worker, repository does not
+        # exist" — the same four batteries that had been green one at a time
+        # on the same machine.
+        #
+        # Narrowing the prune does not close it: dangling images, stopped
+        # containers, unused networks and unused volumes all describe a
+        # sibling leg's live work mid-run, and a label filter would still be
+        # a race against a leg that has not tagged its build yet. Skipping is
+        # the provably safe change because the step then touches nothing at
+        # all, and it costs the self-hosted road nothing: that machine keeps
+        # its disk across jobs and never carried the hosted image's ~25-30 GB
+        # of preinstalled toolchains to reclaim in the first place. Identical
+        # clause, and identical reason, to build-image.yml's own reclaim step.
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           set +e
@@ -276,17 +346,25 @@ jobs:
   # -------------------------------------------------------------------------
   verdict:
     name: Execution-plane battery tier
-    needs: [discover, batteries]
+    needs: [select, discover, batteries]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
+      # A selection that failed is not a "nothing to do": the run cannot say
+      # what it would have run, so it cannot report success.
+      - name: Guard — the selection must have been taken
+        if: ${{ needs.select.result != 'success' }}
+        run: |
+          echo "::error::The queue path selection did not succeed (result=${{ needs.select.result }}). Refusing to report the tier as healthy."
+          exit 1
+
       # `count == '0'` is rejected here as well as in discovery. Two independent
       # rejections because the failure it prevents — a green tier that executed
       # no battery — is the precise defect this whole workflow exists to make
       # impossible. (Codex round 1, MUST-FIX.)
       - name: Guard — discovery must have produced batteries
-        if: ${{ needs.discover.result != 'success' || needs.discover.outputs.count == '0' || needs.discover.outputs.count == '' }}
+        if: ${{ needs.select.outputs.applies == 'true' && (needs.discover.result != 'success' || needs.discover.outputs.count == '0' || needs.discover.outputs.count == '') }}
         run: |
           echo "::error::Battery discovery did not produce a runnable tier (result=${{ needs.discover.result }}, batteries=${{ needs.discover.outputs.count }}). Refusing to report the tier as healthy."
           exit 1
@@ -296,11 +374,22 @@ jobs:
       # itself, and `skipped` in particular is what a matrix that never ran
       # looks like.
       - name: Guard — every selected battery must have passed
-        if: ${{ needs.batteries.result != 'success' }}
+        if: ${{ needs.select.outputs.applies == 'true' && needs.batteries.result != 'success' }}
         run: |
           echo "::error::At least one execution-plane battery did not pass (result=${{ needs.batteries.result }})."
           exit 1
 
+      # The deterministic green stub: the group touches none of this workflow's
+      # paths, so there is nothing to prove and the context concludes success
+      # rather than hanging as a skip.
+      - name: Report — nothing in this group touches the execution plane
+        if: ${{ needs.select.outputs.applies != 'true' }}
+        env:
+          SELECT_REASON: ${{ needs.select.outputs.reason }}
+        run: |
+          echo "Execution-plane battery tier on ${{ github.event_name }}: ${SELECT_REASON} — no battery was required." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Report
+        if: ${{ needs.select.outputs.applies == 'true' }}
         run: |
           echo "Ran the whole execution-plane battery tier: ${{ needs.discover.outputs.count }} batter(y|ies) on ${{ github.event_name }}." >> "$GITHUB_STEP_SUMMARY"

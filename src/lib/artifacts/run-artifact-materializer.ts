@@ -32,6 +32,7 @@ import {
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  type MaterializationDetection,
 } from "./materialization-ledger";
 
 // ---------------------------------------------------------------------------
@@ -357,14 +358,43 @@ export function __resetRunPackageBindingsCacheForTests(): void {
 export async function loadRunDerivationContext(input: {
   templateId: string;
   packageVersion: string | null;
-}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; hasBindings: boolean }> {
-  const packageName = await resolveTemplatePackageName(input.templateId);
-  if (packageName === null) return { producesRefs: [], hasBindings: false };
+}): Promise<{
+  producesRefs: SemanticArtifactProducesRef[];
+  hasBindings: boolean;
+  /** The package's collected bindings (cinatra#3030). The FILE-sourced ones are
+   *  resolved by the pickup, which is the only process that can see the run
+   *  folder; the caller filters. Additive — every earlier caller reads the two
+   *  fields above and is untouched. */
+  bindings: CollectedArtifactBinding[];
+}> {
+  // cinatra#3208, applied here in the cinatra#3030 convergence round: when the
+  // template version this run is pinned to persisted the declaration its own
+  // compile found, THAT is the declaration the run executed and the one the
+  // file pickup resolves against — the registry is not read at all. Reading the
+  // registry instead would let a drifted (or unreachable) copy decide which
+  // files this run promised, which is exactly the two-authorities defect #3208
+  // removed from the materializer.
+  const { packageName, executedDeclaration } = await resolveTemplatePackageAndBindingsFlag(
+    input.templateId,
+    input.packageVersion,
+  );
+  if (packageName === null) return { producesRefs: [], hasBindings: false, bindings: [] };
+  if (executedDeclaration !== null) {
+    return {
+      producesRefs: executedDeclaration.producesRefs,
+      hasBindings: executedDeclaration.bindings.length > 0,
+      bindings: executedDeclaration.bindings,
+    };
+  }
   const loaded = await loadRunPackageBindings({
     packageName,
     packageVersion: input.packageVersion,
   });
-  return { producesRefs: loaded.producesRefs, hasBindings: loaded.bindings.length > 0 };
+  return {
+    producesRefs: loaded.producesRefs,
+    hasBindings: loaded.bindings.length > 0,
+    bindings: loaded.bindings,
+  };
 }
 
 async function resolveTemplatePackageName(
@@ -535,9 +565,14 @@ export async function writeClaimedArtifact(input: {
   /** Ledger identity: the EndNode output name (bindings), the node id (tool), or
    *  the reserved `derived_output` sentinel (cinatra#1893 unbound-output job). */
   outputId: string;
-  /** The calling node id, or null on the `derived_output` path (no node). */
+  /** The calling node id, or null on the `derived_output` / `default_road`
+   *  paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output";
+  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
+  /** The detection ladder's recorded verdict (cinatra#3029, the `default_road`
+   *  path only) — journalled on the ledger row this write claims, so the
+   *  DECIDING RUNG of every default-road artifact is auditable. */
+  detection?: MaterializationDetection | null;
   extension: string;
   title: string;
   mime: string;
@@ -598,6 +633,7 @@ export async function writeClaimedArtifact(input: {
     path: input.path,
     extension: input.extension,
     contentHash,
+    detection: input.detection ?? null,
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -870,6 +906,26 @@ export async function materializeRunArtifacts(input: {
   });
 
   for (const { nodeId, outputId, binding } of bindings) {
+    // A FILE-SOURCED BINDING IS NOT THIS ROAD'S WORK (cinatra#3030, item 0.22).
+    // Its content is a file in the run's outputs folder, which only the process
+    // the folder lives with can see, so the PICKUP resolves it (the file half of
+    // `default-road-pickup`). Skipping it here is deliberate and load-bearing:
+    // failing it would make a declared file binding a broken promise under the
+    // #2486 materialization-honesty gate and fail an otherwise-good run.
+    if (binding.fileFrom !== undefined || binding.filePattern !== undefined) continue;
+    const contentFrom = binding.contentFrom;
+    if (contentFrom === undefined) {
+      // Unreachable through the grammar (exactly one content source, and the
+      // file sources left above). Refused rather than assumed.
+      outcomes.push({
+        ok: false,
+        outputId,
+        nodeId,
+        extension: binding.extension,
+        error: "the binding names no output content source",
+      });
+      continue;
+    }
     const fail = (error: string): void => {
       outcomes.push({
         ok: false,
@@ -902,10 +958,10 @@ export async function materializeRunArtifacts(input: {
           fail(fanMime.error);
           continue;
         }
-        const members = outputs[binding.contentFrom];
+        const members = outputs[contentFrom];
         if (!Array.isArray(members)) {
           fail(
-            `fan-out output "${binding.contentFrom}" did not resolve to an array` +
+            `fan-out output "${contentFrom}" did not resolve to an array` +
               (members === undefined || members === null
                 ? " (output missing from the run's declared outputs)"
                 : ` (got ${typeof members})`),
@@ -914,14 +970,14 @@ export async function materializeRunArtifacts(input: {
         }
         if (members.length === 0) {
           fail(
-            `fan-out output "${binding.contentFrom}" resolved to an empty array — ` +
+            `fan-out output "${contentFrom}" resolved to an empty array — ` +
               "the run declared a produced artifact per member and produced none",
           );
           continue;
         }
         if (members.length > MAX_FAN_OUT_MEMBERS) {
           fail(
-            `fan-out output "${binding.contentFrom}" carries ${members.length} members, ` +
+            `fan-out output "${contentFrom}" carries ${members.length} members, ` +
               `over the ${MAX_FAN_OUT_MEMBERS}-member cap — the whole list is refused, never trimmed`,
           );
           continue;
@@ -934,7 +990,7 @@ export async function materializeRunArtifacts(input: {
         }
         if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
           fail(
-            `fan-out output "${binding.contentFrom}" carries ${fanOutTotalBytes} bytes across ` +
+            `fan-out output "${contentFrom}" carries ${fanOutTotalBytes} bytes across ` +
               `${members.length} members, over the ${MAX_FAN_OUT_TOTAL_BYTES}-byte list cap`,
           );
           continue;
@@ -964,20 +1020,20 @@ export async function materializeRunArtifacts(input: {
           const member = members[index];
           if (typeof member !== "string") {
             failMember(
-              `member ${index} of "${binding.contentFrom}" is not a plain string ` +
+              `member ${index} of "${contentFrom}" is not a plain string ` +
                 `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
             );
             continue;
           }
           const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
           if (!memberTitle.ok) {
-            failMember(`member ${index} of "${binding.contentFrom}": ${memberTitle.error}`);
+            failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
             continue;
           }
           const memberBytes = new TextEncoder().encode(member).byteLength;
           if (memberBytes > MAX_AUTHORED_CONTENT_BYTES) {
             failMember(
-              `member ${index} of "${binding.contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+              `member ${index} of "${contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
             );
             continue;
           }
@@ -1032,7 +1088,7 @@ export async function materializeRunArtifacts(input: {
       }
       const mime = scalarMime.mime;
 
-      const contentRaw = outputs[binding.contentFrom];
+      const contentRaw = outputs[contentFrom];
       let content: string;
       if (typeof contentRaw === "string") {
         content = contentRaw;
@@ -1047,7 +1103,7 @@ export async function materializeRunArtifacts(input: {
         content = JSON.stringify(contentRaw);
       } else {
         fail(
-          `contentFrom output "${binding.contentFrom}" did not resolve to a string` +
+          `contentFrom output "${contentFrom}" did not resolve to a string` +
             (contentRaw === undefined || contentRaw === null
               ? " (output missing from the run's declared outputs)"
               : ` (got ${Array.isArray(contentRaw) ? "array" : typeof contentRaw}; structured values are only accepted for application/json bindings)`),
@@ -1151,6 +1207,79 @@ export type ToolArtifactMaterialization =
  * rejects. Never throws — every failure is a returned error the route
  * surfaces as an HTTP error to the calling node.
  */
+/** The target `resolveBoundArtifactTarget` resolves — the authorization's
+ *  answer to "which declared type do these bytes become". */
+type ResolvedBoundTarget = Extract<
+  Awaited<ReturnType<typeof resolveBoundArtifactTarget>>,
+  { ok: true }
+>["target"];
+
+/**
+ * THE `artifact_materialize` WRITE AUTHORIZATION (extracted in the cinatra#3030
+ * convergence round so the APPEND path answers to it too).
+ *
+ * Everything a tool call must satisfy before any byte is staged: the extension
+ * is one the run's package DECLARED it produces, the form is text-authorable,
+ * the content is under the cap, and the call resolves to exactly one declared
+ * object type. The create path ran these inline; the same-artifact revision
+ * (item 0.30) reached the store without them, which made "which extension may
+ * this run write" a question only the create path asked.
+ */
+export async function authorizeToolMaterializeWrite(input: {
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  extension: string;
+  objectTypeId?: string;
+  mime: string;
+  content: string;
+}): Promise<{ ok: true; target: ResolvedBoundTarget } | { ok: false; error: string }> {
+  const packageName = await resolveTemplatePackageName(input.templateId);
+  if (packageName === null) {
+    return {
+      ok: false,
+      error: `run template ${input.templateId} has no package name — cannot resolve cinatra.produces`,
+    };
+  }
+  const loaded = await loadRunPackageBindings({
+    packageName,
+    packageVersion: input.packageVersion,
+  });
+  if (!loaded.produces.includes(input.extension)) {
+    return {
+      ok: false,
+      error:
+        `extension "${input.extension}" is not declared in ${packageName}'s ` +
+        `cinatra.produces ([${loaded.produces.join(", ")}]) — declared ` +
+        "production and materialization must agree",
+    };
+  }
+  if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(input.mime)) {
+    return {
+      ok: false,
+      error: `declaredMime "${input.mime}" is not text-authorable — artifact_materialize is v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
+    };
+  }
+  const contentBytes = new TextEncoder().encode(input.content).byteLength;
+  if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
+    return {
+      ok: false,
+      error: `content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+    };
+  }
+  // Warm the registry so declared-type resolution sees every installed type.
+  registerAllObjectTypes();
+  const resolved = await resolveBoundArtifactTarget({
+    orgId: input.orgId,
+    extension: input.extension,
+    bindingObjectTypeId: input.objectTypeId,
+    producesObjectTypeId:
+      producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
+  });
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  return { ok: true, target: resolved.target };
+}
+
 export async function materializeToolArtifact(input: {
   runId: string;
   orgId: string;
@@ -1169,57 +1298,23 @@ export async function materializeToolArtifact(input: {
   content: string;
 }): Promise<ToolArtifactMaterialization> {
   try {
-    const packageName = await resolveTemplatePackageName(input.templateId);
-    if (packageName === null) {
-      return {
-        ok: false,
-        error: `run template ${input.templateId} has no package name — cannot resolve cinatra.produces`,
-      };
-    }
-    const loaded = await loadRunPackageBindings({
-      packageName,
-      packageVersion: input.packageVersion,
-    });
-    if (!loaded.produces.includes(input.extension)) {
-      return {
-        ok: false,
-        error:
-          `extension "${input.extension}" is not declared in ${packageName}'s ` +
-          `cinatra.produces ([${loaded.produces.join(", ")}]) — declared ` +
-          "production and materialization must agree",
-      };
-    }
-
-    if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(input.mime)) {
-      return {
-        ok: false,
-        error: `declaredMime "${input.mime}" is not text-authorable — artifact_materialize is v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
-      };
-    }
+    // The SHARED write authorization (produces, text-authorable form, the cap
+    // and the declared target type) — the same one the append path takes.
     const title = input.title.trim();
     if (title.length === 0) {
       return { ok: false, error: "title must be a non-empty string" };
     }
-    const contentBytes = new TextEncoder().encode(input.content).byteLength;
-    if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
-      return {
-        ok: false,
-        error: `content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
-      };
-    }
-
-    // Warm the registry so declared-type resolution sees every installed type.
-    registerAllObjectTypes();
-
-    // Resolve the tool call to its DECLARED object type (cinatra#1454).
-    const resolved = await resolveBoundArtifactTarget({
+    const authorized = await authorizeToolMaterializeWrite({
       orgId: input.orgId,
+      templateId: input.templateId,
+      packageVersion: input.packageVersion,
       extension: input.extension,
-      bindingObjectTypeId: input.objectTypeId,
-      producesObjectTypeId:
-        producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
+      objectTypeId: input.objectTypeId,
+      mime: input.mime,
+      content: input.content,
     });
-    if (!resolved.ok) return { ok: false, error: resolved.error };
+    if (!authorized.ok) return { ok: false, error: authorized.error };
+    const resolved = authorized;
 
     // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple.
     const ownership = await resolveRunScopeOwnership({
@@ -1250,3 +1345,7 @@ export async function materializeToolArtifact(input: {
     };
   }
 }
+
+// The default road's PURE pickup (cinatra#3029) types its ownership seam on
+// the same shape this module writes with.
+export type { ScopeDerivedOwnership };

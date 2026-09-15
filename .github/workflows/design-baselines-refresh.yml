@@ -1,6 +1,8 @@
 # design-baselines-refresh — dispatch-only. Re-draws the two /design-fixtures pixel
-# baselines on the runner class that runs the design job (the end-to-end runner),
-# so the committed goldens match the machine that compares them. The same setup
+# baselines on the runner class that runs the design comparison (PIXEL, the hosted
+# class — see the class list at the top of build-image.yml: the goldens are drawn
+# there and the comparison never passes anywhere else), so the committed goldens
+# match the machine that compares them. The same setup
 # as design-visual-verify's job (services, env, install, build, server), minus the
 # contract/ratchet checks; the last step runs the pixel project with
 # --update-snapshots and uploads tests/e2e/design/__screenshots__/ as an artifact
@@ -14,14 +16,18 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
-    name: design baselines refresh (end-to-end runner)
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    name: design baselines refresh (pixel runner)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       redis:
         image: redis:8
         ports:
-        - 127.0.0.1:6379:6379
+        # Container port only: the runner publishes it on a RANDOM free host
+        # port, read back from `job.services.redis.ports` in this job's first
+        # step, so two jobs holding a redis on ONE self-hosted machine never
+        # race for 6379 (cinatra#3267).
+        - "6379"
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout
           5s --health-retries 10
       postgres:
@@ -31,13 +37,20 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
         ports:
-        - 127.0.0.1:5434:5432
+        # Container port only: the runner publishes it on a RANDOM free host
+        # port, read back from `job.services.postgres.ports` in this job's
+        # first step, so two jobs holding a postgres on ONE self-hosted
+        # machine never race for one host port (cinatra#3267).
+        - "5432"
         options: "--health-cmd pg_isready --health-interval 5s --health-timeout 5s
           --health-retries 10"
     env:
       E2E_DESIGN_PORT: '3101'
       CINATRA_E2E_SETUP_BYPASS: 'true'
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      # SUPABASE_DB_URL and REDIS_URL are exported by this job's first step,
+      # not set here: they name the RANDOM host ports the runner mapped for
+      # the service containers above, and a job-level `env:` cannot read
+      # `job.services.*` (cinatra#3267).
       SUPABASE_SCHEMA: cinatra_e2e_design
       CINATRA_CONFORMANCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt
         }}
@@ -48,10 +61,20 @@ jobs:
       NEXT_PUBLIC_APP_URL: http://localhost:3101
       NEXT_PUBLIC_SITE_URL: http://localhost:3101
       OPENAI_API_KEY: design-visual-verify-placeholder-not-used-by-static-route
-      REDIS_URL: redis://127.0.0.1:6379
       CINATRA_RUNTIME_MODE: production
       CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: 'true'
     steps:
+    # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
+    # the runner mapped: `job.services.*` is unreadable from a job-level
+    # `env:`, so they are exported here, before the first step that reads
+    # one (cinatra#3267).
+    - name: Export the mapped service ports
+      run: |
+        {
+          echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+          echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+        } >> "$GITHUB_ENV"
+
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

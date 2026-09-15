@@ -23,7 +23,7 @@ import { makeOwnershipGrantInstallDeps } from "@/lib/extension-capability-owners
 import { readConnectorAccessDeclarationFromStore } from "@/lib/connector-access-config-host";
 import { readAssistantInstallSignalsFromStore } from "@/lib/assistant-declaration-host";
 import { readSkillPackagingSignalsFromStore } from "@/lib/skill-packaging-install-gate";
-import type { InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import type { InstallPipelineDeps, SuppliedInstallPipelineDeps } from "@/lib/extension-install-pipeline";
 
 /**
  * Wire the production install-pipeline defaults (the seam writer):
@@ -147,6 +147,23 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     readDeclaredCompat: async (storeDir) => {
       const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
       return readDeclaredHostCompatFromStore(storeDir);
+    },
+    // PARENT-SATISFIED CONTEXT-SLOT GATE basis (cinatra#3032, item 0.29): the
+    // composed agent document from the materialized (verified) bytes — same
+    // basis as the reads above. A package that carries no document reads null
+    // and the gate is a no-op for it.
+    readComposedAgentOas: async (storeDir) => {
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      try {
+        const text = await readFile(join(storeDir, "cinatra", "oas.json"), "utf8");
+        return JSON.parse(text) as unknown;
+      } catch {
+        // Absent (every non-agent extension) or unreadable — the gate has
+        // nothing to check, and a malformed document is the loader's own
+        // fail-loud at mount, not a second verdict here.
+        return null;
+      }
     },
     // DEPENDENCY EDGES (#180): dual-read over the materialized manifest
     // (canonical `cinatra.dependencies` wins; legacy `cinatra.agentDependencies`
@@ -324,4 +341,155 @@ export function makeTestInstallPipelineDeps(
     emitOperationalEvent: () => undefined,
   };
   return { ...base, ...overrides };
+}
+
+// ---------------------------------------------------------------------------
+// SUPPLIED-ROAD DI WIRING (cinatra#3204 D1) — the three deps the supplied
+// pipeline entry adds on top of `InstallPipelineDeps`, wired to the real store
+// and the real canonical writer, plus their inert test twins.
+//
+// It is a SIBLING of `extension-install-pipeline-deps.ts`, not a fork of it:
+// the base deps come from `makeDefaultInstallPipelineDeps()` unchanged, so a
+// supplied install runs the same journal, grant, migration, closure and
+// activation seams a registry install runs. Only three things differ, and each
+// differs for a stated reason:
+//
+//   materializeSupplied         — the bytes are handed over, not fetched;
+//   computeStoreTreeDigest      — the content digest is VERIFIED, not believed;
+//   recordSuppliedProvenance    — the row records where it actually came from.
+//
+// The base `recordProvenance` is deliberately NOT reused for the third: it
+// writes a `verdaccio` source, and putting a supplied package on a verdaccio row
+// is precisely the untruth this deliverable removes.
+// ---------------------------------------------------------------------------
+/**
+ * The supplied-road provenance writer. Routes through `sourceSwitchExtension` —
+ * the ONLY sanctioned provenance writer, the same one the registry road uses —
+ * so the row is re-validated on the way in and the lifecycle path is not
+ * bypassed. What changes is the source it writes: `local` or `github`, carrying
+ * the content digest, plus the store's active digest so the pipeline's
+ * finalize-time cross-check has the same basis it has for a registry install.
+ */
+async function makeSuppliedProvenanceWriter(): Promise<
+  Pick<SuppliedInstallPipelineDeps, "recordSuppliedProvenance" | "readActiveDigest">
+> {
+  const resolveTarget = async (packageName: string, orgId: string | null) => {
+    const { readInstalledExtensionsByPackageName } = await import(
+      "@cinatra-ai/extensions/canonical-store"
+    );
+    const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
+    const rows = await readInstalledExtensionsByPackageName(packageName);
+    return pickSingleActiveRow(rows, orgId);
+  };
+
+  return {
+    recordSuppliedProvenance: async (p) => {
+      // Exactly ONE active row must match this (package, org) scope, for the
+      // same reason the registry writer insists on it: provenance must bind the
+      // single row the anchor will later resolve, never an arbitrary owner's.
+      const target = await resolveTarget(p.packageName, p.orgId);
+      if (!target) {
+        throw new Error(
+          `recordSuppliedProvenance: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
+        );
+      }
+      const { sourceSwitchExtension } = await import("@cinatra-ai/extensions/lifecycle-primitive");
+      const source =
+        p.provenance.type === "github"
+          ? {
+              type: "github" as const,
+              repo: p.provenance.repo,
+              ref: p.provenance.ref,
+              resolvedSha: p.provenance.resolvedSha,
+              ...(p.provenance.path ? { path: p.provenance.path } : {}),
+              contentDigest: p.provenance.contentDigest,
+              ...(p.digest ? { activeDigest: p.digest } : {}),
+            }
+          : {
+              type: "local" as const,
+              path: p.provenance.path,
+              // A supplied file that never lived in Git has no revision; the
+              // content digest is the only true value that can stand in the
+              // revision field. The two fields keep their distinct meanings —
+              // which is exactly why `contentDigest` exists next to it.
+              resolvedCommitOrTreeHash:
+                p.provenance.resolvedCommitOrTreeHash ?? p.provenance.contentDigest,
+              contentDigest: p.provenance.contentDigest,
+              ...(p.digest ? { activeDigest: p.digest } : {}),
+            };
+      await sourceSwitchExtension(target.id, source, {
+        actor: { source: "runtime-installer" },
+        reason: `supplied install provenance @ ${p.version}`,
+      });
+    },
+    // FINALIZE-TIME CROSS-CHECK basis for the supplied road. The base reader
+    // returns null for anything that is not a verdaccio source, which would make
+    // every supplied install fail the cross-check — so the supplied road brings
+    // its own reader over the supplied source shapes.
+    readActiveDigest: async (packageName, orgId) => {
+      const target = await resolveTarget(packageName, orgId);
+      const src = target?.source as { type?: string; activeDigest?: string } | undefined;
+      if (!src || (src.type !== "local" && src.type !== "github")) return null;
+      return src.activeDigest ?? null;
+    },
+  };
+}
+
+/**
+ * Production deps for `installExtensionFromSuppliedSnapshot`. The base is the
+ * registry road's own default deps — unchanged — plus the three supplied seams.
+ */
+export async function makeDefaultSuppliedInstallPipelineDeps(): Promise<SuppliedInstallPipelineDeps> {
+  const { makeDefaultInstallPipelineDeps } = await import("@/lib/extension-install-pipeline-deps");
+  const base = await makeDefaultInstallPipelineDeps();
+  const { materializeSuppliedPackageToStore, computeSuppliedContentDigestForStoreDir } =
+    await import("@/lib/extension-package-store");
+  const provenance = await makeSuppliedProvenanceWriter();
+
+  return {
+    ...base,
+    ...provenance,
+    materializeSupplied: async (i) => {
+      const mat = await materializeSuppliedPackageToStore(i);
+      return {
+        storeDir: mat.storeDir,
+        digest: mat.digest,
+        integrity: mat.integrity,
+        contentHash: mat.contentHash,
+      };
+    },
+    computeStoreTreeDigest: (storeDir) => computeSuppliedContentDigestForStoreDir(storeDir),
+  };
+}
+
+/**
+ * Fully-wired INERT supplied deps for unit tests.
+ *
+ * `treeDigest` is what the fake store dir "contains": the digest
+ * `computeStoreTreeDigest` reports back. A happy-path test passes the same value
+ * its provenance declares; a verification test passes a different one and
+ * asserts the refusal. It is deliberately explicit — a default that silently
+ * agreed with whatever was declared would make the one gate this road adds
+ * untestable by construction.
+ */
+export function makeTestSuppliedInstallPipelineDeps(
+  overrides: Partial<SuppliedInstallPipelineDeps> & { treeDigest?: string } = {},
+): SuppliedInstallPipelineDeps {
+  const { treeDigest, ...depOverrides } = overrides;
+  const base: SuppliedInstallPipelineDeps = {
+    ...makeTestInstallPipelineDeps(),
+    materializeSupplied: async (i) => ({
+      storeDir: `/tmp/test-store/${i.packageName}/${i.version}`,
+      digest: "testdigest",
+      integrity: "sha512-supplied-test",
+      contentHash: "testcontenthash",
+    }),
+    computeStoreTreeDigest: async () => treeDigest ?? "",
+    recordSuppliedProvenance: async () => undefined,
+    // `readActiveDigest` is left UNWIRED, exactly as the registry test deps
+    // leave it: the finalize-time cross-check is a production seam over a real
+    // canonical row, and wiring an inert stub here would make every test fail
+    // the cross-check against a row that does not exist.
+  };
+  return { ...base, ...depOverrides };
 }
