@@ -707,12 +707,13 @@ for (const palette of PALETTES) {
 // at the kind's own LISTING — the skills catalog, the installed-extensions
 // list. That is the install landing, not the two observables the sentence names
 // for the skill and the artifact, and a supplied package can reach the listing
-// while reaching neither. These two walks finish those two sentences.
+// while reaching neither. The ARTIFACT walk below finishes the artifact
+// sentence; the skill's own deeper sentence has no surface left to walk on
+// main, and the note where that walk stood says why.
 //
-// Their packages carry their own run tag so this walk installs its OWN skill,
-// agent and artifact pack rather than re-installing the rows the cells above
-// wrote — a re-install over an existing row is a different question with a
-// different answer.
+// Its package carries its own run tag so this walk installs its OWN artifact
+// pack rather than re-installing the row the cells above wrote — a re-install
+// over an existing row is a different question with a different answer.
 // ---------------------------------------------------------------------------
 
 const DEEP_TAG = `${RUN_TAG}d`;
@@ -742,39 +743,36 @@ async function installThroughUpload(
 
 for (const palette of PALETTES) {
   test.describe(`upload screen — the installed kind on the surface the cell names — ${palette}`, () => {
-    test(`CELL4 ${palette}: the uploaded SKILL is offered on an installed agent's own Skills offer`, async ({
-      page,
-    }) => {
-      await installThroughUpload(page, "skill", palette, /\/skills\/?(?:[?#].*)?$/);
-      await installThroughUpload(page, "agent", palette, /\/agents\/?(?:[?#].*)?$/);
-
-      // The agent extension's OWN settings page — its Skills section, which is
-      // the "card's skills offer" the cell names.
-      const segments = packageName("agent", DEEP_TAG).split("/").map(encodeURIComponent);
-      await page.goto(
-        `/configuration/extensions/settings/agent/${segments.join("/")}`,
-      );
-      await usePalette(page, palette);
-      const section = page.locator('[data-slot="agent-skills-section"]');
-      await expect(section).toBeVisible({ timeout: 60_000 });
-
-      // A needle unique to THIS walk's skill package: the offer searches the
-      // extension title, the skill name, the vendor byline and the package
-      // name, so any row that comes back for it is that package's.
-      const needle = `upload-walk-${DEEP_TAG}-skill`;
-      const field = section.getByPlaceholder("Search installed skills…");
-      await field.click();
-      await field.fill(needle);
-
-      const list = page.locator('[role="listbox"]').first();
-      const offered = list.getByRole("option").filter({ hasNotText: "Searching…" });
-      await expect(offered.first()).toBeVisible({ timeout: 60_000 });
-      await expect(list).not.toContainText("No matches.");
-      await expect(list).not.toContainText("Couldn't search");
-      const offeredText = (await offered.first().innerText()).replace(/\s+/g, " ").trim();
-      expect(offeredText, `the offered row: ${offeredText}`).toContain(DEEP_TAG);
-      await shot(page, `cell4-skill-offer-${palette}`);
-    });
+    // THE SKILL'S DEEPER OBSERVABLE IS DEFERRED, NOT SILENTLY DROPPED.
+    //
+    // cinatra#3204 criterion 34 asks for "a skill listed on a card that
+    // declares it", and criterion 21's skill sentence for the skill "offered
+    // on a card that depends on it". The only surface that ever offered an
+    // installed skill on a package's own card was the extension-settings
+    // Skills section, and that section is RETIRED on main — cinatra#3406,
+    // commit 2f1432c9f, "Retire the Skills section from extension settings"
+    // (cinatra#2702). Its retirement gate — the test file
+    // `src/__tests__/agent-skill-assignment-actions-retired.test.ts` — keeps
+    // the section, its client and its four assignment actions out of the tree.
+    // This walk therefore asserts no locator of it.
+    //
+    // The surface that replaces it is the per-agent assignment page the design
+    // spec app-extensions.html §VII draws — "Where skills and context
+    // artifacts are assigned to a package — one scope at a time" — addressed
+    // at {scope-base}/agents/{vendor}/{slug}/settings?tab=skills. That page is
+    // not built on main (no route and no component answers that address), and
+    // it is epic cinatra#2812's per-scope assignment pages. The clause waits
+    // for it there rather than for a locator no page renders.
+    //
+    // What survives of criterion 21's skill sentence is its CATALOG half, and
+    // only as far as the cell above actually walks it: the CELL4 skill cell
+    // lands the uploaded package at /skills and reads the package name on that
+    // listing, so the skill is proven VISIBLE in the catalog by package name.
+    // It does not type that name into the catalog's own search, so the
+    // "queryable" reading of the sentence is not walked by this file; the
+    // catalog's package-name filtering lives in packages/skills
+    // (plugin-pages.tsx filters rows on skill.packageName), and a walk of that
+    // search belongs with that surface, not with this upload cell.
 
     test(`CELL4 ${palette}: an object made in the artifacts area files under the pack's declared type, and the type filter offers it`, async ({
       page,
