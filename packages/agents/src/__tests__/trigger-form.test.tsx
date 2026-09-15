@@ -350,14 +350,14 @@ describe("TriggerScreenClient — the read-only reading of a fired one-off", () 
     const immediateRow = screen
       .getByText("Run right after setup")
       .closest("[data-schedule-option]");
-    expect(immediateRow?.className).toContain("border-primary");
+    expect(immediateRow?.className).toContain("border-indigo-ink");
 
     fireEvent.click(screen.getByText("Recurring"));
 
     // The selection is where it was: the immediate row still carries the
     // selected edge and the recurring row still does not.
-    expect(immediateRow?.className).toContain("border-primary");
-    expect(recurringRow?.className).not.toContain("border-primary");
+    expect(immediateRow?.className).toContain("border-indigo-ink");
+    expect(recurringRow?.className).not.toContain("border-indigo-ink");
     expect(mockedSetRunTrigger).not.toHaveBeenCalled();
     expect(routerState.push).not.toHaveBeenCalled();
   });
