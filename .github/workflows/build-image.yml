@@ -2192,6 +2192,23 @@ jobs:
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
 
+      # Self-rendering extensions border gate (cinatra#3471, epic #2926 —
+      # decision 407 of 2026-09-13: connectors render the setup page themselves,
+      # artifacts render the artifact view themselves, and the host shares its
+      # primitives with extension bundles at RUN TIME). SHRINK-ONLY ratchet over
+      # the design-primitive BYTE COPIES a kind:connector / kind:artifact package
+      # still carries under src/components/ui/: a NEW copy fails immediately, a
+      # removed one must ratchet the committed baseline down (no silent headroom),
+      # and ANY direct reach into the product's @/components/ui/*, @/lib/utils or
+      # src/components/ui fails. The baseline is the only record of those copies
+      # now that the vendoring manifest has retired both kinds (decision 407 A).
+      # Requires the cloned-back extension tree (this job clones it above).
+      - name: Self-rendering extensions border gate (shrink-only ratchet)
+        run: node scripts/extensions/self-rendering-extensions-border-gate.mjs
+
+      - name: Self-rendering extensions border gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/self-rendering-extensions-border-gate.test.mjs
+
       # Build-config consistency check. config/build-config.manifest.json
       # is the single source of truth for the tsconfig.json @cinatra-ai/* path
       # aliases AND the next.config.ts serverExternalPackages + transpilePackages
