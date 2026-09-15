@@ -4,15 +4,15 @@
  *   pnpm vitest run --config vitest.config.ts src/components/__tests__/agents-all-agents-card-keeps-the-drawing-2808.test.tsx
  *
  * The drawing rules this surface is the Installed-extensions card "but without
- * the version and the Active / Archived indicator". The per-scope Agents tabs
- * of cinatra#2808 need both, so the SHARED card learned them BY NAME — and the
- * /agents row model has carried a `version` of its own all along. Handing the
- * whole row to the card would therefore have started rendering a version here.
+ * the version and the Active / Archived indicator". The card carried both BY
+ * NAME for a while, so a row could hand them in and start rendering them here.
+ * design#156 removed that possibility at the source: the §IV card has no
+ * version and no status indicator AT ALL, on any surface that draws it.
  *
- * This is the BEHAVIOURAL guard for that: a row shaped exactly as
- * `NewAgentPage` builds it (version and all) is rendered through the real
- * client, and the drawing's two negatives are read off the MARKUP — not off the
- * source text, which cannot see a value forwarded inside a row object.
+ * This is the BEHAVIOURAL guard for that: rows are rendered through the real
+ * client (and, for the smuggling case, through the real card), and the
+ * drawing's two negatives are read off the MARKUP — not off the source text,
+ * which cannot see a value forwarded inside a row object.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -28,6 +28,7 @@ import {
   AgentRunClient,
   type AgentRunRowModel,
 } from "../../../packages/agents/src/agent-run-client";
+import { AgentAllCard, type AgentAllCardRow } from "@/components/extensions/agent-all-card";
 
 afterEach(() => {
   vi.resetModules();
@@ -48,6 +49,24 @@ const ROW: AgentRunRowModel = {
   unavailable: null,
 };
 
+/**
+ * A row that SMUGGLES the two removed fields past the type (design#156 took
+ * `version` and `status` off the card, so no caller can pass them any more).
+ * The card must render neither even when they arrive anyway — that is what
+ * "the card carries NO version and NO status indicator" means in the markup.
+ */
+const SMUGGLED_ROW = {
+  key: "@acme/research-assistant",
+  name: "Research Assistant",
+  description: "Gathers sources, summarises, and cites answers.",
+  host: "local",
+  runHref: "/agents/acme/research-assistant/new",
+  packageName: "@acme/research-assistant",
+  detailHref: null,
+  version: "v9.9.9",
+  status: "locked",
+} as unknown as AgentAllCardRow;
+
 describe("/agents All Agents card", () => {
   it("renders NO version, even though the row model carries one", () => {
     const html = renderToStaticMarkup(<AgentRunClient rows={[ROW]} />);
@@ -66,5 +85,12 @@ describe("/agents All Agents card", () => {
     const html = renderToStaticMarkup(<AgentRunClient rows={[ROW]} />);
     expect(html).toContain('href="/agents/acme/research-assistant/new"');
     expect(html).toContain(">Run<");
+  });
+
+  it("renders neither field even when a row still carries version and status", () => {
+    const html = renderToStaticMarkup(<AgentAllCard row={SMUGGLED_ROW} />);
+    expect(html).toContain("Research Assistant");
+    expect(html).not.toContain("9.9.9");
+    expect(html).not.toContain('data-slot="installed-status-indicator"');
   });
 });

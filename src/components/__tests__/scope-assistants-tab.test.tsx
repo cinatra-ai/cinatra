@@ -3,9 +3,16 @@
  *
  * The issue's change item 3: "EXTEND the rows around the preserved Chat
  * button(s) with Settings (Skills-only page) and the installed-card fields."
- * So this suite asserts all three at once — the Chat control(s) still there and
- * scoped, the Settings href exactly as #2809 mints it, and the installed-card
- * fields (name, vendor, description, version, status) actually rendered.
+ *
+ * design#156 (specs/app-extensions.html §IV) settles the right panel: "The
+ * assistant row of the Assistants tab carries the same right panel with Chat as
+ * its primary action and the same two text links, the Settings link opening the
+ * assistant's assignment page of §VII ... with the Skills pane alone" — on the
+ * §IV card, which is the installed card minus the version/status row. So this
+ * suite asserts all of it at once: the Chat control(s) still there and scoped,
+ * the Settings href exactly as #2809 mints it and drawn as a text link beside
+ * More details, the remaining installed-card fields rendered, and the version
+ * and status absent.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -72,6 +79,36 @@ const ELIGIBLE: ScopeSurfaceEligibilityRow[] = [
   },
 ];
 
+/**
+ * The two text links of one row: the Settings tag, the More-details tag, and
+ * whatever sits BETWEEN them — which "side by side" leaves empty.
+ */
+function textLinks(html: string) {
+  const sMark = html.indexOf('data-slot="scope-assistant-settings"');
+  expect(sMark, "no Settings link in the markup").toBeGreaterThan(-1);
+  const sStart = html.lastIndexOf("<", sMark);
+  const sTag = html.slice(sStart, html.indexOf(">", sMark) + 1);
+  // The tag that OPENS the row holding the pair — "side by side" is ITS layout.
+  const wStart = html.lastIndexOf("<", sStart - 1);
+  const wrapper = wStart < 0 ? "" : html.slice(wStart, html.indexOf(">", wStart) + 1);
+  const sEnd = html.indexOf("</a>", sMark) + "</a>".length;
+  const mText = html.indexOf("More details", sEnd);
+  expect(mText, "no More details after the Settings link").toBeGreaterThan(-1);
+  const mStart = html.lastIndexOf("<", mText);
+  return {
+    settings: sTag,
+    wrapper,
+    moreDetails: html.slice(mStart, mText),
+    between: html.slice(sEnd, mStart),
+  };
+}
+
+const classOf = (tag: string) => /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+
+function rowSegments(html: string): string[] {
+  return html.split('data-slot="installed-extension-card"').slice(1);
+}
+
 function render(scope: ScopeSurfaceRef = SCOPE) {
   return renderToStaticMarkup(
     <ScopeAssistantsTab rows={buildScopeSurfaceAssistantRows(scope, DIRECTORY, ELIGIBLE)} />,
@@ -118,16 +155,47 @@ describe("ScopeAssistantsTab", () => {
     expect(html).toContain(">Settings<");
   });
 
-  it("renders the installed-card fields: name, vendor, description, version, status", () => {
+  it("draws Settings as a TEXT LINK in the same treatment as More details, to its LEFT", () => {
+    const rows = rowSegments(render());
+    // …and this loop reads EVERY row, so a card marker that stopped matching
+    // cannot let the case pass with nothing asserted.
+    expect(rows).toHaveLength(DIRECTORY.length);
+    for (const row of rows) {
+      const { settings, moreDetails, between, wrapper } = textLinks(row);
+      expect(settings.startsWith("<a")).toBe(true);
+      expect(classOf(settings)).not.toBe("");
+      expect(classOf(settings)).toBe(classOf(moreDetails));
+      expect(between).toBe("");
+      expect(row.indexOf(">Settings<")).toBeLessThan(row.indexOf("More details"));
+      // A ROW, not a column: "side by side" is the WRAPPER's own layout, so a
+      // flex-col wrapper — which keeps source order and adjacency intact while
+      // stacking the two links — fails here.
+      expect(classOf(wrapper)).toContain("flex");
+      expect(classOf(wrapper)).toContain("items-center");
+      expect(classOf(wrapper)).not.toContain("flex-col");
+      // …and a ROW that is not REVERSED: flex-row-reverse would keep source order
+      // and adjacency while drawing Settings to the RIGHT of More details.
+      expect(classOf(wrapper)).not.toContain("flex-row-reverse");
+      // No gear glyph: a text link, not the button this branch first shipped.
+      expect(row.slice(row.indexOf(settings), row.indexOf(">Settings<"))).not.toContain("<svg");
+    }
+  });
+
+  it("renders the installed-card fields the §IV card keeps: name, vendor, description", () => {
     const html = render();
     expect(html).toContain("Research Assistant");
     expect(html).toContain("Site Assistant");
     expect(html).toContain("Cinatra"); // the resolved vendor byline
     expect(html).toContain("Cited answers grounded in your own documents.");
-    expect(html).toContain("v0.4.2");
-    expect(html).toContain("v2.1.0");
-    expect(html).toContain('data-status="active"');
-    expect(html).toContain('data-status="locked"');
+  });
+
+  it("renders NO version and NO Active / Archived indicator", () => {
+    const html = render();
+    expect(html).not.toContain("v0.4.2");
+    expect(html).not.toContain("v2.1.0");
+    expect(html).not.toContain('data-slot="installed-status-indicator"');
+    expect(html).not.toContain('data-status="active"');
+    expect(html).not.toContain('data-status="locked"');
   });
 
   it("re-addresses every in-app control when the scope changes", () => {

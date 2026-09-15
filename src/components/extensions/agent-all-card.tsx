@@ -5,9 +5,9 @@
 //
 // Wraps the shared <InstalledExtensionCard> (the published design-system
 // Installed-extensions card, agent variant: coloured accent panel + byline +
-// three-line description, Run + "More details", no version/status row) and lifts
-// the §V detail-modal open state so the SAME modal is driven by TWO sibling
-// hit-areas:
+// three-line description, Run plus the two text links, no version/status row)
+// and lifts the §V detail-modal open state so the SAME modal is driven by TWO
+// sibling hit-areas:
 //   • the RIGHT "More details" link (the modal's own linkTrigger), and
 //   • the LEFT coloured accent panel — previously inert with a text (I-beam)
 //     cursor, now a pointer-cursor click target (owner ruling 2026-07-06:
@@ -24,15 +24,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Play, Settings } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  InstalledExtensionCard,
-  InstalledStatusIndicator,
-} from "@/components/extensions/installed-extension-card";
+import { Play } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
 import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { cn } from "@/lib/utils";
 import { resolveAgentCardVendor } from "@/components/extensions/agent-card-vendor";
 import type { MarketplaceDetailLoadResult } from "@/lib/marketplace-detail-view";
 
@@ -55,21 +53,12 @@ export type AgentAllCardRow = {
    */
   detailHref: string | null;
   /**
-   * The per-entry SETTINGS control (cinatra#2808, per-scope surfaces S2): the
-   * assignment page for this package AT this scope, addressed by #2809's href
-   * contract. EXTENDED BY NAME — the /agents "All Agents" tab passes none, so
-   * the ratified §IV card ("The right panel drops to a single primary action,
-   * Run, plus More details") renders there exactly as before.
+   * The per-entry SETTINGS text link (cinatra#2808, per-scope surfaces S2): the
+   * §VII assignment page for this package AT this scope, addressed by #2809's
+   * href contract. EXTENDED BY NAME — the /agents "All Agents" tab passes none,
+   * so that surface keeps Run plus More details alone.
    */
   settingsHref?: string | null;
-  /**
-   * The installed VERSION, already formatted (cinatra#2808). Absent on the
-   * /agents card, which the drawing renders "without the version and the
-   * Active / Archived indicator".
-   */
-  version?: string | null;
-  /** The install's lifecycle status (cinatra#2808). Absent on /agents, as above. */
-  status?: "active" | "locked" | null;
   /**
    * Set when this agent CANNOT run (cinatra#2605) — not installed, or a required
    * dependency is not installed. The primary action slot then carries this
@@ -124,12 +113,10 @@ export function AgentAllCard({
       description={row.description || undefined}
       // §IV (cinatra#3227): "The description is capped at three lines."
       descriptionLineClamp={3}
-      // `version` / `status` are absent on the /agents "All Agents" card — the
-      // ratified §IV card is the Installed-extensions card minus the version and
-      // the Active/Archived indicator (cinatra#1007). A per-scope Agents tab
-      // (cinatra#2808) passes both, and only that surface renders them.
-      version={row.version ?? undefined}
-      status={row.status ? <InstalledStatusIndicator status={row.status} /> : undefined}
+      // NO `version` and NO `status`: the §IV card is the Installed-extensions
+      // card minus the version and the Active/Archived indicator (cinatra#1007),
+      // on EVERY surface that draws it — the per-scope Agents tab included
+      // (design#156, owner decision 2026-09-15).
       accentDetailHref={hasDetail && row.detailHref ? row.detailHref : undefined}
       // The accent panel is a SECOND hit-area for the same modal, and it is one
       // only where it can also be a real anchor — the no-JS fallback the ruling
@@ -182,33 +169,44 @@ export function AgentAllCard({
               </Link>
             </Button>
           )}
-          {/* The per-entry Settings control (cinatra#2808): the assignment page
-              for this package at this scope. Rendered only where the caller
-              supplied the href, so the /agents card is unchanged. */}
-          {row.settingsHref && (
-            <Button asChild size="sm" variant="outline">
-              <Link href={row.settingsHref} data-slot="agent-card-settings">
-                <Settings data-icon="inline-start" aria-hidden="true" />
-                Settings
-              </Link>
-            </Button>
-          )}
-          {/* "More details" opens the §V detail modal IN PLACE (owner ruling,
-              2026-07-06) — the SAME <MarketplaceDetailModal> the Installed-
-              extensions card uses, details-only (no footer/install CTA). Its
-              `href` is the full-page detail (no-JS fallback). Rendered only for a
-              scoped listing; A2A / unscoped agents show Run only. `open` is
-              lifted here so the accent panel opens this very same modal. */}
-          {hasDetail && (
-            <AgentDetailModal
-              name={row.name}
-              description={row.description}
-              packageName={row.packageName!}
-              detailHref={row.detailHref}
-              open={open}
-              onOpenChange={setOpen}
-              loadDetail={loadDetail}
-            />
+          {/* §IV (design#156): "The two text links sit side by side in the same
+              treatment, Settings to the left." One row, so they read as a pair
+              under the primary action rather than as two stacked controls. */}
+          {(row.settingsHref || hasDetail) && (
+            <div className="flex items-center gap-2.5">
+              {/* The per-entry Settings TEXT LINK (cinatra#2808): the §VII
+                  assignment page for this package at this scope, in the same
+                  class and style as "More details" beside it. Rendered only
+                  where the caller supplied the href, so the /agents card is
+                  unchanged. */}
+              {row.settingsHref && (
+                <Link
+                  href={row.settingsHref}
+                  data-slot="agent-card-settings"
+                  className={cn(buttonVariants({ variant: "link", size: "sm" }), "underline")}
+                >
+                  Settings
+                </Link>
+              )}
+              {/* "More details" opens the §V detail modal IN PLACE (owner ruling,
+                  2026-07-06) — the SAME <MarketplaceDetailModal> the Installed-
+                  extensions card uses, details-only (no footer/install CTA). Its
+                  `href` is the full-page detail (no-JS fallback). Rendered only
+                  for a scoped listing; A2A / unscoped agents show Run only.
+                  `open` is lifted here so the accent panel opens this very same
+                  modal. */}
+              {hasDetail && (
+                <AgentDetailModal
+                  name={row.name}
+                  description={row.description}
+                  packageName={row.packageName!}
+                  detailHref={row.detailHref}
+                  open={open}
+                  onOpenChange={setOpen}
+                  loadDetail={loadDetail}
+                />
+              )}
+            </div>
           )}
         </>
       }

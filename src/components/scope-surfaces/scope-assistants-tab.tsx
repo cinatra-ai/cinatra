@@ -10,8 +10,9 @@
  * exactly: the Chat control(s) are PRESERVED — one "Chat" for a local
  * assistant, and the "Chat locally" / "Remote chat" pair per authorized
  * connected site for a remote-capable one — and the row is EXTENDED around them
- * with Settings and the installed-card fields (emblem, name, vendor,
- * description, version, status).
+ * with the Settings text link and the installed-card fields (emblem, name,
+ * vendor, description). The row draws the §IV card, so it carries NO version
+ * and NO Active / Archived indicator (design#156, owner decision 2026-09-15).
  *
  * "More details" opens the ratified extension-detail modal in place, exactly as
  * it does on an agent card, so a member reading a scope reaches the package's
@@ -19,17 +20,15 @@
  */
 import { useState } from "react";
 import Link from "next/link";
-import { ExternalLink, MessagesSquare, Settings } from "lucide-react";
+import { ExternalLink, MessagesSquare } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
-import {
-  InstalledExtensionCard,
-  InstalledStatusIndicator,
-} from "@/components/extensions/installed-extension-card";
+import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { resolveAgentCardVendor } from "@/components/extensions/agent-card-vendor";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { cn } from "@/lib/utils";
 import type { ScopeAssistantCardRow } from "@/lib/scope-surface-rows";
 
 export function ScopeAssistantsTab({ rows }: { rows: readonly ScopeAssistantCardRow[] }) {
@@ -57,8 +56,6 @@ function ScopeAssistantCard({ row }: { row: ScopeAssistantCardRow }) {
       kindLabel="Assistant"
       vendor={vendor}
       description={row.description || undefined}
-      version={row.version ?? undefined}
-      status={<InstalledStatusIndicator status={row.status} />}
       onAccentActivate={() => setOpen(true)}
       accentLabel={`View details for ${row.displayName}`}
       actions={
@@ -108,20 +105,27 @@ function ScopeAssistantCard({ row }: { row: ScopeAssistantCardRow }) {
               </span>
             ))
           )}
-          <Button asChild size="sm" variant="outline">
-            <Link href={row.settingsHref} data-slot="scope-assistant-settings">
-              <Settings data-icon="inline-start" aria-hidden="true" />
+          {/* §IV (design#156): the same right panel as the agent card — "the
+              same two text links", Settings to the left of More details, side by
+              side in one row. The Settings link opens the assistant's §VII
+              assignment page, the Skills pane alone. */}
+          <div className="flex items-center gap-2.5">
+            <Link
+              href={row.settingsHref}
+              data-slot="scope-assistant-settings"
+              className={cn(buttonVariants({ variant: "link", size: "sm" }), "underline")}
+            >
               Settings
             </Link>
-          </Button>
-          <AgentDetailModal
-            name={row.displayName}
-            description={row.description}
-            packageName={row.packageName}
-            detailHref={null}
-            open={open}
-            onOpenChange={setOpen}
-          />
+            <AgentDetailModal
+              name={row.displayName}
+              description={row.description}
+              packageName={row.packageName}
+              detailHref={null}
+              open={open}
+              onOpenChange={setOpen}
+            />
+          </div>
         </>
       }
     />
