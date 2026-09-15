@@ -191,18 +191,30 @@ export async function readScopeSurfaceEligibility(
 }
 
 /** The same read, keeping the resolved anchor for the callers that also need
- *  the organization the scope was read under (the assistants predicate). */
+ *  the organization the scope was read under (the assistants predicate), and
+ *  `ok`: whether the read actually COMPLETED.
+ *
+ *  An empty `rows` means two different things, and the assistants tab turns on
+ *  the difference: a COMPLETED read that found no eligible install (`ok` true —
+ *  the ordinary installation that has installed no assistant package), or a read
+ *  that could not be taken at all (`ok` false — no resolvable anchor, or a
+ *  failed membership/permission read). The failed read stays FAIL-CLOSED: a
+ *  caller that would otherwise fold rows of its own in must render nothing. */
 async function readScopeSurfaceEligibilityWithAnchor(
   scope: ScopeSurfaceRef,
-): Promise<{ rows: readonly ScopeSurfaceEligibilityRow[]; viewedOrgId: string | null }> {
+): Promise<{
+  rows: readonly ScopeSurfaceEligibilityRow[];
+  viewedOrgId: string | null;
+  ok: boolean;
+}> {
   try {
     const anchor = await resolveAnchor(scope);
-    if (!anchor) return { rows: [], viewedOrgId: null };
+    if (!anchor) return { rows: [], viewedOrgId: null, ok: false };
     const viewedOrgId = anchor.viewedOrgId;
     const facts = await readPackageFacts();
-    if (facts.size === 0) return { rows: [], viewedOrgId };
+    if (facts.size === 0) return { rows: [], viewedOrgId, ok: true };
     const installs = await readLiveAgentInstalls(facts);
-    if (installs.length === 0) return { rows: [], viewedOrgId };
+    if (installs.length === 0) return { rows: [], viewedOrgId, ok: true };
 
     const [
       { readExtensionAccessPolicies, readExtensionCoOwners, readExtensionInstalledBy },
@@ -315,10 +327,10 @@ async function readScopeSurfaceEligibilityWithAnchor(
         },
       },
     });
-    return { rows, viewedOrgId };
+    return { rows, viewedOrgId, ok: true };
   } catch (e) {
     warn("eligibility read failed; rendering no rows", e);
-    return { rows: [], viewedOrgId: null };
+    return { rows: [], viewedOrgId: null, ok: false };
   }
 }
 
@@ -349,13 +361,26 @@ export async function readScopeSurfaceAgentRows(
  * value import of `scope-filter` — the resolver is reached from /chat and three
  * ratcheted API routes), then extended with Settings and the installed-card
  * fields by the eligibility read.
+ *
+ * THE DIRECTORY IS CONSULTED WHETHER OR NOT AN INSTALLED ASSISTANT PACKAGE IS
+ * ELIGIBLE. The built-in platform assistant is never an `installed_extension`
+ * row — the registry reader unions its descriptor in unconditionally — so an
+ * eligible set that is empty says nothing about what the tab lists; short-
+ * circuiting on it drew the empty-read placeholder on every installation that
+ * has installed no assistant package. The eligibility read is what filters the
+ * INSTALLED assistant packages, and `buildScopeSurfaceAssistantRows` applies it
+ * to those alone.
  */
 export async function readScopeSurfaceAssistantRows(
   scope: ScopeSurfaceRef,
 ): Promise<readonly ScopeAssistantCardRow[]> {
   try {
-    const { rows: eligible, viewedOrgId } = await readScopeSurfaceEligibilityWithAnchor(scope);
-    if (eligible.length === 0) return [];
+    const { rows: eligible, viewedOrgId, ok } = await readScopeSurfaceEligibilityWithAnchor(scope);
+    // FAIL-CLOSED on a read that could not be TAKEN. An eligible set that is
+    // empty because nothing is installed is a real answer and the directory is
+    // consulted for it; an unresolvable anchor or a failed membership read is
+    // not, and must not surface the built-in row on a tab whose fence never ran.
+    if (!ok) return [];
 
     const { buildAssistantsDirectoryForCurrentActor } = await import(
       "@/lib/assistants-directory.server"

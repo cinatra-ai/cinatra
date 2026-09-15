@@ -140,6 +140,36 @@ describe("the Assistants tab's rows", () => {
     const rows = buildScopeSurfaceAssistantRows({ kind: "project", id: "proj-1" }, directory, []);
     expect(rows).toEqual([]);
   });
+
+  /** The BUILT-IN platform assistant is never an `installed_extension` row — the
+   *  registry reader unions its descriptor in unconditionally — so the
+   *  eligibility filter gates the INSTALLED assistant packages only, and the
+   *  built-in row is folded in with no install behind it. */
+  const builtin = {
+    packageName: "@cinatra-ai/cinatra-assistant",
+    vendor: "cinatra-ai",
+    slug: "cinatra-assistant",
+    displayName: "Cinatra",
+    isBuiltin: true,
+    remoteCapable: false,
+    remoteInstances: [],
+  };
+
+  it.each(SCOPES)("folds the BUILT-IN assistant in with NO eligible install on %o", (scope) => {
+    const assistant = { vendor: "cinatra-ai", slug: "cinatra-assistant" };
+    const [row] = buildScopeSurfaceAssistantRows(scope, [builtin], []);
+    expect(row!.packageName).toBe("@cinatra-ai/cinatra-assistant");
+    expect(row!.displayName).toBe("Cinatra");
+    expect(row!.chatHref).toBe(scopeSurfaceAssistantLaunchHref(scope, assistant));
+    expect(row!.settingsHref).toBe(scopeSurfaceAssistantSettingsHref(scope, assistant));
+  });
+
+  it("gives the built-in row the live installed-card fields it has no install for", () => {
+    const [row] = buildScopeSurfaceAssistantRows({ kind: "workspace" }, [builtin], []);
+    expect(row!.version).toBeNull();
+    expect(row!.description).toBeNull();
+    expect(row!.status).toBe("active");
+  });
 });
 
 describe("the version formatting", () => {

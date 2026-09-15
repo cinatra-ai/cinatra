@@ -67,6 +67,10 @@ export type ScopeAssistantCardRow = {
   readonly status: ScopeSurfaceStatus;
 };
 
+/** The status the built-in platform assistant is read at: it carries no install
+ *  row to take one from, and it is never archived or locked out of a scope. */
+const BUILTIN_ASSISTANT_STATUS: ScopeSurfaceStatus = "active";
+
 /** The version as the installed card renders it: the stored version with a
  *  leading `v`, or nothing at all when the install carries none. */
 export function formatScopeSurfaceVersion(version: string | null | undefined): string | null {
@@ -105,6 +109,13 @@ export type ScopeAssistantDirectoryRow = {
   readonly vendor: string;
   readonly slug: string;
   readonly displayName: string;
+  /**
+   * The built-in platform assistant, as the registry reader marks it. It has NO
+   * `installed_extension` row by construction — the reader unions its descriptor
+   * in unconditionally — so the eligibility join below must not read its absence
+   * from the install map as "this scope does not reach it".
+   */
+  readonly isBuiltin?: boolean;
   readonly remoteCapable: boolean;
   readonly remoteInstances: readonly {
     readonly instanceId: string;
@@ -118,8 +129,13 @@ export type ScopeAssistantDirectoryRow = {
  * control re-addressed at `scope` and the installed-card fields joined on by
  * package name.
  *
- * A directory row with NO eligible install is dropped: the tab lists what this
- * scope reaches, and the eligibility loader is what decides that. The Chat
+ * An INSTALLED assistant package's directory row with NO eligible install is
+ * dropped: the tab lists what this scope reaches, and the eligibility loader is
+ * what decides that. The BUILT-IN platform assistant is the one row that join
+ * never gates — it is never an `installed_extension` row, so an installation
+ * carrying no assistant package still reaches it — and it is folded in with the
+ * installed-card fields it genuinely has: no version, no install description,
+ * and the live status every scope reads it at. The Chat
  * control(s) are PRESERVED — a remote-capable assistant keeps one pair per
  * connected site, and only the in-app half is re-scoped (the jump-out addresses
  * the site itself, which no scope owns).
@@ -133,7 +149,11 @@ export function buildScopeSurfaceAssistantRows(
   const out: ScopeAssistantCardRow[] = [];
   for (const row of directoryRows) {
     const install = byPackage.get(row.packageName);
-    if (!install) continue;
+    // The eligibility filter gates the INSTALLED assistant packages only. The
+    // built-in platform assistant has no install to be eligible, and dropping it
+    // here would empty the tab of every installation that has installed no
+    // assistant package at all.
+    if (!install && !row.isBuiltin) continue;
     const assistant = { vendor: row.vendor, slug: row.slug };
     out.push({
       key: row.packageName,
@@ -141,7 +161,7 @@ export function buildScopeSurfaceAssistantRows(
       vendor: row.vendor,
       slug: row.slug,
       displayName: row.displayName,
-      description: install.description,
+      description: install ? install.description : null,
       chatHref: scopeSurfaceAssistantLaunchHref(scope, assistant),
       settingsHref: scopeSurfaceAssistantSettingsHref(scope, assistant),
       remoteCapable: row.remoteCapable,
@@ -154,8 +174,8 @@ export function buildScopeSurfaceAssistantRows(
         }),
         remoteHref: instance.remoteHref,
       })),
-      version: formatScopeSurfaceVersion(install.version),
-      status: install.status,
+      version: install ? formatScopeSurfaceVersion(install.version) : null,
+      status: install ? install.status : BUILTIN_ASSISTANT_STATUS,
     });
   }
   return out;
