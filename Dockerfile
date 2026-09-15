@@ -38,6 +38,52 @@ COPY scripts scripts
 # resolved from the lockfile (NOT npx/`latest`) for reproducible prod builds.
 RUN pnpm install --frozen-lockfile
 RUN pnpm exec cinatra extensions acquire-prod
+
+# ─── extension fleet: which extension set THIS image carries ────────────────
+#
+#   required  (the DEFAULT) — the prod bootable set the step above just
+#             acquired from cinatra-required-extensions.lock.json, and nothing
+#             else. THE ONLY ROAD A REAL DEPLOYMENT EVER TAKES. On this road the
+#             RUN below is a no-op: it reads no lock, makes no request and
+#             touches no file, so the acquired tree, the seed built from it and
+#             the maps generated against it are byte for byte the image of
+#             today.
+#   dev     — additionally materializes the fleet a DEVELOPMENT boot syncs
+#             (cinatra-dev-extensions.lock.json, at its pinned commits) into the
+#             SAME /app/extensions the required set lands in. A preview instance
+#             built this way has agents to run a proof with; every step that
+#             follows — the OAS seed projection, the presence-aware manifest
+#             regeneration, the bundled-digest record — reads the materialized
+#             set exactly as it is, with no knowledge of which fleet produced it.
+#             At FIRST BOOT the unchanged required-extension reconcile writes every
+#             seeded slug into the agent runtime mount and the always-on marker
+#             backfill makes it loadable — the same road the required agents ride,
+#             which is what gives a preview instance an agent to run. A pack that
+#             declares a serverEntry additionally gets its canonical anchor row
+#             from the unchanged boot seeder; a pack that declares none gets no
+#             anchor row and is served by the documented rowless floor (the runtime
+#             lifecycle gate reads "no row" as the image-shipped floor, never as
+#             archived), so it is discoverable and runnable without one.
+#
+# THE dev ROAD IS NEVER A REAL DEPLOYMENT'S ROAD — it exists for preview / proof
+# instances and nothing else. It does not weaken the required road: the required
+# set is acquired FIRST, from its own lock, with its own tree-hash verification,
+# and the dev step refuses any package that lock owns.
+#
+# The dev fleet rides the SAME hardened codeload-tarball road the required
+# acquisition uses (immutable commit SHA in the URL, whole archive inspected in
+# memory, bounded sizes, atomic swap) rather than scripts/ci/sync-dev-extensions
+# .mjs, the git road CI and a dev checkout take: that script syncs the WHOLE
+# cinatra.devExtensions universe — the required set included — and its clone
+# helper hard-fails on a non-empty non-git directory, which is exactly what
+# `acquire-prod` leaves in each of those slots. The tarball road also keeps
+# `git` out of the build stage entirely, on BOTH roads.
+#
+# The lock is copied in its own layer HERE, after the acquisition, so a dev-lock
+# bump never invalidates the required road's COPY or acquire layers above.
+ARG CINATRA_EXTENSION_FLEET=required
+COPY cinatra-dev-extensions.lock.json ./
+RUN node scripts/extensions/acquire-dev-fleet.mjs --fleet "$CINATRA_EXTENSION_FLEET"
 RUN pnpm install --frozen-lockfile
 
 # Materialize a self-contained, symlink-free copy of the published CLI for the
