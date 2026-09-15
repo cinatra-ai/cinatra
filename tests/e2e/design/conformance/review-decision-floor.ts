@@ -32,7 +32,7 @@ export const REVIEW_DECISION_FLOOR_SURFACES = [
   "review-provenance-marketplace",
   "review-target-floor",
   "review-decision-bar",
-  "review-prompt-window",
+  "run-window",
   "review-decision-disabled",
   "review-gate-loading",
   "review-gate-blocked",
@@ -181,10 +181,10 @@ export const REVIEW_DECISION_FLOOR: Readonly<
     readiness:
       "the bar ships and carries this anchor, and one of its three affordances ships under the drawing's own name (comment-review to annotated); the other two do not — the default branch draws reject-review and approve-review where the drawing draws Regenerate and Continue, and those two land with open pull request 3100. The mount is refused for a second reason that does not expire with that landing: the repository's one-card gate bans composing the decision bar anywhere but the card and the bar's own module, and a conformance harness is exactly such a second place — the foundational wave of this epic moved its own proof off the floor for that reason",
   },
-  "review-prompt-window": {
-    surface: "review-prompt-window",
+  "run-window": {
+    surface: "run-window",
     section: "VI",
-    anchor: "review-prompt-window",
+    anchor: "run-window",
     gateState: null,
     provenance: null,
     mounted: false,
@@ -193,7 +193,7 @@ export const REVIEW_DECISION_FLOOR: Readonly<
     states: ["loading"],
     awaitingPullRequest: null,
     readiness:
-      "the window ships on the default branch and carries this anchor together with the drawing's own action and outcome, since the change that moved it into the review gate card landed. It is drawn INSIDE that card: mounting it composes the decision floor the one-card gate keeps to one place, and its submit is a server action on a fenced gate that a harness would have to stand in for — a transport substitution this road forbids",
+      "the window ships on the default branch and carries this anchor. Since cinatra#3487 it is drawn by the RUN PAGE'S CHROME and never inside the card: the ruling of 2026-09-14 puts it there and names the anchor, and the conformance reading is that it is a descendant of the page chrome and never of a lifecycle card. Mounting it in a harness still composes the run page's own frame, and its submit is a server action on a fenced gate a harness would have to stand in for — a transport substitution this road forbids",
   },
   "review-decision-disabled": {
     surface: "review-decision-disabled",

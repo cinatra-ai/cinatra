@@ -72,6 +72,7 @@ vi.mock("../run-window-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { RunPageChrome } from "../run-page-chrome";
 import { ReviewGateCard } from "../review-gate-card";
 
 afterEach(() => {
@@ -128,22 +129,32 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
+/**
+ * AMENDED BY cinatra#3487. Every host outside a conversation is drawn inside the
+ * run page's CHROME now, because the chrome is what owns the one prompt window:
+ * "one window owned by the page … never part of that screen's component or
+ * markup". The card's own readings — who is offered a channel, what a landed
+ * change request does to the exchange — are unchanged and are what this suite
+ * still measures.
+ */
 function renderOn(
   host: "chat_thread" | "run_card" | "page_gate_region" | "site_widget",
   props: { runId?: string } = {},
 ) {
   return render(
-    <LifecycleCardSurfaceProvider
-      host={host}
-      auth={host === "site_widget" ? WIDGET_AUTH : undefined}
-    >
-      <ReviewGateCard view={VIEW} runId={props.runId ?? "run-3141"} />
-    </LifecycleCardSurfaceProvider>,
+    <RunPageChrome>
+      <LifecycleCardSurfaceProvider
+        host={host}
+        auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+      >
+        <ReviewGateCard view={VIEW} runId={props.runId ?? "run-3141"} />
+      </LifecycleCardSurfaceProvider>
+    </RunPageChrome>,
   );
 }
 
 const promptWindows = (root: ParentNode) =>
-  root.querySelectorAll('[data-conformance-id="review-prompt-window"]');
+  root.querySelectorAll('[data-conformance-id="run-window"]');
 const headers = (root: ParentNode) =>
   root.querySelectorAll('[data-conformance-id="review-target-header"]');
 
@@ -152,7 +163,7 @@ const headers = (root: ParentNode) =>
 // ---------------------------------------------------------------------------
 
 describe("#3141 item 1 — the conversational prompt window is part of the gate", () => {
-  it("the run page's own gate draws the window inside the gate's frame, offered in the drawing's words", async () => {
+  it("the run page's own gate is offered the window, in the drawing's words — and the card carries none", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("run_card");
     await waitFor(() =>
@@ -160,9 +171,13 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     );
     const card = container.querySelector('[data-conformance-id="review-gate-card"]');
     expect(card).not.toBeNull();
-    const window = card!.querySelector('[data-conformance-id="review-prompt-window"]');
-    expect(window, "the window is inside the gate's own frame").not.toBeNull();
-    expect(window!.textContent).toContain(OFFER);
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+    const window = promptWindows(container)[0];
+    expect(window.textContent).toContain(OFFER);
+    // AMENDED BY cinatra#3487: it is the PAGE's window, in the page's chrome,
+    // and never inside the card.
+    expect(window.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
+    expect(card!.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(0);
   });
 
   it("draws it beneath the decision bar, which is where the drawing puts it", async () => {
@@ -170,7 +185,7 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     const { container } = renderOn("run_card");
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
     const bar = container.querySelector('[data-conformance-id="review-decision-bar"]')!;
-    const window = container.querySelector('[data-conformance-id="review-prompt-window"]')!;
+    const window = promptWindows(container)[0];
     expect(bar.compareDocumentPosition(window) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -179,20 +194,38 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     const { container } = renderOn("page_gate_region");
     await waitFor(() => expect(promptWindows(container).length).toBeGreaterThan(0));
     expect(promptWindows(container)).toHaveLength(1);
-    expect(document.querySelectorAll('[data-conformance-id="review-prompt-window"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(1);
   });
 
-  it("wherever the gate is mounted WITH its run, it draws that one window and no other", async () => {
-    // The window is the RUN's conversation, so what it needs is the run — not a
-    // host identity. Given the run, every host draws the same single window; the
-    // host makes no difference to it, which is the point of one card for every
-    // surface. What decides whether a window is drawn at all is the next case.
-    for (const host of ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const) {
+  it("wherever the gate is mounted OUTSIDE a conversation WITH its run, it draws that one window and no other", async () => {
+    // The window is the RUN's conversation, so what it needs is the run. Given
+    // the run, every host OUTSIDE a conversation draws the same single window,
+    // which is the point of one card for every surface. THE CONVERSATION IS THE
+    // ONE DIVISION (cinatra#3481, `app-lifecycle-cards.html` §II): "No prompt
+    // window is drawn inside a conversation — the prompt window is the box
+    // outside the chat", so the chat-hosted card draws none even with its run,
+    // and `review-card-in-the-thread-draws-no-prompt-window-3481.test.tsx`
+    // holds it to that. What decides whether a window is drawn at all on these
+    // hosts is the next case.
+    for (const host of ["run_card", "page_gate_region", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container } = renderOn(host);
       await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
       cleanup();
     }
+  });
+
+  it("the CONVERSATION's card draws no window even when it names its run", async () => {
+    // The same loop's fourth host, split out because its reading is the
+    // opposite one: inside a conversation the composer at the foot of the
+    // thread is where a change request is typed (§II), so the card adds no box
+    // of its own above it.
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(promptWindows(container)).toHaveLength(0);
   });
 
   it("a card dispatched in a TRANSCRIPT names no run and draws no window — a thread ends in its composer", async () => {
@@ -207,12 +240,14 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     for (const host of ["chat_thread", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container } = render(
-        <LifecycleCardSurfaceProvider
-          host={host}
-          auth={host === "site_widget" ? WIDGET_AUTH : undefined}
-        >
-          <ReviewGateCard view={VIEW} />
-        </LifecycleCardSurfaceProvider>,
+        <RunPageChrome>
+          <LifecycleCardSurfaceProvider
+            host={host}
+            auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+          >
+            <ReviewGateCard view={VIEW} />
+          </LifecycleCardSurfaceProvider>
+        </RunPageChrome>,
       );
       await waitFor(() =>
         expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
@@ -235,9 +270,11 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
         ({ kind: "changes-requested", status: "requested", idempotent: false }) as const,
     );
     const { container } = render(
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
-      </LifecycleCardSurfaceProvider>,
+      <RunPageChrome>
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+        </LifecycleCardSurfaceProvider>
+      </RunPageChrome>,
     );
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
     const resolvesBefore = resolveFetch.mock.calls.length;

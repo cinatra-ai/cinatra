@@ -35,12 +35,12 @@
 // the window the plan asks for and nothing behind it.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+  useRunWindowScreen,
+  type RunWindowConversationEntry,
+} from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 /** The renderer id the assist endpoint is already tuned for on this subject.
@@ -93,13 +93,15 @@ export function SchedulePromptWindow({
    * DOM rather than predicting it (`useScheduleSurfaceReading`).
    */
   readOnly?: boolean;
-}): ReactElement {
-  const [mount, setMount] = useState<HTMLElement | null>(null);
+}): null {
   const [promptPending, setPromptPending] = useState(false);
   // THE EXCHANGE IS THE RUN'S, not this component's (cinatra#2933). The window
   // keeps no parallel copy it could show instead; the store is the state.
   const runWindow = useRunWindowConversation({ runId, surface: "armed-trigger" });
-  const sendRunWindowTurn = runWindow.send;
+  // The RUN's own controller, under a local name that is NOT the bridge's: the
+  // bridge has exactly one caller in the product (E2), and a second module
+  // wearing its name would read as a second road.
+  const sendWindowTurn = runWindow.send;
   /**
    * THE PLATFORM'S OWN LINE ABOUT THE FORM FILL — not the conversation.
    *
@@ -114,7 +116,7 @@ export function SchedulePromptWindow({
    * line is shown after it. The review page's window already carries its
    * platform outcome exactly this way.
    */
-  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
+  const [outcomeLines, setOutcomeLines] = useState<RunWindowConversationEntry[]>([]);
   // NEGATIVE, so a platform line can never take a stored entry's React key.
   // The store's positions and the controller's optimistic ids are both positive
   // and unbounded, so an offset — however large — is only PROBABLY disjoint;
@@ -152,7 +154,7 @@ export function SchedulePromptWindow({
       // The run's own conversation carries what was typed and what came back.
       // The assist call below still fills THIS FORM's fields, which is a
       // different job and is retired by #2934 together with the fill.
-      void sendRunWindowTurn(prompt);
+      void sendWindowTurn(prompt);
       setPromptPending(true);
       try {
         const res = await fetch(
@@ -203,35 +205,38 @@ export function SchedulePromptWindow({
         setPromptPending(false);
       }
     },
-    [templateId, runId, sendRunWindowTurn],
+    [templateId, runId, sendWindowTurn],
   );
 
-  return (
-    <div
-      data-conformance-id="schedule-prompt-window"
-      data-schedule-prompt-window=""
-      ref={setMount}
-    >
-      <HitlConversationPanel
-        portalTarget={mount}
-        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-        // `app-artifact-review.html` §X): the mount names its surface and the
-        // window reads the drawing's own sentence for it.
-        surface="armed-trigger"
-        // Two independent reasons for there to be no box, and both still hold:
-        // the schedule is over so there is nothing to edit (cinatra#3004), or
-        // the run would refuse this person's message (cinatra#2933).
-        visible={
-          !readOnly &&
-          canRespondInWindow !== false &&
-          !!templateId &&
-          !!mount
-        }
-        conversation={[...runWindow.entries, ...outcomeLines]}
-        promptPending={promptPending || runWindow.pending}
-        storageKey={`cinatra_schedule_assist_${templateId}_step`}
-        onSubmit={handlePromptSubmit}
-      />
-    </div>
-  );
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "the run page's frame mounts exactly ONE prompt
+  // window in its chrome; every step screen, the review route and every
+  // lifecycle card stop mounting one". So this component draws nothing at all
+  // now — it is the schedule screen's REGISTRATION, and the page's chrome draws
+  // the one window below the scheduler exactly where the drawing puts it
+  // (`app-artifact-review.html` §I: "Beneath the form the run's prompt window
+  // (§IX) sits where it always sits — below the scheduler, in the same column").
+  //
+  // THE TWO REASONS FOR NO BOX ARE UNCHANGED, and they are what the screen
+  // publishes as "nothing to manipulate": the schedule is over so there is
+  // nothing to edit (cinatra#3004), or the run would refuse this person's
+  // message (cinatra#2933).
+  //
+  // THE APPLYING ROAD IS UNCHANGED TOO: `handlePromptSubmit` above is still the
+  // one road, and it still fills THIS FORM's fields through the assist call the
+  // screen already owns.
+  useRunWindowScreen({
+    surface: "armed-trigger",
+    runId: runId ?? null,
+    stepId: "schedule",
+    canManipulate:
+      !readOnly && canRespondInWindow !== false && !!templateId,
+    storageKey: `cinatra_schedule_assist_${templateId}_step`,
+    conversation: [...runWindow.entries, ...outcomeLines],
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+  });
+
+  return null;
 }

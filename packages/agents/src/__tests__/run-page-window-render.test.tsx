@@ -31,6 +31,9 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the run page's real mount registers
+// with the chrome, which is what draws it.
+import { RunPageChrome } from "../run-page-chrome";
 
 // §X's OWN SENTENCE FOR THIS READING (design `458fb7ffce6c`,
 // `app-artifact-review.html`, "X. One window, five readings" — "The run page —
@@ -197,7 +200,11 @@ function runPageProps(overrides: Partial<WatcherProps> = {}): WatcherProps {
 describe("the run page draws the prompt window on its real mount (cinatra#2933)", () => {
   it("draws the window, with the ratified placeholder, through SetupCompletionWatcher", async () => {
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
-    render(<SetupCompletionWatcher {...runPageProps()} />);
+    render(
+      <RunPageChrome>
+        <SetupCompletionWatcher {...runPageProps()} />
+      </RunPageChrome>,
+    );
 
     const prompt = await screen.findByText(ANY_WINDOW_SENTENCE);
     expect(prompt).not.toBeNull();
@@ -208,7 +215,11 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
     // sentence as "The run page — a step waiting for its fields", and this is
     // the screen that reading is about.
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
-    render(<SetupCompletionWatcher {...runPageProps()} />);
+    render(
+      <RunPageChrome>
+        <SetupCompletionWatcher {...runPageProps()} />
+      </RunPageChrome>,
+    );
 
     expect(await screen.findByText(RUN_PAGE_SENTENCE)).not.toBeNull();
     // The one string all five mounts used to show is gone from this screen.
@@ -220,7 +231,9 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
   it("shows NO window to a person the run would refuse (AC3)", async () => {
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
     render(
-      <SetupCompletionWatcher {...runPageProps({ canRespondInWindow: false })} />,
+      <RunPageChrome>
+        <SetupCompletionWatcher {...runPageProps({ canRespondInWindow: false })} />
+      </RunPageChrome>,
     );
 
     // Let the portal effect and the controller's mount read settle; the box
@@ -237,7 +250,9 @@ describe("the run page draws the prompt window on its real mount (cinatra#2933)"
     // asserted from the other side: with access, the box is there.
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
     const { unmount } = render(
-      <SetupCompletionWatcher {...runPageProps({ canRespondInWindow: true })} />,
+      <RunPageChrome>
+        <SetupCompletionWatcher {...runPageProps({ canRespondInWindow: true })} />
+      </RunPageChrome>,
     );
     expect(await screen.findByText(ANY_WINDOW_SENTENCE)).not.toBeNull();
     unmount();

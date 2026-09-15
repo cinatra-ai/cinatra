@@ -2832,6 +2832,28 @@ jobs:
       - name: Authz inventory drift gate
         run: pnpm exec vitest run src/lib/authz/__tests__/drift-gate.test.ts
 
+      # THE PROMPT WINDOW BELONGS TO THE RUN PAGE'S CHROME (cinatra#3487), and
+      # the maintainer asked for that to be enforced deterministically: "ensure
+      # deterministically, e.g. via CI, that this is enforced and ensured that
+      # it won't be circumvented". Two structural invariants carry it —
+      #
+      #   E1  the run-window panel module has exactly ONE importer, the run page
+      #       chrome, and the allowlist is a single literal in the test;
+      #   E2  the one request builder at the network boundary takes no parameter
+      #       that narrows tools, intents or capabilities, and both roads — the
+      #       chat composer's and the window's — call it.
+      #
+      # They ride THIS job because it is the perpetual core invariants tier and
+      # a REQUIRED status check. There is no waiver flag, no environment switch
+      # and no skip list for either of them; widening an allowlist means editing
+      # a file on the attribution gate's high-risk path list, which needs a
+      # maintainer-tier approval.
+      - name: Prompt-window structural invariants (run page chrome)
+        run: >-
+          cd packages/agents && pnpm exec vitest run --no-coverage
+          src/__tests__/run-window-panel-single-importer.invariant.test.ts
+          src/__tests__/run-window-request-builder.invariant.test.ts
+
   # RBAC browser e2e — builds the app and boots the production (standalone)
   # server against a Postgres + Redis service container, runs Playwright. The
   # unit-level resolver matrix (src/lib/authz/__tests__/resolver-matrix.test.ts)
