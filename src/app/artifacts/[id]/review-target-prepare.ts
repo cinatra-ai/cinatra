@@ -74,8 +74,10 @@ import type {
   ArtifactByteUrlMinter,
 } from "./review-surface-roads";
 import {
+  beginReviewTargetsCore,
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
+  type BeginReviewResult,
   type PrepareReviewInput,
   type PrepareReviewPorts,
   type PrepareReviewResult,
@@ -532,4 +534,35 @@ export async function prepareArtifactReviewTargets(args: {
     buildContent: args.buildContent,
   });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
+}
+
+/**
+ * The STREAMING reading of the same call (cinatra#3334): the authorization,
+ * gate and substitution preflight is awaited, and the per-target preparations
+ * come back started, capped and in the gate's order. Same core, same ports,
+ * same hard failures — only the moment the caller is answered moves.
+ */
+export async function beginArtifactReviewTargets(args: {
+  input: PrepareReviewInput;
+  orgId: string;
+  actor: ActorContext;
+  runGatePorts: ReviewRunGatePorts;
+  /** The island's byte minter, when this preparation is for an island reader
+   *  (wave 3). Absent on every cookie surface. */
+  byteMinter?: ArtifactByteUrlMinter;
+  /** How this surface reads content (wave 3). Absent on a surface that has not
+   *  named a road. */
+  buildContent?: ArtifactContentBuilder;
+}): Promise<BeginReviewResult> {
+  // THE ROADS TRAVEL THE STREAMING ARM TOO. The island is the one surface that
+  // names a road and, since cinatra#3334, the one surface that enters through
+  // this arm: binding the ports without them here would hand the island the
+  // session addresses and the channel's named absence it cannot fetch.
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    byteMinter: args.byteMinter,
+    buildContent: args.buildContent,
+  });
+  return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }
