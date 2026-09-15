@@ -82,3 +82,130 @@ describe("Sonner Toaster wrapper — opacity contract", () => {
     expect(src).not.toMatch(/theme=\{theme as ToasterProps\['theme'\]\}/);
   });
 });
+
+/**
+ * COPY AND CLOSE SIT TOGETHER ON THE RIGHT, INSIDE THE TOAST.
+ *
+ * The ratified drawing describes a toast as "the popover surface, a
+ * status-coloured border and matching text, the type's icon leading, Copy and
+ * Close on the right" — one row, both controls in it.
+ *
+ * AN EARLIER READING OF THIS FILE CLAIMED THAT PLACEMENT AND DID NOT SHIP IT.
+ * It moved three of the toast library's own custom properties, which only
+ * choose WHICH CORNER the library's corner badge is pinned outside of: the
+ * close control went from outside the top-LEFT corner to outside the top-RIGHT
+ * one. It was still a circular badge hanging off the toast's border rather than
+ * a control beside Copy, and on a real surface it measured overlapping the
+ * application header's own notification badge. The corner is not the placement
+ * the drawing asks for, and this suite now says so in the terms that can be
+ * checked: the control is IN the row, not pinned outside a corner.
+ *
+ * THE GEOMETRY IS A RULE, NOT A VARIABLE, so it lives in the application's own
+ * stylesheet: the library pins the badge with `position: absolute` and a
+ * transform, and no custom property it exposes can undo either. The rule
+ * out-specifies the library's own (four attribute selectors against three), so
+ * it does not depend on which stylesheet the browser sees first. It takes the
+ * GEOMETRY only and writes no colour at all — the close control keeps whatever
+ * the library paints it, in every theme and every status, which is the one way
+ * a placement rule cannot make a toast look wrong in a reading it was never
+ * measured in.
+ *
+ * AND IT IS EVERY TOAST'S PLACEMENT, not only the placement of the one toast
+ * that has an action. The library gives an ACTION the automatic margin that
+ * pushes it to the end of the row; a toast with no action has no such margin,
+ * and a close control taken out of the corner would come to rest against the
+ * text. The toast's own text takes up the slack instead, so the controls sit at
+ * the end of the row whether there are two of them or one.
+ */
+describe("the toast's Close sits beside Copy, in the toast's own row", () => {
+  const src = readFileSync(path.join(__dirname, "sonner.tsx"), "utf8");
+  const css = readFileSync(
+    path.join(__dirname, "..", "..", "app", "globals.css"),
+    "utf8",
+  );
+  const SELECTOR =
+    '[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]';
+  const rule = () => {
+    const at = css.indexOf(SELECTOR + " {");
+    expect(at, "no close-control placement rule in the application stylesheet").toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("\n}", at));
+  };
+
+  it("takes the control OUT of the corner — it is in the toast's flow, not pinned to it", () => {
+    expect(rule()).toMatch(/position:\s*static/);
+    expect(rule()).toMatch(/transform:\s*none/);
+  });
+
+  it("puts it AFTER the Copy action in the row, so the two read as a pair", () => {
+    // The toast is a flex row and Copy carries the auto margin that pushes the
+    // pair to the right; ordering Close after it is what puts Close outermost.
+    expect(rule()).toMatch(/order:\s*[1-9]/);
+  });
+
+  it("puts it at the END OF THE ROW even where there is no Copy to sit beside", () => {
+    // The library's automatic margin belongs to the ACTION. Most toasts in the
+    // application carry no action at all, and for those nothing would push the
+    // control right: it would come to rest against the text. The toast's own
+    // text grows to fill the row instead, which places the control (or the pair)
+    // at the end of it either way.
+    const at = css.indexOf(
+      '[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-content] {',
+    );
+    expect(at, "the toast's text does not take up the slack in the row").toBeGreaterThan(-1);
+    const content = css.slice(at, css.indexOf("\n}", at));
+    expect(content).toMatch(/flex:\s*1/);
+    // And it may not overflow the toast while doing it.
+    expect(content).toMatch(/min-width:\s*0/);
+  });
+
+  it("gives it the shape of a control rather than of a badge", () => {
+    // A 50% radius is a badge. A control in a row is not round.
+    const radius = rule().match(/border-radius:\s*([^;]+);/)?.[1]?.trim();
+    expect(radius, "no border-radius — the library's 50% badge radius would stand").toBeTruthy();
+    expect(radius).not.toMatch(/50%|9999px/);
+  });
+
+  it("out-specifies the library's own rule — both are unlayered", () => {
+    // The library writes [data-sonner-toast][data-styled='true'] [data-close-button]:
+    // three attribute selectors. This rule carries four, so source order between
+    // the two stylesheets cannot decide it.
+    expect((SELECTOR.match(/\[[^\]]+\]/g) ?? []).length).toBeGreaterThan(3);
+    expect(css).toContain(SELECTOR);
+  });
+
+  it("leaves every COLOUR to the library's status rules", () => {
+    // The drawing asks for "a status-coloured border and matching text"; the
+    // close control is part of that reading, so this rule must not paint it.
+    expect(rule()).not.toMatch(/(^|;)\s*(background|color|border-color)\s*:/);
+  });
+
+  it("no longer pins the control outside a corner", () => {
+    for (const property of [
+      "--toast-close-button-start",
+      "--toast-close-button-end",
+      "--toast-close-button-transform",
+    ]) {
+      expect(src, `${property} still chooses a corner for a badge`).not.toContain(property);
+    }
+  });
+
+  it("states, where the chrome is wired, where the control is drawn", () => {
+    // A reader who changes the wrapper must find the placement note beside it,
+    // not in a review thread.
+    expect(src).toMatch(/close/i);
+    expect(src).toMatch(/globals\.css/);
+  });
+
+  it("is direction-neutral — nothing here reads as physical left or right", () => {
+    // The corner properties this replaces were read by the library as PHYSICAL
+    // left and right, which is why they carried a right-to-left caveat. Flow
+    // order and a logical margin carry none: the pair follows the reading
+    // direction on its own.
+    expect(rule()).not.toMatch(/(^|;)\s*(left|right)\s*:/);
+    const layout = readFileSync(
+      path.join(__dirname, "..", "..", "app", "layout.tsx"),
+      "utf8",
+    );
+    expect(layout).toMatch(/<html\s+lang="en"/);
+  });
+});

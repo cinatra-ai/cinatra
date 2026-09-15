@@ -69,7 +69,7 @@ export {
 const CARD_TITLES: Record<LifecycleDataPartViewType, string> = {
   artifact_review_gate: "Review",
   verification_summary: "Verification",
-  trigger_schedule_proposal: "Schedule proposal",
+  trigger_schedule_proposal: "Schedule",
 };
 
 /**

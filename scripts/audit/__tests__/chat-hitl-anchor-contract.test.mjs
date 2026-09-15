@@ -113,6 +113,9 @@ describe("a changed design pin without a re-ratified anchor digest fails", () =>
           specCommit: movedPin,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          // the fourth input, recorded by the adoption road: a re-ratification
+          // that left it out would produce a digest over three of the four.
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     };
@@ -136,13 +139,21 @@ describe("every digest input is really an input", () => {
   });
 
   // The added cell must be one the contract does NOT already record, or the
-  // clone is byte-identical and the discriminator proves nothing.
-  // `verification_summary` stopped being that example when S9e (cinatra#2789)
-  // landed its run-card and gate-region mounts; `trigger_schedule_proposal`
-  // still reaches the two conversation hosts only.
-  it("a HOST CELL added to the parity row invalidates the digest", () => {
+  // clone is byte-identical and the discriminator proves nothing. The subject
+  // has moved twice for exactly that reason: `verification_summary` stopped
+  // being it when S9e (cinatra#2789) landed its run-card and gate-region
+  // mounts, and `trigger_schedule_proposal` stopped being it when S9d
+  // (cinatra#2788) landed the same two. `recommendation_hold` is what is left —
+  // a typed interrupt with no gate-region cell recorded on any row.
+  it("a HOST CELL CHANGED on the parity row invalidates the digest", () => {
+    // It used to ADD `page_gate_region` to this row, because that cell was the
+    // one `recommendation_hold` did not have. cinatra#2790 (S9f) gave it all
+    // four, so adding is no longer a mutation at all — the assertion would pass
+    // vacuously against an unchanged document. Changing a cell that IS there
+    // exercises the same input by the same path, and cannot go quiet the way an
+    // add did once the row filled up.
     const drifted = clone(contract());
-    drifted.domExpectations.hostParity.trigger_schedule_proposal.hosts.run_card = "composition";
+    drifted.domExpectations.hostParity.recommendation_hold.hosts.chat_thread = "composition";
     expect(
       auditAnchorContract({ anchorContract: drifted, manifest: manifest() }).join("\n"),
     ).toContain("the anchor digest is stale");
@@ -198,6 +209,20 @@ describe("the digest is a digest, not a formatting fingerprint", () => {
     expect(computeAnchorDigest(inputs)).toBe(computeAnchorDigest(clone(inputs)));
   });
 
+  it("the note says how many inputs the digest really has, and names them all", () => {
+    // The note is what a reader consults before touching this file, so a stale
+    // input count there sends them to re-ratify over the wrong inputs. The
+    // definition sentence is held to the shape the engine actually hashes:
+    // once anchorsUnresolvedAtPin is recorded it is an input like the others.
+    const definition = contract().note.slice(0, contract().note.indexOf("Moving the design pin"));
+    const recorded = Array.isArray(contract().anchorsUnresolvedAtPin);
+    expect(definition).toContain(recorded ? "exactly four inputs" : "exactly three inputs");
+    expect(definition).toContain("specCommit");
+    expect(definition).toContain("domExpectations");
+    expect(definition).toContain("chat-hitl-capture-recorder.mjs");
+    if (recorded) expect(definition).toContain("anchorsUnresolvedAtPin");
+  });
+
   it("the recorded digest is the one the inputs really produce", () => {
     expect(contract().digest).toBe(
       computeAnchorDigest(
@@ -205,6 +230,7 @@ describe("the digest is a digest, not a formatting fingerprint", () => {
           specCommit: manifest().specCommit,
           domExpectations: contract().domExpectations,
           captureAnchors: captureAnchorExpectations(),
+          anchorsUnresolvedAtPin: contract().anchorsUnresolvedAtPin,
         }),
       ),
     );
@@ -242,5 +268,65 @@ describe("the entrypoint carries the alarm", () => {
     // the arm is wired in and is not the thing failing today.
     const run = spawnSync(process.execPath, [GATE], { encoding: "utf8" });
     expect(run.stderr).not.toContain("anchor-contract violation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The fifth kind is inside the alarm (cinatra#2930, lifecycle-b W3)
+// ---------------------------------------------------------------------------
+//
+// `agent_hitl_screen` was ruled a kind before it had a card and is drawn now.
+// It is covered here the way the other four are — and the two host cells that
+// have no reachable subject record their REASON where their anchors would be,
+// so making one capturable later, or changing why it is not, moves the digest
+// exactly as renaming an anchor does.
+
+describe("the fifth kind is covered by the same alarm", () => {
+  const KIND = "agent_hitl_screen";
+
+  it("is one of the ruled kinds", () => {
+    expect([...ANCHOR_CONTRACT_KINDS]).toContain(KIND);
+  });
+
+  it("records the anchors a capture of it is graded against, on the hosts it can be photographed on", () => {
+    const anchors = captureAnchorExpectations();
+    expect(anchors.chat_thread[`${KIND}|pending`]).toEqual(
+      expect.arrayContaining([expect.stringContaining('[data-conformance-id="hitl-screen-fields"]')]),
+    );
+    expect(anchors.run_card[`${KIND}|pending`]).toEqual(
+      expect.arrayContaining([expect.stringContaining(`[data-lifecycle-card="${KIND}"]`)]),
+    );
+  });
+
+  it("records the reason where a cell has no reachable subject", () => {
+    const anchors = captureAnchorExpectations();
+    for (const host of ["site_widget", "page_gate_region"]) {
+      for (const state of ["pending", "decided"]) {
+        expect(anchors[host][`${KIND}|${state}`], `${host}|${state}`).toEqual([
+          expect.stringContaining("composition-only"),
+        ]);
+      }
+    }
+  });
+
+  it("a composition-only cell quietly made capturable does NOT stay ratified", () => {
+    const anchors = captureAnchorExpectations();
+    const loosened = JSON.parse(JSON.stringify(anchors));
+    loosened.site_widget[`${KIND}|pending`] = ["[data-conversation-list] frame present  canonical"];
+    const digest = computeAnchorDigest(
+      anchorDigestInputs({
+        specCommit: manifest().specCommit,
+        domExpectations: contract().domExpectations,
+        captureAnchors: loosened,
+      }),
+    );
+    expect(digest).not.toBe(contract().digest);
+  });
+
+  it("the settled reading of this kind is an absence, and the digest carries that", () => {
+    const anchors = captureAnchorExpectations();
+    const decided = anchors.chat_thread[`${KIND}|decided`].join("\n");
+    expect(decided).toContain(`[data-lifecycle-card="${KIND}"] frame absent`);
+    expect(decided).not.toContain(`[data-lifecycle-card="${KIND}"] frame present`);
   });
 });

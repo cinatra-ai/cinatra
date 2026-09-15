@@ -61,6 +61,102 @@ async function defaultHealInstallRecord(input: {
   return healMissingInstallRecord(input);
 }
 
+// ---------------------------------------------------------------------------
+// DECLARED TABLES MUST BE ACTIVATED, SKIP OR NO SKIP (cinatra#3462).
+//
+// A package that declares `cinatra.declaredTables` needs a database role of its
+// own and its declared tables before its first passthrough call. The marketplace
+// install pipeline reaches that activation through the host's migration road;
+// the development boot's git-file import road never did. On a database created
+// from nothing the importer therefore logged "skipped — already up to date"
+// while `pg_roles` held no `ext_` role and no declared table existed, and every
+// run of a table-declaring package died at its first call with
+// `role "ext_<scope>_<pkg>" does not exist`.
+//
+// The template-import skip is about the TEMPLATE ROW and stays exactly as it
+// was. The activation is a different question with a different answer, so it
+// runs BEFORE the version-skip guard, on every branch this loader can take for
+// a checkout it would actually import: first import, re-import and the
+// "already up to date" skip alike.
+//
+// It runs on NO branch this loader REFUSES. The downgrade guard is the one that
+// matters: the host's activation starts from `REVOKE ALL PRIVILEGES ON ALL
+// TABLES` and re-grants only what the CURRENT declaration names, so activating
+// from an older checkout the loader is about to reject would strip the
+// installed newer version's grant on every table the old declaration no longer
+// names. The guard's verdict is therefore resolved BEFORE the activation, not
+// after it (codex convergence round 1).
+//
+// A failure is LOUD. It is logged with the package's name and then rethrown, so
+// the importer never reports "already up to date" for a package whose database
+// role is missing — that false healthy signal is the defect this issue is
+// about. The scan is not broken by it: both callers (the dev boot scan and the
+// hot-reload watcher) already wrap each package's import in its own try/catch
+// and continue with the next one.
+// ---------------------------------------------------------------------------
+
+/** The activation seam — injectable so unit tests drive it without a database. */
+export type DeclaredTablesActivationFn = (input: {
+  packageName: string;
+  /** The package's own manifest directory. */
+  packageDir: string;
+  packageVersion?: string;
+}) => Promise<void>;
+
+async function defaultActivateDeclaredTables(input: {
+  packageName: string;
+  packageDir: string;
+  packageVersion?: string;
+}): Promise<void> {
+  const { ensureExtensionDeclaredTablesFromPackageDir } = await import(
+    "@/lib/extension-migration-host"
+  );
+  const result = await ensureExtensionDeclaredTablesFromPackageDir({
+    packageDir: input.packageDir,
+    packageName: input.packageName,
+  });
+  if (!result.activated) {
+    // The loader only calls this for a package whose manifest DECLARES tables.
+    // `activated: false` means the host road read that same manifest and found
+    // no declaration — a re-read race, or a manifest that changed underneath
+    // the scan. Never report it as a successful activation.
+    throw new Error(
+      `the host declared-tables road found no declaration for ${input.packageName} in ${input.packageDir} ` +
+        `although its manifest declares tables — the manifest changed underneath the import`,
+    );
+  }
+}
+
+/**
+ * Run the declared-tables activation for a package that declares tables. A
+ * package that declares none is a no-op that never resolves the host module.
+ * A failure is logged with the package's name and RETHROWN — see the note above.
+ */
+async function activateDeclaredTablesForPackage(input: {
+  packageName: string;
+  packageDir: string;
+  packageVersion?: string;
+  declaresTables: boolean;
+  activate: DeclaredTablesActivationFn;
+}): Promise<void> {
+  if (!input.declaresTables) return;
+  try {
+    await input.activate({
+      packageName: input.packageName,
+      packageDir: input.packageDir,
+      ...(input.packageVersion !== undefined ? { packageVersion: input.packageVersion } : {}),
+    });
+  } catch (err) {
+    console.warn(
+      `[cinatra:extensions:agent] ${input.packageName} declares tables but the declared-tables ` +
+        `activation failed (${err instanceof Error ? err.message : String(err)}) — its database role ` +
+        `and tables are not in place, so the import is refused rather than reported as up to date ` +
+        `(cinatra#3462)`,
+    );
+    throw err;
+  }
+}
+
 type InstallRecordGateVerdict = {
   /** Re-import at the same version — ONLY after an actual repair. */
   reImport: boolean;
@@ -281,6 +377,8 @@ type SiblingIdentity = {
   type?: string;
   produces?: unknown[];
   lifecycle?: unknown;
+  /** Raw `cinatra.declaredTables` passthrough — see the activation below. */
+  declaredTables?: unknown;
 };
 type SiblingRead =
   | { status: "ok"; identity: SiblingIdentity }
@@ -383,9 +481,28 @@ async function readSiblingPackageJsonIdentity(oasSourcePath: string): Promise<Si
     //     `absent` here would synthesize an authoritative "declares nothing",
     //     which the drift check below would then write over a real declaration
     //     (codex round 0, adopted; same clobber class as the layout probe above).
+    // `cinatra.declaredTables` is the DATABASE declaration (cinatra#3462): the
+    // host — never the extension — mints the extension's database role and
+    // creates the declared tables from it. Read here as a raw passthrough so
+    // the loader knows WHETHER this package declares tables at all; the host
+    // road re-reads and validates the declaration itself.
+    const declaredTables =
+      cinatraBlock?.declaredTables !== undefined && cinatraBlock?.declaredTables !== null
+        ? cinatraBlock.declaredTables
+        : undefined;
     return {
       status: "ok",
-      identity: { name, version, description, license, agentDependencies, type, produces, lifecycle },
+      identity: {
+        name,
+        version,
+        description,
+        license,
+        agentDependencies,
+        type,
+        produces,
+        lifecycle,
+        declaredTables,
+      },
     };
   } catch (err) {
     // A JSON.parse SyntaxError on a manifest we DID read. The file exists and is
@@ -414,6 +531,8 @@ export async function ensureAgentPackageFromGitFile(opts: {
   licenseAcknowledged?: boolean;
   /** Test seam — see `InstallRecordHealFn`. */
   healInstallRecord?: InstallRecordHealFn;
+  /** Test seam — see `DeclaredTablesActivationFn` (cinatra#3462). */
+  activateDeclaredTables?: DeclaredTablesActivationFn;
   /**
    * Resolve the organization that OWNS a template this loader CREATES
    * (cinatra#2619). Returning `null` means "no determinate owner right now" —
@@ -481,9 +600,34 @@ export async function ensureAgentPackageFromGitFile(opts: {
     return { templateId: "", upserted: false, skipped: true };
   }
 
+  // --- The installed row, read ONCE ---
+  // Hoisted above the activation because the DOWNGRADE verdict has to be known
+  // before any database object is touched (see the note above): this read feeds
+  // both the version-skip guard and the downgrade guard below.
+  const existing = await readAgentTemplateByPackageName(packageName);
+  const installedVersionIsNewer =
+    !!existing &&
+    !!packageVersion &&
+    !!existing.packageVersion &&
+    semver.valid(existing.packageVersion) !== null &&
+    semver.valid(packageVersion) !== null &&
+    semver.gt(existing.packageVersion, packageVersion);
+
+  // --- Declared-tables activation (cinatra#3462) ---
+  // Runs HERE, above the version-skip guard, so the package's database role and
+  // declared tables are in place whichever branch the template import takes —
+  // but NEVER for a checkout the downgrade guard below is about to reject,
+  // whose older declaration would strip the installed version's grants.
+  await activateDeclaredTablesForPackage({
+    packageName,
+    packageDir: dirname(siblingManifestPath(opts.oasSourcePath)),
+    ...(packageVersion !== undefined ? { packageVersion } : {}),
+    declaresTables: sibling?.declaredTables !== undefined && !installedVersionIsNewer,
+    activate: opts.activateDeclaredTables ?? defaultActivateDeclaredTables,
+  });
+
   // --- Version-skip guard — same pattern as ensureAgentPackage ---
   // Avoids redundant DB writes on every restart when the version is current.
-  const existing = await readAgentTemplateByPackageName(packageName);
   if (existing && existing.packageVersion === packageVersion) {
     // …but a version match alone is NOT "up to date": the row must also already
     // carry every column this loader DERIVES from the manifest.
@@ -553,14 +697,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // If the DB row holds a version strictly greater than the git-file version,
   // the UI-installed version is preserved. We only run both semver.valid()
   // pre-checks to make the null/invalid-string fallthrough explicit.
-  if (
-    existing &&
-    packageVersion &&
-    existing.packageVersion &&
-    semver.valid(existing.packageVersion) &&
-    semver.valid(packageVersion) &&
-    semver.gt(existing.packageVersion, packageVersion)
-  ) {
+  if (installedVersionIsNewer && existing) {
     console.warn(
       `[cinatra:extensions:agent] ${packageName} skipped — installed v${existing.packageVersion} is newer than git-file v${packageVersion} (UI-installed version preserved)`,
     );

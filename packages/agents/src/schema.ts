@@ -188,6 +188,29 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // outage. A two-valued column with a default would silently claim "no
   // bindings" for every pre-existing row.
   hasArtifactBindings: boolean("has_artifact_bindings"),
+  // artifactBindings: the EXECUTED artifact-binding declaration (cinatra#3208),
+  // JSON-as-text exactly as trigger_mode / gated_steps / lifecycle_config are.
+  // Carries the normalized `outputs[].cinatra.artifact` bindings the compile
+  // that produced THIS template version actually found, together with the typed
+  // `cinatra.produces` refs they were validated against (grammar + serializer:
+  // artifact-binding.ts). Written by every install/recompile writer in the SAME
+  // statement as package_version, so the run-completion materializer's
+  // version-pin guard can trust the two together.
+  //
+  // WHY: until #3208 the materializer re-derived a run's bindings by re-reading
+  // the PACKAGE REGISTRY for the run's (package_name, package_version) pair,
+  // while execution was bound to this immutable template-version snapshot. When
+  // the registry copy of a version diverged from the copy the template was
+  // compiled from, the run was materialized against a declaration it never
+  // executed and failed AFTER all the model work was done. The materializer now
+  // reads THIS column and does not call the registry at all when it resolves.
+  //
+  // NULLABLE, three-valued ON PURPOSE, exactly like has_artifact_bindings: null
+  // means "unknown" — a row compiled before this column existed (no backfill),
+  // or a compile that could not see its sibling package.json (so binding <->
+  // produces parity was never established) — and falls through to the pre-#3208
+  // registry read, preserving that fail-closed posture byte for byte.
+  artifactBindings: text("artifact_bindings"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
@@ -342,6 +365,26 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS
   //   delegated_actor_snapshot text;
   delegatedActorSnapshot: text("delegated_actor_snapshot"),
+  // assignment_scope_snapshot (cinatra#2813 S1, epic #2812): the IMMUTABLE
+  // assignment scopes this run was created under —
+  // {v, orgId, projectId?, teamIds[], originatingHumanUserId?}. Written ONCE
+  // by the store on every creation path and never updated; a run whose scope
+  // could move is a run whose assignments can change under it. NOT the same
+  // thing as delegatedActorSnapshot above (execution identity) and
+  // deliberately not reused for it. NULL for pre-migration rows, which
+  // resolve to workspace + the durable organization and nothing else.
+  // Migration: src/lib/drizzle-store.ts entry + core__0100.
+  assignmentScopeSnapshot: jsonb("assignment_scope_snapshot"),
+  // launch_scope_anchor (cinatra#2809, per-scope surfaces S3, epic #2806): the
+  // IMMUTABLE vantage this run was LAUNCHED from — the closed
+  // LaunchScopeAnchorV1 payload, read only by src/lib/launch-scope-anchor.ts.
+  // It decides the run's ONE canonical address, which is why it must not be
+  // derivable from a column that moves. NULL for a pre-migration row and for
+  // every headless / A2A / global writer, which resolves to unanchored and
+  // stays on the flat bare route. Deliberately NOT the same thing as
+  // assignmentScopeSnapshot above (which scopes assignments, not addresses).
+  // Migration: src/lib/drizzle-store.ts entry + core__0102.
+  launchScopeAnchor: jsonb("launch_scope_anchor"),
   // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
   // creation from the LOCKED template owner anchor + org + project launch, and
   // re-derived + containment-checked at MCP-token mint. NULL only for a corrupt
@@ -380,6 +423,34 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   //   streamed_text precedent; no numbered migration (schema-migration-gate
   //   classifies a new nullable column as additive).
   humanPresent: boolean("human_present"),
+  // ---------------------------------------------------------------------
+  // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a).
+  //
+  // A run RECORDS which lifecycle moment it is waiting at, which card that
+  // moment mounts, and the card's server-checked reference. Written by the
+  // lifecycle coordinator (`lifecycle-coordinator.ts`) and by nothing else —
+  // it is the one module that decides a moment, so it is the one module that
+  // may state one.
+  //
+  // WHY: today a screen re-derives what a run waits for from the SHAPE of its
+  // pause (a `setup-<runId>` task-id prefix, a `fieldName` on an interrupt).
+  // A wait for a setup field and a wait for a review are two different facts,
+  // and they are recorded here as two different facts.
+  //
+  // NULL is the ordinary reading: the run is at no moment (running, finished,
+  // or created before the columns existed). The AUDIT moment is the one that
+  // records WITHOUT parking — the run goes on, and the triple states what was
+  // read.
+  //
+  // Migration: additive nullable columns via src/lib/drizzle-store.ts, which
+  //   spreads `agentRunLifecycleMomentSchemaQueries` from
+  //   `src/lib/agent-run-lifecycle-moment-schema.ts` — the human_present /
+  //   streamed_text precedent; no numbered migration (schema-migration-gate
+  //   classifies new nullable columns and a non-unique index as additive).
+  // ---------------------------------------------------------------------
+  lifecycleMoment: text("lifecycle_moment"),
+  lifecycleCardKind: text("lifecycle_card_kind"),
+  lifecycleCardRef: text("lifecycle_card_ref"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -392,6 +463,14 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   parentRunIdIdx:   index("agent_runs_parent_run_id_idx")
     .on(t.parentRunId)
     .where(sql`parent_run_id IS NOT NULL`),
+  // Partial index — matches the DDL the bootstrap leaf
+  // `agentRunLifecycleMomentSchemaQueries` creates (cinatra#2928). Declared
+  // with the same predicate for the same reason the parent-run index above is:
+  // so drizzle-kit does not diff it against the live database and try to
+  // recreate it as a full index.
+  lifecycleMomentIdx: index("agent_runs_lifecycle_moment_idx")
+    .on(t.lifecycleMoment)
+    .where(sql`lifecycle_moment IS NOT NULL`),
   // Index name MUST match the SQL DDL in src/lib/drizzle-store.ts
   // (`agent_runs_org_id_idx`). Drift causes drizzle-kit introspection to drop
   // and recreate the index.
@@ -993,6 +1072,30 @@ export const runRecommendationSkips = cinatraSchema.table("run_recommendation_sk
   skippedAtIdx: index("run_recommendation_skips_skipped_at_idx").on(t.skippedAt),
 }));
 
+/** DECIDED SCHEMA (cinatra#2906): WHAT A RECOMMENDATION CARD ACTUALLY OFFERED.
+ * One row per (hold, skill), written when the card is drawn and read back by the
+ * confirm through the hold the row already hands back — so a confirmed skill is
+ * pinned to the revision the reader SAW rather than to whatever a fresh scoring
+ * pass would resolve at press time, and the efficacy split describes the set the
+ * reader was really asked about. Carries only the four fields that decide an
+ * outcome; the label/score/feature fields that decide how a chip LOOKED are
+ * deliberately absent, because presentation may never change what a run
+ * executes. FK-less, matching the three siblings above. */
+export const runRecommendationOfferedSet = cinatraSchema.table("run_recommendation_offered_set", {
+  id:              text("id").primaryKey(),
+  runId:           text("run_id").notNull(),
+  holdId:          text("hold_id").notNull(),
+  skillId:         text("skill_id").notNull(),
+  skillRevisionId: text("skill_revision_id").notNull(),
+  recommended:     boolean("recommended").notNull(),
+  offeredRank:     integer("offered_rank").notNull(),
+  offeredAt:       timestamp("offered_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  holdSkillUniq: uniqueIndex("run_recommendation_offered_set_uniq").on(t.holdId, t.skillId),
+  holdIdx:       index("run_recommendation_offered_set_hold_idx").on(t.holdId),
+  runIdx:        index("run_recommendation_offered_set_run_idx").on(t.runId),
+}));
+
 // ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------
@@ -1205,6 +1308,12 @@ export const agentRunTriggers = cinatraSchema.table("agent_run_triggers", {
   timezone:       text("timezone").notNull().default("UTC"),
   enabled:        boolean("enabled").notNull().default(true),
   releasedAt:     timestamp("released_at", { withTimezone: true }),
+  // cinatra#2972 — the recurring schedule's "has fired once" stamp. See the
+  // DDL leaf (src/lib/trigger-schema.ts) for why it is not `released_at`.
+  lastFiredAt:    timestamp("last_fired_at", { withTimezone: true }),
+  // cinatra#2972 — the stamp **Cancel schedule** writes. Deliberately not
+  // `enabled`, which the trigger MCP tool already writes for other reasons.
+  stoppedAt:      timestamp("stopped_at", { withTimezone: true }),
   jobSchedulerId: text("job_scheduler_id"),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

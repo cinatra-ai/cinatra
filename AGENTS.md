@@ -85,6 +85,8 @@ surface. Grouped overview:
   `design` (tokens, fonts, brand assets), `artifacts` (binary artifact storage
   contracts), `errors` (Sentry helpers), and `cli` (the `cinatra` command-line
   tool for setup and operations).
+- **Memory** — `memory` (the filesystem side of agent-authored memory: an
+  OKF 0.1 bundle library and the local `memory` CLI, pure and offline).
 
 ## Architecture at a glance
 
@@ -109,6 +111,67 @@ surface. Grouped overview:
   `src/lib/database.ts`). Authentication is handled by Better Auth
   (`src/lib/auth.ts`); the first user to register becomes the platform admin.
 
+## Memory conventions
+
+Everything between the markers below is generated from
+`docs/internals/workflows/memory-conventions.md` and must not be edited here.
+Regenerate it with `MEMORY_SEED_WRITE=1 pnpm --filter @cinatra-ai/memory test`.
+
+<!-- memory-conventions:begin -->
+> When your host has given you a Memory bundle, you have persistent memory:
+> read its `index.md` first, and recall from the bundle before you act. A
+> repository bundle sits at `.memory/`, and `--dir <bundle-dir>` reaches one
+> that lives elsewhere. Write one concept file per durable insight, and read
+> the memory conventions before your first write. Where no bundle is present
+> yet, `memory init` creates one, and these conventions govern it from its
+> first concept.
+
+The conventions behind that pointer have exactly one authority. This block
+carries the pointer and routes for the rest. In a Cinatra checkout, read
+`docs/internals/workflows/memory-conventions.md`. It covers what qualifies as a
+concept, one concept per insight, the frontmatter `type` choice, the duplicate
+check against `index.md`, the credential prohibition, and recall before acting.
+
+The same rules ship as concepts in the seed bundle
+`packages/memory/seed/conventions`, so an agent with no checkout reads them
+through the CLI instead: `memory list --dir <seed-bundle>` and
+`memory recall --dir <seed-bundle> <query>`.
+
+The command surface comes from the `@cinatra-ai/memory` workspace package. No
+subcommand makes a model call. Every subcommand except `sync` is also local and
+offline; `sync` is the one that talks to a Cinatra server.
+
+| Command | Use it for |
+|---------|------------|
+| `memory init` | Create a bundle and its stable identity. |
+| `memory add --type <kind> --title <t>` | Author one concept. |
+| `memory list [--type <kind>] [--json]` | See what the bundle already holds. |
+| `memory recall <query> [--json]` | Lexical search before you act or write. |
+| `memory check [--json]` | Conformance diagnostics; non-zero on an error. |
+| `memory sync [--dry-run] [--json]` | Push the bundle into shared memory. |
+
+Every subcommand takes `--dir <bundle-dir>`. Omit it to use the nearest
+`.memory/bundle.yaml` at or above the working directory.
+
+`memory sync` is one-way. It writes local concepts into shared memory and never
+edits a concept file or `bundle.yaml`, never deletes a remote row, and never
+narrows one. Run `memory sync --dry-run` first: it prints the create / update /
+skip decision for every concept and writes nothing. The endpoint comes from
+`--url` or `CINATRA_MCP_URL` and must be `https` unless it is a loopback host;
+the credential comes from `CINATRA_MCP_TOKEN` only, so it never reaches your
+shell history. The server re-derives every rule for itself, so a concept it
+refuses is refused for a reason your bundle cannot override.
+
+A sync run that wrote something leaves one file behind: `sync-ledger.json` at
+the bundle root. It records the object id and content digest of what the last
+run pushed, which is how a later run reports a row that drifted since. **Do not
+commit it.** It is a per-checkout cache, the object ids in it are minted per
+organization by whichever server answered, and nothing reads it as authority —
+the preflight decides what to write, and the ledger only reports disagreement.
+`memory init` writes a `.gitignore` next to it that already excludes it; a
+bundle created before that line needs the entry added by hand.
+<!-- memory-conventions:end -->
+
 ## Local development
 
 Prerequisites: **Node.js 24.x**, **pnpm** (pinned in the repo — use
@@ -125,6 +188,15 @@ make dev      # bring up infrastructure and start the Next.js dev server
 Open <http://localhost:3000>. Other useful `make` targets: `make down` (stop
 services, keep data), `make reset` (soft reset of app/auth data), `make logs`,
 and `make clean` (wipe Docker volumes).
+
+**Nothing to clean up after a dev session or a lane.** No provider credential is
+ever written to this checkout: the knowledge-graph indexer receives its key
+through the environment of the `docker compose` command that creates it
+(`npm run kg:up`, which `make dev` and `npm run services` end with), so
+`docker/graphiti/.graphiti.env` is **never present** and no file under `docker/`
+may contain a key-shaped value. A leftover from the old road is deleted on every
+generator run and announced. See
+[`docs/internals/contracts/no-provider-key-at-rest.md`](docs/internals/contracts/no-provider-key-at-rest.md).
 
 ### Validation
 

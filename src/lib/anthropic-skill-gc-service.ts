@@ -7,7 +7,6 @@ import {
   type GcResult,
 } from "@cinatra-ai/llm";
 
-import { readAnthropicConnectionFromDatabase } from "@/lib/database";
 import { readAnthropicSkillSyncEnabledFromDatabase } from "@/lib/database";
 import {
   listAllSyncRows,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/anthropic-skill-lease-dao";
 import {
   deriveApiKeyFingerprint,
+  resolveConfiguredAnthropicApiKey,
   deriveEnvironmentNamespace,
   ANTHROPIC_SKILL_LEASE_TTL_MS,
 } from "@/lib/anthropic-skill-sync-service";
@@ -96,7 +96,7 @@ export async function reclaimStaleAnthropicSkills(): Promise<AppGcResult> {
     return { ok: true, reclaimed: [], skipped: [], errors: [] };
   }
 
-  const fp = deriveApiKeyFingerprint();
+  const fp = await deriveApiKeyFingerprint();
   if (!fp) {
     // No Anthropic key ⇒ nothing remote to reclaim.
     return { ok: true, reclaimed: [], skipped: [], errors: [] };
@@ -118,9 +118,11 @@ export async function reclaimStaleAnthropicSkills(): Promise<AppGcResult> {
   // Re-read the key HERE because deriveApiKeyFingerprint read it separately;
   // it may have been blanked/removed between the two reads. An absent key ⇒
   // fail closed BEFORE constructing the client or entering the engine: no
-  // remote DELETE attempts with an empty key.
-  const conn = readAnthropicConnectionFromDatabase();
-  const apiKey = typeof conn?.apiKey === "string" ? conn.apiKey.trim() : "";
+  // remote DELETE attempts with an empty key. Both reads go through the
+  // connector's registered surface (cinatra#3202) — reading the legacy
+  // connector-config row directly made this path silently inert for every key
+  // the connection service holds.
+  const apiKey = await resolveConfiguredAnthropicApiKey();
   if (!apiKey) {
     return { ok: true, reclaimed: [], skipped: [], errors: [] };
   }

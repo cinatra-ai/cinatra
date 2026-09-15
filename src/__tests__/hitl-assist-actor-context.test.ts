@@ -20,11 +20,15 @@ const {
   orchestrateGenerateMock,
   readAgentTemplateByIdMock,
   requireAdminSessionMock,
+  getAuthSessionMock,
+  resolveActorGrantsForUserInOrgMock,
   buildActorContextMock,
 } = vi.hoisted(() => ({
   orchestrateGenerateMock: vi.fn(),
   readAgentTemplateByIdMock: vi.fn(),
   requireAdminSessionMock: vi.fn(),
+  getAuthSessionMock: vi.fn(),
+  resolveActorGrantsForUserInOrgMock: vi.fn(),
   buildActorContextMock: vi.fn(),
 }));
 
@@ -39,6 +43,18 @@ vi.mock("@cinatra/agent-builder", () => ({
 }));
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: requireAdminSessionMock,
+  // cinatra#2933 (W5b): the route now authenticates via getAuthSession()
+  // before it decides between the admin path and the run's own access, so
+  // the route calls it directly. Separately, the module graph reached by
+  // importing the route (route -> canRespondInRunWindow in run-window-turn.ts
+  // -> resolveBoundTurnActor in bound-turn-actor.ts) reads
+  // resolveActorGrantsForUserInOrg off this SAME mocked module at
+  // bound-turn-actor.ts's top level (its DEFAULT_PORTS object), so the export
+  // has to exist there too or the file fails to load before any test runs —
+  // even though neither test below sends a runId, so canRespondInRunWindow
+  // (and this function) is never actually invoked at runtime here.
+  getAuthSession: getAuthSessionMock,
+  resolveActorGrantsForUserInOrg: resolveActorGrantsForUserInOrgMock,
 }));
 vi.mock("@/lib/authz/enforce", () => ({
   buildActorContext: buildActorContextMock,
@@ -62,9 +78,21 @@ describe("POST /api/agents/builder/[templateId]/hitl-assist actorContext gate", 
     orchestrateGenerateMock.mockReset();
     readAgentTemplateByIdMock.mockReset();
     requireAdminSessionMock.mockReset();
+    getAuthSessionMock.mockReset();
+    resolveActorGrantsForUserInOrgMock.mockReset();
     buildActorContextMock.mockReset();
 
     requireAdminSessionMock.mockResolvedValue(FAKE_SESSION);
+    // Step 1 of the route (authenticate) reads getAuthSession() before either
+    // request body below is parsed. Neither carries a runId, so this only has
+    // to clear the route's own `!plain?.user?.id` 401 gate — same session
+    // shape requireAdminSession already resolves for these tests.
+    getAuthSessionMock.mockResolvedValue(FAKE_SESSION);
+    // Not called by either test in this file (no runId => the run-window
+    // access path is never reached), but must resolve to a well-typed
+    // ResolvedActorGrants shape rather than being left undefined, in case
+    // that ever changes.
+    resolveActorGrantsForUserInOrgMock.mockResolvedValue({ projectGrants: [], teamIds: [] });
     buildActorContextMock.mockReturnValue(FAKE_ACTOR_CONTEXT);
     readAgentTemplateByIdMock.mockResolvedValue({
       id: "tpl-1",

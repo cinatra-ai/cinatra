@@ -160,7 +160,14 @@ describe("assertValuesMatchDeclaredObjectTypes", () => {
     const call = src.indexOf("assertValuesMatchDeclaredObjectTypes(");
     expect(call, "the setup loop must call the shared guard").toBeGreaterThan(-1);
     // The call sits inside a try whose catch transitions the run to "failed".
-    const window = src.slice(call - 400, call + 900);
+    // That try now holds TWO pre-dispatch guards — this one and the
+    // satisfiability guard (`assertUnsatisfiableHiddenInputs`, cinatra#3003) —
+    // and BOTH land the run through the same catch, so the window has to reach
+    // past the second call to see it.
+    const window = src.slice(call - 400, call + 1800);
+    // AWAITED, not merely called: an async guard whose promise is dropped would
+    // let dispatch proceed while the rejection escapes the try entirely.
+    expect(window).toMatch(/await\s+assertUnsatisfiableHiddenInputs\(/);
     expect(window).toMatch(/try\s*\{/);
     expect(window).toMatch(/transitionRunStatus\(\s*runId,\s*"queued",\s*"failed"/);
     expect(window).toMatch(/Run cannot start/);
@@ -246,7 +253,11 @@ describe("approve-time resolution failure is non-fatal (cinatra#2484, codex roun
     const window = src.slice(call - 600, call + 600);
     expect(window).toMatch(/try\s*\{/);
     expect(window).toMatch(/catch\s*\(/);
-    // Degrades to "no properties" => validation skipped, approval proceeds.
-    expect(window).toMatch(/declaredPropertiesCache = null/);
+    // Degrades to "no schema" => validation skipped, approval proceeds.
+    // (cinatra#3452: one resolve now answers both readings this path takes —
+    // the declared properties for the type gate and the declared `required`
+    // list for the optional/required split — so the cache it degrades to null
+    // is the resolved SCHEMA, not the properties map alone.)
+    expect(window).toMatch(/resolvedSchemaCache = null/);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * Unit tests for the PURE artifact-review surface model (cinatra#1795 S12 item 4;
- * spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891). Proves the §III provenance mapping, the §V permission
+ * spec design@0c484154b069c6369a33c1375056126289888997). Proves the §III provenance mapping, the §V permission
  * copy, and — the load-bearing rule — the FAIL-CLOSED submit-result → outcome
  * mapping (§IV: a fingerprint conflict / settled gate is a BLOCK, never a silent
  * success). No React / DB — every seam is plain data.
@@ -21,11 +21,18 @@ import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
-  reviewTypeLabel,
+  reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
+const form: ReviewTargetMount = {
+  kind: "form",
+  slot: "detail",
+  arm: "first-party",
+  form: "markdown",
+};
 
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
@@ -48,26 +55,49 @@ const floor: ReviewTargetMount = {
   reason: "requires-rebuild",
 };
 
-describe("§III — provenance conformance id from the OPAQUE mount kind", () => {
-  it("build-map → native, runtime → marketplace, floor → generic-floor anchor", () => {
-    expect(reviewProvenanceConformanceId(buildMap)).toBe("review-provenance-native");
-    expect(reviewProvenanceConformanceId(runtime)).toBe("review-provenance-marketplace");
+describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
+  // THE DRAWING FORBIDS A PROVENANCE REGION ON A RENDERED TARGET (§V of the
+  // ratified artifact-review drawing, read at its default branch): "It is not
+  // put on screen: a display shows the work and nothing about itself — no
+  // renderer name, no package identity, no provenance line — because the reader
+  // is deciding on the work, not on what drew it", and a build-time renderer and
+  // a runtime one "are drawn the same way, because nothing on either target says
+  // which resolved it". The lifecycle-cards drawing §III says the same in its own
+  // words: "no chip, no package identity, no provenance line".
+  //
+  // ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor,
+  // and only because a reader must be told a render failed."
+  it("build-map and runtime carry NO region; only a floor keeps its anchor", () => {
+    expect(reviewProvenanceConformanceId(buildMap)).toBeNull();
+    expect(reviewProvenanceConformanceId(runtime)).toBeNull();
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
   });
 
-  it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
-    expect(reviewProvenanceLabel(buildMap).kind).toBe("build-time");
-    expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
-    expect(reviewProvenanceLabel(floor).kind).toBe("floor");
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
+  // markdown / plain-text rendering carries NO label above the reviewed work.
+  // §V of the pinned review spec draws a provenance strip for the two renderer
+  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
+  // none of those three, and it is not given a fourth strip — it is given none.
+  // The reviewer sees the draft, and nothing above the draft.
+  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
+    expect(reviewProvenanceConformanceId(form)).toBeNull();
+  });
+
+  it("only a floor has a label to print — a rendered target names nothing", () => {
+    expect(reviewProvenanceLabel(buildMap)).toBeNull();
+    expect(reviewProvenanceLabel(runtime)).toBeNull();
+    expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
+  });
+
+  it("the form rung has no provenance label to print", () => {
+    expect(reviewProvenanceLabel(form)).toBeNull();
   });
 });
 
 describe("§II — the immutable header projections", () => {
-  it("prettifies an object-type id into a short type label", () => {
-    expect(reviewTypeLabel("@cinatra-ai/email:draft")).toBe("Email");
-    expect(reviewTypeLabel("@acme/support-desk:case")).toBe("Support Desk");
-    expect(reviewTypeLabel("plain")).toBe("Plain");
-  });
+  // The header's type tag is no longer this model's own projection: it reads
+  // the ONE declared-first kind label (`artifact-kind-label.test.ts`), so the
+  // review line and the artifact page header word a pack identically.
 
   it("truncates a long revision id for display, preserving the exact id", () => {
     const m = reviewRevisionMarker("rev_0123456789abcdef");
@@ -319,5 +349,91 @@ describe("the settled copy names the outcome and its decider", () => {
       expect(reviewSettledCopy(outcome).body).not.toBe(generic.body);
     }
     expect(generic.title).toBe("This review is no longer open");
+  });
+});
+
+describe("reviewTargetRowFacts — the header meta line's read-only row facts", () => {
+  // THE DRAWING DRAWS THE PAIR BARE. §IV names the facts — "the read-only row
+  // facts the host authorized — owner level / visibility, MIME, and updated
+  // time" — and every example line in the ratified drawings prints them with no
+  // label at all: "… · Team · Private · text/html · updated 8 min ago" (§IV, and
+  // the same line again in §V.1's read-only review target). The labelled form
+  // shipped here was a local reading of a plan sentence; the drawing decides, so
+  // the labels go and both facts stay.
+  it("prints the two scope facts BARE, in the drawing's order", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
+    const line = facts.join(" · ");
+    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    expect(line).not.toContain("Ownership:");
+    expect(line).not.toContain("Visibility:");
+  });
+
+  it("keeps BOTH facts, in the order the drawing draws them", () => {
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      new Date("2026-08-31T08:27:26.458Z"),
+    );
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+  });
+
+  // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
+  // time on the header's mono line ("… · text/html · updated 8 min ago"); the
+  // line printed the raw ISO timestamp the row carries instead.
+  it("draws a relative updated time, never the raw ISO timestamp (the drawing: \u201cupdated 8 min ago\u201d)", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "organization",
+        visibility: "organization",
+        mime: "text/markdown",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
+  });
+
+  it("the bare scope pair and the relative time stand on the same line", () => {
+    const now = new Date("2026-08-31T08:27:26.458Z");
+    const facts = reviewTargetRowFacts(
+      {
+        ownerLevel: "team",
+        visibility: "private",
+        mime: "text/html",
+        updatedAt: "2026-08-31T08:19:26.458Z",
+      },
+      now,
+    );
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+  });
+
+  it("falls back to the value it was handed when that value is not a readable instant", () => {
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "user",
+      visibility: "private",
+      mime: "text/plain",
+      updatedAt: "not-an-instant",
+    });
+    expect(facts[3]).toBe("updated not-an-instant");
+  });
+
+  it("carries no type keying — every artifact type reads the same line", () => {
+    const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
+    const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
+    expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
   });
 });

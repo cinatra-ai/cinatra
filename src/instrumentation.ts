@@ -21,6 +21,30 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // The local-operator boot hook runs FIRST, before anything can serve a
+    // request: it installs the connection capture that lets a route handler
+    // read the CONNECTING SOCKET's peer address, and mints this boot's local
+    // credential (0600, in the instance data directory). Both are no-ops in a
+    // production build and the credential is minted only under the explicit
+    // development opt-in. See packages/mcp-server/src/dev-admin-bypass.ts.
+    const { installLocalConnectionCapture } = await import(
+      "@cinatra-ai/mcp-server/local-connection"
+    );
+    installLocalConnectionCapture();
+    const { mintDevLocalToken } = await import(
+      "@cinatra-ai/mcp-server/dev-local-token"
+    );
+    mintDevLocalToken();
+    // With both facts established, the ONE request-level composition goes
+    // behind the transport's port. The MCP transport reads the port instead of
+    // importing the composition, so the file reader and the connection capture
+    // above stay on this boot graph and out of every route graph that imports
+    // the MCP package for unrelated reasons. The `/api/cli/*` guard calls the
+    // same composition directly.
+    const { installDevAdminBypassRequestPort } = await import(
+      "@cinatra-ai/mcp-server/dev-admin-bypass-request"
+    );
+    installDevAdminBypassRequestPort();
     const { register: registerNode } = await import("./instrumentation.node");
     await registerNode();
   }

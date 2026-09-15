@@ -73,6 +73,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: { id: "session-user-1" },
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest(),
       env: { A2A_DEV_BYPASS: "true" },
       isLocalhost: true,
@@ -91,6 +92,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: "client-xyz",
+      bearerSignatureVerified: true,
       request: makeRequest(),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -118,6 +120,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: "client-exmember",
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -134,6 +137,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: "client-dberr",
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -148,6 +152,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: "client-orgless",
+      bearerSignatureVerified: true,
       request: makeRequest(),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -165,6 +170,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest(),
       env: { A2A_DEV_BYPASS: "true" },
       isLocalhost: true,
@@ -179,6 +185,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: "client-revoked",
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -193,6 +200,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "true" },
       isLocalhost: false, // not localhost — fallback must NOT fire
@@ -208,6 +216,7 @@ describe("resolveActorIdentity composition", () => {
     const identity = await resolveActorIdentity({
       sessionUser: undefined,
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest(),
       env: { A2A_DEV_BYPASS: "true" },
       isLocalhost: true,
@@ -229,6 +238,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: "human-oauth-client", // azp — must NOT drive resolution
       authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -258,6 +268,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: undefined,
       authHeader: humanBearer("human-nomember"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -280,6 +291,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: undefined,
       authHeader: humanBearer("human-multi"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -297,6 +309,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: undefined,
       authHeader: humanBearer("human-dberr"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -320,6 +333,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: "forged-nonexistent-user", // decodeJwtClientId's sub fallback
       authHeader: humanBearer("forged-nonexistent-user"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -343,6 +357,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: undefined,
       authHeader: humanBearer("human-existence-dberr"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -363,6 +378,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: "machine-client", // azp of a real service account
       authHeader: humanBearer("forged-sub", "machine-client"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -385,6 +401,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: "human-oauth-client", // the azp — a valid client id
       authHeader: humanBearer("human-both", "human-oauth-client"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -403,6 +420,7 @@ describe("resolveActorIdentity composition", () => {
       sessionUser: undefined,
       requestClientId: "machine-client",
       authHeader: bearerWithClaims({ azp: "machine-client", scope: "mcp" }),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       env: { A2A_DEV_BYPASS: "false" },
       isLocalhost: false,
@@ -661,6 +679,7 @@ describe("composeBearerActorContext", () => {
       trustedDevAdminUserId: null,
       sessionUser: undefined,
       requestClientId: "client-xyz",
+      bearerSignatureVerified: true,
       request: makeRequest(),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -681,6 +700,7 @@ describe("composeBearerActorContext", () => {
       trustedDevAdminUserId: "dev-admin",
       sessionUser: undefined,
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest(),
       a2aDevBypass: "true",
       isLocalhost: true,
@@ -701,6 +721,7 @@ describe("composeBearerActorContext", () => {
       trustedDevAdminUserId: null,
       sessionUser: undefined,
       requestClientId: "client-xyz",
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -721,6 +742,7 @@ describe("composeBearerActorContext", () => {
       trustedDevAdminUserId: null,
       sessionUser: undefined,
       requestClientId: "client-xyz",
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -739,6 +761,7 @@ describe("composeBearerActorContext", () => {
       trustedDevAdminUserId: null,
       sessionUser: undefined,
       requestClientId: undefined,
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       a2aDevBypass: "true",
       isLocalhost: false, // not localhost — dev fallback must not fire
@@ -761,6 +784,7 @@ describe("composeBearerActorContext", () => {
       sessionUser: undefined,
       requestClientId: "human-oauth-client",
       authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -781,6 +805,7 @@ describe("composeBearerActorContext", () => {
       sessionUser: undefined,
       requestClientId: "human-oauth-client",
       authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: true,
       request: makeRequest("example.com"),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -801,6 +826,7 @@ describe("composeBearerActorContext", () => {
       sessionUser: undefined,
       requestClientId: undefined,
       authHeader: null,
+      bearerSignatureVerified: true,
       request: makeRequest(),
       a2aDevBypass: "false",
       isLocalhost: false,
@@ -808,6 +834,114 @@ describe("composeBearerActorContext", () => {
       pool: { query: queryMock as never },
     });
     expect(ctx).toEqual({ resolvedUserId: "human-chat-user", resolvedOrgId: "obo-org" });
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AN UNVERIFIED TOKEN NAMES NOBODY
+//
+// `decodeBearerSub` reads the payload without checking the signature, and the
+// OAuth verify is SKIPPED entirely on the development admin-bypass path. On
+// that path the Authorization header is just a string the caller typed, so
+// every header-derived identity arm must stay shut and the caller must remain
+// the anonymous local operator — never an existing user.
+// ---------------------------------------------------------------------------
+describe("unverified Authorization header composes no identity", () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+  });
+
+  it("ignores the sub of an unverified token, even when it names a REAL user", async () => {
+    // The gate would say yes if it were consulted — it must not be consulted.
+    queryMock.mockResolvedValue({ rows: [{ one: 1 }] });
+    const readServiceAccount = vi.fn(async () => null);
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: false,
+      request: makeRequest(),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: true,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: null, orgId: null });
+    // No user-existence probe, no membership probe: the arm never ran.
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(readServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("ignores the client id of an unverified token, even when it names a REAL service account", async () => {
+    const readServiceAccount = vi.fn(async () => ({
+      userId: "sa-creator",
+      organizationId: "org-sa",
+    }));
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: "machine-client",
+      authHeader: bearerWithClaims({ azp: "machine-client", scope: "mcp" }),
+      bearerSignatureVerified: false,
+      request: makeRequest(),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: true,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: null, orgId: null });
+    expect(readServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("the SAME token composes an identity once its signature is verified", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ one: 1 }] }); // user exists
+    queryMock.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: true,
+      request: makeRequest(),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: true,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: "human-user-1", orgId: "org-solo" });
+  });
+
+  it("a cookie session still wins on the bypass path (an unverified header changes nothing there)", async () => {
+    const identity = await resolveActorIdentity({
+      sessionUser: { id: "cookie-user" },
+      requestClientId: "machine-client",
+      authHeader: humanBearer("someone-else"),
+      bearerSignatureVerified: false,
+      request: makeRequest(),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: true,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: "cookie-user", orgId: null });
+  });
+
+  it("composeBearerActorContext yields no user and no org for an unverified header", async () => {
+    queryMock.mockResolvedValue({ rows: [{ one: 1 }] });
+    const ctx = await composeBearerActorContext({
+      currentOrgId: null,
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "human-oauth-client",
+      authHeader: humanBearer("human-user-1"),
+      bearerSignatureVerified: false,
+      request: makeRequest(),
+      a2aDevBypass: "false",
+      isLocalhost: true,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: null, resolvedOrgId: null });
     expect(queryMock).not.toHaveBeenCalled();
   });
 });

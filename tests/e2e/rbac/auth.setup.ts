@@ -16,6 +16,8 @@ import { resolve, dirname } from "node:path";
 import { Client } from "pg";
 import { test as setup, expect } from "@playwright/test";
 
+import { openRegistrationForFixtures } from "../open-registration";
+
 function readEnvLocal(): Record<string, string> {
   try {
     const raw = readFileSync(resolve(process.cwd(), ".env.local"), "utf-8");
@@ -111,6 +113,11 @@ setup("create member + project + customer fixtures + save session", async ({ req
   // then the member sign-up + sign-in, so the saved storageState carries the
   // MEMBER session (the customer setup signs the customer in fresh in its own
   // context).
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
+
   await request.post("/api/auth/sign-up/email", {
     data: { email: CUSTOMER_EMAIL, password: CUSTOMER_PASSWORD, name: "RBAC Customer UAT" },
     headers,

@@ -72,6 +72,17 @@ export default defineConfig({
         root,
         "packages/agents/src/lifecycle-card-runtime.tsx",
       ),
+      // cinatra#2790 (epic #2784 S9f) — the recommendation card, mounted at the
+      // `agent_run` slot by the shared conversation column on a host whose run
+      // card cannot carry it. Subpath keys precede the bare package key below.
+      "@cinatra-ai/agents/run-recommendation-chip-row": path.join(
+        root,
+        "packages/agents/src/run-recommendation-chip-row.tsx",
+      ),
+      "@cinatra-ai/agents/recommendation-hold": path.join(
+        root,
+        "packages/agents/src/recommendation-hold.ts",
+      ),
       "@cinatra-ai/agents/review-gate-card": path.join(
         root,
         "packages/agents/src/review-gate-card.tsx",
@@ -82,11 +93,27 @@ export default defineConfig({
         root,
         "packages/agents/src/run-recommendation-chip-row.tsx",
       ),
+      // cinatra#2930 — the HITL screen card, mounted by the message list on the
+      // conversation hosts. Subpath alias, so it stays above the bare entry.
+      "@cinatra-ai/agents/agent-hitl-screen-card": path.join(
+        root,
+        "packages/agents/src/agent-hitl-screen-card.tsx",
+      ),
+      "@cinatra-ai/agents/agent-hitl-screen": path.join(
+        root,
+        "packages/agents/src/agent-hitl-screen.ts",
+      ),
       // cinatra#2789 — §VII's ONE audit renderer, dispatched by the registry
       // under test. Subpath alias, so it stays above the bare-package entry.
       "@cinatra-ai/agents/verification-summary-card": path.join(
         root,
         "packages/agents/src/verification-summary-card.tsx",
+      ),
+      // cinatra#2788 — the registry now dispatches the schedule kind to its own
+      // drawn card, so the column's DOM tests have to resolve it too.
+      "@cinatra-ai/agents/schedule-proposal-card": path.join(
+        root,
+        "packages/agents/src/schedule-proposal-card.tsx",
       ),
       // cinatra#2683 — the conversation column mounts the REAL message list in
       // a DOM test, so the leaves that list reaches must resolve here as they do
@@ -98,6 +125,14 @@ export default defineConfig({
       "@cinatra-ai/agents/llm-provider-policy": path.join(
         root,
         "packages/agents/src/llm-provider-policy.ts",
+      ),
+      // cinatra#3044 — the zero-dependency run-status leaf: the message list
+      // reads the ONE wording a start answers with from it, so the turn's
+      // sentence and the card beneath it cannot disagree. Subpath key, so it
+      // stays above the bare entry.
+      "@cinatra-ai/agents/run-status": path.join(
+        root,
+        "packages/agents/src/run-status.ts",
       ),
       "@cinatra-ai/agents": path.join(
         root,
@@ -156,6 +191,12 @@ export default defineConfig({
     },
   },
   test: {
+    // The wholesale package suite runs on the same constrained self-hosted
+    // runner as the root suite and hits the same starvation under load —
+    // imports and hooks alone can cross vitest's 5s/10s defaults. Give
+    // tests and hooks the same 30s headroom as the root suite.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     environment: "node",
     include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"],
     // @ts-ignore — environmentMatchGlobs is a valid vitest option but missing from InlineConfig types

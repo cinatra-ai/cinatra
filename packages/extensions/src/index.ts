@@ -16,6 +16,10 @@ import type {
   Actor,
 } from "@cinatra-ai/extension-types";
 
+// cinatra#3204 D2 — the EXPLICIT source discriminant (the dependency-inversion
+// leaf owns the one grammar; see resolveRefSourceRoad below).
+import { isSuppliedPackageProvenance } from "@cinatra-ai/extension-types";
+
 // ---------------------------------------------------------------------------
 // DanglingReferences type (re-exported from audit-log)
 // ---------------------------------------------------------------------------
@@ -732,24 +736,91 @@ type CanonicalInstallEnsure = {
   ownsRollback: boolean;
 };
 
-// A github/local-sourced install (today: a GitHub or local skill ref) is NOT
-// driven by the host's real-integrity verdaccio pipeline — the per-kind handler
-// resolves + persists it from its `ref` source. The dispatcher must NOT create a
-// `source.type:"verdaccio"`, `integrity:"dispatcher-install"` placeholder
-// canonical row for such an install: that row would never be
-// finalized by the pipeline (which only runs for verdaccio sources) and would be
-// left active-but-non-anchorable forever, breaking the github/local carve-out.
+// ---------------------------------------------------------------------------
+// WHERE DID THIS PACKAGE COME FROM? (cinatra#3204 D2)
 //
-// Discriminator mirrors `resolveSkillPackageSource`'s `isVerdaccioPackageRef`:
-// a verdaccio target carries an `@<scope>/<pkg>` name OR an explicit version; a
-// github/local target is a bare `owner/repo` with no version. Agents / connectors
-// / workflows / artifacts are always verdaccio-backed, so they classify verdaccio
-// here (scoped name + version), and the carve-out only ever fires for the
-// github/local skill path it is meant for.
-function isVerdaccioBackedRef(ref: PackageRef): boolean {
+// Three answers, and the dispatcher routes on which one it gets:
+//
+//   "registry"  — a published package. The real-integrity pipeline drives it and
+//                 the canonical row records verdaccio provenance.
+//   "supplied"  — a package the OPERATOR supplied (a file, or a repository),
+//                 carrying the content digest over the delivered tree. The
+//                 pipeline drives it too, through the host's supplied entry, and
+//                 the canonical row records LOCAL or GITHUB provenance with that
+//                 digest. It is never dressed up as a registry row.
+//   "handler-owned" — the legacy carve-out: a ref that declares NO provenance and
+//                 whose NAME does not look registry-backed. The per-kind handler
+//                 resolves and persists it, exactly as before; no canonical row,
+//                 no pipeline, no rollback.
+//
+// The carve-out used to be the ONLY non-registry answer, and it was decided by a
+// name-shape guess (`@scope/pkg` or a version present ⇒ registry). That guess
+// reads how a package is NAMED, not where it came from, so a scoped package
+// supplied as a file — or any supplied ref carrying a version — was classified
+// registry-backed and driven down a road it did not come from. `ref.provenance`
+// is the discriminator now; the guess survives ONLY for refs that declare
+// nothing, where its behaviour is unchanged byte for byte.
+// ---------------------------------------------------------------------------
+type RefSourceRoad = "registry" | "supplied" | "handler-owned";
+
+/**
+ * LEGACY name-shape guess. Consulted ONLY when a ref declares no provenance.
+ * Agents / connectors / artifacts are always published, so they classify
+ * registry here (scoped name + version) and the carve-out keeps firing only for
+ * the github/local skill path it was written for.
+ */
+function guessRegistryBackedFromName(ref: PackageRef): boolean {
   if (typeof ref.packageName === "string" && ref.packageName.startsWith("@")) return true;
   if (typeof ref.version === "string" && ref.version.length > 0) return true;
   return false;
+}
+
+/** The road a ref takes, from DECLARED provenance first and the name only after. */
+function resolveRefSourceRoad(ref: PackageRef): RefSourceRoad {
+  const declared = ref.provenance;
+  if (declared) {
+    if (declared.type === "verdaccio") return "registry";
+    // A supplied source is only a supplied ROAD when its provenance is complete
+    // — the content digest included. Without a checkable digest there is nothing
+    // for the supplied entry to verify against, so the ref falls back to the
+    // legacy classification rather than entering the pipeline on an unverifiable
+    // claim. Fail closed: a malformed declaration never widens anything.
+    if (isSuppliedPackageProvenance(declared)) return "supplied";
+  }
+  return guessRegistryBackedFromName(ref) ? "registry" : "handler-owned";
+}
+
+/**
+ * The canonical `source` a SUPPLIED ref's row records — honest provenance, with
+ * the content digest — or null for every other road (which keeps the registry
+ * shape below).
+ *
+ * `resolvedCommitOrTreeHash` is required by the local source shape and is a
+ * REVISION identifier, so it is filled from the snapshot's own revision when the
+ * caller had one and otherwise from the content digest: a supplied file that
+ * never lived in Git has no revision, and the content digest is the only true
+ * thing that can stand there. The two fields never mean the same thing, which is
+ * exactly why `contentDigest` exists alongside it.
+ */
+function suppliedRowSource(ref: PackageRef): InstalledExtension["source"] | null {
+  const declared = ref.provenance;
+  if (!declared || !isSuppliedPackageProvenance(declared)) return null;
+  if (declared.type === "github") {
+    return {
+      type: "github",
+      repo: declared.repo,
+      ref: declared.ref,
+      resolvedSha: declared.resolvedSha,
+      ...(declared.path ? { path: declared.path } : {}),
+      contentDigest: declared.contentDigest,
+    };
+  }
+  return {
+    type: "local",
+    path: declared.path,
+    resolvedCommitOrTreeHash: declared.resolvedCommitOrTreeHash ?? declared.contentDigest,
+    contentDigest: declared.contentDigest,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -832,12 +903,18 @@ async function syncCanonicalManifestInstall(
   // the two must agree. For every caller that threads no tuple this is exactly
   // `actor.orgId ?? null`, unchanged.
   const orgId = rowAnchor.organizationId ?? null;
-  // Carve-out: a github/local-sourced install (a GitHub/local skill
-  // ref) is NOT verdaccio-pipeline-driven — the handler resolves + persists it.
-  // Do NOT ensure a verdaccio placeholder canonical row for it (it would never
-  // finalize and would strand an active non-anchorable row). No row, no pipeline,
-  // no rollback — the handler owns the install entirely.
-  if (!isVerdaccioBackedRef(ref)) {
+  // Carve-out: a HANDLER-OWNED install (a ref declaring no provenance whose name
+  // does not look registry-backed — the GitHub/local skill ref this carve-out was
+  // written for) is NOT pipeline-driven; the handler resolves + persists it. Do
+  // NOT ensure a placeholder canonical row for it (it would never finalize and
+  // would strand an active non-anchorable row). No row, no pipeline, no rollback.
+  //
+  // cinatra#3204 D2: a ref that DECLARES supplied provenance with a content
+  // digest does NOT ride this carve-out. It gets a real canonical row recording
+  // its honest local/github provenance, and the host's supplied pipeline entry
+  // drives it through the same gate set a registry install runs.
+  const road = resolveRefSourceRoad(ref);
+  if (road === "handler-owned") {
     return { needsPipeline: false, rowId: null, ownsRollback: false };
   }
   // Read the existing rows OUTSIDE the create/transition logic so we can
@@ -1015,7 +1092,18 @@ async function syncCanonicalManifestInstall(
         ownerId: rowAnchor.ownerId,
         organizationId: rowAnchor.organizationId,
         kind: kind as never,
-        source: {
+        // HONEST PROVENANCE (cinatra#3204 D2). A supplied package records where
+        // it actually came from — `local` or `github`, carrying the content
+        // digest over the delivered tree — instead of the synthetic registry row
+        // this seam used to write for EVERY install. That row claimed a registry
+        // URL the package was never on and an `integrity:"dispatcher-install"`
+        // that attests nothing; writing it for a supplied package would state
+        // something untrue about where the bytes came from, and every consumer
+        // reading provenance would inherit the lie.
+        //
+        // A registry install is unchanged, placeholder integrity included: the
+        // pipeline overwrites it with the real sha512 SRI at its finalize seam.
+        source: suppliedRowSource(ref) ?? {
           type: "verdaccio",
           registryUrl: ref.registryUrl || "http://localhost:4873",
           packageName,
@@ -1303,7 +1391,8 @@ const KINDS_USING_ACTIVATE_HOOK = new Set(["connector"]);
 // no hot-loadable server module, so the in-process activation half is
 // meaningless for them (the native handler IS their run-surface projection).
 // `workflow` stays saga-owned (its handler runs the pipeline itself); the
-// github/local skill carve-out never reaches this path (isVerdaccioBackedRef).
+// handler-owned github/local skill carve-out never reaches this path
+// (resolveRefSourceRoad -> "handler-owned").
 const KINDS_WITH_STORE_PIPELINE_BEFORE_HANDLER = new Set(["agent", "skill", "artifact"]);
 
 // Every kind whose verdaccio install REQUIRES the canonical row + the shared
@@ -1443,9 +1532,11 @@ class ExtensionRegistryImpl {
   // Carve-outs preserved: restore/re-install (archived row re-activated; for a
   // store-routed kind the idempotent pipeline re-fires against the finalized
   // digest); add-from-chat (proposal-only, never reaches this dispatch);
-  // github/local skill installs (resolved INSIDE the handler from the ref source
-  // — no canonical verdaccio row, no pipeline: the isVerdaccioBackedRef
-  // carve-out in syncCanonicalManifestInstall).
+  // handler-owned github/local skill installs (resolved INSIDE the handler from
+  // the ref source — no canonical row, no pipeline: the "handler-owned" road in
+  // syncCanonicalManifestInstall). A ref DECLARING supplied provenance with a
+  // content digest is NOT carved out (cinatra#3204 D2) — it gets a real row with
+  // honest local/github provenance and rides the pipeline.
   // ---------------------------------------------------------------------------
   private async runHostInstall(
     typeId: string,

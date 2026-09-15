@@ -323,6 +323,9 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // entries are those opaque accessors; the rest name transitionRunStatus.
     importBanned: true,
     allowedImporters: [
+      // cinatra#2928 — the coordinator releases a parked run through its
+      // advance entry, and states the moment before the run moves.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/actions.ts",
       "packages/agents/src/execution.ts",
       "packages/agents/src/index.ts",
@@ -330,6 +333,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/orchestrator-actions.ts",
       "packages/agents/src/orchestrator-execution.ts",
       "packages/agents/src/run-actions.ts",
+      // cinatra#2790 (epic #2784 S9f) — the run-START dispatcher itself. The
+      // dispatch was extracted OUT of `run-actions.ts` (still allowlisted above
+      // for its other transitions) into this non-`"use server"` module so the
+      // widget recommendation-hold API branch, which cannot import a
+      // server-action module, reaches the SAME dispatch as the run page's
+      // server action. The extraction carried the `pending_input |
+      // pending_trigger -> queued` CAS and its `queued -> from` compensation
+      // across unchanged: the same guarded caller under a new file name,
+      // grounding both transitions on the acting member's live standing
+      // (`verifySessionAuthority(userId, run.orgId)`) exactly as
+      // `run-actions.ts` did. It resolves no identity of its own — both entries
+      // hand it an already-verified principal — so it adds no client-reachable
+      // surface.
+      "packages/agents/src/run-dispatch-core.ts",
       "packages/agents/src/trigger-release-job.ts",
       // cinatra#2569 (epic #2564 S5) — the conversational schedule proposal's
       // install DRAIN. It arms a confirmed proposal's run (`pending_input →
@@ -343,6 +360,16 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // `setRunTriggerForActor` rather than transitioning itself.
       "packages/agents/src/trigger-schedule-proposal-service.ts",
       "packages/agents/src/trigger-service.ts",
+      // cinatra#3423 — the WayFlow review gate is DECIDED ONCE. The approve
+      // road claims the gate with the ONE conditional statement this writer
+      // already carries (pending_approval -> running, the resume edge), so two
+      // people answering the same pending gate cannot both resume the paused
+      // conversation; the loser is refused with the typed no-longer-pending
+      // outcome. It threads the SAME member-session authority its sibling
+      // setup- branch already hands `resumeRunFromSetupApproval`
+      // (`sessionAuthorityFromResolvedRole(run.orgId, resumeRole)`), resolves no
+      // identity of its own and adds no client-reachable surface.
+      "packages/agents/src/review-task-actions.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -408,15 +435,19 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
-      "packages/agents/src/a2a-actions.ts",
-      "packages/agents/src/actions.ts",
+      // cinatra#2928 — THE ONE CALLER. Every producer creates through the
+      // lifecycle coordinator's `launchAgentRun`, and
+      // `scripts/audit/run-creation-fence.mjs` is what keeps it so. The rows
+      // struck are the producers that used to name the creator directly and now
+      // go through it — the MCP `agent_run` handler among them, which names the
+      // launch frame's creator now and no longer this one.
+      //
+      // cinatra#2929 struck the last two: the widget's content-edit dispatch and
+      // the agent-to-agent action were the surfaces that bypassed the worker, and
+      // both now launch through the coordinator, so neither names a creator any
+      // more. What is left is the coordinator itself and the pass-through barrel.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/lifecycle-repair-dispatch-store.ts",
-      "packages/agents/src/mcp/agent-tools-registry.ts",
-      "packages/agents/src/mcp/handlers.ts",
-      "src/lib/a2a-server.ts",
-      "src/lib/host-content-editor-dispatch.ts",
-      "src/lib/project-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -435,17 +466,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
+      // cinatra#2928 — THE ONE CALLER, for the same reason as `createAgentRun`
+      // above. The pre-dispatch creator is reached through the coordinator's
+      // launch entry, which carries the caller's `withinCreateTx` hook through
+      // unchanged — so the schedule proposal's CONFIRM keeps writing the run,
+      // the single-use consume edge and the schedule-install intent inside ONE
+      // guarded transaction, which is the whole reason that caller exists.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/run-actions.ts",
-      "packages/agents/src/trigger-release-job.ts",
-      // cinatra#2569 (epic #2564 S5) — the schedule proposal's CONFIRM. This is
-      // the run-creating half of a one-transaction commit: the writer's
-      // `withinCreateTx` hook carries the single-use proposal consume edge and
-      // the schedule-install intent INSIDE this same guarded transaction, so a
-      // second Confirm loses the consume insert and the run it was creating
-      // rolls back with it. Splitting the writes across transactions is exactly
-      // what this caller exists to avoid.
-      "packages/agents/src/trigger-schedule-proposal-service.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -694,6 +722,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/restore-engine.ts",
       "src/lib/object-history/merge-proposals.ts",
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
       "src/lib/object-history/index.ts",
       // cinatra#2683 (epic #2564 S8f) — the in-process lifecycle SEED path's
       // change-set fixture. A DESIGN EVENT, so state it rather than let it pass
@@ -715,6 +751,28 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // read that throws for a non-member, after the named run has been proved to
       // belong to the same org and to be readable by the same subject.
       "src/lib/test-support/lifecycle-seed-drivers.ts",
+      // cinatra#3028 (epic #3023, lifecycle-c W4) — the TYPED PROMOTION ROAD's
+      // retype. A DESIGN EVENT, so state it.
+      //
+      // WHY IT NEEDS THIS WRITER: the road promotes a matched base-typed upload
+      // into the matching extension's own type. That is a type change on an
+      // existing row — an application-visible mutation — so it belongs in the
+      // row's own history with a change event and a Graphiti outbox row, and the
+      // canonical writer is the only road that commits those alongside it. The
+      // alternative the gate exists to prevent is exactly what the first draft
+      // did: a raw compare-and-set UPDATE with no history at all.
+      //
+      // WHAT BOUNDS IT: the call is UPDATE-ONLY (`expectedBaseVersion` is always
+      // the version the road just read, never null), `reversible-internal`, and
+      // it writes back the row's own data unchanged — only `type` moves, and the
+      // target type is the extension's own, resolved from the registry, never
+      // caller-supplied. It is reached from ONE surface, the artifact library's
+      // §VI.1 Confirm, which mints the authority through
+      // `verifySessionAuthority` (a live membership read that throws for a
+      // non-member) after its own `object.update` gate on the acting user, and
+      // only when the matcher has already asserted the extension at its own
+      // declared threshold. A named import, not a namespace one.
+      "src/lib/artifacts/typed-promotion-store.ts",
     ],
   },
   {
@@ -730,6 +788,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   {
@@ -745,6 +811,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   {
@@ -764,6 +838,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/index.ts",
       // opaque namespace-import accessor (see module allowlist note above):
       "src/lib/objects/artifact-row-promotion.ts",
+      // cinatra#1381 (epic #1373) — memory row promotion, the artifact flow's
+      // sibling. It reaches this module by the SAME namespace import, so it is
+      // listed on every row for the same reason, and it calls only
+      // historyAwareUpsert. It is the ONE caller that uses the co-commit seam:
+      // the promotion request's CAS transition rides inside this writer's
+      // guarded batch, so the request transition and the row widen are one
+      // commit and there is no claimed-but-unapplied state to compensate.
+      "src/lib/objects/memory-row-promotion.ts",
     ],
   },
   // — restore engine's OWN batched multi-event write (cinatra#1939 wave 3

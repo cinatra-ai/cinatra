@@ -120,3 +120,63 @@ describe("shapeArtifactMaterializeInput", () => {
     ).toThrow("contentJsonField");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3030 (epic #3023 W6, plan item 0.30) — THE SAME-ARTIFACT REVISION.
+//
+// "a mid-run write may name an existing artifact and append its next revision
+//  instead of creating a new one — a compare-and-set against the revision the
+//  caller read"
+//
+// The shaper's job is the GRAMMAR of that call: the two fields travel together
+// or not at all (an append that does not name what it read cannot be checked,
+// and a base without an artifact names nothing), and an append does not have to
+// restate a title the artifact already carries.
+// ---------------------------------------------------------------------------
+describe("the same-artifact revision (cinatra#3030)", () => {
+  const base = {
+    extension: "@cinatra-ai/markdown",
+    declaredMime: "text/markdown",
+    content: "# Revised\n",
+    node_id: "AppendNode",
+  };
+
+  it("carries the artifact and the base revision through when both are named", () => {
+    const shaped = shapeArtifactMaterializeInput({
+      ...base,
+      artifactId: "art-1",
+      baseRepresentationRevisionId: "rev-1",
+    });
+    expect(shaped.artifactId).toBe("art-1");
+    expect(shaped.baseRepresentationRevisionId).toBe("rev-1");
+  });
+
+  it("does not require a title on an append — the artifact already carries one", () => {
+    const shaped = shapeArtifactMaterializeInput({
+      ...base,
+      artifactId: "art-1",
+      baseRepresentationRevisionId: "rev-1",
+    });
+    expect(shaped.title).toBe("");
+  });
+
+  it("refuses an artifact named without the revision the caller read", () => {
+    expect(() => shapeArtifactMaterializeInput({ ...base, artifactId: "art-1" })).toThrow(
+      /must be given together/,
+    );
+  });
+
+  it("refuses a base revision named without the artifact it revises", () => {
+    expect(() =>
+      shapeArtifactMaterializeInput({ ...base, baseRepresentationRevisionId: "rev-1" }),
+    ).toThrow(/must be given together/);
+  });
+
+  it("leaves a CREATE untouched — no append fields, and the title still required", () => {
+    const shaped = shapeArtifactMaterializeInput({ ...base, title: "A new artifact" });
+    expect(shaped.artifactId).toBeUndefined();
+    expect(shaped.baseRepresentationRevisionId).toBeUndefined();
+    expect(shaped.title).toBe("A new artifact");
+    expect(() => shapeArtifactMaterializeInput(base)).toThrow(/title/);
+  });
+});

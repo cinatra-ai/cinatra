@@ -205,7 +205,7 @@ async function main() {
         "Usage:",
         "  node scripts/measure/mcp-allowlist-ab.mjs --confirm",
         "  node scripts/measure/mcp-allowlist-ab.mjs --confirm --model=gpt-5.5 --gap-ms=5000",
-        "  node scripts/measure/mcp-allowlist-ab.mjs --confirm --out=evidence/2771-ab.json",
+        "  node scripts/measure/mcp-allowlist-ab.mjs --confirm --out=test-results/mcp-allowlist-ab.json",
         "",
         "Flags:",
         "  --confirm       actually spend money (without it the script only estimates)",

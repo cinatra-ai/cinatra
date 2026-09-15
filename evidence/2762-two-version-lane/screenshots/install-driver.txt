@@ -1,8 +1,0 @@
-PASS  install: the marketplace lists the connector card
-screenshot: install-marketplace-card.png
-PASS  install: the install panel is ready — data-availability=ready
-screenshot: install-install-panel-open.png
-PASS  install: a successful install redirects to the installed list — landed on http://127.0.0.1:3477/configuration/extensions
-screenshot: install-post-install-installed-list.png
-
-ALL CHECKS PASSED (mode=install, label=install)

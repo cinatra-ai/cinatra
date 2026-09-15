@@ -1,7 +1,7 @@
 {
   "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
   "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
-  "totalCallSites": 382,
+  "totalCallSites": 398,
   "callers": [
     {
       "file": "packages/extensions/src/permissions-store.ts",
@@ -73,7 +73,7 @@
     },
     {
       "file": "src/lib/artifacts/artifact-read.ts",
-      "calls": 1
+      "calls": 2
     },
     {
       "file": "src/lib/artifacts/artifact-refs-store.ts",
@@ -116,6 +116,10 @@
       "calls": 2
     },
     {
+      "file": "src/lib/artifacts/object-backed-contract.ts",
+      "calls": 1
+    },
+    {
       "file": "src/lib/artifacts/object-content-snapshot.ts",
       "calls": 6
     },
@@ -142,6 +146,10 @@
     {
       "file": "src/lib/artifacts/semantic-assertion-store.ts",
       "calls": 6
+    },
+    {
+      "file": "src/lib/artifacts/typed-promotion-store.ts",
+      "calls": 3
     },
     {
       "file": "src/lib/assistant-profiles.ts",
@@ -197,7 +205,7 @@
     },
     {
       "file": "src/lib/dev-auto-setup.ts",
-      "calls": 8
+      "calls": 9
     },
     {
       "file": "src/lib/dev-fixture-seeder.ts",
@@ -269,7 +277,7 @@
     },
     {
       "file": "src/lib/objects-store.ts",
-      "calls": 12
+      "calls": 13
     },
     {
       "file": "src/lib/objects/artifact-claim-store.ts",
@@ -300,6 +308,10 @@
       "calls": 1
     },
     {
+      "file": "src/lib/objects/memory-promotion-request-store.ts",
+      "calls": 7
+    },
+    {
       "file": "src/lib/objects/presentation-identity.ts",
       "calls": 2
     },
@@ -321,7 +333,7 @@
     },
     {
       "file": "src/lib/run-selected-skill-revisions.ts",
-      "calls": 7
+      "calls": 9
     },
     {
       "file": "src/lib/skill-bundle-store.ts",

@@ -21,9 +21,11 @@ Running the app in production **from a host checkout** — `next start`,
 `pnpm start`, or a bare `node .next/standalone/server.js` **without** the
 image's build-and-copy dance — is **UNSUPPORTED.** It is not a documentation
 gap: the required-extension materialize boot phase is fail-closed in production
-and reads its seed from an **image-baked path with no environment or
-configuration override on the production boot path**, so a bare host checkout
-aborts at boot by design (see below). The CLI's
+and reads its seed from an **image-baked path** unless the deploy explicitly
+names another one through `CINATRA_REQUIRED_OAS_SEED_DIR` (a
+prerequisite of host prod, not host prod), so a bare host checkout, which sets
+no such variable and has no seed at the image path, aborts at boot by design
+(see below). The CLI's
 `install --mode prod` provisions an instance but neither builds nor establishes
 a runnable production runtime; that partial state is a byproduct, not a
 supported target.
@@ -50,15 +52,27 @@ which the production runtime depends on:
   the SHA-pinned required set into `/app/extensions`.
 - **Required-extension OAS seed.** `scripts/extensions/build-required-oas-seed.mjs
   --source /app/extensions --out /app/.cinatra-required-oas-seed` projects the
-  image-owned seed. `materializeRequiredExtensions()` accepts a **programmatic**
-  `seedDir` option, but the seed source path defaults to the hardcoded
+  image-owned seed. The seed source path defaults to the hardcoded
   `DEFAULT_REQUIRED_OAS_SEED_DIR = "/app/.cinatra-required-oas-seed"`
-  (`src/lib/required-extension-materialize.ts`), and the boot phase
-  (`src/lib/boot/phases/required-extension-materialize.ts`) passes **no
-  override** — no env or config knob overrides it on the production boot path,
-  so the running instance always uses that default. In production that phase is
-  **fail-closed**: a missing/unreadable seed at that path aborts the boot. A
-  bare host checkout has no seed there, so it cannot boot in production.
+  (`src/lib/required-extension-materialize.ts`), and the image sets no
+  override, so a running IMAGE instance always uses that default — unchanged by
+  the amendment below. In production that phase is **fail-closed**: a
+  missing/unreadable seed at that path aborts the boot. A bare host checkout has
+  no seed there, so it cannot boot in production.
+  - **Amended.** The boot phase
+    (`src/lib/boot/phases/required-extension-materialize.ts`) now reads the
+    `CINATRA_REQUIRED_OAS_SEED_DIR` environment variable when it is set and
+    reconciles from the directory it names, with the same atomicity and
+    fail-closed guarantees, refusing a value that is relative, dot-segmented,
+    or (symlinks resolved) at or under the durable user store — which is a
+    misconfiguration guard on the one boundary this module owns, not an
+    authentication of the deploy. Before that amendment nothing in this
+    repository read the variable, while deploy tooling outside it already
+    exported it into the served process, so the boot silently ignored a seed
+    the deploy had projected. Reading it does NOT make
+    a host checkout a supported production target (see the section below): it
+    honours a value the deploy already sets. Unset — the image case — behaves
+    exactly as documented above.
 - **Presence-aware map regeneration.** `scripts/extensions/generate-extension-manifest.mjs`
   (+ `--check --self`) regenerates the committed `src/lib/generated/*` barrels
   against the acquired set. Those committed barrels carry literal dynamic
@@ -137,10 +151,14 @@ Should a future, owner-approved decision reverse this and make host prod a
 supported target, the concrete, **tested** work it requires — none of which
 exists today, and which is therefore a code change, not a docs edit — is:
 
-- an env-overridable seed directory replacing the hardcoded
+- an env-overridable seed directory alongside the hardcoded
   `DEFAULT_REQUIRED_OAS_SEED_DIR`, threaded through the boot phase
   (`src/lib/required-extension-materialize.ts`,
-  `src/lib/boot/phases/required-extension-materialize.ts`);
+  `src/lib/boot/phases/required-extension-materialize.ts`) — **this one landed**
+  (`CINATRA_REQUIRED_OAS_SEED_DIR`, read when set, refused
+  when relative, dot-segmented, or under the durable user store); it is a
+  prerequisite of host-prod, not host-prod
+  itself, and everything below still does not exist;
 - a checkout-local seed build step mirroring
   `scripts/extensions/build-required-oas-seed.mjs`;
 - the presence-aware map regeneration on the host (cli#145);

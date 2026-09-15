@@ -2,11 +2,21 @@
  * `/teams/[teamId]` screen — the team detail dashboards surface (cinatra#704,
  * epic #699; Permissions tab dropped by cinatra#1688).
  *
- * The reusable entity Dashboards surface (#701) bound to this team's PER-USER
- * dashboard set. The non-removable "Overview" default (#700) holds the team's
- * general info — identity + member count — rendered as the render-only summary
- * portlets (#702) built fresh here via `buildTeamOverviewConfig`; the user may
- * also create/select their own custom dashboards for the team.
+ * WHAT THIS TAB DRAWS (rebuilt to the ratified drawing by cinatra#2807 fix leg
+ * 3). The drawing's Dashboards-tab section fixes it: the caption "The dashboards
+ * in Team: <name>." over the scope's rows — homed and secondary-listed alike,
+ * no relation badge — and, for a scope manager only, "Add dashboard" at the
+ * right of that caption row (§IX.2: "Suppression, not a disabled control").
+ *
+ * WHAT IT NO LONGER DRAWS, and why. This landing used to stack a dashboard
+ * canvas above that panel: a toolbar band, an Overview selector, a Team card and
+ * a members counts card. The section names none of them, and it sends identity
+ * and membership to the Settings entry in its own words — "that entity's
+ * management pane, where rename, visibility and the members / access section
+ * live folded together". The Components Toolbar rule forbids the band's
+ * placement outright ("never stack a toolbar and the etched paired rule"). Each
+ * dashboard is opened at its canonical surface: "the tab points, it never
+ * renders a dashboard inline".
  *
  * Team MANAGEMENT (membership + per-team roles + rename) lives ONLY at
  * `/teams/[teamId]/settings`, reached via the header button (cinatra#1688: the
@@ -59,19 +69,6 @@ import { CrumbContributions } from "@/components/crumb-contributions";
 import { canManageTeamMembers } from "@/app/teams/[teamId]/settings/team-member-authority";
 import type { TeamMemberView } from "@/app/teams/[teamId]/settings/team-members-section";
 
-import { buildTeamOverviewConfig } from "../components/seed-configs/overview-config";
-import { TeamDetailDashboards } from "../components/team-detail-dashboards";
-import type { DashboardEntityRef } from "../store/entity-identity";
-import type { DashboardConfigV1_1 } from "../store/dashboard-config";
-import { ensureEntityOverviewAction, listEntityDashboardsAction } from "../actions";
-import {
-  teamCreateDashboardAction,
-  teamDeleteDashboardAction,
-  teamListDashboardsAction,
-  teamLoadDashboardConfigAction,
-  teamRenameDashboardAction,
-  teamSaveDashboardConfigAction,
-} from "./team-detail-dashboard-actions";
 
 type TeamRow = {
   id: string;
@@ -80,16 +77,6 @@ type TeamRow = {
   org_name: string;
   is_member: boolean;
 };
-
-/** Placeholder DC config for the SSR seed's initial selection. The initial
- *  selection is always the render-only Overview (its persisted row config is
- *  empty and never rendered — the summary comes from `overviewPortlets`), so
- *  this value is structural only. */
-const EMPTY_SEED_CONFIG = {
-  portlets: [],
-  layoutMode: "grid",
-  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
-} as unknown as DashboardConfigV1_1;
 
 export async function TeamDetailDashboardPage({
   params,
@@ -191,55 +178,24 @@ export async function TeamDetailDashboardPage({
   const scopeReference = actor ? buildScopeReferenceSource(actor, scope) : null;
   const scopeLabel = `Team: ${team.name}`;
 
-  // ── Dashboards tab wiring (#700/#701/#702) ──────────────────────────────────
-  // User-owned team-detail dashboards. Ensure the non-removable Overview BEFORE
-  // listing (the shell never seeds it), then bind the ref into the server
-  // actions the client shell drives (the ref crosses Next-encrypted; the client
-  // never authors the owner axis).
-  const ref: DashboardEntityRef = {
-    entityType: "team",
-    entityId: team.id,
-    ownerLevel: "user",
-    ownerId: userId,
-  };
-  await ensureEntityOverviewAction(ref);
-  const list = await listEntityDashboardsAction(ref);
-
-  // Concept B's installed-catalog section (cinatra#2474 PR4) — the node that
-  // fills the slot PR3 left in the popup. Read server-side against THIS team's
-  // vantage and THIS actor's own destination collection; `null` (and so no
-  // section, and no change to the toolbar) whenever nothing is eligible.
+  // Concept B's installed-catalog section — the node that fills the slot the
+  // unified popup leaves for it. Read server-side against THIS team's vantage
+  // and THIS actor's own destination collection; `null` whenever nothing is
+  // eligible, in which case the popup simply carries no catalog section.
   const catalog = await buildScopeCatalogNode({
     actor,
     surface: { kind: "team", orgId: scope.orgId, scopeId: team.id, userId },
   });
 
-  // The Overview's LIVE content — the team's current summary as render-only
-  // portlets (#702). Built fresh per request and handed to `<PortletHost>`, so
-  // it can never be a stale/authorization-obsolete saved row.
-  const overviewConfig = buildTeamOverviewConfig({
-    name: team.name,
-    organizationName: team.org_name,
-    memberCount: members.length,
-  });
-
-  const overview = list.dashboards.find((d) => d.isDefault);
-  const selectedId = overview?.id ?? list.dashboards[0]?.id;
-  const initialData = selectedId
-    ? { list, selectedId, config: EMPTY_SEED_CONFIG }
-    : undefined;
-
-  // The CLIENT-invoked actions bind only the server-derived teamId and
-  // re-authorize the live session on every call (tenant + view authority) — the
-  // render gate above cannot protect a later invocation after an org switch.
-  const dataSource = {
-    listDashboards: teamListDashboardsAction.bind(null, team.id),
-    loadConfig: teamLoadDashboardConfigAction.bind(null, team.id),
-    createDashboard: teamCreateDashboardAction.bind(null, team.id),
-    renameDashboard: teamRenameDashboardAction.bind(null, team.id),
-    deleteDashboard: teamDeleteDashboardAction.bind(null, team.id),
-    saveDashboard: teamSaveDashboardConfigAction.bind(null, team.id),
-  };
+  // Create-new, preserved through the removal of the toolbar band that used to
+  // carry it. Offered only alongside the manager's Add; the action re-authorizes
+  // the live session on every call (tenant + view authority).
+  // NOTE (fix leg 3, convergence round): the popup's create and installed-catalog
+  // paths are NOT wired from this landing. Both write a row owned by the acting
+  // user, and this tab reads the SCOPE's collection, so a copy made through them
+  // would report success and then appear nowhere here. The drawn Add is the
+  // add-to-scope picker; where the other two belong is recorded on the pull
+  // request for the maintainer.
 
   return (
     <Main className="min-h-screen">
@@ -260,31 +216,29 @@ export async function TeamDetailDashboardPage({
             member — the settings page owns the read-only/manage split. */}
         <EntityScopeTabs
           dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}
+          assistantsHref={`/teams/${encodeURIComponent(team.id)}/assistants`}
+          agentsHref={`/teams/${encodeURIComponent(team.id)}/agents`}
+          artifactsHref={`/teams/${encodeURIComponent(team.id)}/artifacts`}
+          skillsHref={`/teams/${encodeURIComponent(team.id)}/skills`}
           settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
           active="dashboards"
         />
-        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3) — the
-            popup is launched from the toolbar INSIDE the shell, so the provider
-            wraps the shell. Server-bound actions and a label cross, never the
-            actor or the scope's owner axis. */}
-        <ScopeAddSourcesProvider
-          scopeLabel={scopeLabel}
-          reference={scopeReference}
-          catalog={catalog}
-        >
-          <TeamDetailDashboards
-            dataSource={dataSource}
-            overviewPortlets={overviewConfig.portlets}
-            initialData={initialData}
-          />
-        </ScopeAddSourcesProvider>
-        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
-            landing by cinatra#2474 PR2 — formerly the separate
-            `/teams/[teamId]/dashboards` route, which PR2 deletes outright (no
-            redirect, no shim). Same #1897 service, list, picker, Remove and
-            promotion recourse; only the mount point moved. The per-user shell
-            above is untouched. */}
-        {actor ? <ScopeDashboardsSection actor={actor} scope={scope} /> : null}
+        {/* The Dashboards tab body. The provider hands the drawn Add
+            affordance its sources; what crosses is server-bound actions and a
+            label, never the actor or the scope's owner axis. */}
+        {actor ? (
+          <ScopeAddSourcesProvider
+            scopeLabel={scopeLabel}
+            reference={scopeReference}
+            catalog={catalog}
+          >
+            <ScopeDashboardsSection
+              actor={actor}
+              scope={scope}
+              entityLabel={scopeLabel}
+            />
+          </ScopeAddSourcesProvider>
+        ) : null}
       </PageContent>
     </Main>
   );

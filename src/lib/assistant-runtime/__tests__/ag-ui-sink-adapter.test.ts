@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { describeStartedRun } from "@cinatra-ai/agents/run-status";
 import {
   createAgUiSinkAdapter,
   extractAgentRunIdFromResult,
@@ -27,6 +28,55 @@ function collectingAdapter(overrides?: {
   });
   return { adapter, published };
 }
+
+// cinatra#2935 (lifecycle-b W5d) — the platform's report now rides on a start's
+// answer beside the run id. The card is drawn from that answer, so the pin is
+// asserted against the answer's REAL shape rather than trusted to be additive.
+describe("the run-card pin, once a start's answer carries the platform's report", () => {
+  const RUN_ID = "06a703fe-e779-4ba5-852c-73c41c513924";
+  // Minted by the platform rather than copied, so this pin tracks the real
+  // sentence a queued start answers with (cinatra#3147).
+  const REPORT = describeStartedRun({
+    packageName: "@cinatra-ai/blog-draft-writer-agent",
+    runId: RUN_ID,
+    status: "queued",
+  });
+
+  it("carries the platform's TRUE sentence for a queued run, not a claim that it started", () => {
+    expect(REPORT).toBe(
+      "Dispatched `@cinatra-ai/blog-draft-writer-agent` " +
+        `(runId: \`${RUN_ID}\`, status: \`queued\`). ` +
+        "The run is queued and will start on its own.",
+    );
+  });
+
+  it("reads the SAME run out of an answer with the report as one without it", () => {
+    const withReport = JSON.stringify({ runId: RUN_ID, status: "queued", message: REPORT });
+    const withoutReport = JSON.stringify({ runId: RUN_ID, status: "queued" });
+    expect(extractAgentRunIdFromResult(withReport)).toBe(RUN_ID);
+    expect(extractAgentRunIdFromResult(withReport)).toBe(
+      extractAgentRunIdFromResult(withoutReport),
+    );
+  });
+
+  it("reads the same run out of the widget door's answer, which relays that report", () => {
+    const widgetAnswer = JSON.stringify({
+      ok: true,
+      runId: RUN_ID,
+      status: "queued",
+      message: REPORT,
+    });
+    expect(extractAgentRunIdFromResult(widgetAnswer)).toBe(RUN_ID);
+  });
+
+  it("a REFUSED start pins no run, because its answer carries no run id", () => {
+    const refused = JSON.stringify({
+      ok: false,
+      message: "You can't start this agent. Nothing was started.",
+    });
+    expect(extractAgentRunIdFromResult(refused)).toBeNull();
+  });
+});
 
 describe("createAgUiSinkAdapter — event mapping", () => {
   it("maps a plain text turn to RUN_STARTED / TEXT_MESSAGE_* / RUN_FINISHED", async () => {

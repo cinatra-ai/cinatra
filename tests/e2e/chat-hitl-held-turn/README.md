@@ -10,9 +10,14 @@ Issue [#2824](https://github.com/cinatra-ai/cinatra/issues/2824), epic
 
 ## What it proves
 
-A browser types one message into `/chat`. From there nothing is simulated:
+A browser types one message into `/chat`. From there exactly **one** thing is
+stood in for — the model layer, which on a key-free stack makes the one decision a
+model makes here (which tool this turn calls) and words the answer. Everything
+below it is real:
 
-1. the runtime routes the turn through its own hard pre-router and creates a real
+1. the conversation's own assistant calls `agent_run` — since
+   [#2935](https://github.com/cinatra-ai/cinatra/issues/2935) (lifecycle-b W5d)
+   nothing dispatches before the model — and the runtime creates a real
    run that **parks** — `agent_runs.status = pending_input`, `human_present = true`,
    a `recommendation` park row in `parked`, and **zero** queue jobs behind it;
 2. the transcript draws the §V card at the `agent_run` producing slot, on the
@@ -48,6 +53,65 @@ A fresh database is `node scripts/apply-public-schema.mjs` plus `pnpm auth:migra
 materialized at boot from the companion extension repos, and without them the app
 does not boot at all.
 
+## The boot gate, and why `webServer.url` does not poll the app
+
+`webServer` does not run `pnpm dev` directly. It runs
+`scripts/ci/dev-boot-route-gate.mjs`, which runs `pnpm dev` as its own child with
+the environment it inherited, waits for `/api/health` exactly as the old
+`webServer.url` poll did, and only then reports the server ready — on a small
+HTTP listener of its own (`E2E_CHAT_HITL_GATE_PORT`, the app port plus 100),
+which is what `webServer.url` now polls.
+
+It exists because `/api/health` answering was never the claim this flow needs.
+cinatra#3056 established that first and added the bounded readiness probe in
+`auth.setup.ts`; cinatra#3194 is what was left after it. On roughly one boot in
+twenty-five the development runtime answers `/api/health` normally and then
+serves its *own not-found document* for `POST /api/auth/sign-up/email` in
+110-400 ms, every time, for the whole 120 s readiness bound — the route is
+**absent for that boot**, not slow (its measured cold compile is 11.7-21.3 s).
+The probe can report that; it cannot mend it, because by then the server is the
+suite's only server.
+
+The gate probes the two routes the setup probes, with the same side-effect-free
+empty-body requests and **the same 120 s bound** — that bound is not widened
+here or anywhere, because the record proves the route is absent rather than slow.
+If the bound is spent on the runtime's own not-found document, the gate replaces
+the boot with a fresh one (one replacement, then it reports the unrouted boot and
+fails). It never proxies or touches a request the suite makes: the application
+keeps its own port and answers the tests directly.
+
+Three things the gate owes the run, because moving the readiness poll off the
+application moved them here too:
+
+* **nothing may already hold the application port.** `reuseExistingServer: false`
+  is what makes a result attributable to the environment this config states, and
+  Playwright used to enforce it by refusing to start when the url it polls
+  already answers — that url is now the gate's. So the gate refuses an occupied
+  application port itself rather than certifying a server this run did not start.
+* **the gate closes when the server it speaks for dies.** `/ready` answering 200
+  for a dead application would be the same lie in the other direction, so the
+  listener is closed on the child's exit and the gate exits with it.
+* **a boot that dies mid-probe is reported as a crash**, not diagnosed as this
+  routing fault and replaced. A replacement boot is for a server that is *there*
+  and not routing; a server that is gone is a different finding and is named one.
+
+### Measuring it
+
+`scripts/ci/dev-boot-route-race-repro.mjs` is the constrained cold-boot loop that
+produced the evidence. It removes the build cache before every boot, starts the
+server niced (and pinned with `taskset` where the platform has it — it records
+which constraints it *actually* applied), and probes the routes as the very first
+request after the health poll, with no warm-up:
+
+```
+node scripts/ci/dev-boot-route-race-repro.mjs \
+  --iterations 10 --app-url http://localhost:3126 --out /tmp/3194-boots
+```
+
+It writes `boots.json` plus one dev-server log per boot, and exits non-zero
+unless every boot registered every route — so it doubles as the ten-consecutive-
+boots check rather than only as a report.
+
 ## Which agent, and why it is the only one
 
 `@cinatra-ai/lint-policy-agent`. Three constraints leave exactly one candidate, and
@@ -68,8 +132,9 @@ from the creation-flow set, and declares no dependencies at all. That it is itse
 "skill-free" costs nothing: the scorer offers whatever sits in
 `agent_assigned_skills` for the package, and the fixture puts one row there.
 
-The driving message embeds its own `inputParams`, so the dispatch takes the
-brace-matched deterministic fast path and **no model is consulted for anything**.
+The driving message embeds its own `inputParams`, so the assistant passes on the
+inputs the sentence states outright and invents none: the same message always
+starts the same run with the same arguments.
 
 Never run `pnpm seed` against this database — the seed truncates `agent_templates`.
 
@@ -77,8 +142,10 @@ Never run `pnpm seed` against this database — the seed truncates `agent_templa
 
 `fixtures.mts apply` writes three things, each through a **shipped writer**: an
 OpenAI *presence* placeholder (no real key; generation is served by the scripted
-provider, and without a bound provider adapter the turn goes conversation-only and
-the pre-router never fires), the MCP public base URL, and **one**
+provider, and under its flag the runtime reports a provider as available whether
+or not this row exists — so the row is world for the instance rather than a
+precondition of this flow's turn, written and restored so the instance is left as
+it was found), the MCP public base URL, and **one**
 `agent_assigned_skills` row. Without that row the recommendation scorer has no
 candidate to offer, so the checkpoint answers "no recommendation candidates" and the
 run dispatches unheld.
@@ -175,30 +242,30 @@ nothing here is written to the canonical capture index.
 
 Two directories, and the difference is the whole policy:
 
-- **`evidence/2824-s9k/`** is the **frozen reference** — four graded PNGs and one
-  `capture-index.provisional.json`, committed. Nothing a run does touches it. The
-  hashes cited in this PR's round comments stay true for as long as those blobs do.
-- **`evidence/2824-s9k/.run/`** is where **a run mints**. `.gitignore` covers it, so
-  a passing run — a developer's, or the future #2886 CI job — leaves
-  `git status --porcelain` **empty**.
+- The **frozen reference** — four graded PNGs and one
+  `capture-index.provisional.json` — is pinned in history at
+  <https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2824-s9k>.
+  Nothing a run does touches it, and the hashes cited in that PR's round comments
+  stay true for as long as that commit does.
+- **`test-results/chat-hitl-held-turn-captures/`** is where **a run mints**. It is
+  the Playwright config's own gitignored `outputDir`, so a passing run — a
+  developer's, or the #2886 CI job — leaves `git status --porcelain` **empty**.
 
-Refreshing the reference is a **deliberate** act, never a side effect of running
-the suite. Point the run directory at the committed one and drive a full green run:
+Re-recording the set is a **deliberate** act, never a side effect of running the
+suite. Point the run directory somewhere of your own and drive a full green run:
 
 ```
-E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+E2E_CHAT_HITL_EVIDENCE_DIR=test-results/my-refresh pnpm test:e2e:chat-hitl-held-turn
 ```
 
-That rewrites the four PNGs and the index in place, from a run that was graded at
-the `audit` tier — which is the only kind of refresh worth committing. Review the
-resulting diff before you keep it.
+That writes four PNGs and an index from a run graded at the `audit` tier — which
+is the only kind of capture worth citing. Nothing is committed: proof pictures are
+posted on the PR and cited by permalink, never carried in the product tree.
 
-The scratch directory sits under `evidence/` rather than under the config's
-`test-results/` outputDir because the S9h recorder **refuses** a screenshot path
-outside `evidence/`, before the shutter, and grades the same rule again when it
-validates the record. A record is honest only when its `screenshot` field names
-where the file really is, so the scratch directory moved under the rule instead of
-the rule being widened for a test.
+The scratch root is the recorder's own `CAPTURE_OUTPUT_ROOT`. The recorder
+**refuses** a screenshot path outside it, before the shutter, and grades the same
+rule again when it validates the record — so a record is honest only when its
+`screenshot` field names where the file really is.
 
 ## Why `retries: 0`
 

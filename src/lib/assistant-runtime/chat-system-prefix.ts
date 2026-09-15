@@ -8,7 +8,7 @@
 // built from named fragments, and several of them change between two turns of the
 // same conversation:
 //
-//   · the explicit-dispatch directive — present only on the turn whose message
+//   · the bound-card fragment — present only on the turn whose message
 //     names an agent package, and it used to be the FIRST fragment, so a single
 //     "@vendor/slug" mention moved the divergence point to byte 0 and re-billed
 //     the whole prompt;
@@ -18,7 +18,7 @@
 //     rows, so identical rows render differently as they age out;
 //   · the instance FREEZE STATE — flipped by this chat's own
 //     `agent_source_publish` tool, so it can change between two turns of one
-//     conversation (codex round-2, finding 2: it used to be spliced into the
+//     conversation (convergence round 2, finding 2: it used to be spliced into the
 //     otherwise-stable instance-identity sentence, which made the head's
 //     asserted stability false the moment a user published their first
 //     package).
@@ -35,7 +35,7 @@
 // reads, which is the stronger position, not the weaker one. Nothing is
 // dropped, nothing is rewritten: the same fragments, re-ordered.
 //
-// PRECEDENCE IS NOT A FREE VARIABLE (codex round-2, finding 1). "Only
+// PRECEDENCE IS NOT A FREE VARIABLE (convergence round 2, finding 1). "Only
 // re-ordered" is not semantics-preserving for an order-sensitive model, and the
 // re-order created a real hazard: it moved USER-CONTROLLED text — the connector
 // / wizard sections inside `userContext`, and (via the LLM package's attachment
@@ -84,7 +84,7 @@ export type ChatSystemPromptFragments = {
   /**
    * The operator's vendor namespace and the substitution rule for it. IDENTITY
    * ONLY — the freeze state that used to be spliced into this sentence lives in
-   * `instanceFreezeState` below, because it MUTATES (codex round-2, finding 2).
+   * `instanceFreezeState` below, because it MUTATES (convergence round 2, finding 2).
    */
   instanceContext: string;
   /** The constant extension-implementation confirmation policy. */
@@ -101,10 +101,28 @@ export type ChatSystemPromptFragments = {
    */
   userContext: string;
   /**
+   * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
+   * lifecycle-b W5b), or `""` for every turn that is not one of those windows.
+   *
+   * The run's own recorded state — its identity, the gate it waits on and that
+   * gate's current fields — assembled server-side under the run's access so the
+   * assistant answers "what is this step waiting for?" without the person
+   * naming the run they are already standing on.
+   *
+   * USER-CONTROLLED, and declared so below: a gate's field values and a run's
+   * name are text people typed. It therefore leads the volatile tail beside
+   * `userContext`, ahead of every policy-bearing fragment, and the composer's
+   * constant trailer is still the last thing read.
+   *
+   * It carries no authority: nothing in it grants a tool, a control or a
+   * decision — see `run-window-frame.ts`, which writes it.
+   */
+  runFrameContext: string;
+  /**
    * "This namespace is FROZEN…" — present only once the instance has published
    * its first package, and `""` before that.
    *
-   * VOLATILE BY CONSTRUCTION (codex round-2, finding 2): the chat's own
+   * VOLATILE BY CONSTRUCTION (convergence round 2, finding 2): the chat's own
    * `agent_source_publish` tool is what flips it, so it can and does change
    * BETWEEN TWO TURNS OF ONE CONVERSATION. Splitting it out of
    * `instanceContext` is what makes the stable head's asserted byte-stability
@@ -115,14 +133,27 @@ export type ChatSystemPromptFragments = {
   instanceFreezeState: string;
   /** Bounded, one-hour window of decided destructive-confirmation outcomes. */
   pendingConfirmationContext: string;
-  /** The deterministic pre-router's hard directive, or `""`. */
-  explicitDispatchDirective: string;
+  /**
+   * The BOUND CARD for this turn (cinatra#2932, lifecycle-b W5a), or `""`.
+   *
+   * Either names the one card the message was sent with and the ONE control the
+   * assistant may press on it, or carries the platform's own refusal for the
+   * assistant to relay when several cards were open and none was picked.
+   *
+   * VOLATILE and POLICY-BEARING, so it sits in the tail after the
+   * user-controlled fragment: it is derived on the server from the reader's own
+   * access, it differs per turn by construction, and it constrains what the
+   * turn may do. It is NOT user-controlled — nothing in it is text a person
+   * typed; the only variable parts are an opaque server-minted ref, a control
+   * name from a closed vocabulary and a count.
+   */
+  boundCardContext: string;
   /** The conversation-only degrade notice for tool-less providers, or `""`. */
   conversationOnlyNotice: string;
 };
 
 /**
- * The CONSTANT policy trailer, composed after everything else (codex round-2,
+ * The CONSTANT policy trailer, composed after everything else (convergence round 2,
  * finding 1).
  *
  * It exists for one reason: the volatile tail contains user-controlled text,
@@ -162,14 +193,18 @@ export const CHAT_SYSTEM_STABLE_FRAGMENTS = [
 /**
  * The fragments allowed to differ between turns, in composition order.
  *
- * ORDER INSIDE THE TAIL IS ALSO A CONTRACT (codex round-2, finding 1): the
+ * ORDER INSIDE THE TAIL IS ALSO A CONTRACT (convergence round 2, finding 1): the
  * user-controlled fragment leads, and every policy-bearing fragment follows it.
  */
 export const CHAT_SYSTEM_VOLATILE_FRAGMENTS = [
   "userContext",
+  // cinatra#3016 — the prompt window's run frame. User-controlled like the
+  // fragment above it, so the two lead the tail together and every
+  // policy-bearing fragment is read after both.
+  "runFrameContext",
   "instanceFreezeState",
   "pendingConfirmationContext",
-  "explicitDispatchDirective",
+  "boundCardContext",
   "conversationOnlyNotice",
 ] as const satisfies readonly (keyof ChatSystemPromptFragments)[];
 
@@ -181,6 +216,7 @@ export const CHAT_SYSTEM_VOLATILE_FRAGMENTS = [
  */
 export const CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS = [
   "userContext",
+  "runFrameContext",
 ] as const satisfies readonly (keyof ChatSystemPromptFragments)[];
 
 /**

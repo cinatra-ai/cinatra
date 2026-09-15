@@ -16,7 +16,8 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { CheckIcon, CopyIcon, ListIcon, PlusIcon, Trash2Icon, Unplug } from "lucide-react";
 // The Connect action's glyph is the first-party joined plug (cinatra#2356) —
 // the SAME mark the status badge and the §I card grid draw for Connected.
 import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
@@ -42,6 +43,14 @@ import {
 } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   ConnectorSetupColumns,
   type ConnectorSetupConformanceId,
   type ConnectorSetupState,
@@ -53,8 +62,9 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
@@ -125,21 +135,27 @@ export type SchemaConfigConnectorFormProps = {
    * renders the two-column grid directly; on a tabbed surface the grid becomes
    * the Setup panel's body so the tablist can sit ABOVE both columns at the
    * Wide width (the tablist is page-header chrome, never inside the content
-   * column). Absent → single-column (the probe-less shape).
+   * column). Absent → single-column: a right column with nothing to put in it
+   * would read worse than no column at all. Since cinatra#3214 the HOST passes
+   * this card on EVERY schema-config connector's setup page — the drawing draws
+   * one setup shape and names no probe-less exemption — so no product setup
+   * surface reaches that branch; only a bare mount (a fixture, a unit test)
+   * does.
    */
   aside?: React.ReactNode;
   /**
-   * Host-owned content that belongs to the SETUP surface only (e.g. the
-   * connection-sharing section). On a tabbed surface it renders inside the
-   * Setup panel — beneath the columns — so it never leaks under a custom or
-   * Help tab; on a flat surface it renders after the fields. Like `aside` it
-   * MUST stay input-free (no named form controls): it renders inside the form
-   * fieldset, and `collectFormInputs()` scans every named descendant control.
+   * Host-owned content of the fixed SHARING tab — "who else may use each saved
+   * connection" (design §II: "Two tabs are fixed and every connector carries
+   * both: Setup first and Sharing second", and "sharing is decided on its own
+   * tab, never inside Setup"). It is a PANEL of its own, so it is neither part
+   * of the Setup body nor replaced by the Setup surface's loading / error
+   * treatments.
    *
-   * Rendered ONLY in the `ready` state: the loading / error treatments replace
-   * the setup body, and this footer is part of that body.
+   * Like `aside` it MUST stay input-free of NAMED form controls: it renders
+   * inside the form fieldset, and `collectFormInputs()` scans every named
+   * descendant control.
    */
-  setupFooter?: React.ReactNode;
+  sharingTab?: React.ReactNode;
   /**
    * Which §II setup surface this form IS: `connector-setup` (the single-
    * connection page) or `connector-multi-setup` (the Setup tab of a
@@ -159,16 +175,45 @@ export type SchemaConfigConnectorFormProps = {
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
 
+/**
+ * How long this surface waits for a named action before it stops waiting and
+ * says so. Set ABOVE the host dispatch's own bound, so the server's own
+ * give-up message normally wins and this is only the backstop for a request
+ * that never comes back at all (a dropped connection, a wedged server). Before
+ * this bound existed, a press on an action whose handler stopped left the
+ * button greyed out forever with no spinner, no message and no way to tell
+ * whether anything had happened.
+ */
+const ACTION_RESPONSE_TIMEOUT_MS = 45_000;
+
+/** The bound as a signal, where the browser supports one. */
+function actionTimeoutSignal(): AbortSignal | undefined {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function") return undefined;
+  return AbortSignal.timeout(ACTION_RESPONSE_TIMEOUT_MS);
+}
+
 async function invokeAction(installId: string, actionId: string, input: unknown): Promise<ActionResult> {
   try {
     const res = await fetch(`/api/extensions/${encodeURIComponent(installId)}/actions/${encodeURIComponent(actionId)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input ?? {}),
+      signal: actionTimeoutSignal(),
     });
     const body = (await res.json().catch(() => ({}))) as { result?: unknown; error?: string };
     return res.ok ? { ok: true, result: body.result } : { ok: false, error: body.error ?? `Request failed (${res.status}).` };
   } catch (e) {
+    // An abort is the bound above, never a server answer: say what happened in
+    // words the person can act on rather than surfacing "signal is aborted".
+    const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      return {
+        ok: false,
+        error:
+          "This action did not respond in time and was given up on. It may not have completed — " +
+          "reload the page before you try again.",
+      };
+    }
     return { ok: false, error: e instanceof Error ? e.message : "Request failed." };
   }
 }
@@ -227,10 +272,13 @@ function collectBannerVariants(surface: SchemaConfigSurface): Record<string, Ban
   return out;
 }
 
-// The reserved value of the base "Setup" tab. A leading underscore can never be
+// The reserved values of the two FIXED tabs. A leading underscore can never be
 // a connector tab id (the schema-config KEY_RE requires a leading letter), so
-// this never collides with a declared tab.
+// neither ever collides with a declared tab.
 const SETUP_TAB_VALUE = "__setup";
+const SHARING_TAB_VALUE = "__sharing";
+/** The fixed second tab's label (design §II — the same word on every connector). */
+const SHARING_TAB_LABEL = "Sharing";
 
 export function SchemaConfigConnectorForm({
   installId,
@@ -242,7 +290,7 @@ export function SchemaConfigConnectorForm({
   omitFieldKinds,
   initialConnected = false,
   aside,
-  setupFooter,
+  sharingTab,
   conformanceId = "connector-setup",
   conformanceState = "ready",
 }: SchemaConfigConnectorFormProps) {
@@ -257,6 +305,15 @@ export function SchemaConfigConnectorForm({
   // failures (record-list / dynamic-select fetches) stay inline — they are a
   // persistent "couldn't load" state, not a one-shot action result.
   const [listEpoch, setListEpoch] = useState(0);
+  // The Sharing tab (design §II) is a SERVER-rendered node the page hands in:
+  // it is composed from the live connection identity rows at request time. A
+  // successful action on THIS form can create or drop a connection (a
+  // connector's own save road registers the identity row, cinatra#3460), so
+  // without re-rendering the server half the Sharing tab keeps answering with
+  // the PRE-save state — "no connection saved here yet" — until the person
+  // reloads the page by hand (converge round 2, finding 1). `listEpoch` only
+  // re-fetches the client-side record lists, so it cannot carry this.
+  const router = useRouter();
   // Live connected state driving the canonical Connect / Disconnect pair.
   // Seeded from the host readiness signal; a successful role action mutates it.
   const [connected, setConnected] = useState<boolean>(initialConnected);
@@ -317,8 +374,11 @@ export function SchemaConfigConnectorForm({
       }
       // Any successful write may have changed the underlying rows — refresh lists.
       setListEpoch((e) => e + 1);
+      // ...and the SERVER half with them, so the Sharing tab reflects a
+      // connection this form just saved without a manual reload.
+      router.refresh();
     },
-    [bannerVariants],
+    [bannerVariants, router],
   );
 
   // One field group — shared by the flat form and by each tab panel. Field
@@ -368,13 +428,17 @@ export function SchemaConfigConnectorForm({
     );
   };
 
-  const hasTabs = !!surface.tabs && surface.tabs.length > 0;
+  // The tab strip is NEVER absent (design §II): Setup and Sharing are fixed on
+  // every connector, and a connector's own tabs — Help last, already ordered by
+  // the parser — extend the strip rather than introducing it.
+  const declaredTabs = surface.tabs ?? [];
 
   // The Setup surface body. With a host `aside` the form owns the §II
-  // two-column grid (fields | 236px status card); without one it stays the
-  // single-column probe-less shape. `setupFooter` (e.g. connection sharing)
-  // belongs to the SETUP surface only, so it rides inside this body — never
-  // beneath a custom or Help tab.
+  // two-column grid (fields | 236px status card). The host passes one for
+  // EVERY schema-config connector since cinatra#3214, so the aside-less
+  // single-column branch below is a bare-mount fallback rather than a product
+  // shape — there is no probe-less layout any more. Sharing is NOT part of this
+  // body: it is the fixed second tab's own panel (cinatra#3374).
   //
   // STATE FORWARDING IS UNCONDITIONAL (#2382 review note 1). It used to be
   // aside-GATED — a probe-less connector could be handed
@@ -397,16 +461,6 @@ export function SchemaConfigConnectorForm({
       ) : (
         renderGroup(surface.fields)
       )}
-      {/* setupFooter is SUPPRESSED while the surface is loading or errored
-          (#2382 review note 2). It used to stay live under both treatments,
-          which read as a contradiction: the host content it carries (the
-          connection-sharing section) describes connections of a setup surface
-          that has explicitly not resolved. §II's loading/error treatments
-          REPLACE the body, and this footer is part of that body. A route that
-          wants its own composition on an error page renders it itself, outside
-          the form — which is exactly what the connector dispatch route does on
-          its invalid-schema / rebuild branches. */}
-      {conformanceState === "ready" ? setupFooter : null}
     </>
   );
 
@@ -425,93 +479,101 @@ export function SchemaConfigConnectorForm({
       data-package={packageName}
       data-connected={connected ? "" : undefined}
     >
-      {hasTabs ? (
-        // Tabbed setup surface (design spec: app-connectors §II). The base fields
-        // are the reserved "Setup" tab; each declared tab follows, and the parser
-        // has already ordered the reserved Help tab LAST. The tab row is
-        // page-header chrome: `TabsListRow` sits at the Wide column directly
-        // beneath the header (its etched rule runs right of the last tab — the
-        // page passes `divider={false}` so the rules never stack), ABOVE the
-        // Setup panel's two-column grid — never inside the content column.
-        <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-6">
-          <TabsListRow>
-            <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
-            {surface.tabs!.map((tab) => (
-              <TabsTrigger key={tab.id} value={tab.id}>
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsListRow>
-          {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
-              the form — still sees inputs on inactive tabs. Radix unmounts
-              inactive tab content by default, which would silently drop those
-              values on submit. With forceMount Radix keeps the panel mounted but
-              no longer sets `hidden`, so we hide the inactive ones ourselves via
-              Radix's own `data-state` (display:none keeps inputs collectable). */}
-          <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
-            {setupBody}
-          </TabsContent>
-          {surface.tabs!.map((tab) =>
-            tab.id === HELP_TAB_ID ? (
-              // Reserved Help tab (§II): read-only setup how-to at the Narrow
-              // width — ONE card, no form, no Save. Rendered by HelpPanel
-              // (advisories become sections of a single card; input-bearing
-              // kinds are not rendered, so they never enter the submit scan).
-              <TabsContent
-                key={tab.id}
-                value={tab.id}
-                forceMount
-                className="data-[state=inactive]:hidden"
+      {/* The FIXED tab strip (design spec: app-connectors §II). Two tabs are
+          fixed and every connector carries both — Setup first, Sharing second
+          ("who else may use each saved connection"); each declared tab follows,
+          and the parser has already ordered the reserved Help tab LAST. The
+          strip is therefore never absent: a custom tab extends it rather than
+          introducing it. The tab row is page-header chrome: `TabsListRow` sits
+          at the Wide column directly beneath the header (its etched rule runs
+          right of the last tab — the page passes `divider={false}` so the rules
+          never stack), ABOVE the Setup panel's two-column grid — never inside
+          the content column. */}
+      <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-6">
+        <TabsListRow>
+          <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
+          <TabsTrigger value={SHARING_TAB_VALUE}>{SHARING_TAB_LABEL}</TabsTrigger>
+          {declaredTabs.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id}>
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsListRow>
+        {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
+            the form — still sees inputs on inactive tabs. Radix unmounts
+            inactive tab content by default, which would silently drop those
+            values on submit. With forceMount Radix keeps the panel mounted but
+            no longer sets `hidden`, so we hide the inactive ones ourselves via
+            Radix's own `data-state` (display:none keeps inputs collectable). */}
+        <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
+          {setupBody}
+        </TabsContent>
+        {/* Sharing (§II): the connection-sharing panels the HOST composes and
+            passes in. It is the only place the sharing question is answered, so
+            it is a panel of its own and the Setup surface's loading / error
+            treatments do not reach it. A person who has saved no connection
+            here sees nothing on it yet — the host passes nothing. */}
+        <TabsContent value={SHARING_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
+          {sharingTab}
+        </TabsContent>
+        {declaredTabs.map((tab) =>
+          tab.id === HELP_TAB_ID ? (
+            // Reserved Help tab (§II): read-only setup how-to at the Narrow
+            // width — ONE card, no form, no Save. Rendered by HelpPanel
+            // (advisories become sections of a single card; input-bearing
+            // kinds are not rendered, so they never enter the submit scan).
+            <TabsContent
+              key={tab.id}
+              value={tab.id}
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
+              <div className="max-w-xl">
+                <HelpPanel fields={tab.fields} installId={installId} />
+              </div>
+            </TabsContent>
+          ) : (
+            // Custom config tab (§II, surface `connector-config-tab`):
+            // content narrows to the Narrow width (max-w-xl · 576px),
+            // flush-left beneath the Wide tablist. The panel carries the
+            // conformance id + the surface's current state; the two
+            // non-ready variants replace the field group IN PLACE so the
+            // surface stays mounted (same treatment as ConnectorSetupColumns).
+            <TabsContent
+              key={tab.id}
+              value={tab.id}
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
+              <div
+                data-conformance-id="connector-config-tab"
+                data-state={conformanceState}
+                className="max-w-xl"
               >
-                <div className="max-w-xl">
-                  <HelpPanel fields={tab.fields} installId={installId} />
-                </div>
-              </TabsContent>
-            ) : (
-              // Custom config tab (§II, surface `connector-config-tab`):
-              // content narrows to the Narrow width (max-w-xl · 576px),
-              // flush-left beneath the Wide tablist. The panel carries the
-              // conformance id + the surface's current state; the two
-              // non-ready variants replace the field group IN PLACE so the
-              // surface stays mounted (same treatment as ConnectorSetupColumns).
-              <TabsContent
-                key={tab.id}
-                value={tab.id}
-                forceMount
-                className="data-[state=inactive]:hidden"
-              >
-                <div
-                  data-conformance-id="connector-config-tab"
-                  data-state={conformanceState}
-                  className="max-w-xl"
-                >
-                  {conformanceState === "loading" ? (
-                    <p
-                      data-slot="connector-config-tab-loading"
-                      aria-busy="true"
-                      className="text-sm text-muted-foreground"
-                    >
-                      Loading settings…
-                    </p>
-                  ) : conformanceState === "error" ? (
-                    <p
-                      data-slot="connector-config-tab-error"
-                      role="alert"
-                      className="text-sm text-destructive"
-                    >
-                      These settings could not be loaded.
-                    </p>
-                  ) : (
-                    renderGroup(tab.fields)
-                  )}
-                </div>
-              </TabsContent>
-            ),
-          )}
-        </Tabs>
-      ) : (
-        setupBody
-      )}
+                {conformanceState === "loading" ? (
+                  <p
+                    data-slot="connector-config-tab-loading"
+                    aria-busy="true"
+                    className="text-sm text-muted-foreground"
+                  >
+                    Loading settings…
+                  </p>
+                ) : conformanceState === "error" ? (
+                  <p
+                    data-slot="connector-config-tab-error"
+                    role="alert"
+                    className="text-sm text-destructive"
+                  >
+                    These settings could not be loaded.
+                  </p>
+                ) : (
+                  renderGroup(tab.fields)
+                )}
+              </div>
+            </TabsContent>
+          ),
+        )}
+      </Tabs>
     </FieldSet>
   );
 }
@@ -669,26 +731,82 @@ function NamedActionRow({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const run = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (field.confirm && !window.confirm(field.confirm)) return;
-    // Scope the input scan to THIS button's own form (see collectFormInputs).
-    const origin = e.currentTarget;
+  const [open, setOpen] = useState(false);
+  // The confirm button lives in a PORTAL (outside the form), so the input scan
+  // anchors on the TRIGGER, which is inside this form (see collectFormInputs).
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const run = useCallback(async (origin: Element | null) => {
     setPending(true);
     const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));
     setPending(false);
+    setOpen(false);
     // The outcome (Done. / error / schema-declared banner variant) TOASTs via
     // onActionResult — no in-form "Done."/error text.
     onActionResult(r);
-  }, [field.confirm, field.actionId, installId, onActionResult]);
+  }, [field.actionId, installId, onActionResult]);
   // The button IS the action: its text is the declared label, with NO FieldLabel
   // row echoing the same text above it (design §II — the form drops the
   // per-action section labels; a custom tab "ends in its own Save").
+  if (!field.confirm) {
+    return (
+      <Field>
+        <FieldContent>
+          {/* While the action is in flight the button carries the SPINNER the rest
+              of the app uses for a pending press (the instance save button, the
+              setup Continue button). A greyed-out button alone is not feedback: it reads
+              exactly like a button that refused the press. */}
+          <Button type="button" className="self-start" onClick={(e) => void run(e.currentTarget)} disabled={pending} aria-busy={pending}>
+            {field.label}
+            {/* The spinner sits on the primary ground, where the Spinner's own
+                text-primary stroke would be the same colour as the button: take
+                the colour override the component documents for exactly this
+                case, or the wait is invisible. */}
+            {pending ? <Spinner className="text-primary-foreground" /> : null}
+          </Button>
+          {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+        </FieldContent>
+      </Field>
+    );
+  }
+  // A declared `confirm` opens an AlertDialog — never a bare browser prompt
+  // (cinatra#3231; connectors surface §II). The declared text is the dialog's
+  // body; the action keeps its own label on the confirm button, in the primary
+  // (not destructive) treatment — a confirmed named action is consequential,
+  // not necessarily destructive.
   return (
     <Field>
       <FieldContent>
-        <Button type="button" className="self-start" onClick={run} disabled={pending}>
-          {field.label}
-        </Button>
+        <AlertDialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
+          <AlertDialogTrigger asChild>
+            <Button ref={triggerRef} type="button" className="self-start" disabled={pending} aria-busy={pending}>
+              {field.label}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{field.label}?</AlertDialogTitle>
+              <AlertDialogDescription>{field.confirm}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="named-action-confirm"
+                className={buttonVariants({ variant: "default" })}
+                disabled={pending}
+                aria-busy={pending}
+                onClick={(e) => {
+                  // Keep the dialog mounted through the async action; `run`
+                  // closes it once the request resolves.
+                  e.preventDefault();
+                  void run(triggerRef.current);
+                }}
+              >
+                {field.label}
+                {pending ? <Spinner className="text-primary-foreground" /> : null}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>
@@ -1010,6 +1128,22 @@ function rowTruthy(row: RecordRow, key: string): boolean {
   return v === true || (typeof v === "string" && v.length > 0);
 }
 
+/**
+ * The record-list field (cinatra#3231 brought it onto the ratified drawing):
+ *   - zero rows render the drawing's Empty state — "@/components/ui/empty":
+ *     centred, the dashed-circle icon, the 14px headline (`emptyState`) over
+ *     the 12px helper (`emptyStateDetail.helper`), and ONE primary action
+ *     ("Always include a single primary action button — never just empty
+ *     text") that moves focus to the field's own add control — the first
+ *     input of the add form in this same generated setup form;
+ *   - the per-row delete is a destructive action on the setup page, so it
+ *     opens an AlertDialog — "a Cancel outline beside the red … confirm —
+ *     never a bare browser prompt" (connectors surface §II), the same
+ *     primitives Disconnect uses above; its copy stays connector-neutral;
+ *   - the field header carries the label and nothing else: the drawing gives
+ *     the generated form no per-field header control. The list still reloads
+ *     on mount and after every write through the shared list epoch.
+ */
 function RecordListRow({
   field,
   installId,
@@ -1025,6 +1159,9 @@ function RecordListRow({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // The row whose delete awaits confirmation; drives the ONE AlertDialog below.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
 
   // The fetch body. Returns the resolved state; the caller decides whether to
   // apply it (so the mount/epoch effect can ignore a stale response after
@@ -1052,10 +1189,6 @@ function RecordListRow({
     }
   }, []);
 
-  const reload = useCallback(async () => {
-    applyResult(await fetchRows());
-  }, [fetchRows, applyResult]);
-
   // Reload on mount and whenever a write bumps the shared epoch. The fetch's
   // first setState runs after a microtask (see fetchRows), and a stale response
   // is dropped if the row unmounted mid-flight.
@@ -1070,25 +1203,43 @@ function RecordListRow({
     };
   }, [fetchRows, applyResult, listEpoch]);
 
-  const onDelete = useCallback(
-    async (id: string) => {
-      if (!field.deleteActionId) return;
-      if (!window.confirm("Delete this entry?")) return;
-      setDeletingId(id);
-      const r = await invokeAction(installId, field.deleteActionId, { id });
-      setDeletingId(null);
-      onActionResult(r); // bumps the epoch → reload
-    },
-    [field.deleteActionId, installId, onActionResult],
-  );
+  const confirmDelete = useCallback(async () => {
+    const id = confirmDeleteId;
+    if (!field.deleteActionId || id === null) return;
+    setConfirmDeleteId(null);
+    setDeletingId(id);
+    const r = await invokeAction(installId, field.deleteActionId, { id });
+    setDeletingId(null);
+    onActionResult(r); // bumps the epoch → reload
+  }, [confirmDeleteId, field.deleteActionId, installId, onActionResult]);
+
+  // The Empty state's single primary action: move keyboard focus to the add
+  // form's first enabled control in this same generated form — the first
+  // control that FOLLOWS this field in document order (the add form is
+  // declared after the list it feeds; a field declared before the list is not
+  // the list's own add control). The field itself carries no input.
+  const focusAddControl = useCallback(() => {
+    const fieldEl = fieldRef.current;
+    const form = fieldEl?.closest<HTMLElement>('[data-testid="schema-config-form"]');
+    if (!fieldEl || !form) return;
+    const candidates = form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+      'input:not([type="hidden"]), select, textarea',
+    );
+    for (const el of Array.from(candidates)) {
+      if (el.disabled || fieldEl.contains(el)) continue;
+      if ((fieldEl.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) continue;
+      el.focus();
+      return;
+    }
+  }, []);
+
+  const helper = field.emptyStateDetail?.helper;
+  const actionLabel = field.emptyStateDetail?.actionLabel ?? "Add entry";
 
   return (
-    <Field data-testid={`record-list-${field.listActionId}`}>
-      <div className="flex items-center justify-between gap-2">
+    <Field ref={fieldRef} data-testid={`record-list-${field.listActionId}`}>
+      <div data-testid="record-list-header">
         <FieldLabel>{field.label}</FieldLabel>
-        <Button type="button" variant="ghost" size="icon-xs" onClick={() => void reload()} aria-label="Refresh list" disabled={loading}>
-          <RefreshCwIcon />
-        </Button>
       </div>
       {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       <FieldContent className="gap-2">
@@ -1100,7 +1251,21 @@ function RecordListRow({
         {rows === null && loading ? (
           <FieldDescription>Loading…</FieldDescription>
         ) : rows && rows.length === 0 ? (
-          <FieldDescription data-testid="record-list-empty">{field.emptyState}</FieldDescription>
+          <Empty data-testid="record-list-empty" className="border border-line">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ListIcon aria-hidden="true" />
+              </EmptyMedia>
+              <EmptyTitle>{field.emptyState}</EmptyTitle>
+              {helper ? <EmptyDescription className="text-xs">{helper}</EmptyDescription> : null}
+            </EmptyHeader>
+            <EmptyContent>
+              <Button type="button" onClick={focusAddControl}>
+                <PlusIcon />
+                {actionLabel}
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : (
           (rows ?? []).map((row, i) => {
             const id = typeof row.id === "string" ? row.id : null;
@@ -1117,10 +1282,22 @@ function RecordListRow({
                   ) : null}
                   <div className="flex flex-wrap gap-1 pt-1">
                     {field.itemBadges
-                      .filter((b) => rowTruthy(row, b.key))
+                      // A showsValue badge is gated on its RENDERED text, not on
+                      // rowTruthy: a whitespace-only value would otherwise draw a
+                      // visually empty badge carrying only its sr-only qualifier.
+                      .filter((b) =>
+                        b.showsValue ? rowText(row, b.key).trim().length > 0 : rowTruthy(row, b.key),
+                      )
                       .map((b) => (
                         <Badge key={b.key} variant={BADGE_VARIANT_MAP[b.variant]}>
-                          {b.label}
+                          {b.showsValue ? (
+                            <>
+                              <span className="sr-only">{`${b.label}: `}</span>
+                              <span data-testid="record-list-badge-value">{rowText(row, b.key)}</span>
+                            </>
+                          ) : (
+                            b.label
+                          )}
                         </Badge>
                       ))}
                   </div>
@@ -1132,7 +1309,7 @@ function RecordListRow({
                     size="icon"
                     aria-label={`Delete ${rowText(row, field.itemTitleKey) || "entry"}`}
                     disabled={deletingId === id}
-                    onClick={() => void onDelete(id)}
+                    onClick={() => setConfirmDeleteId(id)}
                   >
                     <Trash2Icon />
                   </Button>
@@ -1142,6 +1319,37 @@ function RecordListRow({
           })
         )}
       </FieldContent>
+      {field.deleteActionId ? (
+        <AlertDialog
+          open={confirmDeleteId !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirmDeleteId(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Remove this entry from the list? This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="record-list-delete-confirm"
+                onClick={(e) => {
+                  // Close it ourselves once the id is read (see confirmDelete).
+                  e.preventDefault();
+                  void confirmDelete();
+                }}
+              >
+                <Trash2Icon />
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </Field>
   );
 }

@@ -1,0 +1,47 @@
+{
+  "$comment": "PROVENANCE for the manifest artifacts this repository pinned BEFORE the cinatra#3057 reconciliation. Every body beside this receipt is the verbatim committed copy of tests/e2e/design/conformance/manifests/FILE at sourceCommit — the artifact its superseded pin named, so `sha256` and `contentHash` below ARE the hashes conformance-pins.json carried before the reconciliation. Re-derive any row by hand with: git show SOURCE_COMMIT:tests/e2e/design/conformance/manifests/FILE | shasum -a 256. These bodies are the suite's DRIFT input. Once the published manifests were adopted, published-2026-08-28/ became the MATCH set, and a gate whose drift path has no input is a gate whose drift path is untested: run against the pins as they now stand, every body here must still classify as drift, in both hashes.",
+  "supersededOn": "2026-08-30",
+  "sourceCommit": "0306dfc688ee5819560be4fb3ef921a86956d9d1",
+  "manifests": [
+    {
+      "file": "app.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app.json",
+      "byteLength": 376,
+      "sha256": "06662cd06b4878c8ff30145a0bc2a7baddc5fadea21a13c739e6a341ba6e61f7",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:105ce0befd2464c6ac32058a6455abdd96c3e375480e2aba46736a114c075bc1"
+    },
+    {
+      "file": "app-components.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-components.json",
+      "byteLength": 724,
+      "sha256": "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e"
+    },
+    {
+      "file": "app-extensions.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-extensions.json",
+      "byteLength": 3849,
+      "sha256": "3a7abe90f988be62252b357e6a1af4c24b4c2c6c28ce7f45298b2450559ad196",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:797c44f7b2ed706c74aef0cc4a949352cb1625d5eb9e856c42e25460fe4e06fd"
+    },
+    {
+      "file": "app-connectors.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-connectors.json",
+      "byteLength": 3690,
+      "sha256": "b0aada80a8209f0a272142786a50c334e3e7b18b891859218ffa56522936a897",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:9f28d508390afd63dc51c69bc80192e9a33d739726c93bb3ceaeff60b9cf93af"
+    },
+    {
+      "file": "app-notifications.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-notifications.json",
+      "byteLength": 2621,
+      "sha256": "542e5051e58f2cb3c0af5b7a31be6d8100f747fd088f0a6f25af67d8b5289756",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:e2ef9a2f2f8420eff3d8d8978cf6d5289efd8b6e00283dadd28e07e5b8a2bfc3"
+    }
+  ]
+}

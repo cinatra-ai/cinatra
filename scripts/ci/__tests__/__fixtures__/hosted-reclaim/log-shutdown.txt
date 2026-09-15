@@ -1,0 +1,6 @@
+2026-09-07T16:50:11.4821730Z ##[group]Run pnpm build
+2026-09-07T16:50:11.4823110Z   CINATRA_BUILD_CPUS=1
+2026-09-07T16:50:11.4824550Z ##[endgroup]
+2026-09-07T16:52:03.1190220Z    Creating an optimized production build ...
+2026-09-07T16:57:41.8830010Z Error: The operation was canceled.
+2026-09-07T16:57:41.8831440Z The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.

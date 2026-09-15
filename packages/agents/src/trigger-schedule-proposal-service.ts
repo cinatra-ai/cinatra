@@ -39,14 +39,19 @@ import "server-only";
 // window where a one-shot fire can be lost. The drain arms first.
 // ---------------------------------------------------------------------------
 
+import { durationCopyFor } from "./duration-copy";
+import { estimateRunDuration } from "./trigger-duration-estimate";
 import {
   buildCron,
   describeRecurrence,
+  parseCronToRecurring,
+  DEFAULT_RECURRING_CONFIG,
   type RecurringConfig,
 } from "./trigger-recurrence";
 import {
   proposalConsumeKey,
   verifyTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalTokenDetailed,
   type ProposalSchedule,
   type TriggerScheduleProposal,
 } from "@/lib/trigger-schedule-proposal-token";
@@ -58,6 +63,7 @@ import {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
@@ -67,17 +73,21 @@ export {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 };
+import { launchAgentRun } from "./lifecycle-coordinator";
 import {
-  createAgentRunPendingInput,
   readAgentRunById,
   readAgentTemplateById,
   transitionRunStatus,
   RunTransitionError,
 } from "./store";
+import { AuthzError } from "@/lib/authz";
+import type { ActorRoleHints } from "./auth-policy";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
   createOrUpdateRunTrigger,
   readRunTriggerByRunId,
@@ -93,6 +103,7 @@ import {
   parkInstallIntent,
   readInstallIntent,
   readProposalConsume,
+  readProposalConsumeByRunId,
   releaseInstallIntent,
   spendProposalWithinTx,
   type InstallIntentRow,
@@ -113,20 +124,25 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 // in `assistant_turns.content` and is re-fed to the model — naming what was
 // refused there would build a durable enumeration oracle.
 
-/** What Confirm says when the proposal is no longer good. */
+/** What Confirm says when the stated schedule is no longer good. */
 export const PROPOSAL_REFUSALS = {
+  /** The reader may SEE this run and may not configure its schedule
+   *  (cinatra#3044). Their own standing, and nothing about the run, the
+   *  organization or a policy. */
+  notYoursToSchedule:
+    "Only the person who started this run can set its schedule.",
   invalid:
-    "This schedule proposal is no longer valid — it may have expired. Ask again and confirm the new one.",
+    "This schedule is no longer valid — it may have expired. Ask again and confirm the new card.",
   notRunnable:
     "This agent can't be run right now. Open its listing to see what it needs.",
   unknownAgent:
-    "The agent this schedule was proposed for is no longer available.",
+    "The agent this schedule was for is no longer available.",
   installFailed:
     "The schedule could not be armed just now — please try again.",
   past:
     "That time has already passed. Ask for a new time and confirm the new card.",
   supersededBySchedule:
-    "This schedule was already set from this card, with different times than the ones shown here. Open the run to see the schedule that was set.",
+    "This schedule was already set from this card, with different times than the ones shown here. The rows below show the schedule that was set.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -221,35 +237,57 @@ export async function confirmTriggerScheduleProposal(
 
   let runId: string;
   try {
-    const created = await createAgentRunPendingInput(
-      {
-        templateId: proposal.templateId,
-        runBy: actor.userId,
-        inputParams: {},
-        orgId: actor.orgId,
-        // Interactive: the reader is looking at the card they just pressed.
-        // cinatra#2067 — the run may park at the recommendation interception
-        // before it dispatches, exactly as every other interactive run-start.
-        humanPresent: true,
-        // `scopeActor` is deliberately left to the default, as every other
-        // interactive create does: the #2485 C scope guard resolves the run's
-        // OWN owner (`runBy`, the confirming human) and the acting principal is
-        // already this session. Passing a hand-built actor here would be the
-        // only call site in the codebase doing so.
-        // The one transaction. See `spendProposalWithinTx`.
-        withinCreateTx: async (tx, run) =>
-          spendProposalWithinTx(tx, {
-            consumeKey,
-            runId: run.id,
-            orgId: run.orgId,
-            templateId: proposal.templateId,
-            consumedBy: actor.userId,
-            install,
-          }),
-      },
+    // CONFIRM IS LAUNCH, NOT ADVANCE (cinatra#2928). Until this moment there is
+    // no run: the carrier is the schedule the person stated, held in its signed
+    // reference, and nothing has been written. Confirm consumes that reference
+    // and creates the run WITH its schedule in one transaction — which is why
+    // this launch uses the pre-dispatch creator and hands it the companion
+    // write. Routing it through the coordinator is what makes "every way of
+    // starting an agent calls launch" true of the schedule card too.
+    //
+    // The run is left pre-dispatch on purpose: the install drain below arms the
+    // schedule before it exposes it, and a run enqueued here would start now
+    // rather than when the person asked for.
+    const launched = await launchAgentRun({
+      producer: "schedule_confirm",
+      // The reader is looking at the card they just pressed, under a live cookie
+      // session this action already re-derived the user and org from.
+      frame: { userId: actor.userId },
+      interactive: true,
       authority,
-    );
-    runId = created.id;
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: proposal.templateId,
+          runBy: actor.userId,
+          inputParams: {},
+          orgId: actor.orgId,
+          // `scopeActor` is deliberately left to the default, as every other
+          // interactive create does: the #2485 C scope guard resolves the run's
+          // OWN owner (`runBy`, the confirming human) and the acting principal is
+          // already this session. Passing a hand-built actor here would be the
+          // only call site in the codebase doing so.
+          // The one transaction. See `spendProposalWithinTx`.
+          withinCreateTx: async (tx, run) =>
+            spendProposalWithinTx(tx, {
+              consumeKey,
+              runId: run.id,
+              orgId: run.orgId,
+              templateId: proposal.templateId,
+              consumedBy: actor.userId,
+              install,
+            }),
+        },
+      },
+      dispatch: {
+        kind: "await_trigger",
+        why: "the install drain arms the schedule before it exposes it; this run starts when the schedule says so",
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+    }
+    runId = launched.carrier.run.id;
   } catch (err) {
     if (err instanceof ProposalAlreadyConsumedError) {
       // The race we designed for: a concurrent Confirm won. Our run rolled back
@@ -649,6 +687,74 @@ export type ProposalResolution =
       agentName: string;
       canConfirm: boolean;
       restrictedReason: string | null;
+      /** The estimated-duration line, already rendered — see
+       *  `templateDurationCopy`. `null` draws no line. */
+      durationCopy: string | null;
+    }
+  /**
+   * EXPIRED, AND STILL THIS READER'S (cinatra#2836). The thirty-minute window
+   * closed with nobody pressing anything, and the token is otherwise perfect:
+   * authentic, unstretched, minted for exactly this reader in exactly this org.
+   *
+   * A READING, NOT AN ABSENCE. Plan (A) §7.2 step 2 — an expired card "stays
+   * visible", still editable, with Confirm to set the schedule again — and
+   * design §IV reserves the undrawn answer for a reader who may not see the
+   * subject AT ALL. Collapsing the two, which is what this resolver did before
+   * this fix, deleted the card and the question it asked out of the reader's
+   * own transcript, and made every timed-out reader indistinguishable from one
+   * who was never entitled to anything.
+   *
+   * Only a reader who OWNS the token can ever reach this arm: the verify
+   * reports `expired` strictly behind both bindings, so an expired token
+   * belonging to somebody else is the same flat refusal a forged one is, and
+   * lands on `absent` exactly as before.
+   *
+   * It carries the same fields the live proposal does. `canConfirm` is still
+   * the floor read against the reader — an agent the instance would refuse to
+   * run cannot be scheduled by re-proposing it either — and `proposal` carries
+   * the rows the reader last saw, so the expired card re-opens on those rather
+   * than on an empty form.
+   */
+  | {
+      phase: "expired";
+      proposal: TriggerScheduleProposal;
+      agentName: string;
+      canConfirm: boolean;
+      restrictedReason: string | null;
+      /** The estimated-duration line, already rendered — see
+       *  `templateDurationCopy`. `null` draws no line. */
+      durationCopy: string | null;
+    }
+  /**
+   * THE RUN EXISTS AND IS WAITING AT ITS SCHEDULE (cinatra#3044).
+   *
+   * A run a person started from a conversation finishes its setup and parks at
+   * `pending_trigger` owing one answer: "When should this run?". Nothing is
+   * armed — no trigger row, no install intent — so `settled` would be a lie and
+   * `absent` was one: the run is there, the person is waiting on it, and the
+   * card in their conversation is the surface that asks.
+   *
+   * IT CARRIES NO ROWS, deliberately. What the form opens on is the schedule
+   * moment's own default, turned into a row by the one mapping the tier-neutral
+   * card registry states — the mapping both surfaces that draw a schedule
+   * already read, and which the card body on the conversation side applies for
+   * this phase too. Answering rows from HERE would be a second statement of that
+   * decision, free to drift from the one, and this module is deliberately not a
+   * reader of it: §6's own arm holds the set of files that may so much as name
+   * the mapping to the four that state, own or apply it.
+   */
+  | {
+      phase: "run_pending";
+      runId: string;
+      agentName: string;
+      /** The estimated-duration line, already rendered — see
+       *  `templateDurationCopy`. `null` draws no line. */
+      durationCopy: string | null;
+      /** The floor, resolved against the reader — the same read the proposal
+       *  phase takes, for the same reason: an agent this instance would refuse
+       *  to run cannot be scheduled from this card either. */
+      canConfirm: boolean;
+      restrictedReason: string | null;
     }
   | {
       phase: "settled";
@@ -657,8 +763,60 @@ export type ProposalResolution =
       triggerType: "immediate" | "scheduled" | "recurring";
       scheduleCopy: string;
       timezone: string;
+      /**
+       * THE ARMED SCHEDULE AS SELECTIONS — what the settled card's option rows
+       * draw (plan (A) §7.2: "the same card, with the same option rows, now
+       * shows the armed schedule"). Read back from what was INSTALLED, never
+       * from the token: the durable trigger row (or the install intent while it
+       * drains) is what the family actually settled on, so a superseded card's
+       * rows are right for the same reason its `scheduleCopy` is honest.
+       */
+      schedule: ProposalSchedule;
       released: boolean;
       arming: boolean;
+      /**
+       * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#2972)?
+       *
+       * The two trigger families answer it from two different stamps, and they
+       * have to: a one-off's firing IS the gate opening (`releasedAt`), while a
+       * recurring schedule never opens its own run's gate — each tick starts a
+       * copy — so its firing is the tick's own stamp (`lastFiredAt`).
+       *
+       * Plan (A) §7.2 as amended 2026-08-25 keys **Cancel schedule** to it:
+       * "shown only for a recurring schedule that has fired once".
+       */
+      firedOnce: boolean;
+      /**
+       * THE ESTIMATED-DURATION LINE, ALREADY RENDERED (cinatra#3174 fix leg 1).
+       *
+       * `null` where the template has no history to estimate from, which draws
+       * NO LINE rather than a sentence the drawing does not give. See
+       * `templateDurationCopy`.
+       */
+      durationCopy: string | null;
+      /**
+       * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
+       * (cinatra#2972). The row is still there and still drawn; what it has
+       * lost is every control. Plan (A) §7.2: Cancel schedule "stops the
+       * recurring schedule and then makes the scheduler non-editable".
+       */
+      stopped: boolean;
+      /**
+       * May **Save changes** re-arm from this card (plan (A) §7.2 step 6)?
+       *
+       * The refusals, and each is the server's rule read forward rather than a
+       * second policy: a trigger still ARMING has no scheduler to replace yet, a
+       * STOPPED schedule is over, and a ONE-OFF (or an immediate) THAT HAS
+       * ALREADY FIRED is not a schedule any more — re-arming it would make a
+       * second run out of a card that says "change this one".
+       *
+       * A RECURRING SCHEDULE THAT HAS FIRED IS NOT REFUSED, and that is the
+       * change cinatra#2972 lands: plan (A) §7.2 as amended 2026-08-25 — "a run
+       * set to **Recurring** that has fired keeps its scheduler editable — the
+       * same rows and **Save changes**, and a change applies to its future
+       * runs".
+       */
+      canSave: boolean;
       /**
        * This card's rows are NOT the ones the family settled on — it was
        * adjusted away from before Confirm landed. `scheduleCopy` says so and
@@ -696,12 +854,22 @@ export async function resolveProposalForReader(
   token: string,
   actor: ConfirmProposalActor,
 ): Promise<ProposalResolution> {
-  const proposal = verifyTriggerScheduleProposalToken({
+  // THE FINER READ, AND ONLY HERE (cinatra#2836). Confirm and the live Adjust
+  // keep the collapsing verify, because for them an expired token has nothing
+  // left to spend. RESOLUTION is the one caller that must tell an expired card
+  // apart from an absent one, because it is the caller that decides whether the
+  // card is DRAWN at all — and drawing it is what plan (A) §7.2 step 2 asks for.
+  //
+  // `refused` still swallows everything, on the identical path and with the
+  // identical answer as before this change: forged, foreign, stretched,
+  // future-dated, AND expired-but-foreign all arrive here as one value.
+  const verified = verifyTriggerScheduleProposalTokenDetailed({
     token,
     expectedUserId: actor.userId,
     expectedOrgId: actor.orgId,
   });
-  if (!proposal) return { phase: "absent" };
+  if (verified.outcome === "refused") return { phase: "absent" };
+  const proposal = verified.proposal;
 
   const template = await readAgentTemplateById(proposal.templateId);
   if (!template) return { phase: "absent" };
@@ -710,9 +878,18 @@ export async function resolveProposalForReader(
 
   const consumed = await readProposalConsume(proposalConsumeKey(proposal.nonce));
   if (consumed) {
-    const [trigger, intent] = await Promise.all([
+    // THE RUN'S OWN ROW IS NOT READ HERE ANY MORE (cinatra#3174 fix leg 3,
+    // converge round). Fix leg 1 read it on this road for one question only —
+    // whether the one-off had actually run — and fix leg 3 settled that the
+    // schedule's firing is the trigger's own record, `releasedAt`, which is
+    // already in hand from the trigger row beside this. With the question gone
+    // the read is a round-trip and a failure mode this card no longer needs,
+    // and it was an unauthorized read of a run row: the narrowest thing to do
+    // with a read nothing consumes is not to make it.
+    const [trigger, intent, durationCopy] = await Promise.all([
       readRunTriggerByRunId(consumed.runId),
       readInstallIntent(consumed.runId),
+      templateDurationCopy(template),
     ]);
     // Spent — but spent on WHAT? Under #2859's shared consume identity every
     // member of an adjust family addresses one row, so a matching row proves
@@ -732,9 +909,43 @@ export async function resolveProposalForReader(
         ? SUPERSEDED_SCHEDULE_COPY
         : describeProposalSchedule(proposal.schedule),
       timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      // THE ROWS COME FROM THE INSTALLED ROW, not from `proposal.schedule`.
+      // Under #2859's shared consume identity this card's own token may be
+      // holding rows the family was corrected away from; the durable trigger
+      // row is what is armed, and "shows the armed schedule in the same rows"
+      // (plan (A) §7.2) is only true if the rows are read from it.
+      schedule: selectionsFromInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+        timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      }),
       released: !!trigger?.releasedAt,
       // "Arming…" rather than controls over a schedule still being installed.
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      // THE TWO FAMILIES, TWO STAMPS (cinatra#2972). The conversation's card and
+      // the page's step read one schedule, so both readings come off the same
+      // durable row here as they do on the run-addressed path.
+      firedOnce: scheduleFiredOnce({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        releasedAt: trigger?.releasedAt,
+        lastFiredAt: trigger?.lastFiredAt,
+      }),
+      durationCopy,
+      stopped: trigger?.stoppedAt != null,
+      canSave: canSaveInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        released: !!trigger?.releasedAt,
+        arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+        stopped: trigger?.stoppedAt != null,
+      }),
       superseded,
     };
   }
@@ -745,12 +956,538 @@ export async function resolveProposalForReader(
     { packageVersion: template.packageVersion ?? null },
   );
   return {
-    phase: "proposal",
+    // THE EXPIRY READING IS TAKEN LAST, and that order carries meaning rather
+    // than convenience. An expired token whose family was already CONFIRMED is
+    // a settled card, not an expired one — the run exists and the reader should
+    // see it — so the consume lookup above answers first. An expired token for
+    // a template that has since vanished is still `absent`, for the same reason
+    // a live one is. What is left here is exactly the plan's case: the window
+    // closed and nothing was ever armed.
+    phase: verified.outcome === "expired" ? "expired" : "proposal",
     proposal,
     agentName,
     canConfirm: !notRunnable,
     // §IV: the reason is on screen, and it describes the reader's own standing
     // without enumerating anything about the instance.
     restrictedReason: notRunnable ? PROPOSAL_REFUSALS.notRunnable : null,
+    // The line §VI draws beneath the rows of the first-shown and the expired
+    // readings as well as the settled one (converge round).
+    durationCopy: await templateDurationCopy(template),
   };
+}
+
+/**
+ * The status a run waits for its schedule CHOICE in (cinatra#3044).
+ *
+ * Narrower than `SCHEDULE_PARK_STATUSES` in the coordinator, and deliberately:
+ * that pair covers the whole schedule park, `armed` included, and an armed run
+ * has a trigger row — it is `settled` here, not pending. What this names is the
+ * one status in which the question is still open.
+ */
+const SCHEDULE_PENDING_STATUS = "pending_trigger";
+
+/** The moment a waiting run states while that question is open. */
+const SCHEDULE_MOMENT = "schedule";
+
+/**
+ * Resolve a proposal card for a RUN, for one reader (cinatra#2788, S9d).
+ *
+ * The run-page / review-page identity. Those hosts hold no proposal token, so
+ * they address the card by the run it settled into; this call re-derives the
+ * (viewer, organization, template) binding the plan keys the card by from the
+ * proposal's own CONSUME row — the one row that recorded all three, at the one
+ * moment they were all true.
+ *
+ * TWO BINDINGS, ONE CARD (cinatra#3004). A run reaches this call by one of two
+ * histories, and each carries its own proof of who may read it:
+ *
+ *   · IT CAME FROM A PROPOSAL — the consume row recorded (viewer, organization,
+ *     template) at the one moment all three were true, and that row is the
+ *     binding, re-checked against the live reader.
+ *   · IT CAME FROM THE RUN'S OWN SCHEDULING STEP — there is no proposal and never
+ *     was one, so the binding is THE RUN'S OWN ACCESS CONTROL, re-run here
+ *     against the live reader: `readAgentRunById` with the reader's actor and
+ *     role hints is the same probe every other run surface takes, so an owner, a
+ *     co-owner of a shared run and an organization administrator each read this
+ *     schedule exactly where they already read the run — and nobody else does.
+ *     This used to answer `absent`, on the reading that "the Trigger tab is that
+ *     schedule's surface" and drawing the card here would be a second renderer
+ *     of one thing. cinatra#3004 retires that surface: the schedule tab now
+ *     mounts THIS card, so refusing here would leave the ordinary run — the one
+ *     scheduled on its own step, which is most of them — with no schedule drawn
+ *     on any page at all.
+ *
+ *     WITHOUT AN ACCESS CONTEXT IT FAILS CLOSED to the run's own owner in the
+ *     reader's own organization. A caller that cannot present the reader's
+ *     standing cannot be granted the standing's answer.
+ *
+ * AND THE RUN IS THE BINDING ON THIS PATH WHETHER OR NOT A PROPOSAL MADE IT.
+ * This call is only ever reached through a RUN-scoped ref, which the run's own
+ * pages mint for a reader they have already authorized for that run; the
+ * proposal's (user, org) pair binds the TOKEN path, where the token IS the
+ * subject. Asking the token's binding here refused a co-owner of a shared run
+ * and an organization administrator on a run a conversation had created — the
+ * readers the retired surface drew that schedule for, off the run's own row.
+ * So the run's access control decides on every road in, and the consume row is
+ * read for what it actually records: which schedule kind this run settled into.
+ *
+ * THE REFUSALS THAT STAY, all `absent`, and each is deliberate:
+ *
+ *   · the run's own access control refuses the reader.
+ *   · the organization does not match the reader's active one.
+ *   · the run or its template has vanished.
+ *   · an `immediate` row on a run with no proposal AND no schedule step of its
+ *     own — **Run right after setup** named no moment to open a schedule step
+ *     onto, and that run's surface is the first-step form, which draws its own
+ *     read-only reading once the row has fired (cinatra#2980). Written as an
+ *     allow-list of the two scheduled kinds, so a kind added later is absent by
+ *     default rather than drawn unnamed.
+ *
+ *     AND THE RUN THAT ANSWERED ITS OWN SCHEDULE STEP IS NOT THAT RUN
+ *     (cinatra#3044). The refusal was written while the only road to an
+ *     `immediate` row was a dispatch that never parked at a schedule step. The
+ *     run road opened a second: the run parks at its schedule moment, the card
+ *     in the conversation IS where **Run right after setup** is chosen, and that
+ *     row is the card's own stated default — so the refusal withdrew the card
+ *     from the conversation the moment the ordinary press landed, and the slot
+ *     fell back to the bare working placeholder. The drawing requires the
+ *     opposite of that: once it has fired, the card is a reading, the rows go
+ *     read-only and it carries no floor at all. `fromScheduleStep` is that one
+ *     fact, carried on the sealed reference the moment was opened with, and it
+ *     widens NOTHING else: every refusal above is asked first and unchanged.
+ *
+ * THE PROPOSAL'S OWN PHASES ARE NOT ON THIS PATH, and that much is structural:
+ * a proposal is a token, `Confirm` CREATES the run from it, and the pre-confirm
+ * phases live where the token does — in the conversation that made it.
+ *
+ * THERE IS A PENDING PHASE ON THIS PATH, AND IT IS THE RUN'S OWN (cinatra#3044).
+ * This header used to say "there is NO proposal phase on this path" and stop
+ * there, on the reading that a run only ever exists after a proposal was
+ * confirmed. That is true of the token road and false of the RUN road, which
+ * this function is: a run started from a conversation finishes setup, parks at
+ * `pending_trigger` and waits at its schedule moment with nothing armed. It
+ * exists, it waits, and the conversation had no reading for it at all — so the
+ * card the run outbox writes into that turn resolved `absent` and drew nothing,
+ * which is the defect cinatra#3044 records. `run_pending` is that reading,
+ * stated openly rather than inferred: the run is waiting, the floor is the
+ * reader's own, and the rows the form opens on come from the schedule moment's
+ * one stated default.
+ *
+ * IT IS THE WAIT THAT IS DRAWN, NOT THE STATUS. The phase is answered only for a
+ * run that is BOTH parked at `pending_trigger` AND stating the `schedule`
+ * moment. The moment write is best-effort and status-pinned, so a run whose
+ * record lost its compare-and-set states no moment — and a card drawn from a
+ * reference whose moment the row does not state would be a card for a run that
+ * has moved on. No card is the right answer there, which is the same fail-closed
+ * rule the mint side takes.
+ */
+export async function resolveProposalForRun(
+  runId: string,
+  actor: ConfirmProposalActor,
+  /**
+   * The reader's standing, for the no-proposal branch (cinatra#3004). Optional
+   * because the proposal branch never needs it and a caller that holds no
+   * session cannot invent one; absent, that branch falls back to the run's own
+   * owner, which is the narrowest true answer rather than a wider guess.
+   */
+  access?: { actor: PrimitiveActorContext; roles?: ActorRoleHints },
+  /**
+   * What the REFERENCE this call was reached through records (cinatra#3044).
+   *
+   * `fromScheduleStep` says the run's own schedule step opened in a
+   * conversation, which is the one fact that tells a spent **Run right after
+   * setup** the reader answered on a card apart from a run that never had a
+   * schedule step at all. It is read off a sealed, server-minted reference; a
+   * caller that holds no such reference passes nothing and the refusals below
+   * are exactly what they have always been.
+   */
+  options?: { fromScheduleStep?: boolean },
+): Promise<ProposalResolution> {
+  const consumed = await readProposalConsumeByRunId(runId);
+  // THE RUN IS THE BINDING (cinatra#3004), and the run's OWN access control is
+  // what says so — the same probe the run's pages take, so this card is neither
+  // narrower nor wider than the run it belongs to. It is asked on EVERY road
+  // in: a schedule a conversation created is still that run's schedule, and the
+  // proposal token's (user, org) pair binds the token path, not this one.
+  let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
+  try {
+    run = access
+      ? await readAgentRunById(runId, access.actor, access.roles)
+      : await readAgentRunById(runId);
+  } catch (err) {
+    // A denial is an ABSENCE here, like every other refusal on this call: the
+    // reader learns nothing about a run they may not see.
+    if (err instanceof AuthzError) return { phase: "absent" };
+    throw err;
+  }
+  if (!run) return { phase: "absent" };
+  if (run.orgId !== actor.orgId) return { phase: "absent" };
+  // Fail closed where no standing was presented: the owner, and only them.
+  if (!access && run.runBy !== actor.userId) return { phase: "absent" };
+  // The consume row is read for the one thing it records that the trigger row
+  // does not: that a CONFIRMED PROPOSAL created this run, which is what lets an
+  // `immediate` card keep being drawn below.
+  const templateId = consumed ? consumed.templateId : run.templateId;
+
+  const [template, trigger, intent] = await Promise.all([
+    readAgentTemplateById(templateId),
+    readRunTriggerByRunId(runId),
+    readInstallIntent(runId),
+  ]);
+  if (!template) return { phase: "absent" };
+  if (template.orgId && template.orgId !== actor.orgId) return { phase: "absent" };
+
+  const triggerType =
+    (trigger?.triggerType as "immediate" | "scheduled" | "recurring" | undefined) ??
+    intent?.triggerType ??
+    null;
+  // Neither a trigger row nor an install intent means there is nothing armed to
+  // draw the chrome of. TWO RUNS REACH THAT, and only one of them is an absence:
+  // a run whose install never reached the outbox, and a run that is WAITING to
+  // be given a schedule at all (cinatra#3044) — see the header.
+  if (!triggerType) {
+    if (
+      run.status === SCHEDULE_PENDING_STATUS &&
+      run.lifecycleMoment === SCHEDULE_MOMENT
+    ) {
+      // The floor, read against the reader exactly as the proposal phase reads
+      // it: the card is drawn either way, and a reader the instance would refuse
+      // to run this agent for gets `restricted` with the reason on screen rather
+      // than a card that vanishes (§IV).
+      const notRunnable = await assertAgentPackageRunnable(
+        template.packageName,
+        template.packageName ?? template.name,
+        { packageVersion: template.packageVersion ?? null },
+      );
+      // …AND THE FLOOR IS THE ONE THE SERVER WILL HONOUR (a convergence
+      // finding). READ access on this path is the RUN's, which is wider than the
+      // arming path's on purpose: an organization administrator and a co-owner
+      // of a shared run may SEE the run, and the trigger service still requires
+      // the run's own owner or a platform administrator to configure it.
+      // Drawing a live Confirm for a reader that call is going to refuse would
+      // be an offer the server never meant — the same rule `canSave` states for
+      // the settled card, applied to this floor. They keep the DRAWN card and
+      // the reason, which is §IV's `restricted`, never an absence.
+      const mayArm =
+        run.runBy === actor.userId ||
+        access?.roles?.platformRole === "platform_admin";
+      return {
+        phase: "run_pending",
+        runId,
+        agentName: template.name ?? template.packageName ?? "this agent",
+        durationCopy: await templateDurationCopy(template),
+        canConfirm: !notRunnable && mayArm,
+        restrictedReason: notRunnable
+          ? PROPOSAL_REFUSALS.notRunnable
+          : mayArm
+            ? null
+            : PROPOSAL_REFUSALS.notYoursToSchedule,
+      };
+    }
+    return { phase: "absent" };
+  }
+  // A run that came from no proposal and had no schedule step of its own draws
+  // the card only for the two SCHEDULED kinds — see the header. A confirmed
+  // proposal keeps drawing whatever it settled into, `immediate` included: that
+  // card is the answer to a schedule the reader stated in a conversation, and it
+  // has always been drawn. A run that ANSWERED ITS OWN SCHEDULE STEP is the same
+  // answer to the same question, asked of a run that already existed, so it
+  // keeps drawing whatever it settled into too (cinatra#3044).
+  if (
+    !consumed &&
+    options?.fromScheduleStep !== true &&
+    triggerType !== "scheduled" &&
+    triggerType !== "recurring"
+  ) {
+    return { phase: "absent" };
+  }
+
+  return {
+    phase: "settled",
+    runId,
+    agentName: template.name ?? template.packageName ?? "this agent",
+    triggerType,
+    // The plain-language line is the SETTLED trigger's, read back from the row
+    // the install wrote rather than from a token this host does not hold.
+    scheduleCopy: describeInstalledSchedule({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+    }),
+    timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    // The same read-back the conversation's settled card uses, from the same
+    // durable row, so the run page's schedule step and the chat card cannot
+    // draw two different sets of rows for one armed trigger.
+    schedule: selectionsFromInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+      timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    }),
+    released: !!trigger?.releasedAt,
+    arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    // THE TWO FAMILIES, TWO STAMPS (cinatra#2972). See `ProposalResolution`.
+    firedOnce: scheduleFiredOnce({
+      triggerType,
+      releasedAt: trigger?.releasedAt,
+      lastFiredAt: trigger?.lastFiredAt,
+    }),
+    durationCopy: await templateDurationCopy(template),
+    stopped: trigger?.stoppedAt != null,
+    canSave: canSaveInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      released: !!trigger?.releasedAt,
+      arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      stopped: trigger?.stoppedAt != null,
+    }),
+    // NEVER superseded on this path, and structurally so rather than by
+    // omission (cinatra#2859). `superseded` answers "this CARD is holding rows
+    // the family did not settle on", and it can only be asked where the card
+    // holds rows of its own — a proposal TOKEN. A run-addressed card holds
+    // none: every line above is read back from the durable trigger row and the
+    // install intent, which ARE what the family settled on. There is nothing
+    // for the installed schedule to disagree with.
+    superseded: false,
+  };
+}
+
+/**
+ * The INSTALLED schedule, read back as §VI's SELECTIONS (cinatra#2788, S9d).
+ *
+ * The settled card draws the same three option rows as the proposal — plan (A)
+ * §7.2, "the same card, with the same option rows, now shows the armed
+ * schedule" — and rows cannot be drawn from prose. So the durable row is read
+ * back into the closed selection vocabulary by `parseCronToRecurring`, the ONE
+ * module that says what a selection means, completed against its own defaults
+ * exactly as the scheduling step completes a partial reading before drawing it.
+ * A cron that will not parse falls back to the vocabulary's default selection
+ * rather than inventing one: `scheduleCopy` beside the rows still carries the
+ * raw expression, so nothing is claimed that the row does not say.
+ *
+ * A NAIVE WALL CLOCK is what the one-off row hands back, because that is what
+ * the `datetime-local` control and the wire schema both take. The stored
+ * instant is UTC; it is rendered in the trigger's OWN timezone, so re-saving
+ * an untouched card re-arms the same moment rather than shifting it by the
+ * offset.
+ */
+/**
+ * HAS THIS SCHEDULE FIRED (cinatra#2972, corrected by cinatra#3174 fix leg 1)?
+ *
+ * ONE predicate, read by the card's election, by the sentence the turn says
+ * over it and by the floor beneath it, so the three cannot disagree — the same
+ * reason `canSaveInstalled` beside it is one predicate rather than three reads.
+ *
+ * THE TWO FAMILIES ANSWER FROM TWO STAMPS, and they have to. A RECURRING
+ * schedule never opens its own run's gate — each tick starts a copy — so its
+ * firing is the tick's own stamp, `lastFiredAt`, written once per fire. That
+ * half is unchanged.
+ *
+ * A ONE-OFF'S FIRING IS `releasedAt`, AND NOTHING ELSE (cinatra#3174 fix leg
+ * 3, after the second graded proof round). Fix leg 1 read the gate stamp
+ * TOGETHER WITH the run's own row, so that a released one-off whose run had
+ * failed before starting would not take the spent reading. The second round
+ * measured what that costs on the ordinary road: two REAL one-off firings
+ * (`released_at` stamped, real downstream work materialised) whose run rows
+ * were still `pending_approval` with `started_at` NULL, because the run's next
+ * gate had not been answered — and the card drew the CONFIGURED reading over
+ * both, live pickers and a Save changes floor over a schedule that was spent.
+ *
+ * THE SERVER ALREADY READS IT THIS WAY, which is what settles it rather than a
+ * preference between two roundings. `saveScheduleGuardRefusal` in
+ * `trigger-service` refuses a save on a fired one-off and says so in its own
+ * words: "FIRED is read off the trigger's OWN record — `releasedAt`, the stamp
+ * the release job writes when it opens the gate — never off the run's status,
+ * which moves on for reasons that have nothing to do with the schedule." The
+ * trigger store says the same about the other half of the pair: "a one-off's
+ * firing is `releasedAt`". A card that elected its reading on a second rule
+ * drew a form the server would refuse to save.
+ *
+ * WHAT THIS GIVES BACK, named rather than hidden: a one-off whose gate opened
+ * and whose run then failed before starting now takes the spent reading too.
+ * Section VI has no reading for "the gate opened and nothing ran", the server
+ * authorises no save there either, and the run's own failure is drawn by the
+ * run's own surfaces — so the card reads the trigger's record, which is the
+ * only thing it is drawing.
+ *
+ * Pure — no DB, no session, no render.
+ */
+export function scheduleFiredOnce(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  releasedAt: Date | null | undefined;
+  lastFiredAt: Date | null | undefined;
+  /**
+   * The run the schedule gated, as its own durable row reads — accepted, and
+   * NOT consulted for the election (see the note above). A run's status answers
+   * what the RUN did; this function answers what the SCHEDULE did, and those
+   * are two questions. No production caller passes it any more (converge
+   * round): the token road stopped reading the run row for it, and the
+   * run-addressed road stopped handing over the row it holds for access. It is
+   * kept on the type, and exercised by the suite, so that the answer stays
+   * provably independent of whatever a caller believes the run did.
+   */
+  run?: { status?: string | null; startedAt?: Date | string | null } | null | undefined;
+}): boolean {
+  if (input.triggerType === "recurring") return input.lastFiredAt != null;
+  return input.releasedAt != null;
+}
+
+/**
+ * THE ESTIMATED-DURATION LINE FOR A CARD THAT DRAWS THE ROWS (cinatra#3174 fix
+ * leg 1; widened past the settled reading in the converge round).
+ *
+ * Section VI draws the line as a duration — "Estimated run duration / About 45s
+ * – 3.4 hr." — in every one of its five pictures, and the first graded round
+ * drew the literal "Unavailable." instead, because no producer ever asked for
+ * the estimate. This asks.
+ *
+ * HISTORY ONLY, DELIBERATELY. `estimateRunDuration` falls through to an LLM
+ * analysis of the agent's SKILL.md when a template has too little run history,
+ * and a card resolve is not a place to pay for one: this card re-resolves on
+ * every window focus, on every host that draws it. Passing no SKILL.md is what
+ * stops the fall-through at the history tier — the same entry point, one tier
+ * shallower, rather than a second estimator with a rounding of its own.
+ *
+ * A MISSING ESTIMATE IS `null`, AND `null` DRAWS NOTHING. The drawing gives no
+ * empty reading and no wording for one; the scheduling step this card
+ * reproduces already answers that by drawing no line at all, and the card now
+ * answers it the same way.
+ *
+ * ASKED FOR ON EVERY READING THAT DRAWS THE ROWS, not only the settled one
+ * (converge round). §VI draws "Estimated run duration" beneath the rows in ALL
+ * FIVE of its pictures — first shown, configured, expired and both fired
+ * readings — so a card that asked only once left the line missing from the very
+ * frame the reader meets first. One indexed history read per resolve, and no
+ * LLM tier, is what that costs.
+ *
+ * NEVER THROWS. A duration line is not worth a blanked card.
+ */
+async function templateDurationCopy(template: {
+  id: string;
+  triggerMode?: string | null;
+}): Promise<string | null> {
+  try {
+    // The mode crosses a row boundary as a plain string; the estimator's own
+    // vocabulary is closed, and a value outside it is simply not the tier-3
+    // refusal — the same widening the rest of this module takes on a wire read.
+    const triggerMode = template.triggerMode === "start-only" ? "start-only" : "full";
+    const estimate = await estimateRunDuration({
+      template: { id: template.id },
+      compiledOas: { triggerMode },
+      skillMd: "",
+    });
+    return estimate ? durationCopyFor(estimate) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function selectionsFromInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+  timezone: string;
+}): ProposalSchedule {
+  if (input.triggerType === "immediate") return { kind: "immediate" };
+  if (input.triggerType === "scheduled") {
+    return {
+      kind: "scheduled",
+      runAt: naiveWallClockIn(input.scheduledAt ?? new Date(), input.timezone),
+      timezone: input.timezone,
+    };
+  }
+  const partial = input.cronExpression ? parseCronToRecurring(input.cronExpression) : null;
+  return {
+    kind: "recurring",
+    selection: { ...DEFAULT_RECURRING_CONFIG, ...(partial ?? {}) },
+    timezone: input.timezone,
+  };
+}
+
+/** A UTC instant as the timezone-naive "YYYY-MM-DDTHH:MM" the form emits,
+ *  rendered in `timezone`. The inverse of `naiveDatetimeToUtcMs`. */
+function naiveWallClockIn(at: Date, timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
+  } catch {
+    return at.toISOString().slice(0, 16);
+  }
+}
+
+/**
+ * May **Save changes** re-arm this installed trigger?
+ *
+ * The reading the server enforces, computed once so the card and the endpoint
+ * cannot disagree about which schedules are still changeable.
+ */
+export function canSaveInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  released: boolean;
+  arming: boolean;
+  /** The schedule was stopped by **Cancel schedule** (cinatra#2972). */
+  stopped: boolean;
+}): boolean {
+  if (input.arming) return false;
+  // A STOPPED SCHEDULE IS OVER. Plan (A) §7.2: Cancel schedule "stops the
+  // recurring schedule and then makes the scheduler non-editable".
+  if (input.stopped) return false;
+  // A RECURRING SCHEDULE STAYS CHANGEABLE AFTER IT HAS FIRED (cinatra#2972).
+  // Plan (A) §7.2 as amended 2026-08-25: "a run set to **Recurring** that has
+  // fired keeps its scheduler editable … and a change applies to its future
+  // runs". `released` is not even consulted for it — a recurring schedule's own
+  // gate is never opened by a tick, so the stamp says nothing about it, and the
+  // ticks already fired are separate runs no change reaches back into.
+  if (input.triggerType === "recurring") return true;
+  // A ONE-OFF THAT HAS FIRED IS NOT A SCHEDULE. Re-arming it would create a
+  // second run from a control whose whole promise is "change this one". Plan (A)
+  // §7.2: "once a run set to **Run right after setup** or **Schedule for later**
+  // has fired, its schedule cannot be changed any more".
+  if (input.released) return false;
+  if (input.triggerType === "scheduled") {
+    return !!input.scheduledAt && input.scheduledAt.getTime() > Date.now();
+  }
+  return true;
+}
+
+/**
+ * The settled schedule in plain words, from the INSTALLED row.
+ *
+ * The conversation's settled card reads its line off the proposal token it
+ * still holds; this host has no token, so the line is derived from what was
+ * actually installed. `parseCronToRecurring` + `describeRecurrence` is the SAME
+ * pair the scheduling step and the proposal both use, so the two readings of
+ * one schedule cannot drift; the raw expression is the honest fallback the
+ * Trigger tab already falls back to when no preview can be built.
+ */
+function describeInstalledSchedule(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+}): string {
+  if (input.triggerType === "immediate") return "Runs right after setup";
+  if (input.triggerType === "scheduled") {
+    return input.scheduledAt
+      ? `Once, at ${input.scheduledAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
+      : "Once, at the scheduled time";
+  }
+  if (!input.cronExpression) return "On its recurring schedule";
+  // `parseCronToRecurring` answers a PARTIAL selection — it reads back only what
+  // the expression actually pins — so it is completed against the vocabulary's
+  // own defaults, exactly as the scheduling step completes it before drawing.
+  const selection = parseCronToRecurring(input.cronExpression);
+  return selection
+    ? describeRecurrence({ ...DEFAULT_RECURRING_CONFIG, ...selection })
+    : input.cronExpression;
 }

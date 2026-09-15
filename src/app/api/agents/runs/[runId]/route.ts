@@ -9,6 +9,13 @@ import {
   readAgentTemplateById,
   type ActorRoleHints,
 } from "@cinatra-ai/agents";
+// The RUN'S OWN REVIEW SLOT (cinatra#2997). A dedicated SUBPATH import, never
+// the barrel: the gate store reaches the host review cores, and this route is
+// the only consumer here — see the barrel's own note on why it is not
+// re-exported. The read runs AFTER the run has been authorized below, so it is
+// a plain run-scoped read behind this route's own door.
+import { readRunReviewSlot } from "@cinatra-ai/agents/artifact-review-gate-store";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   authenticateWidgetConversationRequest,
   isWidgetBranchRequest,
@@ -116,6 +123,40 @@ async function seedResponse(
   // wayflow-<a2aTaskId> / setup-<runId> gate-identity fallbacks.
   const hitlContext = await deriveRunHitlContext(run, { template });
 
+  // WHAT THE RUN CARD DRAWS WHERE THE REVIEW SCREEN GOES (cinatra#2997).
+  //
+  // The card is a placeholder for the review screen while the agent works and
+  // becomes that screen when the work opens one, so the run's own seed has to
+  // carry the answer — the card must not have to ask a model, and a person must
+  // not have to ask for it in a new turn. Two values and nothing else:
+  //
+  //   `ref`      — the SERVER-MINTED opaque ticket for this run's own review
+  //                gate, minted here exactly as the run screen mints it, from
+  //                (runId, reviewTaskId). The card is only ever addressed by
+  //                one of these, and it re-authorizes itself on resolve — so
+  //                this is a pointer the reader already cleared the door for,
+  //                never a projection of the gate.
+  //   `awaiting` — the run produced something whose review question is still
+  //                open in the outbox. It is what holds the placeholder up
+  //                between `completed` and the gate row existing.
+  //
+  // An instance with no app secret cannot mint a ref; the field is then null and
+  // the card draws its terminal rendering, which is the same answer this route
+  // gave before this field existed.
+  // FAIL-SOFT, and deliberately so. This field tells the run card which of its
+  // readings to draw; the SEED is what mounts the card at all. A slot read that
+  // throws must therefore cost the reader the placeholder's precision, never the
+  // panel — so the failure answers "no review here", which is exactly the seed
+  // this route served before the field existed, and the card's own read tries
+  // again a moment later.
+  const reviewSlot = await readRunReviewSlot(run.id).catch(() => ({
+    reviewTaskId: null,
+    awaiting: false,
+  }));
+  const reviewGateRef = reviewSlot.reviewTaskId
+    ? encodeLifecycleGateRef({ runId: run.id, reviewTaskId: reviewSlot.reviewTaskId })
+    : null;
+
   // Surface the template+run metadata fields the chat-inline
   // <AgenticRunPanel> wrapper needs (templateId for HITL-assist endpoints,
   // agentPackageName for renderer override resolution, agUiEnabled to pick
@@ -134,6 +175,29 @@ async function seedResponse(
     agUiEnabled: run.agUiEnabled ?? null,
     taskId: run.a2aTaskId ?? null,
     traceId: run.traceId ?? null,
+    // THE RUN'S OWN STATED MOMENT (cinatra#2930, epic #2926 W3). The plan:
+    // "No screen re-derives a moment from a task id or from the shape of a
+    // pause." A screen can only read the row if the row reaches it, and this is
+    // the endpoint every chat-inline run panel reads a run through — so the
+    // moment rides with the status it belongs to rather than being inferred
+    // from `hitlContext` beside it.
+    lifecycleMoment: run.lifecycleMoment ?? null,
+    // AND THE CARD THAT MOMENT OWES (cinatra#3044). The moment alone says a run
+    // is waiting; it does not say what to draw. The conversation that started
+    // the run has no other way to learn it: the turn it streamed can never
+    // carry a part written into the STORED turn afterwards, so the reference
+    // the moment was stated with rides the run's own read — the one channel
+    // that is already live on that page — and the card mounts there with no
+    // reload.
+    //
+    // BOTH HALVES OR NEITHER. A kind with no reference addresses nothing, and a
+    // reference with no kind names no renderer; either alone would make a
+    // surface guess. The reader is already authorized for this run by the guard
+    // above, and the reference re-authorizes itself at the resolve route.
+    lifecycleCard:
+      run.lifecycleCardKind && run.lifecycleCardRef
+        ? { kind: run.lifecycleCardKind, ref: run.lifecycleCardRef }
+        : null,
     messages: messages.map((m) => ({
       id: m.id,
       runId: m.runId,
@@ -146,6 +210,7 @@ async function seedResponse(
       createdAt: m.createdAt.toISOString(),
     })),
     hitlContext,
+    reviewGate: { ref: reviewGateRef, awaiting: reviewSlot.awaiting },
   });
 }
 

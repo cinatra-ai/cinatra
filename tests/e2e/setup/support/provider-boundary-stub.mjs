@@ -1,7 +1,7 @@
 /**
  * PROVIDER HTTP-BOUNDARY STUB + EGRESS LEDGER for the setup-flow acceptance
  * suite (cinatra#2392, epic #2385 S7). Descends from the S6 render-proof stub
- * (evidence/2093-s6-setup/drivers/provider-boundary-stub.mjs), extended with
+ * (https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2093-s6-setup/drivers/provider-boundary-stub.mjs), extended with
  * the `/v1/responses` assistant-turn arm the post-setup acceptance drives.
  *
  * Loaded into the REAL dev/prod server via `NODE_OPTIONS=--import`, so it wraps

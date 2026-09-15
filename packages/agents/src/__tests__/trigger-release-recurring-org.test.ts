@@ -20,6 +20,8 @@ const trigger = vi.hoisted(() => ({
   readRunTriggerByRunId: vi.fn(),
   createOrUpdateRunTrigger: vi.fn(async () => undefined),
   deleteRunTriggerByRunId: vi.fn(async () => undefined),
+  // cinatra#2972 — the tick stamps the schedule as having fired.
+  markTriggerFiredInDb: vi.fn(async () => undefined),
 }));
 const gate = vi.hoisted(() => ({
   markTriggerReleased: vi.fn(async () => undefined),
@@ -69,6 +71,24 @@ const enqueue = vi.hoisted(() => ({
   enqueueAgentRun: vi.fn(async () => undefined),
 }));
 
+// cinatra#2981 — the trigger claim reaches Postgres for its advisory lock, and
+// this tier has no database. The pass-through preserves the CONTRACT the claim
+// gives its callers — the body decides on the row as read at claim time — while
+// the row itself keeps coming from this file's own mocked store.
+vi.mock("../trigger-claim", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../trigger-claim")>();
+  const { readRunTriggerByRunId } = await import("../trigger-store");
+  return {
+    ...actual,
+    withTriggerClaim: async (
+      runId: string,
+      body: (
+        live: Awaited<ReturnType<typeof readRunTriggerByRunId>>,
+      ) => Promise<unknown>,
+    ) => body(await readRunTriggerByRunId(runId)),
+  };
+});
+
 vi.mock("../trigger-store", () => trigger);
 vi.mock("../trigger-gate", () => gate);
 vi.mock("../store", () => store);
@@ -96,6 +116,13 @@ function makeRecurringTrigger() {
     enabled: true,
     timezone: "UTC",
     jobSchedulerId: "sched_1",
+    // cinatra#2972 — the tick re-reads the row just before it clones and
+    // refuses a schedule that was stopped meanwhile.
+    stoppedAt: null,
+    // cinatra#2981 — the PM handler compares this stamp across its remote read
+    // to notice a schedule somebody changed underneath it. A FIXED instant, so
+    // the two reads of one unchanged row agree.
+    updatedAt: new Date("2026-06-24T09:00:00.000Z"),
   };
 }
 
@@ -118,7 +145,7 @@ function makeSourceRun(
 
 describe("runAgentRunTriggerReleaseJob - recurring clones orgId", () => {
   it("createAgentRunPendingInput receives sourceRun.orgId", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     store.readAgentRunById.mockResolvedValueOnce(makeSourceRun());
     store.createAgentRunPendingInput.mockResolvedValueOnce({
       id: "run-clone-1",
@@ -145,7 +172,7 @@ describe("runAgentRunTriggerReleaseJob - recurring clones orgId", () => {
   });
 
   it("refuses to clone when sourceRun.orgId is null (no NULL writes)", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     store.readAgentRunById.mockResolvedValueOnce(makeSourceRun({ orgId: null }));
 
     const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
@@ -192,6 +219,8 @@ function makeScheduledTrigger(
     scheduledAt: overrides.scheduledAt ?? new Date("2026-06-25T09:00:00.000Z"),
     cronExpression: overrides.cronExpression ?? null,
     jobSchedulerId: overrides.jobSchedulerId ?? "trigger-release-run-source",
+    // cinatra#2981 — see makeRecurringTrigger.
+    updatedAt: new Date("2026-06-24T09:00:00.000Z"),
   };
 }
 
@@ -212,7 +241,7 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("no-provider → fires normally (recurring clone proceeds)", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     store.readAgentRunById.mockResolvedValueOnce(makeSourceRun());
     store.createAgentRunPendingInput.mockResolvedValueOnce({
       id: "run-clone-x",
@@ -226,7 +255,10 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("unreachable → fail-open fire (scheduled release proceeds)", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({
       kind: "unreachable",
       reason: "plane down",
@@ -241,7 +273,7 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("deleted (recurring) → tears down scheduler + local trigger + pm-link, skips fire", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({ kind: "deleted" });
     await run();
     expect(schedule.cancelTriggerSchedule).toHaveBeenCalledWith({
@@ -264,7 +296,10 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("deleted (scheduled) → tears down rows WITHOUT cancelling the in-flight one-shot, skips fire", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({ kind: "deleted" });
     await run();
     // The scheduled one-shot is THIS active job — never self-cancel (removal of
@@ -277,7 +312,10 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("deleted but teardown throws → fails open and FIRES (never strands the run)", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({ kind: "deleted" });
     // The scheduled path does not cancel; force a row-teardown failure instead.
     trigger.deleteRunTriggerByRunId.mockRejectedValueOnce(new Error("db down"));
@@ -288,7 +326,7 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("paused → skips THIS fire, leaves the schedule, does NOT mutate enabled", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({ kind: "paused" });
     await run();
     // No teardown, no refresh, no enqueue, no enabled mutation.
@@ -300,7 +338,7 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("rescheduled (recurring) → refreshes via scheduleTrigger with PM cron + persists, skips this tick", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeRecurringTrigger());
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({
       kind: "rescheduled",
       cronExpression: "0 12 * * *",
@@ -330,7 +368,10 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   it("rescheduled (scheduled, FUTURE instant) → persists the new instant + skips, NO inline BullMQ re-arm (id hazard) and never fires the old tick", async () => {
     const newMs = Date.now() + 60 * 60 * 1000;
     const future = new Date(newMs).toISOString();
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({
       kind: "rescheduled",
       cronExpression: null,
@@ -360,7 +401,10 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
 
   it("rescheduled (scheduled, NOW/PAST instant) → fires this tick", async () => {
     const past = new Date(Date.now() - 60 * 1000).toISOString();
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({
       kind: "rescheduled",
       cronExpression: null,
@@ -374,10 +418,120 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
   });
 
   it("present → fires normally (scheduled release)", async () => {
-    trigger.readRunTriggerByRunId.mockResolvedValueOnce(makeScheduledTrigger());
+    // cinatra#2981 — the job now reads this row TWICE: once to choose its branch
+    // and once under the claim, at the moment it decides. The row does not change
+    // between them in this scenario, so it answers the same both times.
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeScheduledTrigger());
     pmBridge.readRunTriggerPmState.mockResolvedValueOnce({ kind: "present" });
     await run();
     expect(gate.markTriggerReleased).toHaveBeenCalledWith("run-source");
     expect(enqueue.enqueueAgentRun).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2972 — A RECURRING TICK STAMPS THE SCHEDULE AS HAVING FIRED
+//
+// Plan (A) §7.2 as amended 2026-08-25 keys two readings to "has fired once" —
+// the scheduler stays editable, and **Cancel schedule** is "shown only for a
+// recurring schedule that has fired once". A recurring tick opens the COPY's
+// gate, never this run's, so `releasedAt` can never answer that question; the
+// tick's own stamp is the only honest signal for it.
+// ---------------------------------------------------------------------------
+
+describe("a recurring tick records that the schedule has fired", () => {
+  it("stamps the SCHEDULE-DEFINING run, not the copy — and never releases its gate", async () => {
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
+    store.createAgentRunPendingInput.mockResolvedValue({
+      id: "run-copy",
+      orgId: TEST_ORG_ID,
+      status: "pending_input",
+    });
+
+    const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
+    await runAgentRunTriggerReleaseJob({ runId: "run-source" }, "job-1");
+
+    expect(trigger.markTriggerFiredInDb).toHaveBeenCalledWith("run-source");
+    // The defining run's own gate stays shut: only the COPY is released.
+    expect(gate.markTriggerReleased).not.toHaveBeenCalledWith("run-source");
+  });
+
+  it("a failed stamp does not fail the tick — the copy is already running", async () => {
+    trigger.readRunTriggerByRunId.mockResolvedValue(makeRecurringTrigger());
+    store.createAgentRunPendingInput.mockResolvedValue({
+      id: "run-copy",
+      orgId: TEST_ORG_ID,
+      status: "pending_input",
+    });
+    trigger.markTriggerFiredInDb.mockRejectedValueOnce(new Error("db is down"));
+
+    const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
+    await expect(
+      runAgentRunTriggerReleaseJob({ runId: "run-source" }, "job-1"),
+    ).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2972 — A STOP LANDING DURING THE TICK IS HONOURED
+// ---------------------------------------------------------------------------
+
+describe("a tick refuses to clone a schedule that was stopped meanwhile", () => {
+  it("re-reads the trigger immediately before the clone, and skips when it is stopped", async () => {
+    // Read 1 is the job's own opening read: the schedule is live, so the tick
+    // works through its pre-flight checks. **Cancel schedule** lands in that
+    // window, and the re-read before the clone is what sees it.
+    let reads = 0;
+    trigger.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1
+        ? makeRecurringTrigger()
+        : { ...makeRecurringTrigger(), stoppedAt: new Date(), enabled: false };
+    });
+
+    const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
+    await runAgentRunTriggerReleaseJob({ runId: "run-source" }, "job-1");
+
+    expect(reads).toBeGreaterThan(1);
+    // No copy was created, and the schedule was not stamped as having fired.
+    expect(store.createAgentRunPendingInput).not.toHaveBeenCalled();
+    expect(trigger.markTriggerFiredInDb).not.toHaveBeenCalled();
+  });
+
+  it("and tears down the orphan scheduler a failed cancel (or an interleaved save) left behind", async () => {
+    const removeJobScheduler = vi.fn(async () => undefined);
+    bg.ensureBackgroundJobRuntime.mockResolvedValue({
+      queue: { removeJobScheduler },
+    } as never);
+    let reads = 0;
+    trigger.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1
+        ? makeRecurringTrigger()
+        : { ...makeRecurringTrigger(), stoppedAt: new Date(), jobSchedulerId: "sched_orphan" };
+    });
+
+    const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
+    await runAgentRunTriggerReleaseJob({ runId: "run-source" }, "job-1");
+
+    expect(removeJobScheduler).toHaveBeenCalledWith("sched_orphan");
+    expect(store.createAgentRunPendingInput).not.toHaveBeenCalled();
+  });
+
+  it("a teardown that itself fails does not turn a correct refusal into a throw", async () => {
+    bg.ensureBackgroundJobRuntime.mockRejectedValueOnce(new Error("redis is down"));
+    let reads = 0;
+    trigger.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1
+        ? makeRecurringTrigger()
+        : { ...makeRecurringTrigger(), stoppedAt: new Date(), jobSchedulerId: "sched_orphan" };
+    });
+
+    const { runAgentRunTriggerReleaseJob } = await import("../trigger-release-job");
+    await expect(
+      runAgentRunTriggerReleaseJob({ runId: "run-source" }, "job-1"),
+    ).resolves.toBeUndefined();
+    expect(store.createAgentRunPendingInput).not.toHaveBeenCalled();
   });
 });

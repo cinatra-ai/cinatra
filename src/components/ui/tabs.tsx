@@ -74,17 +74,41 @@ function TabsContent({
 // stretches to the page edge. Use TabsListRow in place of TabsList for
 // that row; pair with `<PageHeader divider={false}>` so the rule does
 // not stack with the header rule above (spec §Dividers).
+//
+// cinatra#3216 — "IMMEDIATELY to the right of the last tab" (spec
+// §Dividers), so the grid carries NO column gap. It used to carry
+// `gap-7` (28px), which punched a visible hole between the last tab and
+// the start of the rule, so the row read as two separate marks instead
+// of one continuous line. Neither §Dividers nor §Tabs allows a gap.
+//
+// cinatra#3228 — `trailingRule={false}` omits the rule. Spec §Toolbar: "The
+// toolbar sits directly below the page header and replaces the section rule
+// for that view — never stack a toolbar and the etched paired rule." A view
+// that mounts a Toolbar directly beneath this row hands the rule's place to
+// the toolbar; every other view keeps the rule (the default).
 function TabsListRow({
   className,
   children,
+  trailingRule = true,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.List>) {
+}: React.ComponentProps<typeof TabsPrimitive.List> & {
+  /** Draw the trailing etched rule (default). Pass false when a Toolbar is
+   *  mounted directly beneath the row and takes the rule's place. */
+  trailingRule?: boolean
+}) {
   return (
-    <div className='grid grid-cols-[auto_1fr] items-end gap-7'>
+    <div className='grid grid-cols-[auto_1fr] items-end'>
       <TabsList className={cn('border-b-0', className)} {...props}>
         {children}
       </TabsList>
-      <Separator major decorative className='mb-[11px] self-end' />
+      {/* cinatra#3106 — the rule this row carries REPLACES the plain list's
+          own `border-b`, which paints on the list's bottom edge, so it has to
+          sit on that same edge: end-aligned in the grid with NO bottom offset.
+          The former `mb-[11px]` lifted it eleven pixels clear of the row
+          baseline, so it read as a second horizontal mark floating above the
+          active tab's underline instead of continuing it. Position only — the
+          etched paired-line paint is unchanged. */}
+      {trailingRule ? <Separator major decorative className='self-end' /> : null}
     </div>
   )
 }

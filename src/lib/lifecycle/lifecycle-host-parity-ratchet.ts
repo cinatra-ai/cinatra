@@ -90,6 +90,11 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     "packages/agents/src/agentic-run-panel.tsx",
     "packages/agents/src/instance-screens.tsx",
     "packages/agents/src/orchestrator-stepper-panel.tsx",
+    // The run page's SCHEDULE STEP declares its own provider inside the rail
+    // row the screen places (cinatra#2788, S9d): plan (A) §7.2 step 5 moved the
+    // schedule out of the screen body and into the step rail, so the screen file
+    // alone no longer sees every owner this host mounts.
+    "packages/agents/src/schedule-rail-step.tsx",
   ]),
   page_gate_region: Object.freeze([
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
@@ -99,6 +104,19 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     // that stops at the route file would read the audit card's gate-region
     // cell as absent and call the loss a regression.
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+    // The review page's SCHEDULE STEP, for the same reason: the schedule left
+    // the gate region for the rail (cinatra#2788), and the rail row is where its
+    // `page_gate_region` declaration now lives.
+    "packages/agents/src/schedule-rail-step.tsx",
+    // And the review page's RUN SURFACE, for the same reason again
+    // (cinatra#3047): the SKILLS question left the gate region for the rail —
+    // "one page per gate", and the change request's "do not show the skills on
+    // top of the review card" — so the module that composes this page's two
+    // columns is where §V's `page_gate_region` declaration now lives. A host
+    // source list that stopped at the route file would read the recommendation
+    // card's gate-region cell as absent and call the move a `host-lost`
+    // regression, which is exactly what it did before this line.
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
   ]),
 });
 
@@ -195,16 +213,30 @@ export type HostParityRatchetRow = {
  * and the review page's gate region each compose `ReviewGateCard` under their
  * own provider.
  *
- * The two shell kinds reach the conversation hosts and nothing else — no run-card
- * or gate-region composition mounts them, so those cells are not targets.
+ * `trigger_schedule_proposal` joined it with S9d (cinatra#2788): the registry
+ * dispatches the DRAWN `ScheduleProposalCard` on both conversation hosts, the
+ * run screen composes it above the scheduling form for a run a proposal
+ * produced, and the review page composes it in its gate region. The two
+ * composition cells are RECORDED here rather than left off — a host set that
+ * grows silently is a host set nobody read, which `host-unratcheted` refuses.
  *
- * `recommendation_hold` is the mirror image: it is composed on the run card,
- * and it now draws on the chat thread too — S9b (#2786) landed that mount, so
- * the chat_thread cell moved from `owed` to `hosts` and is RECORDED as a
- * `transcript` observation, read off the shared column rendering a held
- * dispatch turn. The widget cell stays owed by S9f (#2790), which is why this
- * slice consumes the widget row as an observation rather than asserting a card
- * that no branch has landed.
+ * `recommendation_hold` is on all four hosts too, and each cell was landed by a
+ * named slice:
+ *
+ *   · `run_card`, by COMPOSITION. The run screen's long-standing mount.
+ *   · `chat_thread`, by TRANSCRIPT. S9b (#2786) landed the conversation-origin
+ *     hold: a run started from a conversation now carries a verified launch
+ *     frame, is created with the "a person is present" mark and parks BEFORE
+ *     dispatch, so the shared column draws the card on the held dispatch turn.
+ *   · `site_widget`, by TRANSCRIPT. S9f (#2790) made the card's read and its two
+ *     decisions broker-aware, the in-code credential guard that withheld it went
+ *     with them, and the shared conversation column now mounts it at the
+ *     `agent_run` slot on a host whose run card cannot carry it.
+ *   · `page_gate_region`, by COMPOSITION. S9f's review route composes
+ *     `RecommendationHoldCard` above the review card, keyed by the run (plan §9).
+ *
+ * Each owed row was struck in the change that made its own observation flip —
+ * the only moment a row may be struck — so this kind now owes nothing.
  */
 export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   Record<LifecycleCardKind, HostParityRatchetRow>
@@ -234,14 +266,60 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   trigger_schedule_proposal: {
-    hosts: Object.freeze({ chat_thread: "transcript", site_widget: "transcript" }),
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
     owed: Object.freeze([]),
   },
   recommendation_hold: {
-    hosts: Object.freeze({ chat_thread: "transcript", run_card: "composition" }),
-    owed: Object.freeze([
-      { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2790 (S9f)" },
-    ]),
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
+    owed: Object.freeze([]),
+  },
+  // THE THREE OWED CELLS ARE STRUCK, in the change that made each observation
+  // flip (cinatra#2930, lifecycle-b W3). cinatra#2928 (W2a) registered the kind
+  // and drew nothing, so this row recorded no host and owed the three the ruling
+  // gives it. W3 draws `AgentHitlScreenCard` and mounts it:
+  //
+  //   · `chat_thread`, by TRANSCRIPT. The shared conversation column mounts the
+  //     card at the `agent_run` dispatch part's own slot, beside the §V card and
+  //     outside the inline run panel's subtree, so a parked run's screen is read
+  //     off a rendered transcript end to end.
+  //   · `site_widget`, by TRANSCRIPT. The SAME column, on the widget arm; the
+  //     card's host declaration selects its transport, so the read travels on
+  //     that host's own credential rather than an ambient cookie.
+  //   · `run_card`, by COMPOSITION. The run panel composes the card under its
+  //     own `run_card` provider, around the pause screen the panel has always
+  //     drawn — the fields the gate's renderer draws and the Continue that
+  //     submits them.
+  //
+  //   · `page_gate_region`, by COMPOSITION. The review page composes the same
+  //     card in its gate region, above the review card, keyed by the run. It is
+  //     recorded here rather than left off because the one-card gate's
+  //     done-check reads §IX's "every card appears on every host" as a
+  //     requirement on a DRAWN kind, and a host set that grows silently is a
+  //     host set nobody read — which `host-unratcheted` refuses by design.
+  //
+  // THE ANCHOR CONTRACT WAS RE-RATIFIED FOR THIS, not worked around: adding a
+  // host cell invalidates its digest by design, and the digest was recomputed
+  // over the live inputs after the anchors were re-examined against the drawing
+  // at the pin. The reading that made that possible is recorded in the
+  // contract's own `note`.
+  agent_hitl_screen: {
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
+    owed: Object.freeze([]),
   },
 });
 

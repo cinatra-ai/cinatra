@@ -149,6 +149,47 @@ describe("authz invariant coverage", () => {
     expect(policyNames).toEqual(carveNames);
   });
 
+  it("delegated-WIDGET policy exceptions equal the typed CarveOut entries at delegated_widget_token boundary", () => {
+    // The mirror of the chat parity case above (cinatra#2935, lifecycle-b W5d).
+    // The widget policy's exceptions are exact-name admissions written ABOVE its
+    // verb backstop — that is the bypass — so the static parse reads the
+    // `isDelegatedWidgetMcpToolAllowed` early-return lines rather than a Set.
+    // Same dependency-free convention: parse the file, never import it.
+    const POLICY_PATH = resolve(
+      REPO_ROOT,
+      "packages/mcp-server/src/delegated-widget-tool-policy.ts",
+    );
+    const body = readFileSync(POLICY_PATH, "utf8");
+    const fn = body.match(
+      /export function isDelegatedWidgetMcpToolAllowed[\s\S]*?\n\}/,
+    );
+    expect(fn, "isDelegatedWidgetMcpToolAllowed not found").toBeTruthy();
+    // Each bypass reads `if (name === CONST && allowed.has(name)) return true;`
+    // — resolve the CONST to its literal from the module's own declaration.
+    const consts = [
+      ...fn![0].matchAll(/name === ([A-Z_]+) && allowed\.has\(name\)/g),
+    ].map((mm) => mm[1]);
+    const policyNames = consts
+      .map((c) => {
+        const decl = body.match(
+          new RegExp(`export const ${c} = "([a-z_][a-z0-9_]*)"`),
+        );
+        expect(decl, `${c} has no string literal declaration`).toBeTruthy();
+        return decl![1];
+      })
+      .sort();
+    const carveNames = CARVE_OUTS.filter((c) => c.boundary === "delegated_widget_token")
+      .map((c) => c.primitiveName)
+      .sort();
+    // The lent action is admitted on BOTH policies and its CarveOut is recorded
+    // at the chat boundary, so it is excluded here — the widget ledger covers
+    // the exceptions that exist ONLY on the widget perimeter.
+    const chatNames = new Set(
+      CARVE_OUTS.filter((c) => c.boundary === "delegated_chat_token").map((c) => c.primitiveName),
+    );
+    expect(policyNames.filter((n) => !chatNames.has(n))).toEqual(carveNames);
+  });
+
   it("generated inventory carries no volatile timestamp (deterministic byte-gated artifact)", () => {
     // Recurrence guard. A `generatedAt` date in this byte-compared file made the
     // RBAC inventory check fail the day after every commit (the file was committed

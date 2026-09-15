@@ -29,7 +29,7 @@
  * carried a stray NUL byte that made git treat it as binary.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,6 +66,38 @@ for (const pin of pins.manifests) {
     errors.push(
       `PIN INTEGRITY: manifests/${pin.file} embeds contentHash ${manifest.contentHash}, pinned ${pin.specContentHash}`,
     );
+  }
+  for (const surface of manifest.surfaces) {
+    manifestSurfaces.add(surface.id);
+    surfaceAspects.set(
+      surface.id,
+      new Set([
+        ...surface.fields.map((f) => `field:${f.field}`),
+        ...surface.actions.map((a) => `action:${a.action}`),
+        ...surface.states.map((s) => `state:${s}`),
+      ]),
+    );
+  }
+}
+
+// --- 1b. Committed but NOT yet pinned (cinatra#3156) -------------------------
+// A drawing joins the pin gate only once EVERY one of its surfaces is covered
+// (epic #3155, independent pinning), so between the first wave and the pin
+// there is a committed manifest conformance-pins.json deliberately does not
+// name. Its surfaces are REAL surfaces: a testid-contract entry or an allowlist
+// aspect naming one is valid, and the drivers written against it are the ones
+// the pin will later be granted for. PIN INTEGRITY above stays exactly as it
+// was — it is a statement about pinned bytes, and an unpinned file has no pin
+// to be checked against.
+const pinnedFiles = new Set(pins.manifests.map((pin) => pin.file));
+const unpinnedManifestFiles = readdirSync(path.join(CONF_DIR, "manifests"))
+  .filter((file) => file.endsWith(".json") && !pinnedFiles.has(file))
+  .sort();
+for (const file of unpinnedManifestFiles) {
+  const manifest = JSON.parse(readFileSync(path.join(CONF_DIR, "manifests", file), "utf8"));
+  if (manifest.schemaVersion !== "1.0.0") {
+    errors.push(`manifests/${file} declares unsupported schemaVersion ${manifest.schemaVersion}`);
+    continue;
   }
   for (const surface of manifest.surfaces) {
     manifestSurfaces.add(surface.id);
@@ -159,5 +191,5 @@ if (errors.length > 0) {
   process.exit(1);
 }
 console.log(
-  `conformance testid-contract check OK (${Object.keys(contract.surfaces).length} covered surfaces, ${allowlist.length} allowlist entries, ${pins.manifests.length} pinned manifests)`,
+  `conformance testid-contract check OK (${Object.keys(contract.surfaces).length} covered surfaces, ${allowlist.length} allowlist entries, ${pins.manifests.length} pinned manifests, ${unpinnedManifestFiles.length} committed-not-yet-pinned)`,
 );

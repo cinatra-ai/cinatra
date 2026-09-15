@@ -125,6 +125,21 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
     // boolean column directly; null on pre-backfill / headless rows.
     humanPresent: row.humanPresent ?? null,
+    // The lifecycle MOMENT TRIPLE (cinatra#2928). Surfaced as written: a run at
+    // no moment reads all three as null, which is what every row created before
+    // the columns existed reads too. Nothing here interprets the values — the
+    // coordinator owns what they may say, and a surface reads the moment off
+    // the row rather than deriving it from the shape of the pause.
+    lifecycleMoment: row.lifecycleMoment ?? null,
+    lifecycleCardKind: row.lifecycleCardKind ?? null,
+    lifecycleCardRef: row.lifecycleCardRef ?? null,
+    // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
+    // src/lib/launch-scope-anchor.ts at the surface that addresses the
+    // instance, where a malformed or unknown payload reads UNANCHORED — the row
+    // stays on the flat bare route rather than being repaired from a column
+    // that never meant this. Decoding here instead would put the decoder in
+    // four locked route graphs whose module counts may only ever shrink.
+    launchScopeAnchor: row.launchScopeAnchor ?? null,
   };
 }
 

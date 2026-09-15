@@ -1,9 +1,0 @@
-{
-  "integrity": "sha512-XV8JM8v/g0vDJSs7VzTVtxWpo8bj3XUSdsoFIUFkefgw63QfaXEXd0aAmYReXS8mKaadmL5W97arFToerOKskw==",
-  "tarballDigest": "5d5f0933cbff834bc3252b3b5734d5b715a9a3c6e3dd751276ca0521416479f830eb741f69711777468099845e5d2f2629a69d98be56f7b6ab153a1eace2ac93",
-  "contentHash": "631a596a55691d9f7e22dcb60963626d9648a73333d6c1013ea8db8db1d61997c5b7a99c9445213a3f6fe8f9363f85ba6e9c6bac58d4942526f52dd4deeb994d",
-  "packageName": "@cinatra-ai/google-appointment-schedules-connector",
-  "version": "0.1.1",
-  "registryUrl": "https://registry.cinatra.ai",
-  "materializedAt": "2026-08-15T07:35:55.527Z"
-}

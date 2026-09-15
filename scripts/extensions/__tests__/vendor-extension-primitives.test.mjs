@@ -6,11 +6,18 @@ import {
   rewriteUiImports,
   plannedFiles,
   resolveUiClosure,
+  localItemName,
   findOrphans,
   VENDOR_MANIFEST,
 } from "../vendor-extension-primitives.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+
+/** The declared extension kind of a vendored entry, read from its own package.json. */
+function kindOf(extensionDir) {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, extensionDir, "package.json"), "utf8"));
+  return pkg?.cinatra?.kind ?? null;
+}
 
 describe("rewriteUiImports", () => {
   it("rewrites double-quoted @/lib/utils to a relative path", () => {
@@ -76,6 +83,32 @@ describe("resolveUiClosure", () => {
   });
 });
 
+describe("localItemName - the namespace rule the registry closure depends on", () => {
+  it("strips our namespace", () => {
+    expect(localItemName("@cinatra-ai/label")).toBe("label");
+  });
+
+  // Regression guard for the 2026-09-04 break: a BARE entry resolves against the
+  // consumer's default registry, which is how upstream's like-named utils item
+  // overwrote ours and dropped clsx + tailwind-merge.
+  it("rejects a bare entry", () => {
+    expect(() => localItemName("label")).toThrow(/not namespaced/);
+  });
+
+  it("rejects a foreign namespace", () => {
+    expect(() => localItemName("@acme/label")).toThrow(/not namespaced/);
+  });
+
+  it("every registryDependencies entry in registry.json is namespaced", () => {
+    const registry = JSON.parse(readFileSync(join(REPO_ROOT, "registry.json"), "utf8"));
+    for (const item of registry.items) {
+      for (const dep of item.registryDependencies ?? []) {
+        expect(() => localItemName(dep)).not.toThrow();
+      }
+    }
+  });
+});
+
 describe("findOrphans", () => {
   it("reports no orphans for the committed vendored state", () => {
     expect(findOrphans()).toEqual([]);
@@ -92,14 +125,55 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     }
   });
 
-  // The appointment-schedule extraction (cinatra#2367) took the connector's
-  // form with it, so google-calendar-connector's DIRECT registry imports shrank
-  // to `button` alone (the retained Connect/Disconnect UI). Pinned exactly —
-  // `arrayContaining` would not catch a silent re-widening, and the form's old
-  // primitives must NOT come back with it.
-  it("vendors exactly the google-calendar connection-UI closure (button only)", () => {
-    expect(VENDOR_MANIFEST[0].extensionDir).toContain("google-calendar-connector");
-    expect(VENDOR_MANIFEST[0].uiItems).toEqual(["button"]);
-    expect(resolveUiClosure(VENDOR_MANIFEST[0].uiItems)).toEqual(["button"]);
+  // DECISION 407 A (2026-09-13, cinatra-ai/cinatra#3471, epic #2926): connectors
+  // render the setup page themselves and artifacts render the artifact view
+  // themselves, and the host shares its primitives with extension bundles at run
+  // time — so the COPY CHANNEL IS RETIRED for those two kinds. Their remaining
+  // copies are recorded from now on by the shrink-only border-gate baseline
+  // (scripts/extensions/self-rendering-extensions-border.baseline.json), the ONLY
+  // record of them, so a primitive change no longer forces a release of every
+  // copying package. The kind is read from each entry's OWN package.json, so a
+  // re-added connector/artifact entry fails here whatever it is called.
+  it("vendors no kind:connector and no kind:artifact package (decision 407 A)", () => {
+    const retired = VENDOR_MANIFEST.filter((entry) =>
+      ["connector", "artifact"].includes(kindOf(entry.extensionDir)),
+    ).map((entry) => entry.extensionDir);
+    expect(retired).toEqual([]);
+  });
+});
+
+// Every vendored file is copied byte-for-byte into ~20 extension repositories,
+// so the vendoring SOURCES are a shared, cross-repository surface: an addition
+// to src/lib/utils.ts is an addition to every one of those repositories, and
+// until each has re-vendored, the provenance gate is red for all of them.
+// src/lib/utils.ts is the registry `utils` item — `cn` and the small pure
+// string/number helpers around it. Browser-shell geometry (the app header band,
+// the impersonation banner custom property) is NOT that: it belongs to a module
+// the vendoring channel never copies. This case pins the boundary so such a
+// helper cannot be parked in the vendored lib again.
+describe("the vendored lib source stays free of app-shell geometry", () => {
+  const VENDORED_LIB = "src/lib/utils.ts";
+
+  it("src/lib/utils.ts reads no document and no shell custom property", () => {
+    const source = readFileSync(join(REPO_ROOT, VENDORED_LIB), "utf8");
+    expect(source, `${VENDORED_LIB} must not touch the DOM`).not.toMatch(
+      /\bdocument\b|getComputedStyle/,
+    );
+    expect(source, `${VENDORED_LIB} must not read a shell custom property`).not.toContain(
+      "--banner-height",
+    );
+  });
+
+  it("the overlay collision bound lives outside the vendored lib", () => {
+    const source = readFileSync(join(REPO_ROOT, VENDORED_LIB), "utf8");
+    expect(source).not.toContain("overlayCollisionPadding");
+    const bound = readFileSync(join(REPO_ROOT, "src/lib/overlay-collision.ts"), "utf8");
+    expect(bound).toContain("export function overlayCollisionPadding");
+  });
+
+  it("no planned vendored file is the overlay-collision module", () => {
+    for (const file of plannedFiles()) {
+      expect(file.source).not.toContain("overlay-collision");
+    }
   });
 });

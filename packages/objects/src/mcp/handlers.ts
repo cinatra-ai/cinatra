@@ -18,6 +18,16 @@ import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 // already gates entry to objects_update.
 import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove } from "@/lib/resource-project-move";
+// Substrate-exclusion predicate for the EXPLICIT project binding (cinatra#1377).
+// The SAME rule the ambient write-time inheritance applies inside the store —
+// imported here so an explicit binding of a substrate type is REFUSED rather
+// than silently dropped. No new route-graph edge: `@/lib/objects-store` (already
+// imported below, and reachable from every locked route these handlers serve)
+// already pulls this module in for the ambient path.
+import {
+  resolveProjectInheritanceForType,
+  shouldAutoTagProject,
+} from "@/lib/project-inheritance";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
@@ -46,6 +56,8 @@ import {
   isTombstonedObjectTypeId,
   OBJECT_TYPE_NAMESPACE_RE,
   GENERIC_OBJECT_TYPE_ID,
+  classifyArtifactTypeOwnership,
+  unownedArtifactTypeMessage,
 } from "../namespace";
 import {
   objectTypeRegistry,
@@ -67,6 +79,7 @@ import {
   upsertObjectAndEnqueue,
   getObjectById,
   listObjectsByFilter,
+  resolveObjectIdsByAnchorNodeUuids,
   softDeleteObject,
 } from "@/lib/objects-store";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
@@ -451,24 +464,35 @@ function mapRowToObject(row: ObjectRecord): {
 // Graphiti search_nodes -> objectId extraction
 // ---------------------------------------------------------------------------
 //
-// Reads cinatra_object_id off entity nodes returned by Graphiti's search_nodes
-// MCP tool. cinatra_object_id is a top-level field of the episode_body JSON so
-// that Graphiti's LLM extractor surfaces it on the resulting entity nodes.
+// DETERMINISTIC FIRST, incidental second (cinatra#2591 deliverable 4).
 //
-// Recovery chain for cinatra_object_id from Graphiti entity nodes (search_nodes
-// result). Graphiti's LLM extraction does NOT propagate custom JSON fields to
-// entity node attributes in knowledge-graph-mcp 1.0.x / Graphiti 0.28.2.
-// Four probes in order of reliability:
-//   1. node.attributes.cinatra_object_id — future-proof if Graphiti adds attribute propagation
-//   2. node.cinatra_object_id           — if Graphiti flattens episode body fields onto nodes
-//   3. [oid:<uuid>] tag in node.name    — if Graphiti preserves the tag (future version)
-//   4. node.name IS a bare UUID with label "Object" — confirmed Graphiti 0.28.2 behavior:
-//      the UUID value from cinatra_object_id in the episode body is extracted as a distinct
-//      Entity/Object node whose name IS the UUID string.
+// WHAT THIS USED TO BE. A chain of four probes that read a row id off whatever
+// Graphiti's extraction model happened to put on an entity node. Three of them
+// were measured INERT against Graphiti 0.28.2 (live verification 2026-04-30 —
+// custom episode-body fields do not reach node attributes, and the `[oid:…]`
+// name tag does not survive extraction). The fourth fired only when the model
+// incidentally emitted the row UUID as an entity-node name. So a recall could
+// report `no_ids_extracted` for a row that was definitely indexed, and the
+// planned `memory_recall` semantic path (cinatra#1380) would have inherited
+// that.
+//
+// WHAT IT IS NOW. Every projected row is seeded as a DETERMINISTIC anchor node
+// whose UUID is a pure function of the row id and the lane
+// (`graphiti-projector.ts` -> `anchorNodeUuidFor`), and the inverse map lives in
+// Postgres (`objects.graphiti_anchor_node_uuid`). Ranked node UUIDs resolve
+// through that column. Nothing depends on model whim.
+//
+// THE LEGACY PROBES ARE KEPT, DEMOTED. They are the ONLY recovery path for rows
+// projected before this change (their anchor column is null until the next
+// projection) and for adapter-owned rows that project through their own
+// episode. They run second and only add ids the deterministic pass did not
+// already produce. They are not the mechanism; they are the tail.
 const OID_RE = /\[oid:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function extractObjectIds(nodes: EntityNode[]): string[] {
+/** The pre-#2591 chain: ids read off model-produced node fields. Inert for most
+ *  nodes by measurement; retained for rows with no anchor yet. */
+function extractIncidentalObjectIds(nodes: EntityNode[]): string[] {
   const ids: string[] = [];
   for (const n of nodes) {
     const attrs = (n as unknown as { attributes?: Record<string, unknown> })
@@ -484,6 +508,38 @@ function extractObjectIds(nodes: EntityNode[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Ranked entity nodes -> canonical object ids, RANK PRESERVED.
+ *
+ * Walks the nodes in the order Graphiti ranked them and emits, per node, the
+ * deterministically-anchored row id when there is one, otherwise whatever the
+ * incidental probes can recover. De-duplicated, because two ranked nodes can
+ * legitimately resolve onto the same row (a merged anchor).
+ */
+function resolveObjectIds(nodes: EntityNode[], orgId: string | null): string[] {
+  const byAnchor = resolveObjectIdsByAnchorNodeUuids(
+    nodes.map((n) => n.uuid).filter((u): u is string => typeof u === "string"),
+    orgId,
+  );
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    // A merged anchor can name more than one row — take all of them.
+    const deterministic = node.uuid ? byAnchor.get(node.uuid) : undefined;
+    const candidates =
+      deterministic && deterministic.length > 0
+        ? deterministic
+        : extractIncidentalObjectIds([node]);
+    for (const id of candidates) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ordered.push(id);
+      }
+    }
+  }
+  return ordered;
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +613,322 @@ function buildObjectResourceCheck(row: ObjectRecord): ResourceForAccessCheck {
     // project-anchored agent is confined to objects tagged for its project.
     projectId: row.projectId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// memory_recall projection helpers (cinatra#1380, epic #1373)
+// ---------------------------------------------------------------------------
+//
+// The recall row is a FIXED, CAPPED projection of a memory concept row — never
+// the envelope. That is a size decision AND a leak decision: the excerpt is the
+// only free-text field that rides out, so it is the one that gets a hard byte
+// ceiling. Everything here is pure and runs on rows that have ALREADY passed
+// the org scoping, the actor-scoped ownership filter and the per-row
+// `object.read` probe; none of it is an authorization decision, and none of it
+// reaches SQL or the semantic index.
+
+/**
+ * Hard cap on one recall excerpt, in UTF-8 BYTES.
+ *
+ * The envelope permits a 64 KiB body. A recall hands a model up to
+ * `MEMORY_RECALL_MAX_LIMIT` rows at once, so an uncapped excerpt would let one
+ * call return 3 MiB of memory text into a context window — and would make the
+ * "capped projection" claim decorative in exactly the way cinatra#1379 AC3 caps
+ * the PROJECTED episode. 512 bytes is a lede, which is what a recall row is
+ * for: the caller reads `objects_get` for the full concept.
+ */
+export const MEMORY_RECALL_EXCERPT_MAX_BYTES = 512;
+
+/**
+ * Hard caps on the OTHER projected free-text fields, in UTF-8 BYTES.
+ *
+ * The excerpt cap above is only half a bound. `title`, `kind` and `conceptPath`
+ * ride out of the same projection and an author controls all three, so an
+ * uncapped projection lets the payload the excerpt cap refuses move one key
+ * over: a 32 KiB frontmatter title is admissible at ingest and rode out intact.
+ * The ingest ceilings these inherit are the serialized-frontmatter cap (title),
+ * nothing at all (`okfType`) and 1024 bytes (`conceptId`) — none of them a
+ * recall-sized bound. Each field here is a LABEL, not a document: a caller that
+ * wants the row reads `objects_get`.
+ *
+ * `kind` reuses the FILTER cap, so what a caller may ask for and what it may be
+ * told cannot drift apart.
+ */
+export const MEMORY_RECALL_TITLE_MAX_BYTES = 256;
+export const MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES = 1024;
+export const MEMORY_RECALL_ITEM_KIND_MAX_BYTES = schemas.MEMORY_RECALL_KIND_MAX_BYTES;
+
+/**
+ * Aggregate ceiling on ONE SERIALIZED recall response, in UTF-8 BYTES.
+ *
+ * Per-field caps bound a ROW; nothing bounds the sum, and `MEMORY_RECALL_MAX_LIMIT`
+ * multiplies whatever a row costs. This is the backstop that makes the next
+ * field added to the projection inherit a bound instead of needing one written
+ * for it. 64 KiB sits above every recall the caps above can produce at the
+ * default limit and well inside a context window.
+ *
+ * It bounds the WHOLE response, not the sum of the rows: the accounting below
+ * charges the array brackets, every separator and the fixed envelope, because a
+ * ceiling that measures something smaller than what it claims to measure is the
+ * same kind of untrue statement as the rest of this file is about.
+ */
+export const MEMORY_RECALL_RESPONSE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Over-fetch factor for a recall whose result is narrowed AFTER ranking.
+ *
+ * THREE filters narrow after the ranked fetch and none can be pushed into it:
+ *
+ *   - the per-row `object.read` probe (`filterByAuthz`), which re-authorizes
+ *     every recovered row against the kernel in JS;
+ *   - `kind`, matched against the row's `okfType` in JS;
+ *   - the sealed-room project seal (`AND project_id = $projectId`, applied in
+ *     SQL to a candidate set the lane search deliberately draws from project
+ *     AND ambient lanes).
+ *
+ * Asking the index for exactly `limit` candidates lets rows that are about to be
+ * discarded consume the caller's whole budget, which under-returns a real hit
+ * and, worse, can empty the recovery entirely and report a spurious
+ * `degraded-recent`. So the fetch is widened and the result is sliced to `limit`
+ * afterwards.
+ *
+ * The widening is UNCONDITIONAL, and the probe is why. `kind` and the project
+ * seal are in play only when the caller asks for them; the probe runs on EVERY
+ * call, on BOTH paths. Widening only for the two optional filters left the
+ * ambient recall, the common case, on a budget of exactly `limit`, so every
+ * row the caller was not entitled to see cost it a row of its answer: a recall
+ * of 25 ranked ids with 15 unreadable answered 5 of a requested 10, labelled
+ * `semantic`, with nothing in the response to say why.
+ *
+ * This widens the CANDIDATE set, never the authorization: every extra candidate
+ * still passes the same org scoping, the same type pin, the same project seal,
+ * the same actor-scoped ownership SQL filter and the same per-row `object.read`
+ * probe.
+ */
+const MEMORY_RECALL_CANDIDATE_FETCH_FACTOR = 5;
+
+/** Absolute ceiling on a recall fetch, whatever the factor above computes. */
+export const MEMORY_RECALL_CANDIDATE_FETCH_MAX = 250;
+
+/**
+ * Truncate to a UTF-8 BYTE budget without splitting a code point.
+ *
+ * Byte-exact by construction: it walks code points (the string iterator) and
+ * stops before the first one that would cross the budget, so the result is
+ * always <= `maxBytes` and is always valid UTF-8. Slicing the encoded bytes and
+ * decoding back would be simpler and wrong — a split sequence decodes to U+FFFD,
+ * which can be LONGER than the bytes it replaced.
+ */
+function truncateToUtf8Bytes(
+  value: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).length <= maxBytes) return { text: value, truncated: false };
+  let bytes = 0;
+  let out = "";
+  for (const ch of value) {
+    const size = encoder.encode(ch).length;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    out += ch;
+  }
+  return { text: out, truncated: true };
+}
+
+/**
+ * One row of a `memory_recall` response.
+ *
+ * Derived from `memoryRecallResponseSchema` rather than declared beside it:
+ * the shape the handler builds and the shape the response is parsed against are
+ * then the same object by construction, not by two authors agreeing.
+ */
+type MemoryRecallItem = schemas.MemoryRecallItem;
+
+function memoryRowData(row: ObjectRecord): Record<string, unknown> {
+  return (row.data as Record<string, unknown> | null) ?? {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * `kind` is the OKF frontmatter type (`okfType`), matched in JS against rows
+ * already fetched and already authorized.
+ *
+ * It deliberately never becomes the SQL `type` (which stays pinned to
+ * `MEMORY_CONCEPT_TYPE_ID`) and never reaches the semantic index, so there is
+ * no smuggling path: the worst a hostile `kind` can do is match nothing.
+ * Comparison is exact and case-sensitive, like `okfType` itself.
+ */
+function memoryRowMatchesKind(row: ObjectRecord, kind: string | null): boolean {
+  if (kind === null) return true;
+  return readString(memoryRowData(row).okfType) === kind;
+}
+
+/** Cap a nullable projected label to a UTF-8 byte budget. */
+function capProjectedString(value: string | null, maxBytes: number): string | null {
+  return value === null ? null : truncateToUtf8Bytes(value, maxBytes).text;
+}
+
+/** Canonical row -> the capped recall projection. */
+function toMemoryRecallItem(row: ObjectRecord): MemoryRecallItem {
+  const data = memoryRowData(row);
+  const frontmatter =
+    typeof data.frontmatter === "object" && data.frontmatter !== null
+      ? (data.frontmatter as Record<string, unknown>)
+      : {};
+  const body = typeof data.bodyMarkdown === "string" ? data.bodyMarkdown : "";
+  const { text, truncated } = truncateToUtf8Bytes(body, MEMORY_RECALL_EXCERPT_MAX_BYTES);
+  return {
+    id: row.id,
+    // Every free-text field is capped, not just the excerpt — see the constants
+    // above. `excerptTruncated` stays specific to the excerpt: it tells a caller
+    // that the LEDE is short of the body, which is the only one of these a
+    // caller would go and fetch the rest of.
+    conceptPath: capProjectedString(
+      readString(data.conceptId),
+      MEMORY_RECALL_CONCEPT_PATH_MAX_BYTES,
+    ),
+    title: capProjectedString(readString(frontmatter.title), MEMORY_RECALL_TITLE_MAX_BYTES),
+    kind: capProjectedString(readString(data.okfType), MEMORY_RECALL_ITEM_KIND_MAX_BYTES),
+    // The scope SUMMARY, not a widening: the row has already passed
+    // `object.read`, and `objects_list` on the same row returns strictly more
+    // (the whole envelope plus the actor block). It is here because a recall
+    // consumer has to be able to say whose memory it is reading.
+    scope: {
+      ownerLevel: normalizeOwnerLevel(row.ownerLevel),
+      ownerId: row.ownerId,
+      visibility: normalizeObjectVisibility(row.visibility),
+      projectId: row.projectId,
+    },
+    excerpt: text,
+    excerptTruncated: truncated,
+  };
+}
+
+/**
+ * Lexical re-ordering of the DEGRADED candidate set (the issue's optional
+ * client-side ranking).
+ *
+ * It is a token-overlap sort over the projected fields only — no index, no
+ * corpus statistics, nothing that could be mistaken for retrieval. It does NOT
+ * change what the candidate set IS (recent rows in the caller's lanes, chosen
+ * without the query), which is why the response keeps `mode: "degraded-recent"`
+ * and states `ordering: "lexical-fallback"` beside it. Stable: rows that score
+ * equally keep the recency order the store returned them in.
+ */
+function rankRecallItemsLexically(
+  items: MemoryRecallItem[],
+  query: string,
+): MemoryRecallItem[] {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 1);
+  if (terms.length === 0) return items;
+  const scored = items.map((item, index) => {
+    const haystack = [item.conceptPath, item.title, item.kind, item.excerpt]
+      .filter((v): v is string => typeof v === "string")
+      .join(" ")
+      .toLowerCase();
+    let score = 0;
+    for (const term of terms) if (haystack.includes(term)) score += 1;
+    return { item, index, score };
+  });
+  scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
+  return scored.map((s) => s.item);
+}
+
+/**
+ * The serialized cost of one recall answer MINUS its rows, MEASURED.
+ *
+ * `JSON.stringify({ items: [], ...envelope })` is the response the handler is
+ * about to emit with the array emptied, so its byte length is the envelope plus
+ * `"items":[]`, and the full answer is exactly this number, plus each
+ * serialized item, plus one `,` per join. Nothing here is reserved or rounded.
+ *
+ * `ceilingApplied` widens it by the `responseCeiling` report, because a fit that
+ * ends in a drop emits a WIDER envelope than the one it was measured against.
+ */
+function memoryRecallEnvelopeBytes(
+  envelope: schemas.MemoryRecallEnvelope,
+  ceilingApplied: boolean,
+): number {
+  const meta = ceilingApplied
+    ? { ...(envelope.meta ?? {}), responseCeiling: "applied" as const }
+    : envelope.meta;
+  return new TextEncoder().encode(
+    JSON.stringify({ items: [], ...envelope, ...(meta ? { meta } : {}) }),
+  ).length;
+}
+
+/**
+ * Apply the aggregate response ceiling.
+ *
+ * Rows are kept in order until the next one would cross
+ * `MEMORY_RECALL_RESPONSE_MAX_BYTES`, and the drop is REPORTED
+ * (`meta.responseCeiling: "applied"`) rather than silent: a recall that quietly
+ * returns fewer rows than it recovered is the same soft dishonesty `mode` exists
+ * to prevent, one layer down.
+ *
+ * The accounting is EXACT and the bound has no exceptions. Three things follow,
+ * and all three are deliberate:
+ *
+ *   - the envelope this call is ABOUT TO EMIT is measured, not reserved. A flat
+ *     reservation is wrong in whichever direction it rounds, and it rounded up:
+ *     256 bytes charged against a ranked no-meta envelope of 57 dropped a row
+ *     out of any response sitting in the last 201 bytes under the ceiling, and
+ *     then reported a `responseCeiling` that did not have to happen. A ceiling
+ *     that bounds a number 201 bytes larger than the response is the same kind
+ *     of untrue statement as the rest of this file is about, so the envelope is
+ *     built and measured per path;
+ *   - the array brackets and every `,` separator are charged too, so the
+ *     ceiling bounds the serialized response and not a smaller number that
+ *     resembles it;
+ *   - there is no "always keep the first row" escape. `id` and the `scope`
+ *     fields are canonical database columns rather than capped projections, so
+ *     a single row CAN in principle exceed the ceiling alone; keeping it anyway
+ *     would make the bound advisory. A recall that drops every row still says
+ *     so, which is the honest answer to "your one hit does not fit".
+ *
+ * The two-pass fit closes the circularity between the last two: whether the
+ * answer carries `meta.responseCeiling` depends on whether a row is dropped, and
+ * whether a row is dropped depends on the envelope. Pass one fits against the
+ * envelope with no report; if everything fits, that IS the emitted envelope and
+ * the answer is exact. If anything is dropped the emitted envelope is the wider
+ * reporting one, so pass two re-fits against it. Pass two can never turn the
+ * drop back off: it charges strictly more, so a set that did not fit the
+ * narrower envelope cannot fit the wider one.
+ */
+function applyMemoryRecallResponseCeiling(
+  items: MemoryRecallItem[],
+  envelope: schemas.MemoryRecallEnvelope,
+): { items: MemoryRecallItem[]; ceilingApplied: boolean } {
+  const encoder = new TextEncoder();
+  const fit = (
+    envelopeBytes: number,
+  ): { kept: MemoryRecallItem[]; dropped: boolean } => {
+    const kept: MemoryRecallItem[] = [];
+    let bytes = envelopeBytes;
+    for (const item of items) {
+      // The item, plus the `,` that joins it to the previous one.
+      const size =
+        encoder.encode(JSON.stringify(item)).length + (kept.length > 0 ? 1 : 0);
+      if (bytes + size > MEMORY_RECALL_RESPONSE_MAX_BYTES) {
+        return { kept, dropped: true };
+      }
+      bytes += size;
+      kept.push(item);
+    }
+    return { kept, dropped: false };
+  };
+
+  const whole = fit(memoryRecallEnvelopeBytes(envelope, false));
+  if (!whole.dropped) return { items: whole.kept, ceilingApplied: false };
+  const reported = fit(memoryRecallEnvelopeBytes(envelope, true));
+  return { items: reported.kept, ceilingApplied: true };
 }
 
 type SaveOwnership = {
@@ -728,6 +1100,573 @@ function resolveMemoryConceptDefOrThrow() {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Memory ingest secret scan (cinatra#1378, epic #1373) — FAIL-CLOSED.
+// ---------------------------------------------------------------------------
+//
+// A memory bundle is written by coding agents into a working tree, so a concept
+// file is exactly where an API key ends up by accident. The sync client scans
+// before it uploads and reports a local diagnostic naming the file — but a
+// bundle is untrusted input end-to-end, so the client's scan can never be the
+// thing that decides. This is the gate that decides.
+//
+// Fail-closed in both directions:
+//   - a credential-shaped literal REJECTS the write, and the payload is never
+//     persisted (this runs on the same seam as the envelope schema, before any
+//     commit);
+//   - a scan that cannot COMPLETE also rejects. "Could not look" and "looked
+//     and found nothing" must never produce the same answer, so the walk is
+//     bounded and exceeding a bound throws rather than returning what it had.
+//
+// Inlined here rather than imported for the same reason MEMORY_CONCEPT_TYPE_ID
+// is: this handler is reachable from the locked route-graph budgets, and a new
+// first-party module would grow every locked route by one. It has no imports.
+//
+// It is deliberately NOT a copy of a shared helper with a kill-switch: there is
+// no env flag, no org opt-out, and no claim probe. A memory-typed write whose
+// content cannot be cleared is refused, full stop.
+
+/** Stable refusal codes for the memory ingest secret scan (cinatra#1378). */
+const OBJECTS_MEMORY_SECRET_DETECTED = "OBJECTS_MEMORY_SECRET_DETECTED" as const;
+const OBJECTS_MEMORY_SECRET_SCAN_FAILED =
+  "OBJECTS_MEMORY_SECRET_SCAN_FAILED" as const;
+
+/**
+ * Known credential prefixes — flagged regardless of entropy.
+ *
+ * ORDER IS THE REPORTED ANSWER (cinatra#1378 review item 13): the first match
+ * wins and its name is the only thing the author can act on, so the MORE
+ * SPECIFIC prefix comes first. `sk-ant-…` is also a valid `sk-…`, and telling
+ * an author their Anthropic key is an OpenAI key sends them to the wrong file.
+ */
+const MEMORY_SECRET_PREFIXES: ReadonlyArray<{ name: string; re: RegExp }> = [
+  { name: "anthropic-key", re: /^sk-ant-[A-Za-z0-9_-]{16,}$/ },
+  { name: "openai-sk", re: /^sk-[A-Za-z0-9_-]{16,}$/ },
+  { name: "github-pat", re: /^(gho|ghp|gha|ghs|ghr)_[A-Za-z0-9]{20,}$/ },
+  { name: "google-oauth", re: /^ya29\.[A-Za-z0-9_-]{20,}$/ },
+  { name: "slack-token", re: /^(xoxb|xoxp|xoxa|xoxr|xoxs)-[A-Za-z0-9-]{16,}$/ },
+  { name: "aws-access-key", re: /^(AKIA|ASIA)[A-Z0-9]{12,}$/ },
+];
+
+/**
+ * Documentation shapes that must not be flagged, or the gate trains bypasses.
+ *
+ * ANCHORED, and applied PER TOKEN (cinatra#1378 review item 1). The earlier
+ * shape tested these against the whole trimmed value and returned "no finding"
+ * for the ENTIRE string on a match. Two of the patterns were unanchored, and a
+ * concept body is scanned as one value — so a single `${VAR}` or `<VAR>`
+ * anywhere in a file switched the scan off for the whole file. Tolerance
+ * belongs to the TOKEN that is a placeholder, never to its neighbours.
+ *
+ * There is no whole-value branch any more and none is needed: the token
+ * splitter consumes `{}`, `<>` and the URL punctuation, so a value that IS a
+ * placeholder arrives here as a single token and matches on its own. A
+ * placeholder WRAPPER (`{{ … }}`) therefore no longer launders its contents.
+ */
+const MEMORY_SECRET_PLACEHOLDER_TOKENS: ReadonlyArray<RegExp> = [
+  /^\$\{[A-Z0-9_]+\}$/,
+  /^\$[A-Z0-9_]+$/,
+  /^<[A-Z0-9_]+>$/,
+  /^\{\{[A-Z0-9_. -]+\}\}$/,
+  /^\*+$/,
+  /^REDACTED$/i,
+];
+
+/**
+ * Placeholder WORDS. Matched as a whole token or as a delimited word inside
+ * one (cinatra#1378 review item 6) — never as a bare substring. A
+ * credential-shaped token with `example` spliced into its middle is a
+ * credential, not documentation.
+ */
+const MEMORY_SECRET_PLACEHOLDER_WORDS: ReadonlySet<string> = new Set([
+  "example",
+  "redacted",
+  "placeholder",
+]);
+
+/** Word delimiters inside a single token, for the placeholder-word test. */
+const MEMORY_SECRET_WORD_SPLIT = /[-_.]+/;
+
+/**
+ * Opaque-token entropy, ALPHABET-AWARE (cinatra#1378 review item 5).
+ *
+ * The previous rule was "Shannon entropy >= 4.5 bits per character". Shannon
+ * entropy over a 16-symbol alphabet is bounded by log2(16) = 4.0, so that
+ * branch was STRUCTURALLY UNREACHABLE for any hex string of any length — a
+ * hex-encoded key rode through no matter how long it was.
+ *
+ * The rule here scores a token against the alphabet it is actually drawn from:
+ *
+ *   score = H(token) / min(log2(|charset class|), log2(token length))
+ *
+ * The second term makes short tokens comparable: a 24-character string cannot
+ * exceed log2(24) bits per character however wide its alphabet is.
+ *
+ * The threshold and the digit+letter requirement were calibrated against this
+ * repository's own token corpus (every tracked file under packages/memory,
+ * packages/objects and docs): at 0.85, no ordinary path or prose word in that
+ * corpus flags. Random keys are caught at 93% (32 hex chars), 100% (64 hex
+ * chars) and 96-98% (24-43 base64url chars).
+ *
+ * This rule CANNOT tell an opaque credential apart from a common high-entropy
+ * IDENTIFIER by shape alone, and a memory concept is full of the latter — a
+ * bundle id, an object id, a run id, a commit SHA. Measured against this
+ * detector (5000 samples per shape): a random v4 UUID flags 94.0% of the time
+ * (93.7% inside a prose sentence, 93.5% inside a link target), and a
+ * ULID-shaped id flags 85.8% of the time. A 40-character git commit SHA flags
+ * about 99% of the time; a 12-character short SHA does not, because it is
+ * under the length floor below. Nothing here excludes an identifier shape by
+ * name — only `externalId`, `bundleId` and `cinatraAgentRunId`, and only at
+ * the top level (see `MEMORY_SCAN_EXCLUDED_KEYS`) — so a concept body or a
+ * nested frontmatter value that quotes one is refused exactly like a
+ * credential would be.
+ * Whether to exclude identifier shapes is a separate call this detector
+ * deliberately does not make; buying author ergonomics with a hole is a trade
+ * that should be made on purpose.
+ *
+ * DELIBERATELY OUT OF SCOPE, so this comment does not read as broader than the
+ * code (cinatra#1378 review item 5):
+ *   - A HEX DIGEST IS FLAGGED. A sha256 digest and a hex API key are the same
+ *     shape and nothing in the string separates them, so this gate resolves the
+ *     ambiguity in the fail-closed direction. The envelope's OWN digest is not
+ *     a false positive: `externalId`, `bundleId` and `cinatraAgentRunId` are
+ *     excluded from the scan BY NAME — each is either server-set or
+ *     shape-constrained to something with no room for a credential (see
+ *     MEMORY_SCAN_EXCLUDED_KEYS for the per-key reasons).
+ *   - A token shorter than 24 characters is not entropy-scored at all. Short
+ *     credentials are covered by the prefix list, not by this branch.
+ *   - Standard base64 (`+` and `/`) is not a charset class here: the token
+ *     splitter consumes `/`, so such a token arrives already broken up.
+ *   - A credential with no digit or no letter is not entropy-scored: that
+ *     requirement is what keeps camelCase identifiers out, and the probability
+ *     a random 32-character key lacks a digit is under half a percent.
+ */
+const MEMORY_SECRET_ENTROPY_MIN_LENGTH = 24;
+const MEMORY_SECRET_ENTROPY_THRESHOLD = 0.85;
+
+/** Charset classes an opaque credential is drawn from, most specific first. */
+const MEMORY_SECRET_CHARSET_CLASSES: ReadonlyArray<{ re: RegExp; size: number }> = [
+  { re: /^[0-9a-f]+$/, size: 16 },
+  { re: /^[0-9A-F]+$/, size: 16 },
+  { re: /^[A-Z2-7]+$/, size: 32 },
+  { re: /^[A-Za-z0-9_-]+$/, size: 64 },
+];
+
+/**
+ * A PEM private-key block. No entropy rule reaches this: the armour is
+ * readable ASCII and the base64 payload is split across newlines.
+ */
+const MEMORY_PEM_PRIVATE_KEY = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/;
+
+// URL punctuation (`/ ? = & #`) is in the split set alongside whitespace and
+// JSON punctuation: the common way a credential reaches a concept file is
+// inside a URL, and without those separators the whole URL is one token that
+// matches no anchored prefix and whose entropy is diluted by the readable host
+// and path — so a real key would ride through.
+const MEMORY_SECRET_TOKEN_SPLIT = /[\s,;:|()\[\]<>{}"'`/?=&#]+/;
+
+/** Anchored segment tests: linear, so hostile input cannot make the scan blow up. */
+const MEMORY_JWT_SEGMENT = /^[A-Za-z0-9_-]+$/;
+const MEMORY_JWT_LEADING = /^[A-Za-z0-9_-]+/;
+
+/**
+ * Bounds that make the WALK itself fail-closed. Frontmatter is arbitrary
+ * author-supplied YAML, so it can nest and fan out without limit; a walk that
+ * quietly stopped would clear content it never read.
+ */
+const MEMORY_SCAN_MAX_DEPTH = 32;
+const MEMORY_SCAN_MAX_VALUES = 20_000;
+
+function memorySecretEntropy(value: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of value) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const c of counts.values()) {
+    const p = c / value.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+/**
+ * Normalized, alphabet-aware entropy score for one token, or null when the
+ * token is not drawn from any recognized credential charset.
+ */
+function memorySecretEntropyScore(token: string): number | null {
+  const klass = MEMORY_SECRET_CHARSET_CLASSES.find((c) => c.re.test(token));
+  if (klass === undefined) return null;
+  const ceiling = Math.min(Math.log2(klass.size), Math.log2(token.length));
+  if (ceiling <= 0) return null;
+  return memorySecretEntropy(token) / ceiling;
+}
+
+/** Is this token an opaque credential by the alphabet-aware entropy rule? */
+function isMemoryHighEntropyToken(token: string): boolean {
+  if (token.length < MEMORY_SECRET_ENTROPY_MIN_LENGTH) return false;
+  if (!/[0-9]/.test(token) || !/[A-Za-z]/.test(token)) return false;
+  const score = memorySecretEntropyScore(token);
+  return score !== null && score >= MEMORY_SECRET_ENTROPY_THRESHOLD;
+}
+
+/**
+ * A token with its placeholder WORDS removed.
+ *
+ * `example-<32 opaque chars>` is not documentation with a credential-shaped
+ * name; it is a credential with a documentation word glued on. Stripping the
+ * word is what lets the caller ask the honest question — "is what REMAINS
+ * credential-shaped?" — instead of taking the word's presence as an answer.
+ */
+/**
+ * A contiguous STANDARD-base64 run (`+` and `/` in the alphabet).
+ *
+ * The token splitter consumes `/`, so a standard-base64 credential arrives at
+ * the token loop already broken into fragments too short to score — an AWS
+ * secret access key is the everyday example. This runs on the WHOLE value
+ * before splitting and scores the run as one token.
+ *
+ * Narrow on purpose. The run must actually CONTAIN a `+` or a `/`, because a
+ * run without either is plain alphanumeric and the token loop already scores it
+ * well; it must carry a digit and a letter, which is what keeps a
+ * slash-separated PATH out; and it must clear the same normalized threshold.
+ * Measured over every tracked file in this repository, that combination selects
+ * 20 runs, all of them base64-encoded binary (inline SVG data URIs and test key
+ * material) and none of them concept prose.
+ *
+ * The numbers, measured through the WHOLE detector rather than this rule alone,
+ * because the two branches cover each other: a 40-character standard-base64 key
+ * is caught 97.6% of the time (70.2% by this rule, 27.4% by the token loop —
+ * roughly 28% of such keys happen to contain neither `+` nor `/`, and those are
+ * exactly the ones the token loop sees intact). At 44 characters it is 96.8%.
+ * Coverage falls to 83.6% at 64 characters, where the length ceiling starts to
+ * bite: a longer run needs proportionally more entropy to clear 0.85. Those are
+ * the honest measured numbers, not a claim that the shape is fully covered.
+ */
+const MEMORY_STANDARD_BASE64_RUN = /[A-Za-z0-9+/]{32,}/g;
+
+function MEMORY_STANDARD_BASE64_RUNHit(value: string): boolean {
+  for (const run of value.match(MEMORY_STANDARD_BASE64_RUN) ?? []) {
+    if (!/[+/]/.test(run)) continue;
+    if (!/[0-9]/.test(run) || !/[A-Za-z]/.test(run)) continue;
+    const ceiling = Math.min(Math.log2(64), Math.log2(run.length));
+    if (ceiling > 0 && memorySecretEntropy(run) / ceiling >= MEMORY_SECRET_ENTROPY_THRESHOLD) return true;
+  }
+  return false;
+}
+
+function isMemorySecretPlaceholderTokenResidue(token: string): string {
+  return token
+    .split(MEMORY_SECRET_WORD_SPLIT)
+    .filter((part) => !MEMORY_SECRET_PLACEHOLDER_WORDS.has(part.toLowerCase()))
+    .join("");
+}
+
+/**
+ * Is this token documentation rather than a credential?
+ *
+ * A placeholder WORD skips the token only when what remains after removing it
+ * is too short to be a credential. Matching the word alone — as a bare
+ * substring, and equally as a delimited word — is a one-word bypass anyone can
+ * find: `<12 opaque chars>-example-<17 opaque chars>` is a 38-character
+ * high-entropy token that the word switched the detector off for. `sk-EXAMPLE`
+ * leaves `sk`, and `token.example.placeholder-value` leaves `tokenvalue`; both
+ * stay skipped, which is the tolerance that keeps the gate believed.
+ */
+function isMemorySecretPlaceholderToken(token: string): boolean {
+  if (MEMORY_SECRET_PLACEHOLDER_TOKENS.some((re) => re.test(token))) return true;
+  const lower = token.toLowerCase();
+  if (MEMORY_SECRET_PLACEHOLDER_WORDS.has(lower)) return true;
+  const parts = lower.split(MEMORY_SECRET_WORD_SPLIT);
+  if (!parts.some((word) => MEMORY_SECRET_PLACEHOLDER_WORDS.has(word))) return false;
+  return isMemorySecretPlaceholderTokenResidue(token).length < MEMORY_SECRET_ENTROPY_MIN_LENGTH;
+}
+
+/**
+ * A credential carried in a URL's userinfo: a scheme, then `user:password`, then `@host`.
+ *
+ * Scanned on the WHOLE value before token splitting, because the splitter
+ * consumes `:` and `/` and would take the pair apart. Parsed procedurally
+ * rather than with a regex: the value is untrusted concept content, and a
+ * pattern with two adjacent unbounded runs is a reachable denial of service.
+ * A placeholder password is documentation and is tolerated.
+ */
+function memoryUrlUserinfoCredential(value: string): boolean {
+  let from = 0;
+  for (;;) {
+    const marker = value.indexOf("://", from);
+    if (marker === -1) return false;
+    from = marker + 3;
+    let schemeStart = marker;
+    while (schemeStart > 0 && /[A-Za-z0-9+.-]/.test(value[schemeStart - 1] ?? "")) {
+      schemeStart -= 1;
+    }
+    if (schemeStart === marker) continue;
+    let i = from;
+    let colon = -1;
+    while (i < value.length) {
+      const ch = value[i] ?? "";
+      if (ch === "@") break;
+      if (ch === "/" || ch === "?" || ch === "#" || /\s/.test(ch)) break;
+      if (ch === ":" && colon === -1) colon = i;
+      i += 1;
+    }
+    if (i >= value.length || value[i] !== "@") continue;
+    if (colon === -1) continue;
+    const password = value.slice(colon + 1, i);
+    if (password === "" || isMemorySecretPlaceholderToken(password)) continue;
+    return true;
+  }
+}
+
+/** Linear JWT-shape scan (split on ".", check consecutive triples). */
+function memoryJwtShape(value: string): string | null {
+  if (!value.includes("eyJ")) return null;
+  const parts = value.split(".");
+  for (let i = 0; i + 2 < parts.length; i++) {
+    const head = parts[i] ?? "";
+    const idx = head.indexOf("eyJ");
+    if (idx === -1) continue;
+    const seg0 = head.slice(idx);
+    if (seg0.length < 4 || !MEMORY_JWT_SEGMENT.test(seg0)) continue;
+    const seg1 = parts[i + 1] ?? "";
+    if (seg1.length < 4 || !seg1.startsWith("eyJ") || !MEMORY_JWT_SEGMENT.test(seg1)) continue;
+    const tail = (parts[i + 2] ?? "").match(MEMORY_JWT_LEADING);
+    if (tail === null) continue;
+    return `${seg0}.${seg1}.${tail[0]}`;
+  }
+  return null;
+}
+
+/**
+ * Return the credential-pattern LABEL for one string, or null.
+ * The label names the SHAPE, never the matched text — a refusal message that
+ * echoed the secret would copy it into run history and error logs.
+ */
+function detectMemorySecretPattern(value: string): string | null {
+  if (value.length === 0) return null;
+
+  // Shapes that survive token splitting only as a whole: checked first, on the
+  // WHOLE value. Neither is reachable by an entropy rule (item 5).
+  if (MEMORY_PEM_PRIVATE_KEY.test(value)) return "pem-private-key";
+  if (memoryUrlUserinfoCredential(value)) return "url-credential";
+  if (MEMORY_STANDARD_BASE64_RUNHit(value)) return "standard-base64-token";
+
+  const jwt = memoryJwtShape(value);
+  if (jwt !== null && !isMemorySecretPlaceholderToken(jwt)) return "jwt";
+
+  const bearer = /^\s*Bearer\s+(\S+)\s*$/i.exec(value);
+  if (bearer) {
+    const inner = bearer[1] ?? "";
+    if (isMemorySecretPlaceholderToken(inner)) return null;
+    return detectMemorySecretPattern(inner);
+  }
+
+  // Per-token from here down. There is deliberately NO whole-value placeholder
+  // short-circuit (item 1): tolerance applies to the token that IS a
+  // placeholder and to nothing else in the value.
+  for (const token of value.split(MEMORY_SECRET_TOKEN_SPLIT)) {
+    if (token.length === 0) continue;
+    for (const { name, re } of MEMORY_SECRET_PREFIXES) {
+      if (re.test(token)) return name;
+    }
+    if (isMemorySecretPlaceholderToken(token)) continue;
+    if (isMemoryHighEntropyToken(token)) return "high-entropy-token";
+    // A token that survived the placeholder check because its residue is long
+    // is scored on that RESIDUE too: the glued-on documentation word dilutes
+    // the whole token's entropy, which is the other half of the same bypass.
+    const residue = isMemorySecretPlaceholderTokenResidue(token);
+    if (residue !== token && isMemoryHighEntropyToken(residue)) return "high-entropy-token";
+  }
+  return null;
+}
+
+/**
+ * Object keys a location string may echo verbatim: short, ordinary identifier
+ * shapes. Anything else is rendered positionally.
+ */
+const MEMORY_SAFE_KEY_RE = /^[A-Za-z0-9_.\- ]{1,64}$/;
+
+/**
+ * Render one object key as a location segment WITHOUT echoing it unless it is
+ * obviously safe to.
+ *
+ * A location ends up inside a refusal message, and a refusal message ends up
+ * in terminal scrollback and CI logs. An object KEY is author-controlled text
+ * exactly like a value, so `{ "ghp_<real token>": "note" }` would otherwise
+ * copy the credential into the very message that promises to name only the
+ * shape. A key is echoed only when it is a short ordinary identifier that the
+ * credential detector itself does not flag; everything else is positional.
+ */
+function memoryLocationSegment(key: string, index: number): string {
+  if (!MEMORY_SAFE_KEY_RE.test(key)) return `[key#${index}]`;
+  try {
+    return detectMemorySecretPattern(key) === null ? key : `[key#${index}]`;
+  } catch {
+    return `[key#${index}]`;
+  }
+}
+
+/**
+ * Keys the scan SKIPS, each excluded BY NAME with its reason
+ * (cinatra#1378 review item 2).
+ *
+ * The earlier shape enumerated the three fields to scan, which made every
+ * field added later unscanned BY DEFAULT — and the row already stored more
+ * than three fields, so a credential in `provenance.tool`, in `conceptId`, or
+ * in an unknown top-level key reached the persisted row untouched. The
+ * polarity is now inverted: the scan walks the WHOLE object about to be
+ * written and skips only what is named here.
+ *
+ *   - `externalId` — sha256 of (bundleId + NUL + conceptId), recomputed and
+ *     re-checked by the schema. It is a 64-character hex digest, which the
+ *     alphabet-aware entropy rule flags by design, so scanning it would refuse
+ *     every well-formed envelope.
+ *   - `bundleId` — a UUID the schema constrains. Same reason: high normalized
+ *     entropy over its own charset, and no room in the shape for anything else.
+ *   - `cinatraAgentRunId` — server-injected from the authenticated run. This
+ *     exclusion is only safe because the field is genuinely server-derived on
+ *     this type: the generic save path preserves a value the CALLER supplied
+ *     (`handlers.ts` injects the run id only when the key is absent, so an
+ *     agent can name its own for retry dedup), which on a memory write would
+ *     have made "excluded because the server set it" false — an unscanned,
+ *     uncapped, caller-controlled string in the persisted row. So a memory
+ *     write REFUSES a caller-supplied value outright
+ *     (`enforceMemoryServerProvenance`) and refuses a change to it on update.
+ *     Only then is skipping it skipping our own value.
+ *
+ * Nothing else is excluded. `conceptId`, `okfType`, `okfVersion`,
+ * `provenance`, `frontmatter` (values AND keys) and `links` are all
+ * author-controlled and all scanned.
+ */
+export const MEMORY_SCAN_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
+  "externalId",
+  "bundleId",
+  "cinatraAgentRunId",
+]);
+
+/**
+ * The INGEST GATE'S ENVELOPE SCAN, as a pure verdict.
+ *
+ * The scanned surface is everything a bundle author controls and a reader will
+ * later be shown. It is the whole object minus {@link MEMORY_SCAN_EXCLUDED_KEYS},
+ * walked to the bottom — VALUES and KEYS alike, because a key hides a
+ * credential just as well.
+ *
+ * EXPORTED so a SECOND gate over the same envelopes cannot re-derive the
+ * surface and answer differently (cinatra#1381 review, finding 2). The memory
+ * row-promotion gate asks the same question about the same rows at approve
+ * time; deriving its own surface made it scan `externalId`, `bundleId` and
+ * `cinatraAgentRunId`: the three fields THIS scan excludes by name. All three
+ * are on every stored row, so it refused every real memory row. Any gate that
+ * must agree with ingest calls this function; nothing re-implements it.
+ *
+ * Returns a VERDICT rather than throwing, so a caller that owes its user a
+ * value instead of an exception does not have to invert one. The write path's
+ * `scanMemoryConceptEnvelopeForSecrets` maps this verdict to the
+ * PrimitiveInvocationError it always raised, unchanged.
+ */
+export function inspectMemoryConceptEnvelopeForSecrets(
+  data: Record<string, unknown>,
+):
+  | { clean: true }
+  | { clean: false; failure: "scan-failed"; location: string | null; message: string }
+  | { clean: false; failure: "secret-detected"; location: string; pattern: string } {
+  const values: Array<{ location: string; value: string }> = [];
+  const seen = new Set<object>();
+  const walk = (node: unknown, location: string, depth: number): void => {
+    if (depth > MEMORY_SCAN_MAX_DEPTH) {
+      throw new Error(`nesting deeper than ${MEMORY_SCAN_MAX_DEPTH} levels at ${location}`);
+    }
+    if (values.length > MEMORY_SCAN_MAX_VALUES) {
+      throw new Error(`more than ${MEMORY_SCAN_MAX_VALUES} scannable values`);
+    }
+    if (typeof node === "string") {
+      values.push({ location, value: node });
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    if (seen.has(node as object)) throw new Error(`the value at ${location} is cyclic`);
+    seen.add(node as object);
+    if (Array.isArray(node)) {
+      node.forEach((entry, i) => walk(entry, `${location}[${i}]`, depth + 1));
+      return;
+    }
+    Object.entries(node as Record<string, unknown>).forEach(([key, entry], i) => {
+      const segment = memoryLocationSegment(key, i);
+      // The KEY is author-controlled text too. `{ "<a real token>": "note" }`
+      // hides a credential exactly as well as a value does, so every key is
+      // scanned as a value in its own right at its own (echo-safe) location.
+      values.push({ location: `${location}.${segment}`, value: key });
+      walk(entry, `${location}.${segment}`, depth + 1);
+    });
+  };
+
+  try {
+    // Whole-object walk. Enumerating fields to SCAN is what let three of them
+    // through; enumerating the fields to SKIP fails closed for every field
+    // added later.
+    Object.entries(data).forEach(([key, entry], i) => {
+      if (MEMORY_SCAN_EXCLUDED_KEYS.has(key)) return;
+      const segment = memoryLocationSegment(key, i);
+      values.push({ location: segment, value: key });
+      walk(entry, segment, 0);
+    });
+  } catch (err) {
+    return {
+      clean: false,
+      failure: "scan-failed",
+      location: null,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  for (const { location, value } of values) {
+    let label: string | null;
+    try {
+      label = detectMemorySecretPattern(value);
+    } catch (err) {
+      return {
+        clean: false,
+        failure: "scan-failed",
+        location,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (label !== null) {
+      return { clean: false, failure: "secret-detected", location, pattern: label };
+    }
+  }
+  return { clean: true };
+}
+
+/**
+ * Scan a memory envelope's content surface on the WRITE path. THROWS a
+ * PrimitiveInvocationError on a hit and on a scan that could not complete.
+ * The decision itself is {@link inspectMemoryConceptEnvelopeForSecrets}; this
+ * wrapper only chooses how the write path reports it.
+ */
+function scanMemoryConceptEnvelopeForSecrets(data: Record<string, unknown>): void {
+  const verdict = inspectMemoryConceptEnvelopeForSecrets(data);
+  if (verdict.clean) return;
+  if (verdict.failure === "scan-failed") {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SECRET_SCAN_FAILED,
+      message:
+        verdict.location === null
+          ? `the memory secret scan could not complete, so this concept was not stored: ${verdict.message}`
+          : `the memory secret scan could not complete at ${verdict.location}, so this concept was not stored: ${verdict.message}`,
+      retryable: false,
+      details: {},
+    });
+  }
+  throw new PrimitiveInvocationError({
+    code: OBJECTS_MEMORY_SECRET_DETECTED,
+    message: `this memory concept carries a credential-shaped literal (${verdict.pattern}) at ${verdict.location} and was not stored; remove it from the source file and sync again`,
+    retryable: false,
+    // Shape + location only. The matched text is never echoed back.
+    details: { location: verdict.location, pattern: verdict.pattern },
+  });
+}
+
 /**
  * Memory-envelope enforcement (cinatra#1376, epic #1373). Memory rows take
  * the deterministic static-type path; this gate wires the type's REGISTERED
@@ -753,11 +1692,19 @@ function resolveMemoryConceptDefOrThrow() {
  * objects_update needs no such guard: it keys on the existing row's stored
  * type and always reaches this gate.
  *
- * Returns the data TO PERSIST. For a valid memory envelope this is the input
- * with the schema's `okfVersion` default ("0.1") materialized when the caller
- * omitted it — the parsed output itself is NOT stored because Zod's strip
- * mode would drop unknown top-level keys (the system-injected
- * `cinatraAgentRunId`). Non-memory types pass through untouched.
+ * Returns the data TO PERSIST: the STRICTLY parsed client envelope with the
+ * server-injected fields merged back explicitly (cinatra#1378 review item 2).
+ *
+ * The earlier shape returned the ORIGINAL input rather than the parsed output,
+ * so that the system-injected `cinatraAgentRunId` would survive Zod's strip
+ * mode. That made the schema's tolerance of unknown top-level keys load-bearing
+ * — and an unknown key then rode into the persisted row unscanned and uncapped.
+ * The split below gets both properties instead of trading one for the other:
+ * the server-injected keys are lifted OFF before parsing, the remainder is
+ * parsed strictly (so an unknown CLIENT key is a rejection), and the injected
+ * keys are put back afterwards from the values the server itself supplied.
+ *
+ * Non-memory types pass through untouched.
  */
 function enforceMemoryConceptEnvelope(
   objectTypeId: string,
@@ -765,7 +1712,18 @@ function enforceMemoryConceptEnvelope(
 ): Record<string, unknown> {
   if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return data;
   const def = resolveMemoryConceptDefOrThrow();
-  const parsed = def.schema.safeParse(data);
+
+  // Split server-injected from client-supplied. A key in this set is never
+  // read from the caller's payload as authorization or identity; it is here
+  // only so a strict parse does not reject the server's own enrichment.
+  const injected: Record<string, unknown> = {};
+  const clientData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (MEMORY_SERVER_INJECTED_KEYS.has(key)) injected[key] = value;
+    else clientData[key] = value;
+  }
+
+  const parsed = def.schema.safeParse(clientData);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
@@ -774,11 +1732,270 @@ function enforceMemoryConceptEnvelope(
       `[objects:memory-concept] invalid memory concept envelope: ${issues}`,
     );
   }
-  if (data.okfVersion === undefined) {
-    const parsedOkfVersion = (parsed.data as { okfVersion?: unknown }).okfVersion;
-    return { ...data, okfVersion: parsedOkfVersion ?? "0.1" };
+
+  // The object that is about to be persisted, assembled explicitly. This exact
+  // object is what the scan below reads, so "what was scanned" and "what was
+  // written" cannot drift apart.
+  const toPersist: Record<string, unknown> = {
+    ...(parsed.data as Record<string, unknown>),
+    ...injected,
+  };
+
+  // Fail-closed ingest secret scan (cinatra#1378). Runs AFTER the schema so it
+  // scans a shape it can rely on, and BEFORE every caller's commit — this
+  // function's return value is what gets persisted, so a throw here means
+  // nothing was written.
+  scanMemoryConceptEnvelopeForSecrets(toPersist);
+  return toPersist;
+}
+
+/**
+ * Top-level envelope keys the SERVER injects, which a strict client parse must
+ * not reject (cinatra#1378 review item 2). Kept next to the gate that splits
+ * on them so the two can never disagree.
+ */
+const MEMORY_SERVER_INJECTED_KEYS: ReadonlySet<string> = new Set([
+  "cinatraAgentRunId",
+]);
+
+/** Refusal code for an ownership tuple a memory bundle may not request. */
+const OBJECTS_MEMORY_OWNERSHIP_REFUSED = "OBJECTS_MEMORY_OWNERSHIP_REFUSED" as const;
+
+/**
+ * Authorize the ownership tuple a memory-typed save REQUESTS
+ * (cinatra#1378 review item 4).
+ *
+ * WHY THIS EXISTS. Issue #1378 and epic #1373 both fix the contract: a bundle's
+ * `sync:` block and a concept's frontmatter carry a scope REQUEST for rows the
+ * run CREATES, "evaluated under the caller's normal authorization at save time
+ * (a request, never a grant)". The only thing standing behind that sentence was
+ * the `object.create` probe below — and that probe does not decide what the
+ * comments said it decides. `enforceResourceAccess` short-circuits only when the
+ * resource is user-owned by the ACTOR; everything else falls through to `can()`,
+ * which evaluates the cross-org guard and role->permission and never reads
+ * `ownerType`, `ownerId` or `visibility` at all. `object.create` sits in the
+ * plain member set, so for any same-org member a create naming ANOTHER user as
+ * owner, or a team they are not in, or `visibility: "public"`, passed on the
+ * strength of the member grant alone.
+ *
+ * That kernel gap is not this type's to close. What IS this type's to close is
+ * that memory bundles are UNTRUSTED FILES end-to-end (the epic's first binding
+ * decision), so this is the one save path whose ownership request originates in
+ * a file rather than in a caller's own intent. The rule below is therefore
+ * memory-scoped and deliberately narrow: it does not change `objects_save` for
+ * any other type.
+ *
+ * THE RULE. The request may choose the LEVEL and may narrow the VISIBILITY. It
+ * may never name a PRINCIPAL, and it may never reach a scope whose authority
+ * cannot be derived from the authenticated actor:
+ *
+ *   - `ownerId` is REFUSED outright, exactly as `orgId` already is on every
+ *     objects primitive. The owning principal is derived from the caller. A
+ *     file naming one is either a misunderstanding or a forgery attempt, and
+ *     refusing loudly is the only honest answer — accepting it silently is how
+ *     a member wrote a row owned by a colleague.
+ *   - `ownerLevel: "user"` resolves the owner to the AUTHENTICATED user, so the
+ *     tuple is one the caller could always write. It needs a user to resolve
+ *     to; a machine caller asking for it is refused.
+ *   - `ownerLevel: "organization"` resolves the owner to the caller's own
+ *     organization, which is actor-derived and cross-org-guarded already.
+ *   - `ownerLevel: "team"` and `"workspace"` are REFUSED. No team or workspace
+ *     membership is derivable from the actor at this seam, so there is nothing
+ *     here that could evaluate the request — and a request that cannot be
+ *     evaluated must not be granted. Widening a row past what its author can
+ *     write is what PROMOTION is for (epic #1373), and promotion is reviewed.
+ *   - `visibility: "public"` is REFUSED for the same reason: publishing is a
+ *     promotion outcome the notifications feed reviews, not something a file
+ *     can ask for at create time. `private`, `team` and `organization` pass.
+ *
+ * Returns the ownership OVERRIDE to apply, with the owning principal filled in
+ * from the actor. Refusals are terminal and cause-neutral.
+ */
+function enforceMemoryOwnershipRequest(
+  isMemoryWrite: boolean,
+  input: { ownerLevel?: string; ownerId?: string; visibility?: string },
+  actor: PrimitiveActorContext,
+  orgId: string | null,
+): {
+  ownerLevel?: "user" | "team" | "organization" | "workspace";
+  ownerId?: string;
+  visibility?: "private" | "team" | "organization" | "public";
+} {
+  if (!isMemoryWrite) {
+    return {
+      ...(input.ownerLevel === undefined
+        ? {}
+        : { ownerLevel: input.ownerLevel as "user" | "team" | "organization" | "workspace" }),
+      ...(input.ownerId === undefined ? {} : { ownerId: input.ownerId }),
+      ...(input.visibility === undefined
+        ? {}
+        : { visibility: input.visibility as "private" | "team" | "organization" | "public" }),
+    };
   }
-  return data;
+
+  const refuse = (message: string, field: string): never => {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_OWNERSHIP_REFUSED,
+      message,
+      retryable: false,
+      details: { field },
+    });
+  };
+
+  if (input.ownerId !== undefined) {
+    refuse(
+      "a memory concept may not name an owning principal: `ownerId` is derived from the authenticated caller and is never read from a bundle file. Remove it from the bundle's sync block or the concept's frontmatter.",
+      "ownerId",
+    );
+  }
+  if (input.visibility === "public") {
+    refuse(
+      "a memory concept may not request `visibility: \"public\"` at create time. Publishing memory is a reviewed promotion, not something a bundle file asks for.",
+      "visibility",
+    );
+  }
+
+  const level = input.ownerLevel;
+  if (level !== undefined && level !== "user" && level !== "organization") {
+    refuse(
+      `a memory concept may not request \`ownerLevel: "${level}"\`: no ${level} authority is derivable from the authenticated caller at this seam, so the request cannot be evaluated. Use "user" or "organization", and widen the row through promotion.`,
+      "ownerLevel",
+    );
+  }
+
+  const actorUserId = getActorExt(actor).userId ?? null;
+  if (level === "user" && !actorUserId) {
+    refuse(
+      'a memory concept requested `ownerLevel: "user"`, but this caller has no user identity to own the row.',
+      "ownerLevel",
+    );
+  }
+
+  // The owning principal is filled in from the ACTOR, never from the request.
+  // Filling it in here (rather than leaving it to the generic defaults) is what
+  // keeps the written tuple coherent: the generic default for an omitted
+  // ownerId is the caller's userId, which paired with `organization` would
+  // write an organization-level row owned by a user id.
+  if (level === "user") {
+    return { ownerLevel: "user", ownerId: actorUserId as string, ...(input.visibility === undefined ? {} : { visibility: input.visibility as "private" | "team" | "organization" }) };
+  }
+  if (level === "organization") {
+    if (!orgId) {
+      refuse(
+        'a memory concept requested `ownerLevel: "organization"`, but this caller has no organization context.',
+        "ownerLevel",
+      );
+    }
+    return { ownerLevel: "organization", ownerId: orgId as string, ...(input.visibility === undefined ? {} : { visibility: input.visibility as "private" | "team" | "organization" }) };
+  }
+  return {
+    ...(input.visibility === undefined
+      ? {}
+      : { visibility: input.visibility as "private" | "team" | "organization" }),
+  };
+}
+
+/** Refusal code for a caller-supplied value on a server-derived memory field. */
+const OBJECTS_MEMORY_SERVER_FIELD_REFUSED =
+  "OBJECTS_MEMORY_SERVER_FIELD_REFUSED" as const;
+
+/**
+ * Keep the server-injected envelope fields server-derived on a memory write.
+ *
+ * `objects_save` deliberately preserves a `cinatraAgentRunId` the caller
+ * supplied — the generic path injects the authenticated run id only when the
+ * key is ABSENT, so an agent can pass its own for retry dedup. That is fine for
+ * a type whose payload the caller is trusted to compose. It is not fine for a
+ * memory concept, which is an untrusted FILE: the key is on the
+ * server-injected list, so it is lifted past the strict parse and skipped by
+ * the scan, and a caller-supplied value would ride both of those exemptions
+ * straight into the persisted row.
+ *
+ * Memory rows do not need the field from a caller in any case: their identity
+ * is `externalId`, resolved by the type's own `identityKey`, so the run id is
+ * pure provenance here — and provenance on this path is actor-derived, exactly
+ * like the row's organization, creator and agent columns.
+ */
+function enforceMemoryServerProvenance(
+  isMemoryWrite: boolean,
+  data: Record<string, unknown>,
+): void {
+  if (!isMemoryWrite) return;
+  for (const key of MEMORY_SERVER_INJECTED_KEYS) {
+    if (!(key in data)) continue;
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_SERVER_FIELD_REFUSED,
+      message:
+        `a memory concept may not supply \`${key}\`: it is stamped from the authenticated run and is never read from a bundle file.`,
+      retryable: false,
+      details: { field: key },
+    });
+  }
+}
+
+/**
+ * The identity triple a memory row carries for its whole life.
+ *
+ * The server-stamped `cinatraAgentRunId` is deliberately NOT in this list, and
+ * the difference matters. This check is lenient by design: it skips a field the
+ * stored row does not carry, so a row written before a field existed is still
+ * editable. That leniency is right for identity — a legacy row missing a
+ * `conceptId` should not become unwritable — and it is exactly WRONG for the
+ * run id, because "the stored row has none" is the case an attacker wants: it
+ * would let an update ADD a caller-controlled value to a field the strict parse
+ * skips and the scan excludes. So the run id answers to
+ * `enforceMemoryServerProvenance` instead, which refuses a caller-supplied
+ * value unconditionally, on both write paths, whatever the row holds today.
+ */
+const MEMORY_IDENTITY_FIELDS = ["externalId", "bundleId", "conceptId"] as const;
+
+/** Refusal code for an in-place rewrite of a memory row's identity. */
+const OBJECTS_MEMORY_IDENTITY_IMMUTABLE =
+  "OBJECTS_MEMORY_IDENTITY_IMMUTABLE" as const;
+
+/**
+ * Pin a memory row's identity triple across an update (cinatra#1378 review
+ * item 8).
+ *
+ * The envelope's own `superRefine` checks INTERNAL consistency — that
+ * `externalId` equals sha256(bundleId + NUL + conceptId) — and never compares
+ * any of the three against the identity the row ALREADY carries. A coherent
+ * triple belonging to a DIFFERENT bundle therefore validated, and the row kept
+ * its physical id while its stored `externalId` became the other bundle's key.
+ *
+ * That used to be a latent inconsistency. Since #1378 `data->>'externalId'` is
+ * a LOOKUP KEY: the other bundle's next preflight finds this row, classifies it
+ * `update`, and writes its content into a row it never created, while the
+ * original bundle's key resolves to a fresh row. So the triple is immutable.
+ *
+ * There is no rebind flow. Re-syncing the same concept file resolves to the
+ * same row through the identity key; MOVING a concept to another bundle or
+ * another path is a new identity and therefore a new row, which is what "path
+ * = identity" means in OKF. Refusal is terminal and cause-neutral.
+ */
+function enforceMemoryIdentityImmutable(
+  objectTypeId: string,
+  storedData: Record<string, unknown> | null,
+  mergedData: Record<string, unknown>,
+): void {
+  if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return;
+  if (storedData === null) return;
+  for (const field of MEMORY_IDENTITY_FIELDS) {
+    const stored = storedData[field];
+    if (typeof stored !== "string" || stored.length === 0) continue;
+    const incoming = mergedData[field];
+    if (incoming === stored) continue;
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_MEMORY_IDENTITY_IMMUTABLE,
+      message:
+        `this memory row's identity is fixed; \`${field}\` cannot be changed on an existing row. ` +
+        "A concept that moved to another bundle or another path is a new identity and a new row.",
+      retryable: false,
+      // The FIELD NAME only. Echoing either value would put one bundle's key
+      // into the other bundle's error output.
+      details: { field },
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -811,18 +2028,17 @@ function enforceMemoryConceptEnvelope(
  *  code set only with a documented contract change (packages/objects/AGENTS.md). */
 const OBJECTS_TYPE_NOT_REGISTERED = "OBJECTS_TYPE_NOT_REGISTERED" as const;
 
-/**
- * Derive the DEFINING extension package of a namespaced object-type id
- * (`@scope/pkg:local` → `@scope/pkg`). Under the dependency model exactly one
- * artifact extension defines a type, and the type id is namespaced under that
- * definer — so the package prefix names the definer. Returns null for a
- * non-namespaced / malformed id (nothing to suggest installing).
- */
-function deriveDefinerExtension(typeId: string): string | null {
-  if (!OBJECT_TYPE_NAMESPACE_RE.test(typeId)) return null;
-  const colon = typeId.lastIndexOf(":");
-  return colon > 0 ? typeId.slice(0, colon) : null;
-}
+/** Stable codes for the explicit-project-binding refusals (cinatra#1377).
+ *  Same contract as OBJECTS_TYPE_NOT_REGISTERED above: machine-readable, carried
+ *  onto the run's tool result by normalizePrimitiveError, extended only with a
+ *  documented contract change (packages/objects/AGENTS.md). */
+const OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED =
+  "OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED" as const;
+const OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED =
+  "OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED" as const;
+const OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED =
+  "OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED" as const;
+const OBJECTS_COLLISION_ROW_DELETED = "OBJECTS_COLLISION_ROW_DELETED" as const;
 
 /**
  * Refuse a save whose type has no installed definer (fail-closed write
@@ -839,37 +2055,97 @@ function deriveDefinerExtension(typeId: string): string | null {
  *   null when the classifier produced no installed-type id at all.
  */
 function refuseUnregisteredWrite(attemptedType: string | null): never {
-  const typePhrase = attemptedType ? `"${attemptedType}"` : "this content";
-  // Only suggest an install when the definer is KNOWN-but-not-installed: a
-  // namespaced type id whose defining package currently has zero registered
-  // types (declared/named but not installed). Never invent a suggestion for a
-  // type that is registered (that path never reaches here) or unknowable.
-  let suggestedExtension: string | null = null;
-  if (
-    attemptedType &&
-    attemptedType !== GENERIC_OBJECT_TYPE_ID &&
-    !isTombstonedObjectTypeId(attemptedType) &&
-    !objectTypeRegistry.resolve(attemptedType)
-  ) {
-    const definer = deriveDefinerExtension(attemptedType);
-    if (definer && objectTypeRegistry.getTypesForPackage(definer).length === 0) {
-      suggestedExtension = definer;
-    }
+  // ONE ownership answer, from the classifier this boundary shares with the
+  // artifact write path (enabler 0.16 of `PLAN: Agents Lifecycle (C)`,
+  // cinatra#3028 — "the save boundary refuses a type that no installed extension
+  // and not the host owns, with a named reason"). The NAMED reason rides on
+  // `details` so a caller branches on a token instead of parsing the sentence,
+  // which is precisely what made cinatra#2960's refusal opaque: the run saw
+  // `no installed artifact extension defines "@dynamic/types:..."` and went
+  // looking for an extension to install that by design cannot exist.
+  //
+  // A save that resolved to NO type at all has no id to classify; it keeps the
+  // ratified unclassifiable sentence and carries no reason, because none is
+  // known.
+  if (attemptedType === null) {
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_TYPE_NOT_REGISTERED,
+      message: "no installed artifact extension defines this content",
+      retryable: false,
+      details: { attemptedType: null },
+    });
   }
-  const message = suggestedExtension
-    ? `no installed artifact extension defines ${typePhrase}; install ${suggestedExtension}`
-    : `no installed artifact extension defines ${typePhrase}`;
+  const ownership = classifyArtifactTypeOwnership(attemptedType, {
+    isArtifactWritable: (typeId) => (objectTypeRegistry.resolve(typeId) ? true : null),
+    packageHasRegisteredTypes: (pkg) => objectTypeRegistry.getTypesForPackage(pkg).length > 0,
+  });
+  if (ownership.owned) {
+    // Reached only when the caller refused for a reason ownership cannot see.
+    // Keep the ratified sentence and name no reason rather than invent one.
+    throw new PrimitiveInvocationError({
+      code: OBJECTS_TYPE_NOT_REGISTERED,
+      message: `no installed artifact extension defines "${attemptedType}"`,
+      retryable: false,
+      details: { attemptedType },
+    });
+  }
   throw new PrimitiveInvocationError({
     code: OBJECTS_TYPE_NOT_REGISTERED,
-    message,
+    message: unownedArtifactTypeMessage(attemptedType, ownership),
     // A refused write is a client/authoring error, not a transient failure —
     // retrying the identical save will fail identically.
     retryable: false,
     details: {
       attemptedType,
-      ...(suggestedExtension ? { suggestedExtension } : {}),
+      reason: ownership.reason,
+      ...(ownership.suggestedExtension
+        ? { suggestedExtension: ownership.suggestedExtension }
+        : {}),
     },
   });
+}
+
+/**
+ * Stable machine-readable code for a save whose write PRECONDITION failed
+ * (cinatra#1377): the writer's armed `collisionGuard` blocked the DO UPDATE arm
+ * rather than write a row nobody authorized.
+ *
+ * The code and its message are CAUSE-NEUTRAL on purpose. Two predicates block
+ * that arm — the collision guard (the row moved on since the handler's
+ * `object.update` probe) and the cross-tenant `org_id` guard — and they produce
+ * the same empty result. Nothing outside the failed statement can tell them
+ * apart, so neither this error nor its message asserts which one fired.
+ *
+ * TERMINAL for the same reason: neither cause permits replaying this invocation
+ * under the authorization it already carries. A caller that wants to try again
+ * re-reads the row and re-authorizes against what is actually there, which is a
+ * fresh save. Auto-retrying a write whose authorization could not be confirmed is
+ * the thing the guard exists to prevent.
+ */
+const OBJECTS_WRITE_PRECONDITION_FAILED = "OBJECTS_WRITE_PRECONDITION_FAILED" as const;
+
+/**
+ * `upsertObjectAndEnqueue` for the objects_save path, translating the writer's
+ * guard refusal into the structured primitive error. Any other failure
+ * propagates untouched.
+ */
+function runGuardedSaveUpsert(
+  input: Parameters<typeof upsertObjectAndEnqueue>[0],
+): ReturnType<typeof upsertObjectAndEnqueue> {
+  try {
+    return upsertObjectAndEnqueue(input);
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === OBJECTS_WRITE_PRECONDITION_FAILED) {
+      throw new PrimitiveInvocationError({
+        code: OBJECTS_WRITE_PRECONDITION_FAILED,
+        message:
+          "the write precondition failed; nothing was written; re-read this object and re-authorize before saving again",
+        retryable: false,
+        details: { objectId: input.upsertInput.id ?? null },
+      });
+    }
+    throw err;
+  }
 }
 
 export function createObjectsPrimitiveHandlers() {
@@ -893,23 +2169,89 @@ export function createObjectsPrimitiveHandlers() {
       // carried OBO ceiling chain), not the human-user default. Null for every
       // other caller (chat/session/machine) → human-user defaults preserved.
       const scopeDefault = deriveAgentRunScopeOwnership(request.actor, orgId);
+      // Memory ownership-authority gate (cinatra#1378 review item 4). Runs
+      // BEFORE the defaults and the create probe, because it decides what the
+      // requested tuple even is; the probe then evaluates the tuple this
+      // returned rather than the one an untrusted file asked for.
+      enforceMemoryServerProvenance(
+        input.typeHint === MEMORY_CONCEPT_TYPE_ID,
+        (input.rawData ?? {}) as Record<string, unknown>,
+      );
+      const memoryOwnershipOverride = enforceMemoryOwnershipRequest(
+        input.typeHint === MEMORY_CONCEPT_TYPE_ID,
+        {
+          ...(input.ownerLevel === undefined ? {} : { ownerLevel: input.ownerLevel }),
+          ...(input.ownerId === undefined ? {} : { ownerId: input.ownerId }),
+          ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+        },
+        request.actor,
+        orgId,
+      );
       const ownership = deriveSaveDefaults(
         request.actor,
         orgId,
-        {
-          ownerLevel: input.ownerLevel,
-          ownerId: input.ownerId,
-          visibility: input.visibility,
-        },
+        memoryOwnershipOverride,
         scopeDefault,
       );
-      // Project refinement the row will carry (frame-resolved, never client
-      // input), threaded into the create probe so the OBO project-axis ceiling
-      // evaluates against the REAL project this row lands in (#1885 C1: "the
-      // create probe carries real ownership + projectId"). The authoritative
-      // project_id write still happens in the store from the same frame.
-      const probeProjectId =
-        mcpRequestContextStorage.getStore()?.projectContext?.projectId ?? null;
+
+      // --- Explicit project binding (cinatra#1377, epic #1373) --------------
+      //
+      // An external (CLI) writer reaches this primitive over the authenticated
+      // MCP transport and carries NO ambient `projectContext` frame, so it can
+      // name the target project explicitly. Three-state precedence, keyed on
+      // PRESENCE of the field:
+      //   - omitted       → ambient inheritance, unchanged.
+      //   - explicit null → substrate write; the ambient frame is IGNORED.
+      //   - explicit id   → bind to that project; the ambient frame is IGNORED.
+      //
+      // The explicit path never reads the frame — that is what makes it usable
+      // from outside a run, and it also means a stray ambient frame cannot
+      // bleed into an explicitly-scoped write (AC4).
+      const hasExplicitProjectBinding = input.projectId !== undefined;
+      const explicitProjectId = input.projectId ?? null;
+
+      // A caller-supplied project id is a REQUEST, never a grant. Authorize it
+      // against the caller's own project axis before anything else, fail-closed
+      // and in this order:
+      //   1. `assertProjectReadAccess` — 404-hides a project the caller holds
+      //      no grant on, so the gate is not an existence oracle. (Calling
+      //      `assertProjectWritable` alone would answer 404 for an unknown
+      //      project and 403 for a known one the caller cannot reach.)
+      //   2. `assertProjectWritable(..., "write")` — existence, the archive
+      //      gate (sealed/archived projects reject new writes), and the write
+      //      role tier.
+      // An unresolved `projectGrants` axis means "no grants" in both helpers,
+      // so a legacy caller that never resolved the axis is denied, not passed.
+      if (hasExplicitProjectBinding && explicitProjectId !== null) {
+        const actorForProjectGate = request.actor as unknown as Parameters<
+          typeof assertProjectReadAccess
+        >[0];
+        assertProjectReadAccess(actorForProjectGate, explicitProjectId);
+        await assertProjectWritable(
+          request.actor as Parameters<typeof assertProjectWritable>[0],
+          explicitProjectId,
+          "write",
+        );
+      }
+
+      // Project refinement the row will carry, threaded into the create probe
+      // so the OBO project-axis ceiling evaluates against the REAL project this
+      // row lands in (#1885 C1: "the create probe carries real ownership +
+      // projectId"). On the EXPLICIT branch the store writes from the same
+      // resolution (the binding forwarded below), so probe and write cannot
+      // disagree there. On the ambient branch they can: the probe carries the
+      // frame's projectId unfiltered, while the writer runs the frame through
+      // `resolveProjectInheritanceForType`, which drops it for a substrate
+      // type — that row lands with `project_id` NULL after being probed
+      // against the frame's project. Pre-existing ambient behaviour, unchanged
+      // here.
+      //
+      // The frame is read INSIDE the ambient branch on purpose: on the explicit
+      // path this handler must not so much as touch the request-scoped frame, so
+      // no future edit can accidentally let it influence the outcome.
+      const probeProjectId = hasExplicitProjectBinding
+        ? explicitProjectId
+        : (mcpRequestContextStorage.getStore()?.projectContext?.projectId ?? null);
       // Dev bypass: when A2A_DEV_BYPASS is active and the actor is
       // a sessionless model caller (no userId — i.e. an LLM bridge call coming
       // from OpenAI's relay which has no user session), skip the authz gate.
@@ -1037,6 +2379,176 @@ export function createObjectsPrimitiveHandlers() {
         ? identityHashToUuid(identityHash, groupId)
         : randomUUID();
 
+      // --- Explicit binding vs substrate types (cinatra#1377) ---------------
+      //
+      // Substrate types (catalog / CRM rows) are NEVER project-scoped — the
+      // ambient path drops the tag silently through
+      // `resolveProjectInheritanceForType` because auto-tagging is an accident
+      // of whichever project happened to run the write. An EXPLICIT binding is
+      // not an accident, so silently dropping it would lie to the caller about
+      // where the row landed. Refuse instead; the substrate rule itself is
+      // unchanged and still enforced in the store for both paths.
+      if (
+        hasExplicitProjectBinding &&
+        explicitProjectId !== null &&
+        !shouldAutoTagProject(persistedType)
+      ) {
+        throw new PrimitiveInvocationError({
+          code: OBJECTS_SUBSTRATE_TYPE_NOT_PROJECT_SCOPED,
+          message: `"${persistedType}" is pan-project substrate and cannot be bound to a project`,
+          retryable: false,
+          details: { attemptedType: persistedType },
+        });
+      }
+
+      // The project tag the WRITER will resolve on the ambient path: the frame
+      // value run through the same pure helper the store uses, so the collision
+      // rule below compares what the write actually does, not what the caller
+      // said. `null` on the explicit path — that branch is compared against the
+      // caller's own request instead.
+      const ambientResolvedProjectId = hasExplicitProjectBinding
+        ? null
+        : resolveProjectInheritanceForType(probeProjectId, persistedType);
+
+      // --- Collision semantics (cinatra#1377) -------------------------------
+      //
+      // Identity resolution can steer this save onto an EXISTING row (the
+      // upsert's ON CONFLICT arm). That is an update of someone's row, so the
+      // create probe above is not sufficient authorization on its own: probe
+      // `object.update` against the row as it actually is. The read is org-
+      // scoped but deliberately NOT ownership-filtered — a filtered read would
+      // return null for a row the caller cannot see and the write would then be
+      // authorized as a create against a row that does exist. `enforceResource
+      // Access` with a null resource is the 404-hidden envelope, identical to
+      // the shape `objects_update` uses, so nothing about the row leaks.
+      //
+      // A save with no identityKey mints a fresh random id and can never
+      // collide, so the probe read is skipped for it.
+      //
+      // `allowDeleted` is ON: the writer's `ON CONFLICT (id)` arm hits a
+      // SOFT-DELETED row too. It does NOT resurrect it — this writer's DO UPDATE
+      // arm never clears `deleted_at` (only the canonical twin writer does) — but
+      // it DOES rewrite the row's data, bump its version and re-evaluate its
+      // `project_id`. Probing without tombstones would read null there, so the
+      // write would be authorized as a CREATE against a row that does exist, and
+      // an explicit binding could re-tag a tombstone with no move authorization
+      // and no audit. Seeing the tombstone is what lets the refusals below fire.
+      const existingRow = identityHash
+        ? getObjectById(objectId, { orgId }, undefined, { allowDeleted: true })
+        : null;
+      if (existingRow && !isTrustedDevModelCall) {
+        await enforceResourceAccess(
+          buildObjectResourceCheck(existingRow),
+          request.actor,
+          "object.update",
+        );
+      }
+      if (existingRow) {
+        // A tombstoned row is refused outright. This writer's `ON CONFLICT` arm
+        // would rewrite its data, bump its version and emit the outbox + change
+        // events WITHOUT clearing `deleted_at`, so the caller would be told the
+        // save succeeded while every ordinary read still cannot see the row —
+        // an accept reported over a write that lands nowhere visible. Refuse
+        // instead; undeleting is not something `objects_save` does.
+        if (existingRow.deletedAt) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_ROW_DELETED,
+            message:
+              "this save resolves to a deleted object; objects_save does not undelete, so the write would not be visible",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // A collision that REQUESTS a different project than the row already
+        // carries is a project MOVE, and a move needs the move path's source-
+        // side authorization plus its `resource_project_moves` audit row —
+        // neither of which this handler runs. Refuse with the route to take.
+        // This covers "bind an ambient row into a project", "rebind to another
+        // project" and "explicit null on a project-tagged row" alike; the last
+        // one would otherwise be silently swallowed by the writer's
+        // `COALESCE(EXCLUDED.project_id, objects.project_id)` preserve arm.
+        //
+        // An OMITTED projectId requests nothing — but the writer's preserve arm
+        // is `COALESCE(EXCLUDED.project_id, objects.project_id)`, so a resolved
+        // ambient project does NOT preserve: it overwrites. The ambient half of
+        // the rule is below.
+        if (
+          hasExplicitProjectBinding &&
+          explicitProjectId !== (existingRow.projectId ?? null)
+        ) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
+            message:
+              "this save resolves to an existing object whose project differs from the requested projectId; move it with objects_update (projectId) instead",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // The AMBIENT half. A save with no `projectId`, made inside a frame that
+        // resolves to project P, lands on a row already bound to project Q: the
+        // COALESCE arm writes P over Q. That takes the row OUT of Q's sealed
+        // room — with none of the move path's source-side authorization on Q
+        // (which this caller may hold nothing on) and no `resource_project_moves`
+        // audit row. Same defect the explicit refusal above prevents, so it gets
+        // the same refusal and the same remedy.
+        //
+        // Deliberately NOT refused: an UNTAGGED row (`project_id` NULL) that
+        // inherits the active frame. That is the documented write-time
+        // inheritance, and it is purely additive — the row becomes visible in
+        // P's project-mode reads and is removed from nobody's, because a NULL
+        // tag was never inside any project's room. Only a change that DEPRIVES a
+        // project of a row it holds needs the audited move path.
+        if (
+          !hasExplicitProjectBinding &&
+          ambientResolvedProjectId !== null &&
+          existingRow.projectId != null &&
+          ambientResolvedProjectId !== existingRow.projectId
+        ) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_PROJECT_MOVE_REQUIRED,
+            message:
+              "this save resolves to an existing object bound to a different project than the active project context; move it with objects_update (projectId) instead",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+        // Ownership/visibility are IMMUTABLE through this writer: the upsert's
+        // ON CONFLICT arm does not list owner_level / owner_id / visibility, so
+        // an existing row keeps its tuple and a default-scoped (user/private)
+        // save can never narrow a wider row. Refuse a request that asks for a
+        // DIFFERENT tuple rather than accepting it and silently not applying
+        // it — a caller that believes it just widened a row is exactly the
+        // false-accept this surface must not produce. Same-value fields, and
+        // omitted fields, pass through as the no-ops they are.
+        const requestedScopeChange =
+          (input.ownerLevel !== undefined &&
+            input.ownerLevel !== existingRow.ownerLevel) ||
+          (input.ownerId !== undefined && input.ownerId !== existingRow.ownerId) ||
+          (input.visibility !== undefined &&
+            input.visibility !== existingRow.visibility);
+        if (requestedScopeChange) {
+          throw new PrimitiveInvocationError({
+            code: OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED,
+            message:
+              "this save resolves to an existing object; objects_save never changes an existing row's ownership or visibility",
+            retryable: false,
+            details: { objectId },
+          });
+        }
+      }
+
+      // The tuple actually written. On a collision it is the EXISTING row's
+      // tuple (the refusal above guarantees the caller asked for nothing else),
+      // which states the preserve-the-wider-row intent in the handler instead
+      // of leaving it implicit in the writer's ON CONFLICT column list.
+      const ownershipForWrite: SaveOwnership = existingRow
+        ? {
+            ownerLevel: existingRow.ownerLevel,
+            ownerId: existingRow.ownerId,
+            visibility: existingRow.visibility,
+          }
+        : ownership;
+
       // --- Postgres-primary write -------------------------------------------
       // A single atomic call to upsertObjectAndEnqueue inserts or updates the
       // row in cinatra.objects AND emits a graphiti_projection_outbox row in
@@ -1054,6 +2566,32 @@ export function createObjectsPrimitiveHandlers() {
       // type BEFORE it is persisted. No-op for the generic fallback type (its
       // schema accepts any object) and for unclaimed types.
       await enforceActivatedTypePayload(persistedType, orgId, persistedData);
+      // The memory gates above key on the DECLARED `typeHint`, which is how
+      // every memory write actually arrives — the type resolves statically on
+      // an exact typeHint and the sync client always sends it. A save that
+      // reaches the memory type WITHOUT declaring it would have skipped both
+      // gates: its ownership tuple was never evaluated (so the generic defaults
+      // could write an organization level paired with a user id, the incoherent
+      // tuple the gate exists to prevent) and its server-injected fields were
+      // never checked.
+      //
+      // Asserting the gates a second time here is not enough: by this point the
+      // tuple has already been derived and probed, so a second call could only
+      // validate what it can no longer change. The honest answer at this depth
+      // is to refuse. A memory concept is written by `memory sync`, which
+      // declares the type; nothing legitimate arrives here undeclared.
+      if (
+        persistedType === MEMORY_CONCEPT_TYPE_ID &&
+        input.typeHint !== MEMORY_CONCEPT_TYPE_ID
+      ) {
+        throw new PrimitiveInvocationError({
+          code: OBJECTS_MEMORY_SERVER_FIELD_REFUSED,
+          message:
+            "a memory concept must be saved with an explicit `typeHint`; a save that reaches this type by classification has bypassed the memory ownership and provenance gates and is refused rather than written under defaults they never evaluated.",
+          retryable: false,
+          details: { field: "typeHint" },
+        });
+      }
       // Memory-envelope gate (cinatra#1376): validates the SAME shape that gets
       // stored; a no-op for any non-memory type (including the generic
       // fallback), which passes through untouched.
@@ -1070,7 +2608,7 @@ export function createObjectsPrimitiveHandlers() {
       // already-scheduled/published draft.
       await enforceDraftableLock(persistedType, orgId, objectId);
 
-      const record = upsertObjectAndEnqueue({
+      const record = runGuardedSaveUpsert({
         upsertInput: {
           id: objectId,
           type: persistedType,
@@ -1085,12 +2623,30 @@ export function createObjectsPrimitiveHandlers() {
           packageVersion: actorExt.packageVersion,
           agentSpecVersion: actorExt.agentSpecVersion,
           // Write the resolved ownership tuple.
-          ownerLevel: normalizeOwnerLevel(ownership.ownerLevel),
-          ownerId: ownership.ownerId,
-          visibility: ownership.visibility,
+          ownerLevel: normalizeOwnerLevel(ownershipForWrite.ownerLevel),
+          ownerId: ownershipForWrite.ownerId,
+          visibility: ownershipForWrite.visibility,
         },
         operation: "upsert",
         payloadHash: identityHash ?? undefined,
+        // Explicit project binding (cinatra#1377). Forwarded ONLY when the
+        // caller actually supplied the field: its absence is what tells the
+        // writer to fall back to ambient frame inheritance, so spreading an
+        // `undefined` key would be indistinguishable but a `null` key would
+        // not — pass the key or don't.
+        ...(hasExplicitProjectBinding
+          ? { explicitProjectBinding: explicitProjectId }
+          : {}),
+        // Make the collision authorization above BINDING rather than advisory.
+        // The probe and this write are separate statements, so without a guard a
+        // row inserted (or changed) in between would be written — and, with an
+        // explicit binding, re-tagged — under an authorization that was never
+        // evaluated against it. The guard pins the writer's DO UPDATE arm to the
+        // exact row state the probe authorized; anything else refuses.
+        collisionGuard: {
+          expectedVersion: existingRow?.version ?? null,
+          expectedProjectId: existingRow?.projectId ?? null,
+        },
       });
 
       // version === 1 means the INSERT path executed; version > 1 means the
@@ -1127,8 +2683,11 @@ export function createObjectsPrimitiveHandlers() {
 
       // Sealed-room read filter. When the caller supplies a projectId, 404-hide
       // if the actor has no read+ grant on it. The actor's projectGrants axis
-      // is routed through the MCP registries (A2A path) and read here via the
-      // ActorContext-shaped fields stamped on `request.actor`. Platform admins
+      // is stamped by this package's MCP registry for the transport-resolved
+      // identity pair (packages/objects/src/mcp/registry.ts) and by
+      // `actorContextToObjectsEnvelope` for the in-process session client, and
+      // is read here via the ActorContext-shaped fields stamped on
+      // `request.actor`. An unresolved axis is NO grants. Platform admins
       // bypass the grant check. The actual SQL `AND project_id = $projectId`
       // runs inside `listObjectsByFilter` (data layer); this preserves the
       // non-bypassable SQL re-filter.
@@ -1145,6 +2704,50 @@ export function createObjectsPrimitiveHandlers() {
 
       const hasQuery =
         typeof input.query === "string" && input.query.trim().length > 0;
+
+      // cinatra#1378: `externalIds` is a KEY lookup, so it belongs to the
+      // Postgres-only path. Two refusals keep it honest rather than
+      // approximately right:
+      //
+      //   - WITHOUT a `type`, the filter would scan `data->>'externalId'`
+      //     across every type in the org. External ids are only unique within
+      //     the type that defines them, so an unqualified match could return a
+      //     row of an unrelated type that happens to carry the same key.
+      //   - WITH a `query`, the answer would come from the ranked semantic path
+      //     — relevance-ordered and truncated — while the caller asked
+      //     "which of these exact keys exist". A preflight that silently lost
+      //     rows to a relevance cut would report present rows as absent, and a
+      //     sync run reads absent as "create".
+      //
+      // Both are refusals, not silent corrections: a preflight that quietly
+      // answered a different question is what a duplicate write is made of.
+      if (input.externalIds !== undefined) {
+        if (typeof input.type !== "string" || input.type.trim() === "") {
+          throw new Error(
+            "objects_list: externalIds requires an explicit `type` (an external id is unique only within its type)",
+          );
+        }
+        if (hasQuery) {
+          throw new Error(
+            "objects_list: externalIds is an exact key lookup and cannot be combined with a semantic `query`",
+          );
+        }
+        // cinatra#1378 review item 7: the bound that BINDS is `limit`, and its
+        // schema default is 100 while the batch cap is 500. `LIMIT` is applied
+        // in SQL after the WHERE and this handler always answers
+        // `nextCursor: null`, so a batch larger than the effective limit was
+        // truncated with nothing to say so — and a truncated preflight reports
+        // present rows as absent, which is exactly the misreading that turns a
+        // skip into a duplicate write. The store's own doc comment says this
+        // cap prevents that; it only does if the call is refused.
+        if (input.externalIds.length > input.limit) {
+          throw new Error(
+            `objects_list: externalIds carries ${input.externalIds.length} ids but limit is ${input.limit}; ` +
+              "a batch larger than the number of rows the call can return would report present rows as absent — " +
+              "raise limit to at least the batch size or split the batch",
+          );
+        }
+      }
 
       // Actor-scoped ownership filter (cinatra#1428): the same SQL filter the
       // artifact read surface splices; the kernel post-filter below stays as
@@ -1231,6 +2834,10 @@ export function createObjectsPrimitiveHandlers() {
             // cinatra#1456: indexed data.* correlation filter (thread/campaign/
             // contact seam). Pushed into SQL; per-row object.read still gates below.
             dataEquals: input.dataEquals,
+            // cinatra#1378: the memory-sync preflight's batch key lookup.
+            // Pushed into SQL alongside the type filter; per-row object.read
+            // still gates below, so this narrows the read and never widens it.
+            externalIds: input.externalIds,
             limit: input.limit,
             // Pass projectId straight through; the store appends
             // `AND project_id = $projectId` when the per-table feature flag is
@@ -1293,7 +2900,7 @@ export function createObjectsPrimitiveHandlers() {
           group_ids: searchGroupIds,
           max_nodes: input.limit ?? 50,
         });
-        objectIds = extractObjectIds(res.nodes);
+        objectIds = resolveObjectIds(res.nodes, orgId);
       } catch (err) {
         console.warn(
           "[objects_list] searchNodes failed; falling back to Postgres-only filter:",
@@ -1319,9 +2926,19 @@ export function createObjectsPrimitiveHandlers() {
         );
         const visible = await filterByAuthz(rows);
         const items = applyCategoryFilter(visible.map(mapRowToObject));
-        // Distinguish "Graphiti unavailable" from "Graphiti responded but
-        // extracted no cinatra_object_id from the entity nodes". The latter
-        // signals a field-path problem rather than a network error.
+        // Distinguish "Graphiti unavailable" from "Graphiti responded, and
+        // none of its ranked nodes named a row we hold".
+        //
+        // Since cinatra#2591 that second state means something much sharper
+        // than it used to. Recovery no longer depends on the extraction model
+        // emitting an id: every projected row is seeded as a deterministic
+        // anchor node and resolved through `objects.graphiti_anchor_node_uuid`.
+        // So `no_ids_extracted` now says the hits were genuinely other nodes
+        // (extracted entities from some row's episode, another tenant's lane
+        // filtered out, or rows projected before the anchor existed) — not that
+        // the id field path is broken. It stays classified as DEGRADATION
+        // rather than an empty search result, which is the contract
+        // cinatra#1380's `memory_recall` depends on.
         const meta = degraded
           ? { semanticSearch: "unavailable" as const, fallback: "postgres_filter" as const }
           : objectIds !== null && objectIds.length === 0
@@ -1362,6 +2979,320 @@ export function createObjectsPrimitiveHandlers() {
       const visible = await filterByAuthz(ordered);
       const items = applyCategoryFilter(visible.map(mapRowToObject));
       return { items, nextCursor: null };
+    },
+
+
+    // -----------------------------------------------------------------
+    // memory_recall (cinatra#1380, epic #1373) — the SHARED-memory recall
+    // surface, and the epic's HONESTY INVARIANT made structural.
+    //
+    // WHAT IT IS. A read pinned to `@cinatra-ai/memory:concept` that searches
+    // the caller's SERVER-DERIVED entitled lanes (cinatra#1379), re-fetches the
+    // canonical Postgres rows, and returns a CAPPED recall projection —
+    // concept path, title, kind, a scope summary and a bounded body excerpt —
+    // never the envelope. The data-layer authorization is unchanged: the same
+    // org scoping, the same actor-scoped ownership filter, the same per-row
+    // `object.read` probe `objects_list` runs.
+    //
+    // WHY IT IS ITS OWN PRIMITIVE rather than a flag on `objects_list`. Two
+    // reasons, and both are about what the CALLER is told:
+    //
+    //   1. `mode` IS THE POINT. `objects_list` answers a degraded query with a
+    //      body that looks exactly like a ranked one plus an OPTIONAL `meta`
+    //      key a caller may not read. For a recall surface that is not good
+    //      enough: an agent that treats recent-rows-in-my-lanes as
+    //      "the memory system's best answer to my question" will confidently
+    //      state something the corpus never said. So `mode` is REQUIRED on
+    //      every response, it is one of exactly two values, and
+    //      `degraded-recent` is returned for BOTH degradation classes —
+    //      the index being unavailable AND a response whose ranked nodes named
+    //      no row we hold (`no_ids_extracted`). The second one is degradation,
+    //      not an empty search result: it says the hits were genuinely other
+    //      nodes, not that the corpus has no answer.
+    //   2. THE ANSWER IS SMALLER. A recall feeds a context window. The row
+    //      projection is capped and fixed, so a 64 KiB body cannot ride out
+    //      through a surface whose job is to hand a model a few paragraphs.
+    //
+    // `meta` reuses `objects_list`'s EXISTING degradation vocabulary verbatim
+    // (`semanticSearch: "unavailable" | "no_ids_extracted"` +
+    // `fallback: "postgres_filter"`) rather than inventing a parallel channel —
+    // the issue's grounding note. `mode` is the load-bearing addition on top.
+    //
+    // `ordering` is stated separately from `mode` on purpose. On the degraded
+    // path the CANDIDATE SET is recent rows (not query-selected), and a lexical
+    // pass reorders that small set by token overlap. Sorting it while still
+    // calling the response "recent" would be the same soft dishonesty in
+    // miniature, so the response names both facts: what the candidates are
+    // (`mode`) and how they were ordered (`ordering`).
+    // -----------------------------------------------------------------
+    "memory_recall": async (
+      request: PrimitiveInvocationRequest<unknown>,
+    ): Promise<schemas.MemoryRecallResponse> => {
+      // STRICT parse (schemas.memoryRecallSchema). This is where a forged
+      // `group_ids` / `groupIds` / `lanes` / `orgId` dies: lanes are derived
+      // below from the AUTHENTICATED actor and there is no input surface for
+      // them, so an unknown top-level key is a rejection rather than an ignored
+      // stray. Every author-controlled field is capped here too.
+      const input = schemas.memoryRecallSchema.parse(request.input);
+      const actorExt = getActorExt(request.actor);
+      const orgId = actorExt.orgId;
+      // NO `A2A_DEV_BYPASS` relaxation here, and that is a DELIBERATE divergence
+      // from `objects_list` (codex convergence round 1, finding 1). The bypass
+      // relaxes two things at once on that primitive: the org guard, and — via
+      // `readScopeActor` — the actor-scoped ownership WHERE clause. On a surface
+      // pinned to the memory type both relaxations are the leak: an orgless call
+      // derives the `cinatra-default` lane (which names no tenant) and reads with
+      // `org_id = NULL`, and a scope-actor-less call drops the one SQL filter that
+      // separates one user's private concepts from another's — leaving nothing but
+      // the kernel probe between a caller and every memory row in the database.
+      // Memory is org-scoped by construction, so there is no legitimate orgless
+      // recall to preserve; the guard is unconditional.
+      if (!orgId) {
+        throw new Error(
+          "memory_recall requires an authenticated org context (actor.orgId is null)",
+        );
+      }
+
+      // Sealed-room read filter, identical to `objects_list`: a supplied
+      // projectId is NOT a grant — 404-hide when the actor has no read+ grant,
+      // and the non-bypassable `AND project_id = $projectId` runs inside
+      // `listObjectsByFilter` on BOTH the ranked and the degraded path.
+      //
+      // THE LANE/ROW ASYMMETRY, stated because it reads as a contradiction
+      // otherwise (codex convergence round 2). The lane set below is project
+      // PLUS ambient (cinatra#1379's derivation, shared verbatim with
+      // `objects_list`), but the canonical read is SEALED to the project: an
+      // ambient row is `project_id IS NULL` and the SQL seal drops it. So a
+      // project recall RETURNS PROJECT ROWS ONLY. The ambient lanes still earn
+      // their place — they are what the index ranks against — but they are
+      // relevance context, not results. Closing the gap the other way would mean
+      // teaching the store a "project OR ambient" read mode, which weakens the
+      // shipped non-bypassable intersection; cinatra#1380 says "data-layer
+      // authorization unchanged", so that ruling belongs to the epic, not here.
+      const projectId =
+        typeof input.projectId === "string" && input.projectId.trim().length > 0
+          ? input.projectId.trim()
+          : null;
+      if (projectId !== null) {
+        const actorForGate = request.actor as unknown as Parameters<
+          typeof assertProjectReadAccess
+        >[0];
+        assertProjectReadAccess(actorForGate, projectId);
+      }
+
+      // `kernelActorForRead` directly, NOT `readScopeActor`: the latter returns
+      // `undefined` (no ownership filter at all) for a sessionless caller under
+      // `A2A_DEV_BYPASS`, which is the second half of finding 1 above. Every
+      // memory read carries the ownership filter.
+      const scopeActor = kernelActorForRead(request.actor, orgId);
+      const limit = input.limit;
+      const query = input.query.trim();
+      const kind = input.kind?.trim() ?? null;
+
+      // Per-row authorization post-filter — the SAME boundary `objects_list`
+      // applies to Graphiti candidates, with the same loud-drop diagnostic for
+      // internal/system reads (cinatra#1948 (a)).
+      const filterByAuthz = async (rows: ObjectRecord[]): Promise<ObjectRecord[]> => {
+        const out: ObjectRecord[] = [];
+        for (const r of rows) {
+          try {
+            await enforceResourceAccess(
+              buildObjectResourceCheck(r),
+              request.actor,
+              "object.read",
+            );
+            out.push(r);
+          } catch (err) {
+            if (err instanceof AuthzError) continue;
+            throw err;
+          }
+        }
+        const droppedCount = rows.length - out.length;
+        if (droppedCount > 0 && isInternalSystemRead(request.actor)) {
+          recordInternalReadAuthzDrop({
+            primitive: "memory_recall",
+            droppedCount,
+            totalCount: rows.length,
+            droppedTypes: [MEMORY_CONCEPT_TYPE_ID],
+            actorType: (request.actor.actorType as string | null | undefined) ?? null,
+            source: (request.actor.source as string | null | undefined) ?? null,
+            orgId,
+          });
+        }
+        return out;
+      };
+
+      // Lane entitlement, SERVER-DERIVED (cinatra#1379): own user lane + a lane
+      // per real team membership + the ambient org lane, each also in its
+      // `-proj-<id>` form when the call carries a project (project recall =
+      // project + ambient). A lane the actor is not entitled to is never in the
+      // set. This is relevance scoping, NOT the authorization boundary — every
+      // candidate is still re-fetched and `object.read`-gated above.
+      let teamIds: string[] = [];
+      if (actorExt.userId && orgId) {
+        const teams = await readTeamsForUser(actorExt.userId, orgId);
+        teamIds = teams.map((t) => t.id);
+      }
+      const searchGroupIds = deriveEntitledLanes({
+        orgId,
+        userId: actorExt.userId,
+        teamIds,
+        projectId,
+      });
+
+      // The ranked/recent fetch budget, widened UNCONDITIONALLY. The per-row
+      // `object.read` probe above is a post-ranking filter on every call and on
+      // both paths, so there is no shape of this recall that cannot lose rows
+      // after the fetch; `kind` and the project seal only add to it. See
+      // MEMORY_RECALL_CANDIDATE_FETCH_FACTOR for what an ambient recall cost
+      // while this was conditional.
+      const candidateLimit = Math.min(
+        limit * MEMORY_RECALL_CANDIDATE_FETCH_FACTOR,
+        MEMORY_RECALL_CANDIDATE_FETCH_MAX,
+      );
+
+      let objectIds: string[] | null = null;
+      let unavailable = false;
+      try {
+        const res = await searchNodes({
+          query,
+          group_ids: searchGroupIds,
+          max_nodes: candidateLimit,
+        });
+        objectIds = resolveObjectIds(res.nodes, orgId);
+      } catch (err) {
+        console.warn(
+          "[memory_recall] searchNodes failed; degrading to a recent-rows listing:",
+          err,
+        );
+        unavailable = true;
+      }
+
+      // ---------------- SEMANTIC PATH (attempted first) ----------------
+      // Ranked ids -> canonical rows, rank re-imposed via a Map (never
+      // rows.find(): O(n^2) and wrong on duplicate ids). `projectId` is passed
+      // down so the SQL intersects the candidate set with the project boundary.
+      //
+      // ROW RECOVERY, NOT ID COUNT, is what decides the mode (codex convergence
+      // round 1, finding 2). `resolveObjectIds` still runs the DEMOTED incidental
+      // probes from before cinatra#2591, and those can lift a syntactically valid
+      // UUID off a node that names no row we hold. Deciding on
+      // `objectIds.length > 0` would then answer `mode: "semantic"` with an empty
+      // `items` — telling the caller "search ran and your memory has no answer"
+      // when the truth is "the ranked hits named nothing we could recover", which
+      // is exactly what `no_ids_extracted` means. So the ranked fetch runs first
+      // and the mode is decided on what it RECOVERED.
+      let ordered: ObjectRecord[] = [];
+      if (!unavailable && objectIds !== null && objectIds.length > 0) {
+        // BOUND THE CANDIDATE SET, THEN ASK FOR ALL OF IT. Two facts meet here
+        // and the read is wrong without both.
+        //
+        // `resolveObjectIds` can return MORE ids than `max_nodes` asked for — a
+        // merged anchor names several rows — so the id list is not already
+        // bounded by `candidateLimit`. And `listObjectsByFilter` suppresses
+        // `ORDER BY` whenever `ids` is set (the caller re-imposes rank) and
+        // falls back to `LIMIT 100` when no limit is passed. Pass no limit and
+        // beyond 100 candidates the database keeps an arbitrary 100 of them in
+        // no defined order: the top-ranked row can be the one it drops, while
+        // the response still answers `mode: "semantic"`, `ordering:
+        // "semantic-rank"`. That is this primitive's own failure arriving
+        // through the read.
+        //
+        // So: slice to `candidateLimit` first — a DETERMINISTIC drop of the
+        // LOWEST-ranked ids, which is the bound the over-fetch already promised
+        // — and then pass `limit: candidateIds.length`, which covers every id
+        // that survived it. Same rule the degraded read below states, now
+        // applied on the path that ranks.
+        const candidateIds = objectIds.slice(0, candidateLimit);
+        const rows = listObjectsByFilter(
+          {
+            orgId,
+            ids: candidateIds,
+            type: MEMORY_CONCEPT_TYPE_ID,
+            projectId,
+            limit: candidateIds.length,
+          },
+          scopeActor,
+        );
+        const byId = new Map<string, ObjectRecord>(rows.map((r) => [r.id, r]));
+        ordered = candidateIds
+          .map((id) => byId.get(id))
+          .filter((r): r is ObjectRecord => r != null);
+      }
+
+      if (!unavailable && ordered.length > 0) {
+        // A genuine ranked answer. Note that `kind` and the per-row `object.read`
+        // probe may still empty `items` from here, and that stays `semantic`:
+        // rows WERE recovered for this query and a filter removed them, which is
+        // an honest empty search result. Relabelling it degradation would be the
+        // same dishonesty pointing the other way.
+        const visible = await filterByAuthz(ordered);
+        // The ceiling charges the envelope THIS path emits, a ranked answer
+        // with no `meta` at all, rather than a reservation wide enough for the
+        // degraded one.
+        const { items, ceilingApplied } = applyMemoryRecallResponseCeiling(
+          visible
+            .filter((r) => memoryRowMatchesKind(r, kind))
+            .map(toMemoryRecallItem)
+            .slice(0, limit),
+          { mode: "semantic", ordering: "semantic-rank" },
+        );
+        // Parsed, not just returned: `mode` is required by the schema AND by
+        // the handler's declared return type, so neither a new path nor a
+        // reshaped one can drop it quietly. The schema is a discriminated union
+        // on `mode`, so the ordering and the `meta` vocabulary below have to
+        // agree with it too.
+        return schemas.memoryRecallResponseSchema.parse({
+          items,
+          mode: "semantic",
+          ordering: "semantic-rank",
+          ...(ceilingApplied ? { meta: { responseCeiling: "applied" } } : {}),
+        });
+      }
+
+      // ---------------- DEGRADED PATH ----------------
+      // Reached when the semantic index threw (`unavailable`) OR answered with
+      // ranked nodes that recovered no row we hold (`no_ids_extracted`, whether
+      // the id list was empty or every id in it was a ghost). BOTH are
+      // degradation. The read below is a plain recent-rows listing scoped to the
+      // caller's memory rows — the query is NOT applied to it, which is exactly
+      // why the response may not claim to be search.
+      const recent = listObjectsByFilter(
+        {
+          orgId,
+          type: MEMORY_CONCEPT_TYPE_ID,
+          // Same over-fetch rule as the ranked path: a post-fetch filter must
+          // not silently cost the caller rows. Bounded either way.
+          limit: candidateLimit,
+          projectId,
+        },
+        scopeActor,
+      );
+      const recentVisible = await filterByAuthz(recent);
+      // The degradation metadata is built ONCE and charged before it is sent:
+      // this envelope is the widest the schema admits, and the ranked path's is
+      // the narrowest, so a single reservation could only be wrong for one of
+      // them.
+      const degradedMeta = {
+        semanticSearch: unavailable ? ("unavailable" as const) : ("no_ids_extracted" as const),
+        fallback: "postgres_filter" as const,
+      };
+      const { items: recentItems, ceilingApplied } = applyMemoryRecallResponseCeiling(
+        rankRecallItemsLexically(
+          recentVisible.filter((r) => memoryRowMatchesKind(r, kind)).map(toMemoryRecallItem),
+          query,
+        ).slice(0, limit),
+        { mode: "degraded-recent", ordering: "lexical-fallback", meta: degradedMeta },
+      );
+      return schemas.memoryRecallResponseSchema.parse({
+        items: recentItems,
+        mode: "degraded-recent",
+        ordering: "lexical-fallback",
+        meta: {
+          ...degradedMeta,
+          ...(ceilingApplied ? { responseCeiling: "applied" } : {}),
+        },
+      });
     },
 
     "objects_get": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -1459,6 +3390,27 @@ export function createObjectsPrimitiveHandlers() {
         // non-draftable types and unlocked drafts. A move-only update (input.data
         // undefined) is metadata, not a content revision — never gated here.
         await enforceDraftableLock(existing.type, orgId, existing.id);
+        // The server-injected fields stay server-derived on an update too.
+        // Checked against the RAW client patch, not the merged payload: the
+        // question is whether the CALLER supplied the field, and the answer
+        // must not depend on what the stored row happens to hold — a row with
+        // no run id stored is precisely the case where an update could ADD a
+        // caller-controlled value to a field the strict parse skips and the
+        // scan excludes.
+        enforceMemoryServerProvenance(
+          existing.type === MEMORY_CONCEPT_TYPE_ID,
+          incomingData,
+        );
+        // Memory identity is immutable (cinatra#1378 review item 8). Checked
+        // BEFORE the envelope gate: an update that rewrites the triple is
+        // refused for what it is, rather than passing the envelope's
+        // internal-consistency check and silently rebinding the row's lookup
+        // key to another bundle.
+        enforceMemoryIdentityImmutable(
+          existing.type,
+          (existing.data as Record<string, unknown> | null) ?? null,
+          mergedData,
+        );
         // Memory-envelope gate (cinatra#1376): a partial update of a memory
         // row must still yield a VALID merged envelope — rejected before any
         // commit (ahead of the project-move branch below, mirroring the

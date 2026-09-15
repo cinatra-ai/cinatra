@@ -116,6 +116,10 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     oboCeiling: null,
     dependentInstallId: null,
     humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
+    // cinatra#2928 lifecycle moment triple — a fixture run is at no moment.
+    lifecycleMoment: null,
+    lifecycleCardKind: null,
+    lifecycleCardRef: null,
     executionAttemptId: null,
   };
 }

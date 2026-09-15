@@ -18,7 +18,12 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
-import { buildComposeArgs, formatGuardedComposeCommand } from "./dev-preflight.mjs";
+import {
+  buildComposeArgs,
+  formatGuardedComposeCommand,
+  isLoopbackHost,
+  PROTOCOL_DEFAULT_PORTS,
+} from "./dev-preflight.mjs";
 import path from "node:path";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
@@ -30,26 +35,20 @@ export const BUNDLED_DB_SERVICES = [
   { composeService: "neo4j", label: "Neo4j", containerPort: 7687, defaultHostPort: 7687, envVar: "NEO4J_URI" },
 ];
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
+// Re-exported, not redefined: the connect/publish note in dev-preflight.mjs
+// asks the same question about the same address, so the two guards read ONE
+// loopback set. (That module owns it because this one already imports it.)
+export { isLoopbackHost };
 
-export function isLoopbackHost(host) {
-  return LOOPBACK_HOSTS.has(String(host ?? "").trim());
-}
-
-// Default port per URL scheme. A URL that omits an explicit port resolves to its
-// scheme default, NOT the bundled-stack fallback — otherwise a loopback
-// `postgresql://…@localhost/db` (which means :5432) is mis-read as the bundled
-// 5434 and a perfectly-healthy non-bundled DB triggers a false drift diagnosis.
-export const PROTOCOL_DEFAULT_PORTS = {
-  "http:": 80,
-  "https:": 443,
-  "postgres:": 5432,
-  "postgresql:": 5432,
-  "redis:": 6379,
-  "rediss:": 6379,
-  "bolt:": 7687,
-  "neo4j:": 7687,
-};
+// Same arrangement, same reason (cinatra#2839). A URL that omits an explicit
+// port resolves to its scheme default, NOT the bundled-stack fallback —
+// otherwise a loopback `postgresql://…@localhost/db` (which means :5432) is
+// mis-read as the bundled 5434 and a perfectly-healthy non-bundled DB triggers
+// a false drift diagnosis. `classifyServiceUrl` reads the SAME table to decide
+// whether a portless URL states a port at all, because a scheme this table does
+// not know sends the resolution below to the bundled fallback and produces an
+// address that appears nowhere in what the operator stated.
+export { PROTOCOL_DEFAULT_PORTS };
 
 // Derive { host, port } from a URL-shaped value. Port precedence:
 //   explicit URL port  >  scheme default  >  bundled fallback.
@@ -78,11 +77,21 @@ export function parseHostPort(urlValue, fallback) {
 
 // Decide whether a DOWN service is a candidate for Docker drift diagnosis. Only
 // the bundled local stack qualifies: the expected host must be loopback AND the
-// expected port must be the override's default. A non-loopback host (a hosted
-// DB / external infra) or a non-default port means "not our docker stack" — skip
-// (so a perfectly-healthy external DB is never mis-blamed on docker-compose.dev.yml).
-export function shouldDiagnoseDrift({ host, port }, service) {
-  return isLoopbackHost(host) && Number(port) === service.defaultHostPort;
+// port the app connects on must be the one THIS CHECKOUT PUBLISHES. A
+// non-loopback host (a hosted DB / external infra), or a port that is not the
+// published one, means "not our docker stack" — skip (so a perfectly-healthy
+// external DB is never mis-blamed on docker-compose.dev.yml).
+//
+// `publishedHostPort` defaults to the service's historical fixed port, which is
+// what this compared against before the dev stack's host ports became
+// per-worktree (cinatra#2839). It is now passed explicitly by both callers, read
+// off the resolved plan via `resolvePublishedHostPort`, because redis's
+// "default" is exactly the port a lane moves: comparing a lane's connect port to
+// the GLOBAL 6379 either skipped the diagnosis entirely or condemned a healthy
+// lane container for not publishing a port it was never asked to publish.
+export function shouldDiagnoseDrift({ host, port }, service, publishedHostPort) {
+  const expected = publishedHostPort === undefined ? service.defaultHostPort : publishedHostPort;
+  return isLoopbackHost(host) && Number(port) === Number(expected);
 }
 
 // PURE drift detector. Given a service's running state + the published-ports map

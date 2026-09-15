@@ -21,6 +21,11 @@ import { render, screen, cleanup } from "@testing-library/react";
 // Stub lucide-react so jsdom does not hit React-version mismatches.
 // (Same pattern as schema-field-renderer-multiline.test.tsx.)
 vi.mock("lucide-react", () => ({
+  // The gate's control floor draws the arrow glyph after the word
+  // (cinatra#3047 fix leg 8): the drawing's floor is "the primary
+  // Continue, right-aligned over a hairline floor".
+  ArrowRight: ({ className }: { className?: string }) =>
+    React.createElement("span", { "data-icon": "arrow-right", className }),
   LinkIcon: ({ className }: { className?: string }) =>
     React.createElement("span", { "data-icon": "link", className }),
   MailIcon: ({ className }: { className?: string }) =>

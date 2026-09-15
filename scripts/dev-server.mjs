@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLED_DB_SERVICES,
+  isLoopbackHost,
   shouldDiagnoseDrift,
   diagnoseDockerPortDrift,
   resolveMainRepoRoot,
@@ -31,14 +32,21 @@ import {
 import {
   COMPOSE_PROJECT_ENV_VAR,
   SKIP_PREFLIGHT_ENV_VAR,
+  classifyServiceUrl,
   createComposeRunner,
   formatComposeCommand,
+  formatConnectPortMismatch,
+  formatStandDownUnreachable,
   formatUnmanagedServices,
+  formatUnusableServiceUrl,
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
+  redactUrlCredentials,
+  WITHHELD_URL_VALUE,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
+  resolvePublishedHostPort,
   unmanagedComposeServices,
   shouldSkipDevPreflight,
 } from "./lib/dev-preflight.mjs";
@@ -166,8 +174,16 @@ for (const message of planMessages(composeHostPortPlan.warnings)) {
 // default. A `#` that is part of the value (a dev DB password, a URL fragment)
 // still survives: the comment must begin the value or follow whitespace. Both
 // halves are asserted in scripts/__tests__/dev-preflight.test.mjs.
+// The stated value itself, read by the SAME precedence the address below is
+// derived with. Kept separate because the two answer different questions: this
+// one is what the operator WROTE, and `parseHostPort` may hand back an address
+// that appears nowhere in it (cinatra#2839, round-4 finding).
+function envUrlValue(filePath, key) {
+  return process.env[key] || readEnvFileValue(filePath, key);
+}
+
 function envHostPort(filePath, key, fallback) {
-  const value = process.env[key] || readEnvFileValue(filePath, key);
+  const value = envUrlValue(filePath, key);
   // parseHostPort applies explicit-port > scheme-default > fallback precedence, so
   // a no-port loopback URL (e.g. postgresql://…@localhost/db = :5432) is NOT
   // mis-read as the bundled host port and never triggers a false drift exit.
@@ -201,14 +217,118 @@ async function runDbPortPreflight() {
     ["postgres", "redis"].includes(s.composeService),
   );
   const down = [];
+  // Rows whose STATED URL names no address at all. Kept apart from `down`
+  // because "down" is an answer about an address, and these have none
+  // (cinatra#2839, round-4 finding).
+  const unusableUrls = [];
   for (const svc of targets) {
+    // The port THIS checkout publishes for the service, read off the SAME plan
+    // the compose runner below is pinned to (cinatra#2839, acceptance item 2).
+    // Measuring against the hardcoded global default instead is what let this
+    // read-only door disagree with the writing one: on a lane it either skipped
+    // the diagnosis or condemned a healthy container. `resolvePublishedHostPort`
+    // returns the historical default for anything the plan does not scope, so
+    // postgres, neo4j and the whole unscoped checkout are untouched.
+    const claim = resolvePublishedHostPort({
+      composeService: svc.composeService,
+      defaultHostPort: svc.defaultHostPort,
+      plan: composeHostPortPlan,
+    });
+    // The plan claims no host port for it: the service is configured somewhere
+    // else, so no container here is this checkout's to judge — the same
+    // stand-down the Nango heal honors with `--no-deps`.
+    //
+    // It stands the DIAGNOSIS down, not the PROBE, and the difference is the
+    // whole finding (cinatra#2839 round-3): the app still dials whatever its URL
+    // resolves to, so "nothing is listening there" stays true and stays worth
+    // saying. Skipping the loop here made a scoped, portless loopback
+    // `REDIS_URL` — the one shape that reaches this branch and is still probed
+    // on this host — say NOTHING where main warned, and ECONNREFUSED in app boot
+    // was the next thing the operator heard. `scripts/check-services.mjs` skips
+    // only the note and the diagnosis on the same condition and keeps printing
+    // the row; this is that same stand-down, on the launching surface.
+    const standDown = claim.standDown === true;
+    const statedUrl = envUrlValue(envPath, svc.envVar);
+    // NO ADDRESS, NO ADDRESS TALK (cinatra#2839, round-4 finding). A stated URL
+    // that names no host and port — `REDIS_URL=not a url`, `redis://`, a `:0`
+    // nothing can listen on — still reaches `parseHostPort`, which FALLS BACK to
+    // the bundled `127.0.0.1:<default>`. Probing that fallback and reporting the
+    // result named a service the app never talks to: either "not reachable yet
+    // at 127.0.0.1:6379" for an address it does not use, or silence when the
+    // operator's own redis happened to answer there. So the shape is settled
+    // BEFORE the probe, the probe is not run, and the row gets the validation
+    // line instead of a reachability one.
+    //
+    // It is spoken whatever the scope and whatever the stand-down: the defect is
+    // in the URL, not in who publishes the service, and an unscoped checkout
+    // with a broken URL was getting the same invented address. `standDown`
+    // decides only whether the publishing half of the line is added, since
+    // postgres is not a service this plan parameterizes.
+    if (classifyServiceUrl(statedUrl).state === "unusable") {
+      unusableUrls.push({ svc, url: statedUrl, standDown, hostPortVar: claim.envVar });
+      continue;
+    }
     const { host, port } = envHostPort(envPath, svc.envVar, {
       host: "127.0.0.1",
       port: svc.defaultHostPort,
     });
-    if (!shouldDiagnoseDrift({ host, port }, svc)) continue; // external/non-default → not ours
+    // The probe follows the APP, always — it answers "can the app reach its
+    // service?", so resolving it from the plan instead would report a healthy
+    // container the app never talks to. When the two disagree on a scoped
+    // checkout that disagreement is itself the finding, and a loud one: the lane
+    // publishes its own service and then does its work in somebody else's.
+    const mismatch = formatConnectPortMismatch({
+      service: svc.label,
+      claim,
+      connectHost: host,
+      connectPort: port,
+      laneScope: composeHostPortPlan.laneScope,
+    });
+    if (mismatch) console.warn(`[dev-server] ⚠ ${mismatch}`);
+    // A non-loopback host is somebody else's infrastructure — a hosted DB, a
+    // shared cache — and always was outside this preflight. Not probed, not
+    // diagnosed, not remarked on: the one skip that stays in front of everything.
+    if (!isLoopbackHost(host)) continue;
     if (await probeTcp(host, port)) continue; // reachable → fine
-    down.push({ svc, host, port });
+    // Reachability and drift are two different questions, and the port test only
+    // answers the second. A checkout that connects on a port it does not publish
+    // has no container here to diagnose — but "nothing is listening there" is
+    // still true, and gating the PROBE on the drift test is what turned that
+    // case into total silence followed by ECONNREFUSED in app boot. Probe every
+    // loopback service — the stood-down one included; diagnose only the ones
+    // this checkout publishes.
+    //
+    // A stood-down service is never diagnosable: the plan claims no published
+    // port for it, so there is nothing for `shouldDiagnoseDrift` to compare
+    // against and no container here is this checkout's to inspect. Stated
+    // outright rather than left to fall out of an undefined `claim.published`.
+    down.push({
+      svc,
+      host,
+      port,
+      standDown,
+      // Carried so the stand-down warning is formatted from the STATEMENT and
+      // the address together, never from the address alone.
+      statedUrl,
+      // The plan's own name for this service's host-port claim, carried here so
+      // the stand-down warning below can name the variable that would end the
+      // stand-down without re-deriving it from the port table.
+      hostPortVar: claim.envVar,
+      diagnosable: !standDown && shouldDiagnoseDrift({ host, port }, svc, claim.published),
+    });
+  }
+  // Before the early return: a row with no address is never in `down`, and this
+  // is the one thing an operator with a broken URL needs to hear.
+  for (const { svc, url, standDown, hostPortVar } of unusableUrls) {
+    console.warn(
+      `[dev-server] ⚠ ${formatUnusableServiceUrl({
+        service: svc.label,
+        urlVar: svc.envVar,
+        url,
+        hostPortVar,
+        standDown,
+      })}`,
+    );
   }
   if (down.length === 0) return;
 
@@ -219,7 +339,11 @@ async function runDbPortPreflight() {
     mainRoot = process.cwd();
   }
   const drifted = [];
-  for (const { svc, port } of down) {
+  for (const { svc, port, diagnosable } of down) {
+    // Down, but not at a port this checkout publishes: no container here is its
+    // to inspect, so Docker is never touched for it. It still rides in `down`,
+    // so the "not reachable yet" warning below names it.
+    if (!diagnosable) continue;
     let diag;
     try {
       // `skip` is passed even though this function already returned on it
@@ -247,9 +371,37 @@ async function runDbPortPreflight() {
   }
   // Containers not running / unreachable but no drift — warn and continue; the
   // app retries and the operator may be bringing services up alongside.
-  console.warn(
-    `[dev-server] ⚠ ${down.map((d) => d.svc.label).join(", ")} not reachable yet — start them with \`pnpm services\` (the app will retry once they are up).`,
-  );
+  //
+  // TWO SENTENCES, because there are two different answers. `pnpm services`
+  // brings up the services this checkout publishes — and it REFUSES outright a
+  // plan that stands one down (`formatStandDownRefusal`), since a whole-stack
+  // `up` would start that service anyway, on the compose default, in somebody
+  // else's face. Naming it as the remedy for a stood-down service would send the
+  // operator to a command that cannot run, so the stood-down row gets its own
+  // line and the remedy that does work (`formatStandDownUnreachable`).
+  const publishedHere = down.filter((d) => !d.standDown);
+  if (publishedHere.length > 0) {
+    console.warn(
+      `[dev-server] ⚠ ${publishedHere.map((d) => d.svc.label).join(", ")} not reachable yet — start them with \`pnpm services\` (the app will retry once they are up).`,
+    );
+  }
+  for (const { svc, host, port, hostPortVar, statedUrl } of down.filter((d) => d.standDown)) {
+    console.warn(
+      `[dev-server] ⚠ ${formatStandDownUnreachable({
+        service: svc.label,
+        urlVar: svc.envVar,
+        hostPortVar,
+        host,
+        port,
+        // The stated URL travels WITH the address, so the formatter can refuse
+        // to describe a derived fallback as the configured one. Unreachable by
+        // construction here — an unusable URL never reaches `down` — and passed
+        // anyway, because the guarantee belongs to the formatter, not to this
+        // call site's ordering.
+        url: statedUrl,
+      })}`,
+    );
+  }
 }
 
 await runDbPortPreflight();
@@ -308,9 +460,21 @@ async function runNangoHealthPreflight() {
   if ((await probeHttpHealth(healthUrl, 4000)).ok) return; // healthy → silent
 
   // A custom remote Nango (hosted / shared infra) is not ours to start — flag it.
+  // The address is redacted like every other stated URL this preflight echoes
+  // (cinatra#2913, round-5 finding N4): a hosted Nango URL is the shape most
+  // likely to carry userinfo, and this line is printed on every `pnpm dev`
+  // while that host is down.
+  //
+  // AND IT HANDLES THE FAIL-CLOSED ANSWER, because it calls the helper DIRECTLY
+  // rather than through `formatStatedUrlValue` (round-7 finding B2). A hosted
+  // URL the helper cannot structurally redact is named by its VARIABLE here,
+  // never by its value.
   if (!isLocalNangoUrl(rawUrl)) {
+    const shownNangoUrl = redactUrlCredentials(resolveNangoBaseUrl(rawUrl));
     console.warn(
-      `[dev-server] ⚠ Nango connector service at ${resolveNangoBaseUrl(rawUrl)} is not answering /health — connectors will fail until it recovers.`,
+      shownNangoUrl === WITHHELD_URL_VALUE
+        ? `[dev-server] ⚠ Nango connector service is not answering /health at the address NANGO_SERVER_URL states. Its value is not echoed here: this preflight cannot prove it carries no credential. Connectors will fail until it recovers.`
+        : `[dev-server] ⚠ Nango connector service at ${shownNangoUrl} is not answering /health — connectors will fail until it recovers.`,
     );
     return;
   }
