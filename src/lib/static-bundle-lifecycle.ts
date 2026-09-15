@@ -49,6 +49,25 @@ import "server-only";
 //                                        → seed the anchor DIRECTLY archived
 //                                        (tombstone seed; no live-row window).
 //
+// WHICH FLEET THE IMAGE CARRIES decides the seed set (engineering#666). The
+// image records its fleet at build time and this module reads it through
+// `@/lib/bundled-fleet` (fail-soft: anything but a marker that says `dev` reads
+// as `required`, so a deployment can never be widened by an unreadable file):
+//   - `required` — the road EVERY real deployment takes — seeds exactly the set
+//     above and nothing else: bundled serverEntry + bundled required-in-prod,
+//     plus their transitive required closure. Unchanged, byte for byte.
+//   - `dev` — a preview / proof instance, built with the development fleet —
+//     ALSO anchors every other record of the image's own manifest, of every
+//     kind, so the instance's catalogue knows the packs the instance ships; and
+//     for kind `agent` it additionally seeds the `agent_templates` row the
+//     chat's run resolver reads, because an `installed_extension` anchor is a
+//     different row in a different table and does not satisfy that read. That
+//     row is built by the install path's own derivation over the image's own OAS
+//     seed (see @cinatra-ai/agents/seed-bundled-agent-template) — never a
+//     hand-written template — and is created ONLY for a package this seeder
+//     positively established as live this run, so neither an operator's archive
+//     decision nor a failed anchor write is papered over by a new write road.
+//
 // Soft-failing: a per-package failure is logged loudly and never blocks boot —
 // the loader's own fail-open path and the post-boot required-set activation
 // assertion of the registration cutover are the backstops.
@@ -142,6 +161,18 @@ export type StaticBundleLifecycleResult = {
    * the last-known-good truth rather than a half-validated one.
    */
   accessDeclarationFailed: string[];
+  /**
+   * Bundled AGENT packages for which the chat-resolvable `agent_templates` row
+   * was created at boot (dev-fleet images only; empty on every required-fleet
+   * image, which is every real deployment).
+   */
+  seededAgentTemplates: string[];
+  /**
+   * Bundled agent packages whose `agent_templates` row could not be seeded —
+   * logged loudly; the anchor row is unaffected, so the package stays
+   * lifecycle-tracked and only its chat dispatch is missing.
+   */
+  agentTemplateFailed: string[];
 };
 
 /**
@@ -163,6 +194,8 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
     failed: [],
     refreshFailed: [],
     accessDeclarationFailed: [],
+    seededAgentTemplates: [],
+    agentTemplateFailed: [],
   };
 
   const { readInstalledExtensionsByPackageName } = await import(
@@ -267,12 +300,40 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   // closed (fixes the linkedin-oauth-connector boot crash; see PR #204, #253).
   // We follow the SAME install-blocking edge predicate and edge source the boot
   // gate uses, so seeding and the assert agree and nothing is over-anchored.
-  const anchorNames = transitiveRequiredClosure(
-    baseSeed.map((r) => r.packageName),
-    STATIC_EXTENSION_RECORDS,
-  );
+  // WHICH FLEET THIS IMAGE CARRIES (engineering#666). Fail-soft: absent /
+  // malformed / unknown reads as `required`, so the deployment road's seed set
+  // is the default AND the fallback.
+  const { BUNDLED_FLEET_DEV, readBundledFleet } = await import("@/lib/bundled-fleet");
+  const fleet = readBundledFleet();
+
+  // A DEV-FLEET image anchors its WHOLE manifest — every record of every kind
+  // the image actually carries — so a preview instance's catalogue knows the
+  // packs it ships. A required-fleet image keeps today's set exactly: the base
+  // seed plus its transitive required closure, computed by the unchanged walk.
+  const anchorNames =
+    fleet === BUNDLED_FLEET_DEV
+      ? new Set(STATIC_EXTENSION_RECORDS.map((r) => r.packageName))
+      : transitiveRequiredClosure(
+          baseSeed.map((r) => r.packageName),
+          STATIC_EXTENSION_RECORDS,
+        );
   const records = STATIC_EXTENSION_RECORDS.filter((r) => anchorNames.has(r.packageName));
   if (records.length === 0) return result;
+
+  // Packages this run POSITIVELY established as live — a live anchor it found,
+  // a live platform row it adopted, or an anchor it seeded live. The dev-fleet
+  // agent-template seed below runs for these and ONLY these.
+  //
+  // The set is positive, not a not-live blacklist, because the loop leaves a
+  // package's state unestablished on more paths than it declares one: the
+  // recovery re-read in the outer catch continues on ANY anchor row it finds
+  // (archived tombstones included), and a package whose anchor write failed
+  // outright ends the iteration with no row at all. A blacklist records none of
+  // those, so a retired or unanchored agent would fall through it and be given
+  // a chat-resolvable published template row — resurrecting exactly the
+  // operator decision this module must never resurrect. Anything this loop did
+  // not prove live is left alone.
+  const liveAnchored = new Set<string>();
 
   const actorOpts = {
     actor: { source: "static-bundle-lifecycle" },
@@ -295,6 +356,7 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
       const anchored = rows.find((r) => isStaticBundleAnchorSource(r.source));
       if (anchored) {
         if (anchored.status !== "active" && anchored.status !== "locked") continue;
+        liveAnchored.add(rec.packageName);
         const src = anchored.source;
         if (!isStaticBundleAnchorSource(src)) continue; // unreachable; narrows the type
         // Keep the cached access declaration current on every live anchor
@@ -349,6 +411,7 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         });
         await ensureDeclarationCached(rec, platformRow.id, platformRow.accessDeclaration);
         const live = platformRow.status === "active" || platformRow.status === "locked";
+        if (live) liveAnchored.add(rec.packageName);
         (live ? result.seededLive : result.seededArchived).push(rec.packageName);
         continue;
       }
@@ -391,13 +454,24 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         actorOpts,
       );
       await ensureDeclarationCached(rec, seededId, null);
+      if (!legacyRetired) liveAnchored.add(rec.packageName);
       (legacyRetired ? result.seededArchived : result.seededLive).push(rec.packageName);
     } catch (err) {
       // Concurrent boot may have anchored the package between our read and
       // write — re-read before treating this as a failure.
       try {
         const rows = await readInstalledExtensionsByPackageName(rec.packageName);
-        if (rows.some((r) => isStaticBundleAnchorSource(r.source))) continue;
+        const recovered = rows.find((r) => isStaticBundleAnchorSource(r.source));
+        if (recovered) {
+          // A concurrent boot won the insert. Establish liveness from the row
+          // it actually wrote, by the SAME predicate the main loop uses, so a
+          // live agent recovered here is not silently denied its template row;
+          // an archived tombstone still establishes nothing.
+          if (recovered.status === "active" || recovered.status === "locked") {
+            liveAnchored.add(rec.packageName);
+          }
+          continue;
+        }
       } catch {
         // fall through to the failure report
       }
@@ -408,6 +482,92 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         err instanceof Error ? err.message : err,
       );
     }
+  }
+
+  // ── the chat-resolvable AGENT record, dev-fleet images only ───────────────
+  //
+  // The run resolver reads `agent_templates` by package name; the anchor rows
+  // above are `installed_extension`. On a dev-fleet image both are needed, so
+  // every LIVE bundled agent record also gets its template row seeded from the
+  // image's own OAS seed through the install path's own derivation. Per-package
+  // soft-failing, exactly like the anchors: a package that cannot be seeded is
+  // reported and the boot continues.
+  if (fleet === BUNDLED_FLEET_DEV) {
+    const agentRecords = records.filter(
+      (r) => r.kind === "agent" && liveAnchored.has(r.packageName),
+    );
+    if (agentRecords.length > 0) {
+      // The module loads and the seed-directory resolution share ONE error
+      // boundary, because they share one outcome: without both, no agent can
+      // get a template row this boot. They sit INSIDE the boundary rather than
+      // above it so this function keeps the module's soft-failing contract — a
+      // rejecting dynamic import (a missing export condition in a traced
+      // standalone build, a throwing module initializer) must be reported and
+      // must not discard the anchor results already collected above.
+      let seeder: typeof import("@cinatra-ai/agents/seed-bundled-agent-template").ensureBundledAgentTemplateRecord | null =
+        null;
+      let seedDir: string | null = null;
+      try {
+        ({ ensureBundledAgentTemplateRecord: seeder } = await import(
+          "@cinatra-ai/agents/seed-bundled-agent-template"
+        ));
+        const { resolveRequiredOasSeedDir } = await import("@/lib/required-extension-materialize");
+        seedDir = resolveRequiredOasSeedDir().seedDir;
+      } catch (err) {
+        seeder = null;
+        seedDir = null;
+        console.error(
+          "[static-bundle-lifecycle] the bundled agent-template seeder could not be prepared " +
+            "(module load or image OAS seed resolution) — no bundled agent gets its " +
+            "chat-resolvable template row this boot; the anchors above are unaffected:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+      for (const rec of agentRecords) {
+        // The seeder could not be prepared (logged above) — no agent gets a
+        // template row this boot; the anchors above are unaffected.
+        if (seedDir === null || seeder === null) break;
+        try {
+          const outcome = await seeder({
+            packageName: rec.packageName,
+            packageVersion: rec.version ?? "0.0.0",
+            seedDir,
+          });
+          if (outcome.outcome === "created") {
+            result.seededAgentTemplates.push(rec.packageName);
+          } else if (outcome.outcome === "absent") {
+            console.warn(
+              `[static-bundle-lifecycle] ${rec.packageName} is a bundled agent but the image's ` +
+                `OAS seed carries no package tree for it (${outcome.reason}) — the chat cannot ` +
+                `resolve it until the seed carries it`,
+            );
+          }
+        } catch (err) {
+          result.agentTemplateFailed.push(rec.packageName);
+          console.error(
+            `[static-bundle-lifecycle] could not seed the agent template row for ` +
+              `${rec.packageName} — it stays anchored, but a chat dispatch will answer ` +
+              `"Template not found":`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+  }
+
+  if (result.seededAgentTemplates.length > 0) {
+    console.info(
+      `[static-bundle-lifecycle] seeded the chat-resolvable agent template row for ` +
+        `${result.seededAgentTemplates.length} bundled agent(s): ` +
+        result.seededAgentTemplates.join(", "),
+    );
+  }
+  if (result.agentTemplateFailed.length > 0) {
+    console.error(
+      `[static-bundle-lifecycle] ${result.agentTemplateFailed.length} bundled agent(s) have an ` +
+        `anchor but NO chat-resolvable template row — a chat dispatch of them answers ` +
+        `"Template not found": ${result.agentTemplateFailed.join(", ")}`,
+    );
   }
 
   if (result.seededLive.length > 0 || result.seededArchived.length > 0) {
