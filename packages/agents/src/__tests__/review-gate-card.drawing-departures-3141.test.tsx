@@ -154,7 +154,7 @@ function renderOn(
 }
 
 const promptWindows = (root: ParentNode) =>
-  root.querySelectorAll('[data-conformance-id="run-window"]');
+  root.querySelectorAll('[data-conformance-id="review-prompt-window"]');
 const headers = (root: ParentNode) =>
   root.querySelectorAll('[data-conformance-id="review-target-header"]');
 
@@ -177,7 +177,7 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     // AMENDED BY cinatra#3487: it is the PAGE's window, in the page's chrome,
     // and never inside the card.
     expect(window.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
-    expect(card!.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(0);
+    expect(card!.querySelectorAll('[data-conformance-id="review-prompt-window"]')).toHaveLength(0);
   });
 
   it("draws it beneath the decision bar, which is where the drawing puts it", async () => {
@@ -194,7 +194,7 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     const { container } = renderOn("page_gate_region");
     await waitFor(() => expect(promptWindows(container).length).toBeGreaterThan(0));
     expect(promptWindows(container)).toHaveLength(1);
-    expect(document.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-conformance-id="review-prompt-window"]')).toHaveLength(1);
   });
 
   it("wherever the gate is mounted OUTSIDE a conversation WITH its run, it draws that one window and no other", async () => {
@@ -366,6 +366,17 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
   it("keeps the header past the 12-second bound, where only the BODY shows the recovery affordance", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { container } = await renderPending("run_card");
+    // DRAIN THE PASSIVE EFFECTS BEFORE MOVING THE CLOCK. The island arms its
+    // 12-second bound in an effect, and React schedules a passive effect through
+    // the scheduler — a callback that, under fake timers, has not necessarily run
+    // by the time `waitFor` returned. Measured on this suite: the island is
+    // committed and reading "loading" while `vi.getTimerCount()` is still 0, so
+    // an advance made here would fire nothing, the effect would arm the bound
+    // afterwards, and the card would read "loading" for a bound that had never
+    // been moved past. Draining the queue first is what makes the advance land on
+    // a real timer — the card reaches "timed-out" on its own, which is what this
+    // case is here to read.
+    await act(async () => {});
     await act(async () => {
       vi.advanceTimersByTime(12_500);
     });

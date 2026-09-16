@@ -206,7 +206,7 @@ async function settle() {
 }
 
 const windows = (root: ParentNode) =>
-  root.querySelectorAll('[data-conformance-id="run-window"]');
+  root.querySelectorAll('[data-conformance-id="review-prompt-window"]');
 const chromeNode = (root: ParentNode) =>
   root.querySelector('[data-run-window-host="page-chrome"]');
 

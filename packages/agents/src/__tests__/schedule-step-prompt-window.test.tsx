@@ -106,7 +106,7 @@ const stepDetail = (c: HTMLElement) =>
  * window, found by its own anchor.
  */
 const promptWindow = (c: HTMLElement) =>
-  c.querySelector('[data-conformance-id="run-window"]') as HTMLElement | null;
+  c.querySelector('[data-conformance-id="review-prompt-window"]') as HTMLElement | null;
 
 /**
  * HOW LONG THE WINDOW IS ALLOWED TO TAKE TO ARRIVE.

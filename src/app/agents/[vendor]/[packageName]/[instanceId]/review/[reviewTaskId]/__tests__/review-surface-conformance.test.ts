@@ -49,10 +49,11 @@ const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts"
 // mounts rather than by this route. The anchor and its action travelled with it.
 // THE WINDOW'S OWN MODULE SINCE cinatra#3487. The ruling of 2026-09-14 takes
 // the window out of the card and gives it to the run page's chrome: "one window
-// owned by the page … never part of that screen's component or markup", with the
-// anchor named in the same breath — `data-conformance-id="run-window"`. So the
-// anchor's render site is the panel the chrome mounts, and the card that used to
-// carry it is read for the road instead.
+// owned by the page … never part of that screen's component or markup". THE
+// ANCHOR DOES NOT MOVE WITH IT: the drawing declares this surface as
+// `review-prompt-window` and the staged manifest carries that id, so the window
+// keeps it and only its render site changes — the panel the chrome mounts, with
+// the card that used to carry it read for the road instead.
 const RUN_WINDOW_PANEL = readRepo("packages/agents/src/hitl-conversation-panel.tsx");
 const RUN_WINDOW_CHROME = readRepo("packages/agents/src/run-page-chrome.tsx");
 const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
@@ -137,12 +138,12 @@ const HOST_STANDARD_IDS = new Set([
   // painted at all — the loading skeleton and the preview-recovery panel — and
   // an anchor is what makes "exactly one header per pinned target" checkable.
   "review-target-header",
-  // cinatra#3141 item 1, RENAMED BY cinatra#3487 — §VI's conversational prompt
-  // window. It moved once more, out of the card and into the run page's own
-  // chrome, and the ruling names its anchor: "the window's anchor
-  // (`data-conformance-id="run-window"`) is a descendant of the page chrome and
-  // never of `[data-lifecycle-card-host]`".
-  "run-window",
+  // cinatra#3141 item 1, MOVED AGAIN BY cinatra#3487 — §VI's conversational
+  // prompt window. It moved once more, out of the card and into the run page's
+  // own chrome. The id is the drawing's own and is unchanged by the move; what
+  // cinatra#3487 adds is where it may be read — the anchor is a descendant of
+  // the page chrome and never of `[data-lifecycle-card-host]`.
+  "review-prompt-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
   // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are
@@ -548,7 +549,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     "run-surface": RUN_SURFACE,
     "run-step-rail": RUN_STEP_RAIL,
     "run-chip-row": RUN_CHIP_ROW,
-    "run-window": RUN_WINDOW_PANEL,
+    "review-prompt-window": RUN_WINDOW_PANEL,
   };
 
   for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
@@ -588,9 +589,9 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
   it("render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)", () => {
     // The full closed set the spec annotates at design@5e5c53aff (review-route
     // anchors + the five run-embedded anchors + the documented host-standard panel).
-    // `run-window` since cinatra#3487 — the window moved out of the card and
-    // into the run page's chrome, and the ruling names its anchor there.
-    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "run-window"];
+    // The window keeps the drawing's own id through cinatra#3487 — the window
+    // moved out of the card and into the run page's chrome, its anchor did not.
+    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
     const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
     for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, RUN_WINDOW_PANEL, RUN_WINDOW_CHROME]) {
       for (const foundId of conformanceIdsIn(src)) {

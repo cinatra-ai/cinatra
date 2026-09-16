@@ -34,15 +34,24 @@ vi.mock("next/navigation", () => ({
 // draws what the invariant looks for — a textarea and a send control — so a
 // window drawn anywhere inside a card is VISIBLE to this test rather than
 // invisible for want of the real component.
-vi.mock("@cinatra-ai/sdk-ui", () => ({
-  LoadingSpinner: () => null,
-  PromptField: ({ placeholder }: { placeholder?: string }) => (
-    <div data-testid="prompt-field">
-      <textarea placeholder={placeholder} readOnly value="" />
-      <span role="button" aria-label="Apply AI suggestion" data-send-control="" />
-    </div>
-  ),
-}));
+//
+// THE FIELD IS THE SHADCN WRAPPER, never a raw element: the design-system
+// boundary admits no exemption for a test file, and the wrapper renders the very
+// `textarea` node this invariant counts, so the reading is unchanged. The factory
+// is async so the wrapper is imported where the mock actually runs — a hoisted
+// factory cannot close over a module-level import.
+vi.mock("@cinatra-ai/sdk-ui", async () => {
+  const { Textarea } = await import("@/components/ui/textarea");
+  return {
+    LoadingSpinner: () => null,
+    PromptField: ({ placeholder }: { placeholder?: string }) => (
+      <div data-testid="prompt-field">
+        <Textarea placeholder={placeholder} readOnly value="" />
+        <span role="button" aria-label="Apply AI suggestion" data-send-control="" />
+      </div>
+    ),
+  };
+});
 
 vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
@@ -111,7 +120,7 @@ function windowPartsInside(root: ParentNode): {
       (t) => t.closest('[data-conformance-id="review-note-field-subordinate"]') === null,
     ).length;
     sendControls += card.querySelectorAll("[data-send-control]").length;
-    anchors += card.querySelectorAll('[data-conformance-id="run-window"]').length;
+    anchors += card.querySelectorAll('[data-conformance-id="review-prompt-window"]').length;
   }
   return { fields, textareas, sendControls, anchors };
 }

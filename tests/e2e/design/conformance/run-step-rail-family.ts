@@ -439,7 +439,7 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       unexportedModules: [],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the run-window anchor there), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session. The floor it ships declares approve-review to resolved, reject-review to resolved and request-changes to changes-requested; continue-review to resolved — the pair the drawing binds on the run page's review step — is a literal in no file under src/ or packages/",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session. The floor it ships declares approve-review to resolved, reject-review to resolved and request-changes to changes-requested; continue-review to resolved — the pair the drawing binds on the run page's review step — is a literal in no file under src/ or packages/",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",

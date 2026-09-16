@@ -138,7 +138,7 @@ function mockResolve(body: TriggerScheduleProposalViewBody) {
  * exactly what a reader sees under the form.
  */
 function composerIsDrawn(root: HTMLElement): boolean {
-  return root.querySelectorAll('[data-conformance-id="run-window"]').length > 0;
+  return root.querySelectorAll('[data-conformance-id="review-prompt-window"]').length > 0;
 }
 
 /** The card's controls floor — what "the schedule can still be changed" IS. */
