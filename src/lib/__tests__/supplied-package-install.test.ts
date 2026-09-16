@@ -449,6 +449,161 @@ describe("the anonymous download is PINNED, BOUNDED and single-hosted", () => {
     expect(asked).toEqual(["https://codeload.github.com/acme/thing/zip/HEAD"]);
   });
 
+  // THE REQUEST URL IS ASSEMBLED FROM VALIDATED PARTS (cinatra#3204, the
+  // code-scanning finding js/request-forgery at the candidate head). The link is
+  // the operator's input by design, so the road may not fetch the string that
+  // input produced: the endpoint is rebuilt from the fixed archive host and the
+  // owner, repository and ref read out of it, each checked against a strict
+  // pattern and percent-encoded. Anything that is not that endpoint is refused
+  // BEFORE a request is made - the host check alone let a wrong path or a
+  // wrong-shaped ref through to `fetch`.
+  it("assembles the request URL from validated parts, refusing anything else before a request is made", async () => {
+    const asked: string[] = [];
+    const watching = (async (url: string) => {
+      asked.push(url);
+      return new Response(gitHubSourceArchive() as unknown as BodyInit, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const refused = [
+      // A foreign host, a host that only LOOKS like the archive host, and the
+      // archive host over plain http.
+      "https://evil.example.com/acme/thing/zip/HEAD",
+      "https://codeload.github.com.evil.example.com/acme/thing/zip/HEAD",
+      "http://codeload.github.com/acme/thing/zip/HEAD",
+      // The right host, a path that is not the public source archive.
+      "https://codeload.github.com/acme/thing/tarball/HEAD",
+      "https://codeload.github.com/acme/thing/zip/HEAD/../../../other",
+      "https://codeload.github.com/acme/../evil/zip/HEAD",
+      // A path segment outside the shape, or naming another repository.
+      "https://codeload.github.com/ac%2Fme/thing/zip/HEAD",
+      "https://codeload.github.com/someone-else/thing/zip/HEAD",
+      // A ref outside the shape: a traversal, a query, a fragment, a leading "-".
+      "https://codeload.github.com/acme/thing/zip/%2e%2e%2f%2e%2e%2fetc",
+      "https://codeload.github.com/acme/thing/zip/HEAD?to=evil.example.com",
+      "https://codeload.github.com/acme/thing/zip/HEAD#evil",
+      "https://codeload.github.com/acme/thing/zip/-rf",
+      "https://codeload.github.com/acme/thing/zip/",
+      "not a url at all",
+      "",
+    ];
+
+    for (const archiveUrl of refused) {
+      await expect(
+        prepareSuppliedRepositoryArchiveSnapshot({
+          owner: "acme",
+          repo: "thing",
+          ref: null,
+          archiveUrl,
+          resolveValidator: async () => null,
+          stageSnapshot: async () => "never.tgz",
+          fetchImpl: watching,
+        }),
+      ).rejects.toThrow(/refusing to download an extension package/);
+    }
+
+    // NOT ONE of them was requested.
+    expect(asked).toEqual([]);
+  });
+
+  it("asks for exactly the public source archive the link named, qualified refs and all", async () => {
+    const asked: string[] = [];
+    const watching = (async (url: string) => {
+      asked.push(url);
+      return new Response(gitHubSourceArchive() as unknown as BodyInit, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "sample-release-tag",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/refs/tags/sample-release-tag",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: watching,
+    });
+
+    expect(asked).toEqual([
+      "https://codeload.github.com/acme/thing/zip/refs/tags/sample-release-tag",
+    ]);
+  });
+
+  // A SCOPED RELEASE TAG is an ordinary, downloadable release - the shape a
+  // monorepo publishes its packages under - and the link parser accepts it.
+  // The rebuild must therefore ask for exactly the archive the parser named: a
+  // ref shape STRICTER than the parser's is drift, and it refuses archives
+  // GitHub serves.
+  it("asks for a scoped release tag exactly as the link named it", async () => {
+    const asked: string[] = [];
+    const watching = (async (url: string) => {
+      asked.push(url);
+      return new Response(gitHubSourceArchive() as unknown as BodyInit, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "@acme/widget@1.2.3",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/refs/tags/%40acme/widget%401.2.3",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: watching,
+    });
+
+    expect(asked).toEqual([
+      "https://codeload.github.com/acme/thing/zip/refs/tags/%40acme/widget%401.2.3",
+    ]);
+  });
+
+  // A NON-ASCII BRANCH NAME is likewise the parser's to accept, and it survives
+  // the rebuild percent-encoded exactly as the builder wrote it.
+  it("asks for a non-ASCII branch name exactly as the link named it", async () => {
+    const asked: string[] = [];
+    const watching = (async (url: string) => {
+      asked.push(url);
+      return new Response(gitHubSourceArchive() as unknown as BodyInit, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "feature/\u65e5\u672c\u8a9e",
+      archiveUrl: `https://codeload.github.com/acme/thing/zip/feature/${encodeURIComponent("\u65e5\u672c\u8a9e")}`,
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: watching,
+    });
+
+    expect(asked).toEqual([
+      `https://codeload.github.com/acme/thing/zip/feature/${encodeURIComponent("\u65e5\u672c\u8a9e")}`,
+    ]);
+  });
+
+  // THE OWNER SHAPE IS PINNED ON ITS OWN. In the table above every refusal could
+  // also be explained by the endpoint naming another repository than the install
+  // does; here the install names the very owner the endpoint carries, so the
+  // only thing left to refuse it is the name shape itself.
+  it("refuses an owner outside the GitHub name shape the install itself names", async () => {
+    const asked: string[] = [];
+    const watching = (async (url: string) => {
+      asked.push(url);
+      return new Response(gitHubSourceArchive() as unknown as BodyInit, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "-acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/-acme/thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: watching,
+      }),
+    ).rejects.toThrow(/refusing to download an extension package/);
+
+    expect(asked).toEqual([]);
+  });
+
   it("re-checks every entry name AFTER the generated wrapper folder is stripped", async () => {
     // "thing-main//escape.txt" is harmless with the wrapper on and an absolute
     // path with it off, so the strip is what has to refuse it.

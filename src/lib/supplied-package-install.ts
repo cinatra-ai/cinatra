@@ -176,25 +176,135 @@ export async function prepareSuppliedRepositorySnapshot(input: {
 /**
  * What the link said to fetch. The screen's server boundary parses the link (the
  * parser and the URL builder are `@cinatra-ai/skills`) and hands the RESULT down
- * here, so this module never needs the parser's import graph — and never gets to
- * invent a URL of its own.
+ * here, so this module never needs the parser's import graph. The endpoint below
+ * is what that boundary produced, and it is DATA here: the request URL is read
+ * for its parts and assembled again from validated ones before anything is
+ * fetched.
  */
 export type SuppliedRepositoryArchiveTarget = {
   owner: string;
   repo: string;
   /** The ref as submitted, or null for the default branch. */
   ref: string | null;
-  /** The public archive endpoint, as the link parser's builder produced it. */
+  /** The public archive endpoint, as the link parser's builder produced it -
+   *  re-read and re-assembled from validated parts before it is requested. */
   archiveUrl: string;
 };
 
 /**
- * The ONLY host this road downloads from. The URL arrives as data from the
- * boundary above, so it is re-checked here rather than trusted: a road that
- * fetches whatever URL it is handed is a request-forgery sink, whatever the
- * caller meant.
+ * The ONLY host this road downloads from - a constant, never a part of anything
+ * anyone typed. The endpoint that arrives from the boundary above is DATA: a
+ * road that fetches whatever URL it is handed is a request-forgery sink,
+ * whatever the caller meant, so nothing below fetches that string. It is read
+ * for its parts, every part is checked against the shapes below, and the request
+ * URL is assembled again from this constant and those parts.
  */
 const ARCHIVE_HOST = "codeload.github.com";
+
+// THE SHAPES A PART MAY HAVE. They restate the link parser's own guards in
+// `@cinatra-ai/skills` (`isSafeOwnerAndRepo`, `isSafeArchiveRef`) rather than
+// importing them, because this module must not pull the parser's import graph
+// (the Octokit client, the connection client) into the install road.
+/** A GitHub owner login: alphanumerics and single inner hyphens. */
+const OWNER_SHAPE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+/** A GitHub repository name: alphanumerics plus `.`, `_`, `-`. */
+const REPO_SHAPE = /^[A-Za-z0-9._-]+$/;
+/** Characters a ref may not carry: control codes, whitespace, and the URL
+ *  punctuation that would make the archive path mean something else. */
+const UNSAFE_REF_CHARS = new RegExp("[" + "\\u0000-\\u001f\\u007f" + "\\s?#%]");
+/** The longest archive ref PATH this road will splice in. The parser caps the
+ *  ref itself at 255 characters, and the link builder qualifies a release ref
+ *  with "refs/tags/" (ten more) before it reaches this module, so a cap of 255
+ *  here would measure a different string and refuse long tags the parser
+ *  accepts. */
+const MAX_REF_PATH_LENGTH = 265;
+
+/** The owner and repository, in the shape GitHub gives them. */
+function isSafeOwnerAndRepo(owner: string, repo: string): boolean {
+  if (!OWNER_SHAPE.test(owner)) return false;
+  if (repo === "." || repo === ".." || !REPO_SHAPE.test(repo)) return false;
+  return true;
+}
+
+/**
+ * A branch, a tag (qualified or not) or a 40-character commit id, in the shape
+ * an archive path carries it.
+ *
+ * This RESTATES the parser's `isSafeArchiveRef` rule for rule, and deliberately
+ * is no STRICTER than it: a shape that merely looks safer is drift, and it
+ * refuses archives the parser accepts and GitHub serves - the scoped release tag
+ * shape a monorepo publishes under ("refs/tags/@scope/name@1.2.3") and any
+ * non-ASCII branch name among them.
+ *
+ * Refused: an empty or over-long path, a traversal, a backslash, a control or
+ * whitespace character, a query, fragment or percent character (the path arrives
+ * here DECODED, so a percent left in it is a second encoding), a leading or
+ * trailing slash, a leading "-", and an empty or "." segment. Whatever survives
+ * is percent-encoded segment by segment in the builder below, so no character in
+ * it can mean anything but one path segment.
+ */
+function isSafeArchiveRefPath(refPath: string): boolean {
+  if (refPath.length === 0 || refPath.length > MAX_REF_PATH_LENGTH) return false;
+  if (refPath.includes("\\") || refPath.includes("..")) return false;
+  if (UNSAFE_REF_CHARS.test(refPath)) return false;
+  if (refPath.startsWith("/") || refPath.endsWith("/") || refPath.startsWith("-")) return false;
+  return refPath.split("/").every((segment) => segment.length > 0 && segment !== ".");
+}
+
+/**
+ * READ the parts out of the endpoint the boundary handed down - owner,
+ * repository and ref - decoding one path segment at a time.
+ *
+ * NULL IS A REFUSAL: a foreign host (or one that merely looks like the archive
+ * host), plain http, credentials or a port, a query or a fragment, and any path
+ * that is not the public source archive of one repository come back as null and
+ * are never requested.
+ */
+function readArchiveEndpointParts(
+  archiveUrl: string,
+): { owner: string; repo: string; refPath: string } | null {
+  let url: URL;
+  try {
+    url = new URL(archiveUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.hostname !== ARCHIVE_HOST) return null;
+  if (url.port !== "" || url.username !== "" || url.password !== "") return null;
+  if (url.search !== "" || url.hash !== "") return null;
+
+  // `/<owner>/<repo>/zip/<ref...>` and nothing else.
+  const raw = url.pathname.split("/");
+  if (raw.length < 5 || raw[0] !== "" || raw[3] !== "zip") return null;
+  let segments: string[];
+  try {
+    segments = raw.slice(1).map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  const [owner, repo, , ...refSegments] = segments;
+  return { owner: owner ?? "", repo: repo ?? "", refPath: refSegments.join("/") };
+}
+
+/**
+ * BUILD the request URL from validated parts, or refuse.
+ *
+ * This is the one place a URL is made on this road: the host is the constant
+ * above, and each part is checked against its shape and percent-encoded before
+ * it is spliced in, so no byte of anyone's string reaches the request
+ * unvalidated.
+ */
+function buildArchiveRequestUrl(parts: {
+  owner: string;
+  repo: string;
+  refPath: string;
+}): string | null {
+  const { owner, repo, refPath } = parts;
+  if (!isSafeOwnerAndRepo(owner, repo)) return null;
+  if (!isSafeArchiveRefPath(refPath)) return null;
+  const encodedRef = refPath.split("/").map(encodeURIComponent).join("/");
+  return `https://${ARCHIVE_HOST}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/zip/${encodedRef}`;
+}
 
 export type FetchedRepositoryArchive = {
   /** The ZIP bytes exactly as they arrived. */
@@ -221,21 +331,25 @@ const COMMIT_ID_PATTERN = /^[0-9a-f]{40}$/;
 export async function fetchSuppliedRepositoryArchive(
   input: SuppliedRepositoryArchiveTarget & { fetchImpl?: typeof fetch },
 ): Promise<FetchedRepositoryArchive> {
-  const archiveUrl = input.archiveUrl;
   const repository = `${input.owner}/${input.repo}`;
   const refLabel = input.ref ?? "its default branch";
   const get = input.fetchImpl ?? fetch;
 
-  let host: string;
-  try {
-    host = new URL(archiveUrl).hostname;
-  } catch {
-    host = "";
-  }
-  if (host !== ARCHIVE_HOST) {
+  // THE ENDPOINT IS REBUILT, NEVER FETCHED AS HANDED. What arrived is read for
+  // its parts, the parts are checked against their shapes, and the URL below is
+  // assembled from the host constant and those parts alone. It must also name
+  // the repository this install is for: a link that resolves to anything else is
+  // refused here, before any request.
+  const parts = readArchiveEndpointParts(input.archiveUrl);
+  const archiveUrl =
+    parts && parts.owner === input.owner && parts.repo === input.repo
+      ? buildArchiveRequestUrl(parts)
+      : null;
+  if (archiveUrl === null) {
     throw new Error(
-      `[supplied-install] refusing to download an extension package from "${archiveUrl}" — ` +
-        `this road downloads only from ${ARCHIVE_HOST}.`,
+      `[supplied-install] refusing to download an extension package from "${input.archiveUrl}" — ` +
+        `this road downloads only the public source archive of ${repository} from ${ARCHIVE_HOST}, ` +
+        `at a branch, tag or commit it can name.`,
     );
   }
 
@@ -448,7 +562,15 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
       ? {
           ...input,
           ref: input.pin.resolvedSha,
-          archiveUrl: `https://${ARCHIVE_HOST}/${input.owner}/${input.repo}/zip/${input.pin.resolvedSha}`,
+          // Through the same builder as every other request on this road; an
+          // out-of-shape pin yields no URL at all and is refused below, before
+          // any request.
+          archiveUrl:
+            buildArchiveRequestUrl({
+              owner: input.owner,
+              repo: input.repo,
+              refPath: input.pin.resolvedSha,
+            }) ?? "",
         }
       : input,
   );
