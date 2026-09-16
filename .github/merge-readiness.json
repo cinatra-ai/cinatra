@@ -217,7 +217,7 @@
       "paths": [
         "**"
       ],
-      "skippable": false,
+      "skippable": true,
       "timeoutMinutes": null
     },
     {
@@ -349,6 +349,26 @@
       "timeoutMinutes": 5
     },
     {
+      "context": "Detect changed paths (crm-migration-gate)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/crm-migration-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect changed paths (gates-pnpm)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
       "context": "Detect skip — docs-only or draft (build-image)",
       "app": "github-actions",
       "workflow": ".github/workflows/build-image.yml",
@@ -461,7 +481,7 @@
       "paths": [
         "**"
       ],
-      "skippable": false,
+      "skippable": true,
       "timeoutMinutes": 15
     },
     {
