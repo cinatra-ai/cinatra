@@ -56,6 +56,7 @@ vi.mock("@/lib/archive-supplied-install", async (importOriginal) => {
 });
 
 import {
+  fetchSuppliedRepositoryArchive,
   installSuppliedCandidate,
   prepareSuppliedRepositoryArchiveSnapshot,
   prepareSuppliedRepositorySnapshot,
@@ -928,5 +929,358 @@ describe("the LINK road records a FINALIZED ref, so its row is written (cinatra#
     });
     expect(prepared.ref).toBe("v1.2.3");
     expect(prepared.provenance).toMatchObject({ ref: "v1.2.3" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A BARE LINK PROVES THE NAME IT RECORDS (cinatra#3204 fix leg 6 — criteria 7,
+// 8, 20)
+//
+// A link that names no ref means the repository's default branch, and the
+// archive host serves that at the stand-in path. The bytes and the pin are
+// exactly what that path serves; what the row still lacks is a NAME, because
+// the generated root folder of the stand-in archive is named after the stand-in
+// itself.
+//
+// The name is PROVED, never guessed. Asking whether a branch called "main"
+// exists would answer a different question — a repository can carry a main
+// branch that is not its default — so the test is an IDENTITY test: at most two
+// header-only requests for refs/heads/main then refs/heads/master, each through
+// the module's own validated-parts builder against its single archive host, no
+// redirect followed, and a candidate counts only when the validator it returns
+// is IDENTICAL, character for character, to the one the downloaded archive
+// returned - weak marker and all, since the host writes a weak tag to a client
+// that accepts compression and that is every client on this road.
+// ---------------------------------------------------------------------------
+
+const SENTINEL_ARCHIVE_URL = "https://codeload.github.com/acme/thing/zip/HEAD";
+const MAIN_CANDIDATE_URL = "https://codeload.github.com/acme/thing/zip/refs/heads/main";
+const MASTER_CANDIDATE_URL = "https://codeload.github.com/acme/thing/zip/refs/heads/master";
+const PINNED_ARCHIVE_URL = `https://codeload.github.com/acme/thing/zip/${SHA}`;
+/**
+ * The validator the archive host returns for the bytes that arrived.
+ *
+ * IT IS WEAK, because that is what the product actually receives: the runtime
+ * fetch accepts compression, and the host validates the compressed
+ * representation weakly. A fixture that answered strongly here would pass while
+ * the road never fired in the product.
+ */
+const ARCHIVE_VALIDATOR = `W/"${"0052e4b2".repeat(8)}"`;
+const OTHER_VALIDATOR = `W/"${"7f13aa90".repeat(8)}"`;
+/** The same content hash written STRONGLY - a different string, so a different tag. */
+const STRONG_ARCHIVE_VALIDATOR = `"${"0052e4b2".repeat(8)}"`;
+
+/**
+ * The archive host, as far as this road can see it: the archive paths serve
+ * bytes with a validator, the candidate paths answer whatever the fixture says
+ * (or throw, when the fixture says so), and everything else is a 404. Every
+ * request is recorded with its method AND its redirect mode, so a test can
+ * count the header-only ones and pin that none of them follows a redirect.
+ */
+function archiveHost(fixture: {
+  archives: Record<string, { bytes: Uint8Array; etag?: string }>;
+  candidates?: Record<
+    string,
+    { status: number; etag?: string; location?: string; throws?: string }
+  >;
+}) {
+  const calls: { url: string; method: string; redirect: string }[] = [];
+  const impl = (async (url: string, init?: { method?: string; redirect?: string }) => {
+    calls.push({
+      url,
+      method: init?.method ?? "GET",
+      redirect: init?.redirect ?? "follow",
+    });
+    const archive = fixture.archives[url];
+    if (archive) {
+      return new Response(archive.bytes as unknown as BodyInit, {
+        status: 200,
+        ...(archive.etag ? { headers: { etag: archive.etag } } : {}),
+      });
+    }
+    const candidate = fixture.candidates?.[url];
+    if (!candidate) return new Response(null, { status: 404 });
+    if (candidate.throws) throw new Error(candidate.throws);
+    const headers: Record<string, string> = {};
+    if (candidate.etag) headers.etag = candidate.etag;
+    if (candidate.location) headers.location = candidate.location;
+    return new Response(null, { status: candidate.status, headers });
+  }) as unknown as typeof fetch;
+  const headRequests = () => calls.filter((call) => call.method === "HEAD");
+  return { impl, calls, headRequests };
+}
+
+/** The archive the stand-in path serves: its root folder is named after the
+ *  stand-in, which is why the bytes alone name no branch. */
+function sentinelSourceArchive() {
+  return gitHubSourceArchive({ root: "thing-HEAD" });
+}
+
+describe("a BARE link proves the branch name it records (cinatra#3204)", () => {
+  beforeEach(() => {
+    registry.extensionRegistry.install.mockClear();
+  });
+
+  it("records the branch whose archive carries the SAME validator as the bytes that arrived", async () => {
+    const bytes = sentinelSourceArchive();
+    const host = archiveHost({
+      archives: {
+        [SENTINEL_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR },
+        [PINNED_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR },
+      },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+
+    // THE ORDER THE PRODUCT TAKES: the bare link is previewed, and the form
+    // hands the preview's own ref back beside the pin the operator approved.
+    const preview = await previewSuppliedRepositoryArchive({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      fetchImpl: host.impl,
+    });
+    expect(preview.ref).toBe("main");
+    expect(preview.resolvedSha).toBe(SHA);
+
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: preview.ref,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: host.impl,
+    });
+
+    // The name the tab showed is the name the row records...
+    expect(prepared.ref).toBe("main");
+    expect(prepared.provenance).toMatchObject({
+      type: "github",
+      repo: "acme/thing",
+      ref: "main",
+      resolvedSha: SHA,
+    });
+    // ...and the install's own validator accepts that source, so the row is
+    // written rather than refused three steps later.
+    expect(validateExtensionSource(prepared.provenance)).toEqual([]);
+  });
+
+  it("refuses the name when a candidate answers with a DIFFERENT validator - a branch that merely exists is never recorded", async () => {
+    // "main" exists here, but its archive is not the tree the bare link
+    // resolved to: it is not this repository's default branch. Recording it
+    // would name a branch the bytes did not come from.
+    const stageSnapshot = vi.fn(async (digest: string) => `${digest}.tgz`);
+    const host = archiveHost({
+      archives: { [SENTINEL_ARCHIVE_URL]: { bytes: sentinelSourceArchive(), etag: ARCHIVE_VALIDATOR } },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: OTHER_VALIDATOR } },
+    });
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: SENTINEL_ARCHIVE_URL,
+        resolveValidator: async () => null,
+        stageSnapshot,
+        fetchImpl: host.impl,
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+
+    // Both candidates were asked, header-only, and neither answered for these
+    // bytes - so nothing was staged and nothing was dispatched.
+    expect(host.headRequests().map((call) => call.url)).toEqual([
+      MAIN_CANDIDATE_URL,
+      MASTER_CANDIDATE_URL,
+    ]);
+    expect(stageSnapshot).not.toHaveBeenCalled();
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps its refusal word for word when NEITHER candidate answers", async () => {
+    const host = archiveHost({
+      archives: { [SENTINEL_ARCHIVE_URL]: { bytes: sentinelSourceArchive(), etag: ARCHIVE_VALIDATOR } },
+    });
+
+    await expect(
+      previewSuppliedRepositoryArchive({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: SENTINEL_ARCHIVE_URL,
+        fetchImpl: host.impl,
+      }),
+    ).rejects.toThrow(
+      "[supplied-install] acme/thing: this install could not resolve the branch, tag or release name " +
+        "to record - the link named none and the archive that was downloaded does not name the branch " +
+        "it was generated from. Type the branch, tag or release to install from and try again. " +
+        "Nothing was written.",
+    );
+    expect(host.headRequests()).toHaveLength(2);
+  });
+
+  it("costs at most TWO header-only requests, none for a typed ref or a pin, and changes not one byte of what a bare link downloads", async () => {
+    const bytes = sentinelSourceArchive();
+    const bare = archiveHost({
+      archives: { [SENTINEL_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR } },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+
+    const fetched = await fetchSuppliedRepositoryArchive({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      fetchImpl: bare.impl,
+    });
+    // THE BYTES AND THE PIN DO NOT MOVE: the bare link still downloads the
+    // stand-in path, which is how the archive host serves the default branch.
+    expect(Array.from(fetched.archive)).toEqual(Array.from(bytes));
+    expect(fetched.resolvedSha).toBe(SHA);
+    expect(fetched.archiveUrl).toBe(SENTINEL_ARCHIVE_URL);
+    // One download, one header-only test, and it stopped at the first answer.
+    // EVERY request on this road, the download and the test alike, follows no
+    // redirect of its own: the hop-by-hop check above is the only thing that
+    // may move a request to another URL.
+    expect(bare.calls[0]).toEqual({
+      url: SENTINEL_ARCHIVE_URL,
+      method: "GET",
+      redirect: "manual",
+    });
+    expect(bare.headRequests()).toEqual([
+      { url: MAIN_CANDIDATE_URL, method: "HEAD", redirect: "manual" },
+    ]);
+    expect(bare.calls).toHaveLength(2);
+
+    // A TYPED REF TESTS NOTHING: the operator named the ref, so there is no
+    // name to prove.
+    const typed = archiveHost({
+      archives: {
+        "https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3": {
+          bytes: gitHubSourceArchive({ root: "thing-1.2.3" }),
+          etag: ARCHIVE_VALIDATOR,
+        },
+      },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+    const typedPrepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "v1.2.3",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: typed.impl,
+    });
+    expect(typedPrepared.ref).toBe("v1.2.3");
+    expect(typed.headRequests()).toEqual([]);
+
+    // A PIN TESTS NOTHING EITHER: the install asks by commit, and the name it
+    // records is the one the preview already settled.
+    const approving = archiveHost({
+      archives: { [SENTINEL_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR } },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+    const approved = await previewSuppliedRepositoryArchive({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      fetchImpl: approving.impl,
+    });
+    const pinned = archiveHost({
+      archives: { [PINNED_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR } },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+    const pinnedPrepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: approved.ref,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      pin: { resolvedSha: approved.resolvedSha, contentDigest: approved.contentDigest },
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: pinned.impl,
+    });
+    expect(pinnedPrepared.ref).toBe("main");
+    expect(pinned.headRequests()).toEqual([]);
+    expect(pinned.calls).toEqual([
+      { url: PINNED_ARCHIVE_URL, method: "GET", redirect: "manual" },
+    ]);
+  });
+
+  // THE SHAPE THE PRODUCT ACTUALLY SEES. The runtime fetch accepts compression,
+  // so the archive host validates the compressed representation WEAKLY and
+  // writes the same weak tag to both paths. Reading a weak tag as no validator
+  // at all - which an earlier draft of this road did - made the whole proof
+  // silently inert in the product while a strongly-answering fixture passed.
+  it("proves the name from the WEAK validator the host writes to a compressing client, falling through to master", async () => {
+    const bytes = sentinelSourceArchive();
+    const host = archiveHost({
+      archives: {
+        [SENTINEL_ARCHIVE_URL]: { bytes, etag: ARCHIVE_VALIDATOR },
+      },
+      candidates: {
+        // The first candidate cannot even be asked; the second answers with the
+        // very tag the download carried.
+        [MAIN_CANDIDATE_URL]: { status: 200, throws: "socket hang up" },
+        [MASTER_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR },
+      },
+    });
+
+    const preview = await previewSuppliedRepositoryArchive({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archiveUrl: SENTINEL_ARCHIVE_URL,
+      fetchImpl: host.impl,
+    });
+    expect(preview.ref).toBe("master");
+    expect(host.headRequests().map((call) => call.url)).toEqual([
+      MAIN_CANDIDATE_URL,
+      MASTER_CANDIDATE_URL,
+    ]);
+  });
+
+  it("never reads a STRONG tag and a WEAK tag as one tree", async () => {
+    // The same content hash, written in both forms. They are not the same
+    // validator, so this proves nothing and the refusal stands.
+    const host = archiveHost({
+      archives: {
+        [SENTINEL_ARCHIVE_URL]: { bytes: sentinelSourceArchive(), etag: ARCHIVE_VALIDATOR },
+      },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: STRONG_ARCHIVE_VALIDATOR } },
+    });
+
+    await expect(
+      previewSuppliedRepositoryArchive({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: SENTINEL_ARCHIVE_URL,
+        fetchImpl: host.impl,
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+  });
+
+  it("sends no test at all when the download carried NO validator", async () => {
+    const host = archiveHost({
+      archives: { [SENTINEL_ARCHIVE_URL]: { bytes: sentinelSourceArchive() } },
+      candidates: { [MAIN_CANDIDATE_URL]: { status: 200, etag: ARCHIVE_VALIDATOR } },
+    });
+
+    await expect(
+      previewSuppliedRepositoryArchive({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: SENTINEL_ARCHIVE_URL,
+        fetchImpl: host.impl,
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+    // Nothing a candidate could be identical to, so nothing is asked.
+    expect(host.headRequests()).toEqual([]);
   });
 });

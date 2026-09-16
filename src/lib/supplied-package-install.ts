@@ -314,6 +314,12 @@ export type FetchedRepositoryArchive = {
   /** The ref as submitted, or null when the link named none. */
   ref: string | null;
   /**
+   * THE BRANCH NAME PROVED AGAINST THESE BYTES, for a link that named no ref -
+   * or null when none was proved. Nothing is guessed: a name is proved only
+   * when the archive host serves it the very tree this download received.
+   */
+  provedRef: string | null;
+  /**
    * The repository name the bytes ACTUALLY came from — the last endpoint in the
    * redirect chain, which is the repository's current name when the link named
    * one it has since been renamed away from. The generated root folder is named
@@ -325,6 +331,82 @@ export type FetchedRepositoryArchive = {
 };
 
 const COMMIT_ID_PATTERN = /^[0-9a-f]{40}$/;
+
+/**
+ * THE NAMES A BARE LINK'S DEFAULT BRANCH MAY GO BY, in the order they are
+ * tried. Two, and no more: every further name is another request on every bare
+ * link, and a repository whose default branch is called neither still refuses
+ * with the sentence that already tells the operator to type the branch.
+ */
+const DEFAULT_BRANCH_CANDIDATES = ["main", "master"] as const;
+
+/**
+ * The entity tag a response carries, exactly as the host wrote it - or null
+ * when it carried none.
+ *
+ * THE WEAK FORM IS KEPT, and kept WHOLE. The archive host answers a client that
+ * accepts compression - which every runtime fetch here is - with a weak
+ * validator ("W/..."), because the bytes on the wire are the compressed ones;
+ * it is the same content hash it writes strongly to a client that takes the
+ * archive uncompressed. Reading that as "no validator" would have made the
+ * proof below never fire in the product while passing a fixture that answers
+ * strongly. The prefix is NOT stripped: two tags count as one only when the
+ * host wrote the identical string for both, weak marker and all, so a weak tag
+ * is never compared equal to a strong one.
+ */
+function archiveEntityTag(response: Response): string | null {
+  const etag = response.headers.get("etag")?.trim() ?? "";
+  if (etag.length === 0) return null;
+  return etag;
+}
+
+/**
+ * PROVE which branch the bytes that just arrived came from - for a link that
+ * named no ref, whose archive the host serves at the stand-in path and whose
+ * generated root folder is therefore named after the stand-in rather than after
+ * a branch.
+ *
+ * IT IS AN IDENTITY TEST, NOT AN EXISTENCE TEST. Whether a branch called "main"
+ * exists answers a different question: a repository can carry a main branch
+ * that is not its default, and recording it would name a branch the bytes did
+ * not come from. A candidate counts ONLY when the host answers for it with the
+ * very same validator it returned for the download, character for character -
+ * the host saying, of its own accord, that the two paths denote one tree. Both
+ * tags are read from the same client in the same way, so they are weak or
+ * strong together and a difference in kind is itself a mismatch.
+ *
+ * NO SECOND HOST AND NO SECOND BUILDER. Every request URL comes from the
+ * validated-parts builder above, against the one archive-host constant; each
+ * request is header-only, follows no redirect, and there are at most two of
+ * them. Anything else - no validator on the download, no answer, a different
+ * validator, a redirect, a request that fails - proves nothing, and the
+ * caller's existing refusal stands word for word.
+ */
+async function proveDefaultBranchNameOfArchive(input: {
+  owner: string;
+  repo: string;
+  validator: string | null;
+  get: typeof fetch;
+}): Promise<string | null> {
+  if (input.validator === null) return null;
+  for (const candidate of DEFAULT_BRANCH_CANDIDATES) {
+    const url = buildArchiveRequestUrl({
+      owner: input.owner,
+      repo: input.repo,
+      refPath: `refs/heads/${candidate}`,
+    });
+    if (url === null) continue;
+    let response: Response;
+    try {
+      response = await input.get(url, { method: "HEAD", redirect: "manual" });
+    } catch {
+      continue;
+    }
+    if (!response.ok) continue;
+    if (archiveEntityTag(response) === input.validator) return candidate;
+  }
+  return null;
+}
 
 /**
  * DOWNLOAD the public source archive, anonymously.
@@ -457,6 +539,23 @@ export async function fetchSuppliedRepositoryArchive(
     );
   }
 
+  // THE NAME FOR THE ROW, PROVED AGAINST THESE BYTES. A link that named no ref
+  // means the repository's default branch, and the stand-in path is exactly how
+  // the archive host serves it - which is why these bytes name no branch
+  // themselves. The identity test asks the host, in at most two header-only
+  // requests, which branch denotes exactly this tree; when it proves none, the
+  // name settler refuses as it always has.
+  const servedBy = readArchiveEndpointParts(target);
+  const provedRef =
+    usableSubmittedRef(input.ref) === null && parts !== null && isPlaceholderRefName(parts.refPath)
+      ? await proveDefaultBranchNameOfArchive({
+          owner: servedBy?.owner || input.owner,
+          repo: servedBy?.repo || input.repo,
+          validator: archiveEntityTag(response),
+          get,
+        })
+      : null;
+
   return {
     archive: new Uint8Array(buffer),
     resolvedSha: declared,
@@ -464,10 +563,11 @@ export async function fetchSuppliedRepositoryArchive(
     // word. "HEAD" is the sentinel the canonical row's validator rejects, so a
     // download that minted it here was minting the refusal three steps later.
     ref: input.ref,
+    provedRef,
     // READ OFF THE ENDPOINT THAT SERVED THE BYTES, not off the link as typed: a
     // renamed repository is served under its current name, and its archive's
     // root folder carries that name.
-    effectiveRepo: readArchiveEndpointParts(target)?.repo || input.repo,
+    effectiveRepo: servedBy?.repo || input.repo,
     archiveUrl,
   };
 }
@@ -589,6 +689,12 @@ function finalizeRecordedRef(input: {
   archiveRepo?: string;
   submitted: string | null | undefined;
   rootFolder: string | null | undefined;
+  /**
+   * The branch name the download PROVED against the bytes it returned, for a
+   * link that named no ref. It is consulted only when neither the operator nor
+   * the archive's own root folder named one.
+   */
+  proved?: string | null;
   resolvedSha: string;
 }): string {
   const submitted = usableSubmittedRef(input.submitted);
@@ -599,6 +705,11 @@ function finalizeRecordedRef(input: {
     resolvedSha: input.resolvedSha,
   });
   if (derived !== null) return derived;
+  // THE NAME THE DOWNLOAD PROVED - the one case the root folder cannot cover,
+  // because a bare link's archive is generated at the stand-in and named after
+  // it. It is a name the bytes are proved to have come from, never a guess.
+  const proved = input.proved?.trim() ?? "";
+  if (proved.length > 0 && !isPlaceholderRefName(proved)) return proved;
   throw new Error(
     `[supplied-install] ${input.owner}/${input.repo}: this install could not resolve the branch, tag or ` +
       `release name to record - the link named none and the archive that was downloaded does not name the ` +
@@ -633,6 +744,7 @@ export async function previewSuppliedRepositoryArchive(
     archiveRepo: fetched.effectiveRepo,
     submitted: fetched.ref,
     rootFolder: preview.generatedRootFolder,
+    proved: fetched.provedRef,
     resolvedSha: fetched.resolvedSha,
   });
   return {
@@ -721,6 +833,7 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
         ? (await previewSuppliedArchive(fetched.archive, { unwrapGeneratedRootFolder: true }))
             .generatedRootFolder
         : undefined,
+    proved: fetched.provedRef,
     resolvedSha: fetched.resolvedSha,
   });
 
