@@ -425,7 +425,7 @@
     {
       "packageName": "@cinatra-ai/web-scrape-agent",
       "repo": "cinatra-ai/web-scrape-agent",
-      "resolvedSha": "25b978d8c4b1f98bd080e3c0071fc4aadf8e9606"
+      "resolvedSha": "7fa1d84d5f47ea81490aa70bb94d1bdb6f4a63b1"
     },
     {
       "packageName": "@cinatra-ai/wordpress-agent",
