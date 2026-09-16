@@ -13,7 +13,27 @@ export type AgentInstanceNavProps = {
    * `activeTab="overview"`. The prop and its dead branch are removed with it —
    * the agent workspace is Setup / Trigger / Permissions.
    */
-  activeTab: "setup" | "run" | "trigger" | "permissions";
+  /**
+   * AND `"none"`, WHICH LIGHTS NOTHING (cinatra#3068 fix leg 3). The ratified
+   * drawing, on a step drawn inside this frame: "A step shown inside the frame
+   * selects nothing ... no tab is drawn selected." No trigger in the strip
+   * carries that value, so the strip keeps every tab it has and draws none of
+   * them selected -- the strip stays a pure function of `showTriggerTab`, and
+   * this member changes only what is lit, never what is present.
+ *
+   * `"none"` NAMES NO TRIGGER THE STRIP CARRIES (cinatra#3182 item 8, and with
+   * it cinatra#3168's dangling reference).
+   *
+   * Application Design — Agents, the run view's conditional-tab section: "A step
+   * drawn inside this frame never lights a tab the strip does not carry." A run
+   * standing at its scheduling step is standing at a STEP, not in the body of a
+   * tab, so the frame must be able to say "nothing is selected" — and say it
+   * without pointing at a tab that is not rendered. Radix selects the trigger
+   * whose value matches, so a value no trigger carries lights nothing while the
+   * strip itself is unchanged: the same tabs on every route, which is the
+   * constant frame cinatra#2487 bought.
+   */
+  activeTab: "setup" | "run" | "trigger" | "permissions" | "none";
   /**
    * When true, renders the Trigger tab.
    * Only shown when agent_run_triggers row exists AND triggerType IN ('scheduled','recurring')
@@ -51,9 +71,14 @@ export function AgentInstanceNav({ agentId, instanceId, activeTab, showTriggerTa
           <Link href={base}>Setup</Link>
         </TabsTrigger>
 
+        {/* THE TAB IS NAMED FOR WHAT IT SHOWS (cinatra#3004): the schedule
+            form, in the state this run's schedule is in. The route keeps its
+            path — a person's bookmark still opens the same surface — and only
+            the word a reader sees changes, because "trigger" is not a word this
+            surface uses any more. */}
         {showTriggerTab && (
           <TabsTrigger value="trigger" asChild>
-            <Link href={`${base}/trigger`}>Trigger</Link>
+            <Link href={`${base}/trigger`}>Schedule</Link>
           </TabsTrigger>
         )}
         <TabsTrigger value="permissions" asChild>

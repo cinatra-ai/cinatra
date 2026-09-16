@@ -68,21 +68,31 @@ export async function setSingleOrgMode(singleOrg: boolean): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the closed-registration toggle. Defaults to FALSE (registration open) so
- * the OSS fresh-install behavior is preserved (D5/D8). Mirrors isSingleOrgMode:
- * any read error → false (FAIL OPEN). A DB-backed flag read failing implies
- * broader DB unavailability where account creation likely fails anyway; the
- * authoritative block-time count (auth.ts) fails CLOSED on its own count error,
- * which is the path that matters when the operator has explicitly closed the
- * door. Only a stored primitive `true` enables the closed state.
+ * Read the closed-registration setting. Registration is CLOSED unless the
+ * instance says otherwise, and it stays closed whenever the setting cannot be
+ * read:
+ *
+ *   - nothing stored (a brand-new instance)      → closed
+ *   - stored value is not the boolean `false`    → closed
+ *   - the setting cannot be read at all          → closed
+ *   - stored value is exactly `false`            → open
+ *
+ * Only an explicit `false` opens the door, so an instance never ends up
+ * accepting strangers because a setting was missing, garbled, or unreadable.
+ * Opening registration is a deliberate act: the first-account setup step and
+ * the access-control screen are the two places that record it.
+ *
+ * The first human on an instance is still admitted while the instance is
+ * closed — that exception lives in the gate (first-human bootstrap), not here,
+ * so a fresh install can always create its first admin account.
  */
 export async function isRegistrationClosed(): Promise<boolean> {
   try {
     const { readConnectorConfigFromDatabase } = await import("@/lib/database");
-    const cfg = readConnectorConfigFromDatabase<{ closedRegistration?: boolean } | null>("instance_identity", null);
-    return cfg?.closedRegistration === true;
+    const cfg = readConnectorConfigFromDatabase<{ closedRegistration?: unknown } | null>("instance_identity", null);
+    return cfg?.closedRegistration !== false;
   } catch {
-    return false;
+    return true;
   }
 }
 

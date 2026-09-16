@@ -129,6 +129,14 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
         // cinatra#793: the verdaccio installer consumes the FINALIZED unified-
         // store payload the dispatcher's pipeline just materialized — resolved
         // at the SAME org scope the dispatcher ensured the canonical row at.
+        //
+        // cinatra#3204 D2: `local` lands here TOO, and for the same reason — a
+        // supplied package reaches this handler only after the host's supplied
+        // install entry finalized its store payload, so what the handler
+        // consumes is byte-identical in shape to the registry case. The branch
+        // is about WHERE THE PAYLOAD IS (the finalized store) rather than which
+        // registry it came from; the honest provenance lives on the canonical
+        // row, not in this call.
         await installSkillPackageFromVerdaccio({
           packageName: ref.packageName,
           packageVersion: ref.version,

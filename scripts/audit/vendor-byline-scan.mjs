@@ -79,6 +79,15 @@ export const GUARDED_FILES = Object.freeze([
     forbid: [FORBID_SCOPE_HELPER, FORBID_VENDOR_SLUG],
   },
   {
+    // THE RUN PAGE'S SKILLS STEP (cinatra#3047). Every pill reads
+    // "<Skill name> by <vendor>", which makes it a byline surface — so it
+    // consumes the one resolver and is guarded here rather than being a second
+    // place where a machine identifier could become a vendor label.
+    file: "packages/agents/src/run-recommendation-chip-row.tsx",
+    requireAny: [RESOLVER],
+    forbid: [FORBID_SCOPE_HELPER, FORBID_VENDOR_SLUG],
+  },
+  {
     file: "src/components/extensions/agent-card-vendor.ts",
     requireAny: [RESOLVER],
     forbid: [FORBID_SCOPE_HELPER, FORBID_VENDOR_SLUG],

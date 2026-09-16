@@ -137,7 +137,7 @@ describe("every contextSlots agent carries explicit context-resolution wiring", 
         "email-outreach-agent",
         "blog-idea-generator-agent",
         "blog-draft-writer-agent",
-        "blog-image-prompt-agent",
+        "blog-image-generator-agent",
       ]),
     );
   });

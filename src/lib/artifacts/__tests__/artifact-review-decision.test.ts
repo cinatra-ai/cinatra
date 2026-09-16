@@ -259,6 +259,20 @@ describe("rendererProvenanceFromMount", () => {
       digest: null,
     });
   });
+
+  // cinatra#2931 W4 — plan (B) §5: "a rendered text target is recorded as
+  // rendered and never as a fallback". The audit row for a draft the reviewer
+  // read in full must not say the review fell through to the floor.
+  it("records the FORM rung as first-party — never as a floor", () => {
+    expect(
+      rendererProvenanceFromMount({
+        kind: "form",
+        slot: "detail",
+        arm: "first-party",
+        form: "markdown",
+      }),
+    ).toEqual({ kind: "first-party", packageName: null, digest: null });
+  });
 });
 
 // ---------------------------------------------------------------------------

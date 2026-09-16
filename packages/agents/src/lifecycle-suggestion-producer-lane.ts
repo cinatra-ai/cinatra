@@ -35,6 +35,7 @@ import {
   buildGateSuggestions,
   SUGGESTION_PRODUCER_LANE_ID,
   type GateSuggestionSnapshotPayload,
+  type MultiTargetSuggestionInput,
 } from "@/lib/lifecycle/lifecycle-suggestion-producer";
 import type {
   CoreAnalysisAuthzDecision,
@@ -257,6 +258,162 @@ export async function produceSuggestionsForNewGate(input: {
       target: input.target,
       project: defaultSuggestionProjector(input.orgId),
     });
+  } catch {
+    return { status: "refused", reason: "projection-unavailable" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE PROJECTOR BY KIND, ON BOTH PATHS (enabler 0.15 of `PLAN: Agents Lifecycle
+// (C)`, cinatra#3028 / epic #3023 — the closing half of cinatra#2950).
+//
+// THE PLAN'S SENTENCE, VERBATIM: "The suggestion projector, declared by the
+// kind: an artifact extension may declare, beside its display, a suggestion
+// projector for its type; the host resolves it by kind when it opens a gate — on
+// the single-artifact path and the batch path alike — and a kind without one
+// yields no suggestions, recorded as such. The snapshot is multi-target: one
+// snapshot per gate holding a payload per pinned target, produced by each
+// target's own kind projector, so a batch gate with several kinds is served
+// alike and the batch decision stays one all-or-nothing boundary."
+//
+// WHAT CHANGED HERE, in one line: the lane used to be handed ONE target and ONE
+// projector by the caller. It is now handed the gate's WHOLE pinned set and
+// resolves each target's projector by that target's own kind.
+// ---------------------------------------------------------------------------
+
+/** One pinned target, with the kind the host read off its artifact row. */
+export interface GateTargetKind {
+  target: CoreAnalysisTarget;
+  /** The artifact's object type. Empty when it could not be read — resolution
+   *  then finds no projector, which is recorded as such rather than guessed. */
+  kind: string;
+}
+
+/**
+ * Run the producer over EVERY target a gate pinned, resolving each target's
+ * projector by its kind, and freeze exactly one multi-target snapshot.
+ *
+ * Every outcome is a value, exactly as the single-target lane above: this runs
+ * best-effort behind gate creation on both paths, and a producer that could take
+ * an orchestration sweep down with it would be a worse defect than a missing
+ * suggestion.
+ */
+export async function runSuggestionProducerLaneForTargets(input: {
+  gateId: string;
+  orgId: string;
+  targets: readonly GateTargetKind[];
+}): Promise<RunSuggestionProducerOutcome> {
+  if (input.targets.length === 0) {
+    return { status: "refused", reason: "projection-unavailable" };
+  }
+
+  let entries: MultiTargetSuggestionInput[];
+  try {
+    const { resolveSuggestionProjectorForKind } = await import(
+      "@/lib/lifecycle/suggestion-projector-registry"
+    );
+    entries = await Promise.all(
+      input.targets.map(async (t): Promise<MultiTargetSuggestionInput> => {
+        const descriptor = t.kind ? resolveSuggestionProjectorForKind(t.kind) : null;
+        if (!descriptor) {
+          // A KIND WITHOUT A PROJECTOR, RECORDED AS SUCH. The entry is still
+          // written: a gate whose target shows no chips must read as "this kind
+          // declares no projector", never as "the producer never ran".
+          return {
+            target: t.target,
+            kind: t.kind,
+            projectorId: null,
+            projection: { includedFields: {}, excludedFields: [] },
+            authzDecision: "denied",
+          };
+        }
+        try {
+          const projected = await descriptor.create(input.orgId)(t.target);
+          return {
+            target: t.target,
+            kind: t.kind,
+            projectorId: descriptor.projectorId,
+            projection: projected.projection,
+            authzDecision: projected.authzDecision,
+          };
+        } catch {
+          // A projector that threw disclosed nothing FOR THIS TARGET. The other
+          // targets keep their entries — one kind's failure must not blank a
+          // batch gate's whole snapshot.
+          return {
+            target: t.target,
+            kind: t.kind,
+            projectorId: descriptor.projectorId,
+            projection: { includedFields: {}, excludedFields: [] },
+            authzDecision: "denied",
+          };
+        }
+      }),
+    );
+  } catch {
+    return { status: "refused", reason: "projection-unavailable" };
+  }
+
+  let built: { payload: GateSuggestionSnapshotPayload; suggestions: unknown[] };
+  try {
+    const { buildMultiTargetGateSuggestions } = await import(
+      "@/lib/lifecycle/lifecycle-suggestion-producer"
+    );
+    built = buildMultiTargetGateSuggestions({ targets: entries, laneId: SUGGESTION_PRODUCER_LANE_ID });
+  } catch {
+    return { status: "refused", reason: "producer-unavailable" };
+  }
+
+  if (built.suggestions.length === 0) {
+    // Honest and common: every pinned target is clean, or no kind declares a
+    // projector. No row is written, so a gate with no snapshot still means
+    // "nothing to propose" rather than "the producer never ran".
+    return { status: "refused", reason: "empty-snapshot" };
+  }
+
+  let write: Awaited<ReturnType<typeof writeGateSuggestionSnapshot>>;
+  try {
+    write = await writeGateSuggestionSnapshot({
+      gateId: input.gateId,
+      payload: built.payload,
+    });
+  } catch {
+    return { status: "refused", reason: "producer-unavailable" };
+  }
+
+  switch (write.status) {
+    case "written":
+      return {
+        status: "written",
+        snapshotId: write.snapshotId,
+        suggestionCount: built.suggestions.length,
+      };
+    case "idempotent":
+      return {
+        status: "idempotent",
+        snapshotId: write.snapshotId,
+        suggestionCount: built.suggestions.length,
+      };
+    case "refused":
+      return { status: "refused", reason: write.reason };
+  }
+}
+
+/**
+ * The best-effort auto-gate hook, for BOTH paths.
+ *
+ * Replaces `produceSuggestionsForNewGate`'s single-target call at the
+ * single-artifact choke point and adds the one the BATCH path never had —
+ * cinatra#2950's "the batch auto-gate does not invoke the suggestion lane at
+ * all". Never throws into the orchestration sweep.
+ */
+export async function produceSuggestionsForGateTargets(input: {
+  gateId: string;
+  orgId: string;
+  targets: readonly GateTargetKind[];
+}): Promise<RunSuggestionProducerOutcome> {
+  try {
+    return await runSuggestionProducerLaneForTargets(input);
   } catch {
     return { status: "refused", reason: "projection-unavailable" };
   }

@@ -33,17 +33,8 @@ import {
   DEFAULT_CONNECTOR_INVENTORY_DEPS,
 } from "@/lib/connector-inventory.server";
 import { connectionSubjectUserId } from "@/lib/connection-use-gate";
-import {
-  delegatedChatAllowedToolNames,
-  resolveDelegatedChatClass,
-  isDelegatedChatMcpToolAllowed,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
-import {
-  detectExplicitDispatchDirective,
-  detectExplicitDispatchPackage,
-} from "@/app/api/chat/explicit-dispatch";
-import { serverSideExplicitDispatch } from "@/app/api/chat/explicit-dispatch-server";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import {
   ensureInstalledSkillsRegistered,
@@ -60,6 +51,13 @@ import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
 // chat surface used to deliver skills to a provider and leave NO trace, so an
 // audit could only be settled at the wire.
 import { recordTurnSkillDelivery } from "@/lib/agent-run-skills-used";
+// cinatra#2932 (lifecycle-b W5a) — the send-time half of the lent action: the
+// bound card re-checked under the reader's own access, and the single-use grant
+// this turn's self-MCP reference carries.
+import {
+  issueTurnLentActionGrant,
+  type TurnBoundCard,
+} from "@/lib/lifecycle/bound-card-binding";
 import {
   buildTurnSkillDeliveryRows,
   type TurnSkillDeliveryRow,
@@ -97,6 +95,7 @@ import {
   runScriptedWidgetAssistantTurn,
   scriptedTurnAsksForLifecyclePull,
   scriptedTurnAsksForScheduleProposal,
+  scriptedTurnStartsAgent,
 } from "@cinatra-ai/llm/scripted-test-provider";
 // The reserved producer label the sink's recognizer requires. Stamped by THIS
 // module, on THIS module's own record of what it actually dispatched — never by
@@ -200,6 +199,35 @@ export type RunChatTurnArgs = {
    * records nothing) the first time a new entry point forgot to pass it.
    */
   turnIdentity: { turnId: string; runId: string };
+  /**
+   * The BOUND CARD this message was sent with (cinatra#2932, lifecycle-b W5a).
+   *
+   * A CLAIM, NOT A CONCLUSION. The composer sends the refs of the cards it had
+   * on screen and the one the reader pressed, if any; it decides nothing. The
+   * runtime re-resolves every ref under the reader's OWN access, applies the
+   * binding rule to what survives, and only then mints the single-use grant this
+   * turn's self-MCP reference carries. A page that offers refs the reader may
+   * not see binds nothing; a page that claims one card while two are really open
+   * gets the platform's refusal anyway.
+   *
+   * Absent ⇒ no binding, no grant, and a system string byte-identical to a turn
+   * that never had a composer binding.
+   */
+  boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  /**
+   * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
+   * lifecycle-b W5b), already composed as text by the window's own road.
+   *
+   * READ STATE, NOT AUTHORITY. It is composed into this turn's system context
+   * and nothing else: no tool is added for it, no grant is minted from it, and
+   * the turn's tool set is byte-identical with and without it. It is present
+   * whether or not the provider can use tools — a conversation-only model can
+   * still answer about the run it was handed, which is the whole point.
+   *
+   * Absent ⇒ the system string is byte-identical to a turn that never had one,
+   * which is every chat turn.
+   */
+  runFrame?: string;
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
@@ -465,7 +493,7 @@ async function buildUserContext(userId?: string): Promise<string> {
 // the namespace here lets the LLM emit the correct `@<vendor>/<slug>` package
 // name from the first scaffold, instead of pattern-matching off the shipped
 // Cinatra examples.
-// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, codex round-2 finding 2).
+// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, convergence round 2 finding 2).
 //
 // These two things have DIFFERENT LIFETIMES and used to share one sentence:
 //
@@ -608,7 +636,10 @@ function warnOnUnclassifiedVehicles(
 //                 admit a name.
 //   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
 //                 connection for, read through the same per-row `use` gate the
-//                 connector inventory uses.
+//                 connector inventory uses. For a connector that holds no
+//                 connection of its own, that is the connection it DECLARES it
+//                 consumes (cinatra#3108) — the inventory row already answers
+//                 the question that way, so this set needs no second rule.
 //
 // The capability key for a primitive is derived from the LIVE connector
 // catalog rather than from a table: a primitive whose name matches a catalog
@@ -653,21 +684,52 @@ async function resolveChatMcpCatalogState(input: {
     // the filter silently gates nothing.
     const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
 
-    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
-    // still comes from the legacy allowlist, and since the owner's ruling a
-    // primitive with no class in force is unexposed, each seeded name carries
-    // the class `resolveDelegatedChatClass` puts in force for it — the interim
-    // one here, because nothing in the tree declares yet. Seeding no class
-    // would empty the catalog, which is exactly the failure the shim prevents.
-    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
-      name,
-      declaredClass: resolveDelegatedChatClass(name, undefined),
-      capabilityKey: capabilityKeyFor(name),
+    // cinatra#2817 slice 1 — THE SEEDING SITE, now the request-scoped
+    // registration PLAN rather than a static name list. The pass that decides
+    // what registers is the pass that produces this, so the catalog cannot
+    // advertise a primitive the perimeter refuses (or hide one it serves): the
+    // servable subset IS the set `registerTool` accepted, each entry carrying
+    // the class its registration put in force and the capability key resolved
+    // from the live connector catalog.
+    // LAZY, deliberately: `@/lib/mcp-server` carries the whole connector /
+    // module / database graph, and a static import here would put it on every
+    // route this runtime is on (and force every test of an unrelated turn seam
+    // to stub it). The catalog hint is best-effort and already inside a
+    // try/catch, so the import cost is paid only when the hint is built.
+    //
+    // REBUILT EVERY TURN, ON PURPOSE, WITH NO MEMO.
+    // The plan is only valid for the (activationGeneration, admissionGeneration)
+    // pair it was built under: an install/activation or a recorded/withdrawn
+    // review changes what the same primitive name resolves to. Caching it would
+    // mean holding a decision made against a policy that may no longer be in
+    // force, and the failure would be SILENT because this whole block is
+    // fail-open (a stale hint looks exactly like a fresh one). Rebuilding is the
+    // conservative direction: the cost is one registration pass plus one store
+    // read per turn, and the hint is best-effort anyway.
+    //
+    // `admissionSnapshotCacheKey` (packages/mcp-server/src/delegated-chat-admission.ts)
+    // states the key any future cache here MUST use. It has no production
+    // consumer for exactly this reason: there is no cache to consume it yet.
+    const { buildDelegatedChatCapabilityPlan } = await import("@/lib/mcp-server");
+    const plan = await buildDelegatedChatCapabilityPlan({
+      resolveCapabilityKey: capabilityKeyFor,
+    });
+    const servable: ServableChatPrimitive[] = plan.servable.map((entry) => ({
+      name: entry.name,
+      declaredClass: entry.declaredClass,
+      capabilityKey: entry.capabilityKey,
     }));
 
+    // HOST ADMISSION IS THE PLAN (cinatra#2817 slice 3). The plan's servable
+    // subset is exactly what the shared evaluator admitted under this request's
+    // admission snapshot, so membership in it IS host approval. Re-deriving the
+    // answer here from a name would be the second answer this issue removes —
+    // and a name-keyed predicate could not express the decision anyway, which
+    // is about an owner at a version with a reviewed declaration.
+    const admitted = new Set(servable.map((primitive) => primitive.name));
     return {
       servable,
-      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isHostApproved: (name) => admitted.has(name),
       isCapabilityAvailable: (key) => authorizedKeys.has(key),
     };
   } catch {
@@ -836,6 +898,17 @@ export async function runAssistantTurn(
   //     unlabelled and `recognizeLifecycleViewEnvelope` refuses it, so this
   //     branch can no more fabricate a card than its twin can.
   //
+  // A THIRD READING JOINS THEM (cinatra#2935, lifecycle-b W5d): the turn that
+  // asks for an agent to be STARTED. It is here for the reason the other two
+  // are — a key-free stack has no model to choose the tool — and it became
+  // necessary when W5d removed the pre-model dispatch reader: with nothing
+  // dispatching before the model, the assistant is the only road to a run from
+  // a conversation, and on this stack the assistant is the deterministic
+  // provider. The one thing that reading decides is which tool to call; the
+  // REAL `agent_run` primitive behind it resolves the template, runs the whole
+  // authorization ladder, applies the creation preflight and decides for itself
+  // whether the run parks on a recommendation.
+  //
   // `userId` is required and unfaked: without a signed-in human there is no chat
   // identity to delegate, so the turn falls through to the adapter path, whose
   // own guard answers with the authenticated-user error.
@@ -844,7 +917,8 @@ export async function runAssistantTurn(
     scriptedProviderEnabled &&
     userId &&
     (scriptedTurnAsksForLifecyclePull(scriptedInstructions) ||
-      scriptedTurnAsksForScheduleProposal(scriptedInstructions))
+      scriptedTurnAsksForScheduleProposal(scriptedInstructions) ||
+      scriptedTurnStartsAgent(scriptedInstructions) !== null)
   ) {
     const dispatchedResults = new Set<string>();
     const callSelfMcpTool = createScriptedChatSelfMcpDispatch({
@@ -956,6 +1030,15 @@ export async function runAssistantTurn(
   // interim mode is SUPERSEDED by #1717 native-MCP activation when it fires.
   const conversationOnly = isConversationOnlyProvider(adapter.provider);
   const conversationOnlyNotice = conversationOnlyNoticeFor(conversationOnly);
+  // cinatra#2933 (lifecycle-b W5b) — the turn STATES its own capability, once,
+  // as soon as it is known. The plan: "A conversation whose model cannot
+  // operate anything lends nothing … The assistant says so plainly the moment
+  // it is asked to act … never a silent no-op." A caller that has to tell a
+  // person that cannot depend on the model volunteering it, and the only place
+  // that knows is here. Additive and inert: every existing sink ignores an
+  // event it does not name (the AG-UI adapter's `default` arm returns), so no
+  // existing surface changes.
+  send("turn_capability", { conversationOnly });
 
   // Tool array. Conversation-only providers (Gemini, AC#5) carry NO tools; every
   // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
@@ -1007,6 +1090,12 @@ export async function runAssistantTurn(
   // so it never carries the requirement either and its request stays
   // byte-identical to before.
   let selfMcpCapabilityRequired: LlmCapabilityRequirement | undefined;
+  // cinatra#2932 (lifecycle-b W5a) — declared at TURN scope because two places
+  // read it: the tool assembly, which puts the grant on the self-MCP reference,
+  // and the system fragments below, which tell the model what it may press. A
+  // conversation-only turn assembles no tools, so it keeps the default — no
+  // grant, and nothing said about a control it could not operate.
+  let turnBoundCard: TurnBoundCard = { grant: null, systemContext: "" };
   // The provider's skill contribution to the system prompt: an availability cue
   // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
   // provider. Declared out here because both branches below feed it.
@@ -1193,15 +1282,31 @@ export async function runAssistantTurn(
   // below instead of running a turn that lies about the platform.
   const mcpReachability = await checkPublicMcpReachability();
   if (mcpReachability.status === "unreachable") {
+    // The probe already retried a timeout and gave up (#3109), so this is a
+    // considered verdict, not one slow moment. The log carries WHICH outcome
+    // it was — a timeout and a refused connection are different events and
+    // have to be tellable apart afterwards — and the URL and the raw network
+    // reason stay here, where an operator reads them.
     console.error(
       `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
-        `(${mcpReachability.reason}) — refusing to run the turn without Cinatra tools (#1699)`,
+        `[${mcpReachability.kind}] (${mcpReachability.reason}) — refusing to run the turn ` +
+        "without Cinatra tools (#1699, #3109)",
     );
+    // What the PERSON reads says what happened to them, in words that need no
+    // knowledge of the product's own network setup, and names the one thing
+    // worth doing next. The two outcomes ask for different next steps, so
+    // they do not read alike: a moment that did not answer is worth sending
+    // again, an address that answered "no" needs somebody to fix it.
     send("error", {
       message:
-        `Cinatra tools are unavailable: the public MCP URL ${mcpReachability.url} is not reachable ` +
-        `(${mcpReachability.reason}). The assistant can't use platform tools until the tunnel is ` +
-        "restored — check /configuration/development?tab=tunnel and run its connection test.",
+        mcpReachability.kind === "timeout"
+          ? "The platform tools did not answer in time for this message, so the assistant " +
+            "stopped rather than answer as though it never had them. Send the message again - " +
+            "a slow moment usually clears on its own."
+          : "The platform tools were unavailable for this message, so the assistant stopped " +
+            "rather than answer as though it never had them. If this keeps happening, an " +
+            "administrator can open /configuration/development?tab=tunnel and run its " +
+            "connection test.",
     });
     return;
   }
@@ -1225,6 +1330,28 @@ export async function runAssistantTurn(
   // A mint/build failure returns null on BOTH paths → the same fail-closed error
   // below (the widget path never silently falls back to the chat token or the
   // machine token).
+  // THE BOUND CARD, RE-CHECKED HERE (cinatra#2932, lifecycle-b W5a). The claim
+  // the composer sent is resolved under the reader's OWN live standing and the
+  // binding rule is applied to what survived; a bound card mints ONE single-use
+  // grant for ONE of its controls, which rides this turn's self-MCP reference as
+  // a header. Nothing bound and nothing minted is the ordinary case and costs
+  // the turn nothing — `systemContext` is `""` and the system string is
+  // byte-identical to a turn that never had a composer binding.
+  turnBoundCard = await issueTurnLentActionGrant({
+    claim: args.boundCard ?? null,
+    userId: widgetPrincipal ? widgetPrincipal.userId : userId,
+    orgId: widgetPrincipal ? widgetPrincipal.orgId : sessionOrgId,
+    // The turn's DURABLE identity is the grant's one-per-message key, so a
+    // retried send of the same turn cannot mint a second spendable authority.
+    messageId: args.turnIdentity.turnId,
+    // THE PERSON'S OWN WORDS (convergence round 1, finding 2). Taken from the turn's
+    // last user message, here on the server, and stored with the grant — so what
+    // lands on the card is what they typed and the model supplies no text at
+    // all. `null` when the turn carries no user message, which lands an empty
+    // comment rather than an invented one.
+    messageText:
+      [...messages].reverse().find((m) => m.role === "user")?.content ?? null,
+  });
   const chatCinatraMcpTool = widgetPrincipal
     ? await buildLlmMcpServerToolForWidget(
         adapter.provider,
@@ -1248,6 +1375,9 @@ export async function runAssistantTurn(
           platformRole: widgetPrincipal.platformRole,
         },
         issueWidgetMcpActorToken,
+        // cinatra#2932 — the widget is on the same road; it carries the grant
+        // exactly as the chat page does.
+        { lentActionGrant: turnBoundCard.grant },
       )
     : await buildLlmMcpServerToolForChat(
         adapter.provider,
@@ -1259,6 +1389,8 @@ export async function runAssistantTurn(
             userId,
             sessionOrgId,
           }),
+          // cinatra#2932 — this turn's lent-action grant, or null.
+          lentActionGrant: turnBoundCard.grant,
         },
       );
   if (!chatCinatraMcpTool) {
@@ -1323,7 +1455,7 @@ export async function runAssistantTurn(
   // deployments. The SKILL.md uses `@<vendor>/<slug>` as a placeholder;
   // this context substitutes the real vendor.
   // Two fragments from one read: stable identity for the cacheable head, and
-  // the MUTABLE freeze state for the volatile tail (codex round-2, finding 2).
+  // the MUTABLE freeze state for the volatile tail (convergence round 2, finding 2).
   const { identity: instanceContext, freezeState: instanceFreezeState } =
     buildInstanceContext();
 
@@ -1337,75 +1469,33 @@ export async function runAssistantTurn(
       ? await buildPendingConfirmationContext({ orgId: sessionOrgId, userId })
       : "";
 
-  // Deterministic explicit-dispatch pre-router.
+  // THE PRE-MODEL DISPATCH READER IS GONE (cinatra#2935, lifecycle-b W5d).
   //
-  // SOFT layer (system-message directive): scans the latest user message
-  // for verb-anchored explicit `@cinatra-ai/<slug>` references and prepends
-  // a hard "OVERRIDES every other instruction" directive to the system
-  // message. Unit tests verify the directive, but provider behavior can still
-  // skip the expected tool call.
+  // From the plan (PLAN: Agents Lifecycle (B), section 4):
   //
-  // HARD layer (server-side dispatch, this section): when the regex matches,
-  // invoke `agent_run` server-side bypassing the LLM entirely, emit synthetic
-  // tool_call + tool_result + text SSE events, and early-return from the turn.
-  // The LLM never gets a chance to skip the tool. The chat-mcp e2e
-  // harness's `tool_call` listener fires immediately and the run is queued
-  // exactly as if the LLM had called it.
+  //   "The sentence-matcher that started an agent whenever it saw a verb next
+  //    to a package name | The conversation's assistant starts the agent
+  //    itself, and the run appears in the thread as its own card."
   //
-  // SKIPPED in conversation-only mode (cinatra#1875 AC#5): a no-native-MCP
-  // provider (Gemini) runs tool-less, and server-side `agent_run` dispatch IS a
-  // tool action — firing it would contradict the "no live actions" notice and
-  // let a tool-less turn perform a live dispatch. The directive/dispatch are both
-  // gated so the conversation-only turn is genuinely tool-free.
-  const explicitDispatchDirective = conversationOnly
-    ? ""
-    : detectExplicitDispatchDirective(messages);
-  const explicitDispatchPackage = conversationOnly
-    ? null
-    : detectExplicitDispatchPackage(messages);
-
-  if (explicitDispatchPackage) {
-    // Find the latest user message; the pre-router uses it as source material
-    // for input extraction so the agent's StartNode required inputs are
-    // pre-filled and the setup-loop HITL gate isn't surfaced to the user.
-    const lastUserMessage = [...messages]
-      .reverse()
-      .find((m) => m.role === "user");
-    const userPrompt =
-      typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "";
-    const dispatchResult = await serverSideExplicitDispatch({
-      packageName: explicitDispatchPackage,
-      actor: actorContext,
-      send,
-      userPrompt,
-    });
-    if (dispatchResult.ok) {
-      // Run is queued + SSE events emitted. The e2e harness will pick up
-      // the synthetic tool_call/tool_result and continue polling
-      // /api/agents/runs/<runId> on its own. No LLM turn needed.
-      console.info(
-        `[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: ${explicitDispatchPackage} → runId=${dispatchResult.runId}`,
-      );
-      return;
-    }
-    // Terminal failures (e.g. creation-flow preflight refusal) must NOT fall
-    // through to the LLM. The synthetic tool_result + text events already
-    // explained the gate to the user; an LLM turn would re-author the run
-    // despite the gate and bypass the chat-side preflight invariant.
-    // Early-return.
-    if ((dispatchResult as { terminal?: boolean }).terminal === true) {
-      console.warn(
-        `[assistant-runtime] explicit-dispatch pre-router TERMINAL failure for ${explicitDispatchPackage}: ${dispatchResult.error} — no LLM fallthrough`,
-      );
-      return;
-    }
-    // On non-terminal dispatch failure (e.g. unknown agent, registry miss),
-    // fall through to the regular LLM path — the synthetic tool_result
-    // already emitted carries the error, and the LLM can offer alternatives.
-    console.warn(
-      `[assistant-runtime] explicit-dispatch pre-router HARD attempt failed for ${explicitDispatchPackage}: ${dispatchResult.error} — falling through to LLM`,
-    );
-  }
+  //   "One consequence runs the other way: with the sentence-matcher gone,
+  //    starting an agent by naming it becomes something the assistant does —
+  //    an agent tag is addressed to the conversation's assistant, which starts
+  //    the agent; nothing dispatches before the model."
+  //
+  // What stood here was the verb-anchored regex and the hard server-side
+  // short-circuit it drove: a message carrying one of seven verbs beside a
+  // package reference created a run and returned from the turn BEFORE the
+  // model read a word of it. It was the arm the site widget passed too, so its
+  // removal repairs the chat page, the chat conversation and the third-party
+  // application in one act.
+  //
+  // The capability is not removed, it MOVED: the assistant calls `agent_run`
+  // itself (the primitive's own tool description asks for exactly that
+  // wording), the run appears in the thread as its own card through the
+  // ordinary tool-result carriage, and inside a third-party application the
+  // widget's assistant reaches the one narrowly scoped start
+  // (`agent_named_start`) its closed allowlist now names. Nothing dispatches
+  // before the model on any host.
 
   // Build chat-side resolver ports when any user message in this turn carries
   // attachments. Per-message resolution happens inside stream now,
@@ -1659,12 +1749,21 @@ export async function runAssistantTurn(
     extensionConfirmationPolicy,
     userContext,
     // Volatile: `agent_source_publish` can flip this mid-conversation, so it
-    // must not sit in the head (codex round-2, finding 2). It follows
+    // must not sit in the head (convergence round 2, finding 2). It follows
     // `userContext` because it is policy-bearing text and policy is read after
     // user-controlled content, never before it (finding 1).
+    // cinatra#3016 — the run a prompt window outside the chat sits under, or
+    // `""`. It follows `userContext` because it is the other user-controlled
+    // fragment, and it is NOT withheld from a conversation-only turn: it is
+    // state to read, not a control to press.
+    runFrameContext: args.runFrame ?? "",
     instanceFreezeState,
     pendingConfirmationContext,
-    explicitDispatchDirective,
+    // cinatra#2932 — what this turn is bound to and the ONE control it may
+    // press, or the platform's own refusal to relay. `""` when nothing is
+    // bound, which is every ordinary turn. A conversation-only turn holds no
+    // tools, so it is told nothing about a control it could not operate.
+    boundCardContext: conversationOnly ? "" : turnBoundCard.systemContext,
     // AC#5: the conversation-only degrade notice (empty for tool-capable
     // providers).
     conversationOnlyNotice,

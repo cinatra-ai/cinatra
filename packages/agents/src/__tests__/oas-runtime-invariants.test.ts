@@ -21,6 +21,11 @@ import { describe, it, expect } from "vitest";
 import { scanOasForRuntimeInvariantFindings } from "../validate-oas-runtime-invariants";
 import type { ReviewFinding } from "../validate-agent-json";
 import { KNOWN_BROKEN_AGENTS } from "./__fixtures__/known-broken-agents";
+import {
+  PLATFORM_SUPPLIED_FLOW_INPUTS,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs data module (allowJs)
+} from "../../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // packages/agents/src/__tests__/ → cinatra repo root
@@ -1042,6 +1047,339 @@ describe("OAS-RUNTIME-008 — internal A2AAgent composition forbidden (use FlowN
     };
     const findings = scanOasForRuntimeInvariantFindings(wrappingFlow);
     expect(findings.filter((f) => f.code === "OAS-RUNTIME-008" && f.severity === "blocker")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OAS-RUNTIME-014 — a hidden Flow input the run can never carry (cinatra#3003).
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal Flow whose StartNode declares `metadata.cinatra.{required,hidden}`.
+ * Mirrors the real bundled runtime-agent shape: every declared input is fed to
+ * one `/api/llm-bridge` ApiNode, so only the satisfiability invariant can fire.
+ */
+function flowWithStartMeta(spec: {
+  packageName?: string;
+  packageVersion?: string;
+  inputs: Array<{ title: string; type: string; default?: unknown }>;
+  required?: string[];
+  hidden?: string[];
+}): Record<string, unknown> {
+  const titles = spec.inputs.map((i) => i.title);
+  return {
+    agentspec_version: "26.1.0",
+    component_type: "Flow",
+    id: spec.packageName ?? "@acme/fixture-agent",
+    name: "Fixture Agent",
+    metadata: {
+      cinatra: {
+        type: "node",
+        ...(spec.packageName ? { packageName: spec.packageName } : {}),
+        ...(spec.packageVersion ? { packageVersion: spec.packageVersion } : {}),
+      },
+    },
+    inputs: spec.inputs,
+    outputs: [{ title: "result", type: "string" }],
+    start_node: { $component_ref: "start" },
+    nodes: [
+      { $component_ref: "start" },
+      { $component_ref: "api" },
+      { $component_ref: "end" },
+    ],
+    control_flow_connections: [
+      {
+        component_type: "ControlFlowEdge",
+        name: "start_to_api",
+        from_node: { $component_ref: "start" },
+        to_node: { $component_ref: "api" },
+      },
+      {
+        component_type: "ControlFlowEdge",
+        name: "api_to_end",
+        from_node: { $component_ref: "api" },
+        to_node: { $component_ref: "end" },
+      },
+    ],
+    data_flow_connections: [
+      ...titles.map((t) => ({
+        component_type: "DataFlowEdge",
+        name: `start_${t}_to_api_${t}`,
+        source_node: { $component_ref: "start" },
+        source_output: t,
+        destination_node: { $component_ref: "api" },
+        destination_input: t,
+      })),
+      {
+        component_type: "DataFlowEdge",
+        name: "api_result_to_end_result",
+        source_node: { $component_ref: "api" },
+        source_output: "result",
+        destination_node: { $component_ref: "end" },
+        destination_input: "result",
+      },
+    ],
+    $referenced_components: {
+      start: {
+        component_type: "StartNode",
+        id: "start",
+        name: "Inputs",
+        metadata: {
+          cinatra: {
+            ...(spec.required ? { required: spec.required } : {}),
+            ...(spec.hidden ? { hidden: spec.hidden } : {}),
+          },
+        },
+        inputs: spec.inputs,
+      },
+      api: {
+        component_type: "ApiNode",
+        id: "api",
+        name: "Call",
+        inputs: spec.inputs.map((i) => ({ title: i.title, type: i.type })),
+        outputs: [{ title: "result", type: "string" }],
+        data: {
+          user: titles.map((t) => `${t}={{ ${t} }}`).join(" "),
+        },
+        url: "{{CINATRA_BASE_URL}}/api/llm-bridge",
+        http_method: "POST",
+      },
+      end: {
+        component_type: "EndNode",
+        id: "end",
+        name: "Outputs",
+        inputs: [{ title: "result", type: "string" }],
+        outputs: [{ title: "result", type: "string" }],
+      },
+    },
+  };
+}
+
+const findings014 = (oas: Record<string, unknown>): ReviewFinding[] =>
+  scanOasForRuntimeInvariantFindings(oas).filter(
+    (f) => f.code === "OAS-RUNTIME-014",
+  );
+
+describe("OAS-RUNTIME-014 — a hidden input nothing can supply (cinatra#3003)", () => {
+  // The exact shape @cinatra-ai/author-agent shipped at 0.1.1: three inputs, no
+  // defaults anywhere, `spec` required, `agent_run_id` + `packageSlug` hidden.
+  const AUTHOR_AGENT_0_1_1 = () =>
+    flowWithStartMeta({
+      packageName: "@cinatra-ai/author-agent",
+      packageVersion: "0.1.1",
+      inputs: [
+        { title: "agent_run_id", type: "string" },
+        { title: "packageSlug", type: "string" },
+        { title: "spec", type: "string" },
+      ],
+      required: ["spec"],
+      hidden: ["agent_run_id", "packageSlug"],
+    });
+
+  it("refuses the author agent's 0.1.1 shape, naming the agent and packageSlug", () => {
+    const found = findings014(AUTHOR_AGENT_0_1_1());
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe("blocker");
+    expect(found[0].message).toContain("packageSlug");
+    // The message must name the agent as vendor/package@version so an operator
+    // reading a failed gate knows which package to fix.
+    expect(found[0].message).toContain("@cinatra-ai/author-agent@0.1.1");
+    expect(found[0].location).toContain("packageSlug");
+  });
+
+  it("does NOT flag agent_run_id in that same shape — dispatch supplies it", () => {
+    const found = findings014(AUTHOR_AGENT_0_1_1());
+    expect(found.map((f) => f.message).join(" ")).not.toContain(
+      'hidden Flow input "agent_run_id"',
+    );
+  });
+
+  it("passes the sibling runtime agents' shape (every hidden input defaulted)", () => {
+    // @cinatra-ai/planner-agent, code-reviewer-agent and security-reviewer-agent
+    // all ship exactly this: oasJson required, the three hidden inputs defaulted.
+    const oas = flowWithStartMeta({
+      packageName: "@cinatra-ai/planner-agent",
+      packageVersion: "0.1.1",
+      inputs: [
+        { title: "agent_run_id", type: "string", default: "" },
+        { title: "oasJson", type: "string" },
+        { title: "packageSlug", type: "string", default: "" },
+        { title: "reviewContext", type: "string", default: "{}" },
+      ],
+      required: ["oasJson"],
+      hidden: ["agent_run_id", "packageSlug", "reviewContext"],
+    });
+    expect(findings014(oas)).toHaveLength(0);
+  });
+
+  it("passes the author agent's FIXED shape (0.1.2 — hidden inputs defaulted)", () => {
+    const oas = flowWithStartMeta({
+      packageName: "@cinatra-ai/author-agent",
+      packageVersion: "0.1.2",
+      inputs: [
+        { title: "agent_run_id", type: "string", default: "" },
+        { title: "packageSlug", type: "string", default: "" },
+        { title: "spec", type: "string" },
+      ],
+      required: ["spec"],
+      hidden: ["agent_run_id", "packageSlug"],
+    });
+    expect(findings014(oas)).toHaveLength(0);
+  });
+
+  it("`\"default\": \"\"` counts — presence, not truthiness, satisfies the runtime", () => {
+    const oas = flowWithStartMeta({
+      packageName: "@acme/falsy-default-agent",
+      inputs: [
+        { title: "visible", type: "string" },
+        { title: "flag", type: "string", default: "" },
+      ],
+      required: ["visible"],
+      hidden: ["flag"],
+    });
+    expect(findings014(oas)).toHaveLength(0);
+  });
+
+  it("does not fire on a VISIBLE undeclared input — a caller that sees it can pre-supply it", () => {
+    const oas = flowWithStartMeta({
+      packageName: "@acme/visible-agent",
+      inputs: [
+        { title: "topic", type: "string" },
+        { title: "tone", type: "string" },
+      ],
+      required: ["topic"],
+      hidden: [],
+    });
+    expect(findings014(oas)).toHaveLength(0);
+  });
+
+  it("STILL fires when the input is both required and hidden — `required` is not a door", () => {
+    // Naming a hidden input `required` does not get it collected: `execution.ts`
+    // filters `pendingFields` down to required names and then drops every
+    // `x-hidden` one, and neither the `agent_run` tool nor a published agent
+    // tool enforces a template's required list. Honouring `required` here would
+    // silence the check without making a single run satisfiable, so the only
+    // way to say "a specific caller pre-supplies this" is a written-down
+    // exemption.
+    const oas = flowWithStartMeta({
+      packageName: "@acme/required-hidden-agent",
+      inputs: [{ title: "campaignId", type: "string" }],
+      required: ["campaignId"],
+      hidden: ["campaignId"],
+    });
+    const found = findings014(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain("campaignId");
+    // ...and the diagnosis must not send the author down the road that fails.
+    expect(found[0].message).toContain(
+      "Naming it in metadata.cinatra.required does NOT work",
+    );
+  });
+
+  it("reads the FLOW descriptor: a StartNode-only default does NOT clear it", () => {
+    // pyagentspec starts the conversation from the Flow's own `inputs`, so a
+    // default that exists only on the StartNode copy the host compiler reads
+    // leaves the runtime demanding the input.
+    const oas = flowWithStartMeta({
+      packageName: "@acme/start-only-default-agent",
+      inputs: [
+        { title: "visible", type: "string" },
+        { title: "ghost", type: "string" },
+      ],
+      required: ["visible"],
+      hidden: ["ghost"],
+    });
+    const start = (oas.$referenced_components as Record<string, { inputs: Array<Record<string, unknown>> }>)
+      .start;
+    start.inputs = start.inputs.map((i) =>
+      i.title === "ghost" ? { ...i, default: "" } : i,
+    );
+    expect(findings014(oas)).toHaveLength(1);
+  });
+
+  it("a Flow-descriptor default clears it, whatever the StartNode copy says", () => {
+    const oas = flowWithStartMeta({
+      packageName: "@acme/flow-only-default-agent",
+      inputs: [
+        { title: "visible", type: "string" },
+        { title: "ghost", type: "string", default: "" },
+      ],
+      required: ["visible"],
+      hidden: ["ghost"],
+    });
+    const start = (oas.$referenced_components as Record<string, { inputs: Array<Record<string, unknown>> }>)
+      .start;
+    start.inputs = start.inputs.map((i) => {
+      if (i.title !== "ghost") return i;
+      const copy = { ...i };
+      delete copy.default;
+      return copy;
+    });
+    expect(findings014(oas)).toHaveLength(0);
+  });
+
+  // The load-bearing proof for the SHARED constant: this shape is satisfiable
+  // ONLY because dispatch writes those keys AND they survive the container
+  // loader into `start_conversation(inputs=...)`. Remove a title from
+  // PLATFORM_SUPPLIED_FLOW_INPUTS and this test goes red — which is exactly the
+  // false refusal the constant exists to prevent.
+  it("passes hidden, undefaulted inputs that the PLATFORM supplies", () => {
+    for (const supplied of PLATFORM_SUPPLIED_FLOW_INPUTS as readonly string[]) {
+      const oas = flowWithStartMeta({
+        packageName: "@acme/platform-fed-agent",
+        inputs: [
+          { title: "topic", type: "string" },
+          { title: supplied, type: "string" },
+        ],
+        required: ["topic"],
+        hidden: [supplied],
+      });
+      expect(
+        findings014(oas),
+        `${supplied} is in PLATFORM_SUPPLIED_FLOW_INPUTS and must not be refused`,
+      ).toHaveLength(0);
+    }
+  });
+
+  it("names the flow id when the OAS omits the optional packageVersion", () => {
+    const oas = flowWithStartMeta({
+      packageName: "@acme/versionless-agent",
+      inputs: [
+        { title: "visible", type: "string" },
+        { title: "ghost", type: "string" },
+      ],
+      required: ["visible"],
+      hidden: ["ghost"],
+    });
+    const found = findings014(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain("@acme/versionless-agent");
+    expect(found[0].message).toContain("ghost");
+  });
+
+  it("honours the bounded per-(package, input) exemption and nothing wider", () => {
+    const shape = (packageName: string, hiddenInput: string) =>
+      flowWithStartMeta({
+        packageName,
+        inputs: [
+          { title: "campaignId", type: "string" },
+          { title: hiddenInput, type: "string" },
+        ],
+        required: ["campaignId"],
+        hidden: [hiddenInput],
+      });
+    // The one recorded entry.
+    expect(
+      findings014(shape("@cinatra-ai/email-drafting-agent", "confirmedRecipients")),
+    ).toHaveLength(0);
+    // A DIFFERENT input on the SAME package is still refused.
+    expect(
+      findings014(shape("@cinatra-ai/email-drafting-agent", "somethingElse")),
+    ).toHaveLength(1);
+    // The SAME input on a DIFFERENT package is still refused.
+    expect(
+      findings014(shape("@acme/copycat-agent", "confirmedRecipients")),
+    ).toHaveLength(1);
   });
 });
 

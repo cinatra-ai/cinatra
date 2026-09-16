@@ -32,6 +32,7 @@ import {
   grantAdminRoleByEmail,
   userIdByEmail,
 } from "./setup-helpers";
+import { openRegistrationForFixtures } from "../open-registration";
 
 const EMAIL = process.env.E2E_NOTIF_USER_EMAIL ?? "notif-uat@local.test";
 const PASSWORD = process.env.E2E_NOTIF_USER_PASSWORD ?? "NotifUAT!2026";
@@ -42,6 +43,11 @@ setup(
   async ({ request, baseURL }) => {
     const origin = baseURL ?? "http://localhost:3100";
     const COMMON_HEADERS = { Origin: origin } as const;
+
+    // Registration is closed on a fresh instance and only the first account gets
+    // in on the bootstrap exception, so this harness says out loud that it needs
+    // the public sign-up road open before it uses it.
+    await openRegistrationForFixtures({ databaseUrl: DATABASE_URL, schema: SCHEMA });
 
     // 1. Sign-up (idempotent).
     const signUp = await request.post("/api/auth/sign-up/email", {

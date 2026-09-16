@@ -95,6 +95,11 @@ vi.mock("@/lib/boot/phases/boot-degrade-probe", () => ({
     { name: "boot-degrade-probe", policy: "degraded", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/provider-connection-bootstrap", () => ({
+  providerConnectionBootstrapPhases: () => [
+    { name: "provider-connection-bootstrap", policy: "retryable", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/dev-boot", () => ({
   devAwaitedPhases: () => [{ name: "a2a-dev-auto-connect", policy: "dev-only", run: async () => {} }],
   startDetachedDevAgentsScanPhase: vi.fn(),
@@ -141,6 +146,7 @@ describe("runBoot orchestration", () => {
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
+      "run-data-root-guard", // cinatra#3030 — the run folder is the THIRD data root, guarded the same way
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
@@ -151,6 +157,7 @@ describe("runBoot orchestration", () => {
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, AWAITED (dev + prod)
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
+      "provider-connection-bootstrap", // env → sealed row, AFTER extension activation, BEFORE the services that read the provider
       "assistant-bootstrap",
       "otel-tracing",
       "a2a-dev-auto-connect", // AWAITED dev phase, between otel + usage
@@ -182,6 +189,7 @@ describe("runBoot orchestration", () => {
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
+      "run-data-root-guard", // cinatra#3030 — the run folder is the THIRD data root, guarded the same way
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
@@ -191,6 +199,7 @@ describe("runBoot orchestration", () => {
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, runs in PROD too
+      "provider-connection-bootstrap", // env → sealed row, runs in PROD too (that is the whole point)
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod

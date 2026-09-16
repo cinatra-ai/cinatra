@@ -11,6 +11,10 @@ import {
 // registry detail screen uses (single source of truth for enabled/disabled
 // state per org/team/project target row).
 import { buildInstallTargetPickerContext } from "@cinatra-ai/agents/install-target-picker";
+// cinatra#2944: the RUN GATE's own provisioning verdict. The browse card's
+// install state is derived from the SAME truth the gate refuses runs with,
+// rather than a second, weaker reading of it.
+import { resolveAgentRunAvailabilityMap } from "@cinatra-ai/agents/runtime-install-gate";
 import {
   installExtensionPackageFormAction,
   updateExtensionPackageFormAction,
@@ -24,6 +28,7 @@ import { InstallPanelScopeProvider } from "./extension-install-scope-panel";
 import { resolveInstallPanelAvailability } from "./install-panel-availability";
 // Per-card node composition (cinatra#2539) — the grid's RSC payload shape.
 import { buildMarketplaceCardNodes } from "./marketplace-card-nodes";
+import { applyRunGateInstallTruth } from "./marketplace-card-model";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 // cinatra#2698 (S4): the marketplace's install state is derived from the
 // package's EFFECTIVE canonical row, not from a package-name template map that
@@ -221,6 +226,23 @@ export async function ExtensionsMarketplaceScreen({
       installedVersionByName.set(t.packageName, { version: t.packageVersion, isArchived: true });
     }
   }
+  // cinatra#2944 — THE RUN GATE IS THE INSTALL TRUTH.
+  //
+  // Both loops above grandfather a template with no canonical
+  // `installed_extension` row to "installed" (the shared template read defaults
+  // a package with no canonical row to active). For a catalog-governed opt-in
+  // package the run gate proves the opposite and refuses the run as
+  // "not-installed" — the card claimed Installed and offered no install
+  // control, so the package could be neither run nor installed. The gate's own
+  // resolver answers for every listed package in ONE read (fail-open on an
+  // unreadable catalog or a store outage, in which case nothing is dropped) and
+  // every package it proves uninstalled leaves the map, which is exactly the
+  // state the Install control is rendered from.
+  const runGateAvailability = await resolveAgentRunAvailabilityMap([
+    ...activeTemplates,
+    ...archivedTemplates,
+  ]);
+  applyRunGateInstallTruth(installedVersionByName, runGateAvailability);
   // cinatra#2698 (S4, change 3) — THE EFFECTIVE ROW OVERRIDES THE MAP, and the
   // override is LAST so it wins over both loops above.
   //

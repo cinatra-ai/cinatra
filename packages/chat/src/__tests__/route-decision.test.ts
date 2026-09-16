@@ -247,16 +247,24 @@ describe("decideMessageRouting — declared webhook / mcp-poll assistant (pendin
   });
 });
 
-describe("decideMessageRouting — honest no-responder (the retired @chatgpt route)", () => {
-  it("an unknown/delisted handle with no tagged participants → no reply, no hang", () => {
+describe("decideMessageRouting — the turn always answers (the retired @chatgpt route)", () => {
+  it("RED ON BASE — an unknown/delisted handle is ANSWERED, not left in silence", () => {
     // @chatgpt post-ruling: not in the audience registry ⇒ classifies unresolved.
+    //
+    // AMENDED for cinatra#2935 (lifecycle-b W5d). This case used to assert
+    // `{ shouldCallLlm: false, isBroadcast: true }` — the no-assistant
+    // short-circuit, which `resolveDispatchPlan` turned into `{ kind: "none" }`
+    // and the client turned into a POST that never happened. That is the rule
+    // the plan removes: "The turn always answers. You get a reply and the run's
+    // card, never silence." The message now takes the host reply, exactly like a
+    // message with no mention at all. Nothing about the CLASSIFIER changed: the
+    // handle still resolves to nothing.
     const r = decideMessageRouting({
       classified: [unresolved("chatgpt")],
       deliveryFor: NO_DELIVERY,
       cinatraHostId: "cin-host",
     });
-    // { shouldCallLlm:false, isBroadcast:true } → resolveDispatchPlan `{ kind:"none" }`.
-    expect(r).toEqual({ shouldCallLlm: false, isBroadcast: true });
+    expect(r).toEqual({ shouldCallLlm: true, hostAssistantUserId: "cin-host" });
   });
 
   it("a scoped agent-dispatch ref is NOT a no-responder — it streams the host reply", () => {

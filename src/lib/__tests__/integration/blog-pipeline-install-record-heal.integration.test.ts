@@ -45,6 +45,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { Client } from "pg";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // The full app bootstrap references Supabase-only tables (public.user) absent
 // on a plain verify Postgres; no-op it and build only the leaves this slice
@@ -56,7 +57,7 @@ const PKG_DIR = path.join(process.cwd(), "extensions", "cinatra-ai", "blog-post-
 const HAS_DB =
   typeof DB_URL === "string" &&
   DB_URL.length > 0 &&
-  !DB_URL.includes("unused:unused@localhost:5432/unused") &&
+  !isPlaceholderDbUrl(DB_URL) &&
   !DB_URL.includes("build:build@127.0.0.1:5432/build");
 // The in-tree extension tree is cloned back by scripts/ci/sync-dev-extensions.mjs;
 // without it there is no real manifest to prove anything about.

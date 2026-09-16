@@ -1,0 +1,31 @@
+{
+  "$comment": "PROVENANCE for the manifest artifacts this repository pinned BEFORE the 2026-09-12 hashes-only reconciliation. Every body beside this receipt is the verbatim committed copy of tests/e2e/design/conformance/manifests/FILE at sourceCommit — the artifact its superseded pin named, so `sha256` and `contentHash` below ARE the hashes conformance-pins.json carried for these three pins before the reconciliation. Re-derive any row by hand with: git show SOURCE_COMMIT:tests/e2e/design/conformance/manifests/FILE | shasum -a 256. THREE rows, not five: the reconciliation moved only app, app-components and app-extensions — app-connectors and app-notifications kept the pins they had. These bodies are a drift input of their own: run against the pins as they now stand, each one must still classify as drift, in both hashes.",
+  "supersededOn": "2026-09-12",
+  "sourceCommit": "8480c15cd702ca9dd1591a27b0d4cd2a92efccaa",
+  "manifests": [
+    {
+      "file": "app.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app.json",
+      "byteLength": 1288,
+      "sha256": "e3e59dfd5b832f408bcba30649234f1bd0fb4f5774531347a0c8fad19fc77ddc",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168"
+    },
+    {
+      "file": "app-components.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-components.json",
+      "byteLength": 1211,
+      "sha256": "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add"
+    },
+    {
+      "file": "app-extensions.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-extensions.json",
+      "byteLength": 3849,
+      "sha256": "9513577bfe20c16af19d93d2000bc7da3bf91aba1fea48e6301cd0b8e27a02b9",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:60465f0e227f0308c18a215c9a2d14c95efda2f064800a2c4c59c729491b019b"
+    }
+  ]
+}

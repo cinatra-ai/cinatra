@@ -31,6 +31,8 @@ import {
   UAT_PASSWORD,
 } from "./fixtures";
 
+import { openRegistrationForFixtures } from "../open-registration";
+
 // Shared with the fixture module — the seeding needs the same identity to
 // resolve the owning org it binds every instance to.
 const EMAIL = UAT_EMAIL;
@@ -99,6 +101,11 @@ setup("create platform-admin user, seed WordPress fixtures, save session", async
       ? `external server at ${origin} (production-equivalent standalone build when started that way)`
       : `Playwright-managed 'pnpm dev' server at ${origin} — NOT production-equivalent`,
   });
+
+  // Registration is closed on a fresh instance and only the first account gets
+  // in on the bootstrap exception, so this harness says out loud that it needs
+  // the public sign-up road open before it uses it.
+  await openRegistrationForFixtures();
 
   // Idempotent: 200 on a fresh database, 400/422 when the UAT user is already
   // provisioned. A 403 is NOT tolerated here — Better Auth returns

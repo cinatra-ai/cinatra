@@ -36,6 +36,7 @@ import * as authz from "@/lib/authz";
 import type { AgentAuthPolicy } from "../auth-policy";
 import { deserializeTemplate } from "../store";
 import type { AgentTemplateRecord, AgentRunRecord } from "../store";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 // Fixture orgId for the agent_runs.org_id NOT NULL constraint.
 const TEST_ORG_ID = "org-test";
@@ -44,7 +45,7 @@ const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
-  !dbUrl.includes("unused:unused@localhost:5432/unused");
+  !isPlaceholderDbUrl(dbUrl);
 
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
 // and REQUIRES a host-minted authority; the guard also reads the org's

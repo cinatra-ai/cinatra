@@ -152,6 +152,12 @@ describe("the kind branch", () => {
       userId: "u-1",
       orgId: "org-1",
       role: null,
+      // cinatra#3004 — the reader's STANDING travels with the decision, exactly
+      // as it travels with the read: a run-addressed card whose run came from no
+      // proposal is reached under the RUN's own access control, so a control a
+      // reader can SEE has to be one they can press. The route hands down what
+      // it already placed and asserts nothing of its own.
+      access: expect.objectContaining({ actor: expect.anything() }),
     });
   });
 

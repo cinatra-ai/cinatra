@@ -495,7 +495,7 @@ describe("the expired re-propose refuses anything not owned by the reader", () =
           orgId: ORG,
           schedule: WEEKDAYS_8AM,
         }),
-      ).toEqual({ ok: false });
+      ).toEqual({ ok: false, reason: "ref_refused" });
     }
     // The refusal lands before the template store is ever reached.
     expect(readAgentTemplateById).not.toHaveBeenCalled();
@@ -535,7 +535,7 @@ describe("the LIVE card's Adjust is deliberately NOT widened", () => {
         orgId: ORG,
         schedule: WEEKDAYS_8AM,
       }),
-    ).toEqual({ ok: false });
+    ).toEqual({ ok: false, reason: "ref_refused" });
   });
 
   it("and still adjusts a LIVE prior, in its lineage, exactly as before", async () => {

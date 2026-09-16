@@ -149,6 +149,34 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // behind a ref re-resolves its own state server-side on every render.
   artifact_review_gate_render:      { resourceType: "agent_run", action: "read",   status: "enforced" },
   artifact_review_gates_list:       { resourceType: "agent_run", action: "list",   status: "enforced" },
+  // THE LENT ACTION (cinatra#2932, lifecycle-b W5a) — the ONE lifecycle
+  // primitive that RESOLVES an interaction instead of showing it, and the one
+  // deliberate exception to the "the model never decides" rule, named here as
+  // the rule requires rather than hidden.
+  //
+  // Classified on `agent_run`/`update` for the same reason the two pulls above
+  // are classified on `agent_run`: the authority is the producing RUN's access,
+  // enforced by the card's own path (`enforceReviewDecisionAccess` inside
+  // `submitReviewDecisionAction` for the review card's Comment/Approve/Reject;
+  // `enforceRunAccess(execute) + enforceRunAccess(approveHitl)` inside
+  // `approveReviewTaskInternal` for a waiting screen's Continue), never the
+  // artifact's. `update` rather than a decide-shaped verb because the kernel's
+  // vocabulary has no decide action and the effect is a state change on the run
+  // the caller already holds access to.
+  //
+  // A SECOND, INDEPENDENT AUTHORITY SITS ABOVE THAT ONE. Run access alone is not
+  // enough here: the handler additionally requires a server-minted, signed,
+  // single-use grant on the request frame naming the person, the message, the
+  // ONE bound card and the ONE control — so the model cannot reach this even for
+  // a run it could otherwise operate. status enforced.
+  lifecycle_bound_card_decide:      { resourceType: "agent_run", action: "update", status: "enforced" },
+  // THE ONE NARROW START (cinatra#2935, lifecycle-b W5d) — the widget's
+  // replacement for the removed sentence-matcher, classified on the resource it
+  // actually creates. The authority is `agent_run`'s own: the handler resolves
+  // the person's live standing and hands it to the primitive, which runs
+  // `enforceRunAccess(execute)` plus the project binding before the coordinator
+  // launches anything. status enforced.
+  agent_named_start:                { resourceType: "agent_run", action: "create", status: "enforced" },
   // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5).
   // DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
   // artifact::create). There is no dedicated artifact_extension resourceType (cf.
@@ -326,6 +354,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // Renamed with the extraction (cinatra#2367): the tool moved off
   // google-calendar-connector to its own connector, and the primitive it
   // registers is `appointment_schedule_list` — one name, one owner.
+  appointment_schedule_add:  { resourceType: "connector_instance", action: "execute", status: "enforced" },
   appointment_schedule_list: { resourceType: "connector_instance", action: "execute", status: "enforced" },
 
   // ───── linkedin (connector_instance) ─────
@@ -339,6 +368,15 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   media_feed_youtube_list:  { resourceType: "connector_instance", action: "execute", status: "enforced" },
 
   // ───── metric_cost ─────
+  // cinatra#1381 (epic #1373) — the memory promotion REQUEST tool. It opens a
+  // pending approval and writes nothing to the memory row; the widen happens
+  // only at the approvals decide (`approvals_decide` / the inline
+  // /notifications action -> the admin-gated PromotionBackend decide). Member-
+  // level write on the memory OBJECT: object::update (effect write) —
+  // requesting is not applying. The read gate the tool actually runs is
+  // `object.read` against the row, inside the shared request service.
+  memory_promote_request:     { resourceType: "object", action: "update", status: "enforced" },
+
   metric_cost_budget_get:     { resourceType: "metric_cost", action: "read", status: "enforced" },
   metric_cost_by_agent:       { resourceType: "metric_cost", action: "read", status: "enforced" },
   metric_cost_by_provider:    { resourceType: "metric_cost", action: "read", status: "enforced" },
@@ -358,6 +396,21 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   objects_save:          { resourceType: "object", action: "create", status: "enforced" },
   objects_types_list:    { resourceType: "object", action: "list",   status: "enforced" },
   objects_update:        { resourceType: "object", action: "update", status: "enforced" },
+  // cinatra#1380 (epic #1373) — `memory_recall` is an object LIST read, pinned
+  // to `@cinatra-ai/memory:concept`. It is classified here for the same reason
+  // every other read is: `enforceMcpBoundary` BLOCKS an unclassified primitive,
+  // so this record is what makes the tool reachable at all — and it binds the
+  // recall to the same coarse `object/list` boundary `objects_list` answers to,
+  // on top of the handler's own org guard, sealed-room gate, actor-scoped SQL
+  // ownership filter and per-row `object.read` probe.
+  //
+  // Deliberately NOT added to the delegated-chat admission table
+  // (`CORE_EXACT` in packages/mcp-server/src/capability-plan.ts): admitting a
+  // name there is a security decision that WIDENS the injection-hardened chat
+  // perimeter, cinatra#1380 does not ask for it, and the perimeter has a
+  // non-widening gate that says so. The tool is reachable over the
+  // authenticated MCP transport and by authorized direct callers.
+  memory_recall:         { resourceType: "object", action: "list",   status: "enforced" },
 
   // ───── object history / data-safety ─────
   // status:"unenforced" — these defer to per-handler authz (org guard +

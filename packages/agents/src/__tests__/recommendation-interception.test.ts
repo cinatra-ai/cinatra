@@ -21,7 +21,17 @@ vi.mock("../lifecycle-policy-store", () => ({
   POLICY_ARTIFACT_TYPE_WILDCARD: "*",
 }));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
+  // The pre-start selection clear (cinatra#3047) — a no-op for these arms,
+  // which is exactly what it is on a run that has nothing to clear.
+  clearRunSelectedSkillRevisionsBeforeStart: vi.fn(() => 0),
+  // The pre-start selection REPLACE (cinatra#3047) — the hold-bound confirm's
+  // one guarded write. `true` = it applied, which is what a pre-start run gives.
+  replaceRunSelectedSkillRevisionsBeforeStart: vi.fn(() => true),
   writeRunSelectedSkillRevisions: (...a: unknown[]) => writeRunSelectedSkillRevisions(...a),
+  writeRunRejectedRecommendations: vi.fn(),
+  // cinatra#2906 — with NO recorded offer the confirm keeps its pre-#2906 path,
+  // which is what this suite has always exercised.
+  readRunRecommendationOfferedSet: vi.fn(async () => []),
 }));
 
 import {
@@ -121,6 +131,8 @@ describe("confirmRunSkillSelection (AC-6)", () => {
       intent: { promptText: "write a blog" },
       confirmedSkillIds: ["a"],
     });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
     expect(out.written).toBe(1);
     expect(out.selection).toEqual([
       { skillId: "a", skillRevisionId: "a@1", selectionSource: "recommended_confirmed" },

@@ -34,6 +34,17 @@ export function Toaster({ ...props }: ToasterProps) {
           // wrapper through Sonner `action` and `cancel` slots; this primitive
           // owns the CSS chrome only.
 
+          // WHERE COPY AND CLOSE ARE DRAWN IS A RULE, NOT A VARIABLE.
+          // The drawing puts Copy and Close together on the right, inside the
+          // toast. The toast library pins its close control outside a corner
+          // with position: absolute and a transform, and the custom properties
+          // it exposes only choose WHICH corner — a badge on the left corner
+          // and a badge on the right corner are the same drawing, and the right
+          // one measured overlapping the application header's own notification
+          // badge. The placement therefore lives in src/app/globals.css, where a
+          // rule can answer the library's own; this component keeps the toast's
+          // colours, which is all a custom property can carry.
+
           // Default toast — popover surface, foreground text.
           '--normal-bg': 'var(--popover)',
           '--normal-text': 'var(--popover-foreground)',

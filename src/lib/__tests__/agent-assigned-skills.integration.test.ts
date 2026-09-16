@@ -28,6 +28,7 @@ import {
   agentAssignedSkillsSchemaQueries,
 } from "@/lib/skill-lifecycle-schema";
 import { agentAssignedSkillsDdlSql } from "../../../migrations/core/core__0089_agent-assigned-skills.mjs";
+import { perScopeAssignmentDdlSql } from "../../../migrations/core/core__0100_per-scope-assignment-stores.mjs";
 import {
   AGENT_ASSIGNED_SKILLS_CAP,
   deleteAssignedSkill,
@@ -35,6 +36,7 @@ import {
   deleteAssignedSkillsForSkillIds,
   insertAssignedSkill,
   readAssignedSkillsForAgentPackage,
+  readAssignedSkillsForAgentScope,
   type AssignedSkillsQuery,
   type AssignedSkillsStoreDeps,
 } from "@/lib/agent-assigned-skills-store";
@@ -109,7 +111,21 @@ async function describeTable(schema: string) {
       ORDER BY i.relname`,
     [schema, AGENT_ASSIGNED_SKILLS_TABLE],
   );
+  const constraints = await pool.query(
+    // Constraint NAMES are part of the shape: an auto-named bootstrap FK and a
+    // hand-named migration FK describe the same rule and still leave the two
+    // arms different — and the difference only shows when the migration runs
+    // after the bootstrap and adds a second one.
+    `SELECT c.conname AS name, c.contype AS type
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = $1 AND t.relname = $2
+      ORDER BY c.conname`,
+    [schema, AGENT_ASSIGNED_SKILLS_TABLE],
+  );
   return {
+    constraints: constraints.rows.map((r) => ({ name: r.name, type: r.type })),
     columns: columns.rows.map((r) => ({
       name: r.column_name,
       type: r.data_type,
@@ -126,6 +142,26 @@ async function describeTable(schema: string) {
   };
 }
 
+/** The tables the assignment DDL REFERENCES.
+ *
+ *  The real bootstrap creates `agent_runs` and `assistant_threads` long before
+ *  it reaches the assignment leaves, so a fresh install always has them. An
+ *  isolated arm creates only the leaf under test, so it has to stand these up
+ *  itself — otherwise the FK on `origin_run_id` (and the migration's two ALTERs)
+ *  would fail for a reason that has nothing to do with what is being proven. */
+async function createReferencedTables(schema: string): Promise<void> {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS "${schema}"."agent_runs" (id text PRIMARY KEY)`,
+  );
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS "${schema}"."assistant_threads" (id text PRIMARY KEY)`,
+  );
+  // `resource` is the artifact row the context twin's FK cascades from.
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS "${schema}"."resource" (id text PRIMARY KEY)`,
+  );
+}
+
 beforeAll(async () => {
   if (!RUN) return;
   pool = new Pool({ connectionString: CONNECTION, max: 8 });
@@ -133,6 +169,7 @@ beforeAll(async () => {
   // --- ARM A: FRESH DATABASE -------------------------------------------------
   // A brand-new instance runs the bootstrap schema builder and nothing else.
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${FRESH_SCHEMA}"`);
+  await createReferencedTables(FRESH_SCHEMA);
   for (const q of agentAssignedSkillsSchemaQueries(FRESH_SCHEMA)) {
     await pool.query(q.text);
   }
@@ -143,6 +180,7 @@ beforeAll(async () => {
   // migration can create it — which is exactly why a manifest fragment alone
   // would not have been enough.
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${UPGRADE_SCHEMA}"`);
+  await createReferencedTables(UPGRADE_SCHEMA);
   await pool.query(
     `CREATE TABLE IF NOT EXISTS "${UPGRADE_SCHEMA}"."custom_skill_assignments" (
        skill_id text NOT NULL, agent_id text NOT NULL, PRIMARY KEY (skill_id, agent_id))`,
@@ -159,13 +197,25 @@ afterAll(async () => {
 describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgrade", () => {
   it("ARM A (fresh database): the bootstrap DDL creates the table", async () => {
     const shape = await describeTable(FRESH_SCHEMA);
+    // The widened column set (cinatra#2813 S1): the scope tuple keys the row,
+    // `source` says who chose the skill, `origin_run_id` points at the run an
+    // accepted recommendation came from.
     expect(shape.columns.map((c) => c.name)).toEqual([
       "agent_package_name",
       "created_at",
       "created_by",
+      "origin_run_id",
       "position",
+      "scope_id",
+      "scope_kind",
       "skill_id",
+      "source",
     ]);
+    expect(shape.columns.find((c) => c.name === "scope_kind")!.nullable).toBe("NO");
+    expect(shape.columns.find((c) => c.name === "scope_id")!.nullable).toBe("NO");
+    // The pointer is nullable BY DESIGN: deleting a run must lose the link, not
+    // the assignment a person kept.
+    expect(shape.columns.find((c) => c.name === "origin_run_id")!.nullable).toBe("YES");
     expect(shape.columns.find((c) => c.name === "created_by")!.nullable).toBe("NO");
     expect(shape.columns.find((c) => c.name === "position")!.type).toBe("integer");
     expect(
@@ -182,7 +232,7 @@ describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgra
     const client = await pool.connect();
     try {
       await client.query(`SET search_path TO "${UPGRADE_SCHEMA}"`);
-      await client.query(agentAssignedSkillsDdlSql);
+      await client.query(`${agentAssignedSkillsDdlSql}\n${perScopeAssignmentDdlSql}`);
     } finally {
       client.release();
     }
@@ -196,6 +246,7 @@ describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgra
     const upgraded = await describeTable(UPGRADE_SCHEMA);
     expect(upgraded.columns).toEqual(fresh.columns);
     expect(upgraded.indexes).toEqual(fresh.indexes);
+    expect(upgraded.constraints).toEqual(fresh.constraints);
   });
 
   it("both halves are IDEMPOTENT (either may run after the other)", async () => {
@@ -207,7 +258,7 @@ describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgra
     const client = await pool.connect();
     try {
       await client.query(`SET search_path TO "${FRESH_SCHEMA}"`);
-      await expect(client.query(agentAssignedSkillsDdlSql)).resolves.toBeDefined();
+      await expect(client.query(`${agentAssignedSkillsDdlSql}\n${perScopeAssignmentDdlSql}`)).resolves.toBeDefined();
     } finally {
       client.release();
     }
@@ -220,10 +271,17 @@ describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgra
     const scratch = `${UPGRADE_SCHEMA}_down`;
     await pool.query(`CREATE SCHEMA IF NOT EXISTS "${scratch}"`);
     try {
+      await createReferencedTables(scratch);
       for (const q of agentAssignedSkillsSchemaQueries(scratch)) await pool.query(q.text);
       expect((await describeTable(scratch)).columns.length).toBeGreaterThan(0);
+      // Reverted in reverse order, the way an operator would: the widening
+      // first, then the migration that created the table.
+      const widening = await import(
+        "../../../migrations/core/core__0100_per-scope-assignment-stores.mjs"
+      );
       const mod = await import("../../../migrations/core/core__0089_agent-assigned-skills.mjs");
       const statements: string[] = [];
+      widening.down({ sql: (s: string) => statements.push(s) } as never);
       mod.down({ sql: (s: string) => statements.push(s) } as never);
       const client = await pool.connect();
       try {
@@ -239,14 +297,14 @@ describe.skipIf(!RUN)("agent_assigned_skills — fresh install vs operator upgra
   });
 });
 
-describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
+describe.skipIf(!RUN)("the atomic per-scope cap against a real Postgres", () => {
   const AGENT = "@cinatra-ai/web-scrape-agent";
 
   async function reset() {
     await pool.query(`TRUNCATE TABLE "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"`);
   }
 
-  it("assigns three in order and REFUSES the fourth", async () => {
+  it("assigns up to the cap in order and REFUSES the next one", async () => {
     await reset();
     const deps = depsFor(FRESH_SCHEMA);
     for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
@@ -257,13 +315,22 @@ describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
       expect(out.outcome).toBe("assigned");
     }
     const fourth = await insertAssignedSkill(
-      { agentPackageName: AGENT, skillId: "@p/s:4", createdBy: "admin_1" },
+      {
+        agentPackageName: AGENT,
+        skillId: `@p/s:${AGENT_ASSIGNED_SKILLS_CAP + 1}`,
+        createdBy: "admin_1",
+      },
       deps,
     );
     expect(fourth).toEqual({ outcome: "cap_exceeded", count: AGENT_ASSIGNED_SKILLS_CAP });
     const rows = await readAssignedSkillsForAgentPackage(AGENT, deps);
-    expect(rows.map((r) => r.position)).toEqual([1, 2, 3]);
-    expect(rows.map((r) => r.skillId)).toEqual(["@p/s:1", "@p/s:2", "@p/s:3"]);
+    const expected = Array.from({ length: AGENT_ASSIGNED_SKILLS_CAP }, (_, i) => i + 1);
+    expect(rows.map((r) => r.position)).toEqual(expected);
+    expect(rows.map((r) => r.skillId)).toEqual(expected.map((i) => `@p/s:${i}`));
+    // Every row the pre-scope callers write is a WORKSPACE row.
+    expect(new Set(rows.map((r) => `${r.scopeKind}:${r.scopeId}`))).toEqual(
+      new Set(["workspace:__workspace__"]),
+    );
   });
 
   it("RACE: two concurrent inserts at the cap boundary cannot both land", async () => {
@@ -291,7 +358,9 @@ describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
     const rows = await readAssignedSkillsForAgentPackage(AGENT, deps);
     expect(rows).toHaveLength(AGENT_ASSIGNED_SKILLS_CAP);
     // Positions stay dense and unique — the serialization held.
-    expect(rows.map((r) => r.position)).toEqual([1, 2, 3]);
+    expect(rows.map((r) => r.position)).toEqual(
+      Array.from({ length: AGENT_ASSIGNED_SKILLS_CAP }, (_, i) => i + 1),
+    );
   });
 
   it("RACE: many concurrent inserts from an EMPTY state land exactly the cap", async () => {
@@ -334,6 +403,124 @@ describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
     expect(await readAssignedSkillsForAgentPackage(AGENT, deps)).toHaveLength(1);
   });
 
+  it("the cap is PER EXACT SCOPE — a full workspace tier does not block a project", async () => {
+    // The headline of the widening (cinatra#2813 S1, epic #2812). Before it, an
+    // agent had ONE set of assigned skills; now every scope has its own, and
+    // filling one must leave the others untouched. Proven against a real
+    // Postgres because the cap rides on a UNIQUE index and an advisory lock,
+    // and neither is observable through a query double.
+    await reset();
+    const deps = depsFor(FRESH_SCHEMA);
+    for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
+      const out = await insertAssignedSkill(
+        { agentPackageName: AGENT, skillId: `@p/s:${i}`, createdBy: "admin_1" },
+        deps,
+      );
+      expect(out.outcome).toBe("assigned");
+    }
+    // The workspace tier is full.
+    expect(
+      await insertAssignedSkill(
+        {
+          agentPackageName: AGENT,
+          skillId: `@p/s:${AGENT_ASSIGNED_SKILLS_CAP + 1}`,
+          createdBy: "admin_1",
+        },
+        deps,
+      ),
+    ).toEqual({ outcome: "cap_exceeded", count: AGENT_ASSIGNED_SKILLS_CAP });
+
+    // A PROJECT row of the same agent — and even the SAME skill — still lands:
+    // it is a different row, at a different position, under a different lock.
+    const project = { scopeKind: "project", scopeId: "proj_1" } as const;
+    for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
+      const out = await insertAssignedSkill(
+        { agentPackageName: AGENT, skillId: `@p/s:${i}`, createdBy: "admin_1", scope: project },
+        deps,
+      );
+      expect(out.outcome).toBe("assigned");
+    }
+    const scoped = await readAssignedSkillsForAgentScope(AGENT, project, deps);
+    expect(scoped.map((r) => r.position)).toEqual(
+      Array.from({ length: AGENT_ASSIGNED_SKILLS_CAP }, (_, i) => i + 1),
+    );
+    // …and the project tier has its own cap.
+    expect(
+      await insertAssignedSkill(
+        {
+          agentPackageName: AGENT,
+          skillId: `@p/s:${AGENT_ASSIGNED_SKILLS_CAP + 1}`,
+          createdBy: "admin_1",
+          scope: project,
+        },
+        deps,
+      ),
+    ).toEqual({ outcome: "cap_exceeded", count: AGENT_ASSIGNED_SKILLS_CAP });
+
+    // The package-wide read spans both tiers; the scoped read sees only one.
+    expect(await readAssignedSkillsForAgentPackage(AGENT, deps)).toHaveLength(
+      AGENT_ASSIGNED_SKILLS_CAP * 2,
+    );
+    expect(
+      await readAssignedSkillsForAgentScope(
+        AGENT,
+        { scopeKind: "project", scopeId: "proj_OTHER" },
+        deps,
+      ),
+    ).toEqual([]);
+  });
+
+  it("removing a scoped row leaves the workspace row of the same skill alone", async () => {
+    await reset();
+    const deps = depsFor(FRESH_SCHEMA);
+    const project = { scopeKind: "project", scopeId: "proj_1" } as const;
+    await insertAssignedSkill(
+      { agentPackageName: AGENT, skillId: "@p/s:1", createdBy: "admin_1" },
+      deps,
+    );
+    await insertAssignedSkill(
+      { agentPackageName: AGENT, skillId: "@p/s:1", createdBy: "admin_1", scope: project },
+      deps,
+    );
+    await expect(
+      deleteAssignedSkill({ agentPackageName: AGENT, skillId: "@p/s:1", scope: project }, deps),
+    ).resolves.toEqual({ deleted: true });
+    expect(await readAssignedSkillsForAgentScope(AGENT, project, deps)).toEqual([]);
+    expect(
+      (await readAssignedSkillsForAgentPackage(AGENT, deps)).map((r) => r.scopeKind),
+    ).toEqual(["workspace"]);
+  });
+
+  it("the database REFUSES a malformed scope tuple, not just the store", async () => {
+    // The TypeScript rule and the SQL CHECK are built from the same module, and
+    // this is the half that still holds when a writer bypasses the store.
+    await reset();
+    await expect(
+      pool.query(
+        `INSERT INTO "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"
+           (agent_package_name, skill_id, scope_kind, scope_id, source, "position", created_by)
+         VALUES ($1, $2, 'workspace', 'org_1', 'manual', 99, $3)`,
+        [AGENT, "@p/bad:1", "admin_1"],
+      ),
+    ).rejects.toThrow(/scope_tuple_chk/);
+    await expect(
+      pool.query(
+        `INSERT INTO "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"
+           (agent_package_name, skill_id, scope_kind, scope_id, source, "position", created_by)
+         VALUES ($1, $2, 'project', '__workspace__', 'manual', 98, $3)`,
+        [AGENT, "@p/bad:2", "admin_1"],
+      ),
+    ).rejects.toThrow(/scope_tuple_chk/);
+    await expect(
+      pool.query(
+        `INSERT INTO "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"
+           (agent_package_name, skill_id, scope_kind, scope_id, source, "position", created_by)
+         VALUES ($1, $2, 'everyone', 'x', 'manual', 97, $3)`,
+        [AGENT, "@p/bad:3", "admin_1"],
+      ),
+    ).rejects.toThrow(/scope_kind_chk/);
+  });
+
   it("the cap is PER AGENT PACKAGE", async () => {
     await reset();
     const deps = depsFor(FRESH_SCHEMA);
@@ -350,7 +537,7 @@ describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
     expect(other.outcome).toBe("assigned");
   });
 
-  it("the UNIQUE (agent_package_name, position) index refuses a duplicate slot", async () => {
+  it("the UNIQUE (agent_package_name, scope, position) index refuses a duplicate slot", async () => {
     await reset();
     const deps = depsFor(FRESH_SCHEMA);
     await insertAssignedSkill(
@@ -361,8 +548,8 @@ describe.skipIf(!RUN)("the atomic 3-cap against a real Postgres", () => {
     await expect(
       pool.query(
         `INSERT INTO "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"
-           (agent_package_name, skill_id, "position", created_by)
-         VALUES ($1, $2, 1, $3)`,
+           (agent_package_name, skill_id, scope_kind, scope_id, source, "position", created_by)
+         VALUES ($1, $2, 'workspace', '__workspace__', 'manual', 1, $3)`,
         [AGENT, "@p/s:other", "admin_1"],
       ),
     ).rejects.toThrow(/duplicate key value|unique constraint/i);
@@ -418,7 +605,11 @@ describe.skipIf(!RUN)("removal down to zero, against real SQL", () => {
     expect(out.outcome).toBe("assigned");
     const rows = await readAssignedSkillsForAgentPackage(AGENT, deps);
     // Ordering is what matters, not density: insertion order is preserved.
-    expect(rows.map((r) => r.skillId)).toEqual(["@p/s:1", "@p/s:3", "@p/s:new"]);
+    // Derived from the cap so the fixture cannot go stale the next time it moves.
+    const survivors = Array.from({ length: AGENT_ASSIGNED_SKILLS_CAP }, (_, i) => `@p/s:${i + 1}`)
+      .filter((id) => id !== "@p/s:2")
+      .concat("@p/s:new");
+    expect(rows.map((r) => r.skillId)).toEqual(survivors);
     expect(rows).toHaveLength(AGENT_ASSIGNED_SKILLS_CAP);
   });
 });
@@ -508,7 +699,10 @@ describe.skipIf(!RUN)("teardown — real Postgres", () => {
     for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
       await insertAssignedSkill({ agentPackageName: A1, skillId: `@p/s:${i}`, createdBy: "a" }, deps);
     }
-    await deleteAssignedSkillsForSkillIds(["@p/s:1", "@p/s:2", "@p/s:3"], deps);
+    await deleteAssignedSkillsForSkillIds(
+      Array.from({ length: AGENT_ASSIGNED_SKILLS_CAP }, (_, i) => `@p/s:${i + 1}`),
+      deps,
+    );
     expect(await readAssignedSkillsForAgentPackage(A1, deps)).toEqual([]);
     for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
       const out = await insertAssignedSkill(

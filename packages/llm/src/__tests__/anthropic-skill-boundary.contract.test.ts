@@ -15,7 +15,7 @@
  * ## The constant has moved once, on exactly that evidence
  *
  * The S7 live acceptance (cinatra#2094, check **C10** in
- * `evidence/2094-s7-acceptance/live-results.json`) uploaded a rooted canonical
+ * `https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-results.json`) uploaded a rooted canonical
  * zip of **30,000,505** archive bytes to the real endpoint and the API
  * **ACCEPTED it (HTTP 200)**. The old value — 30,000,000, the decimal-MB
  * reading of the docs' "under 30 MB" — was therefore a confirmed client-side
@@ -171,7 +171,7 @@ describe("Anthropic Skills API boundary (constant guard)", () => {
   });
 
   it("is above the archive size the live API was observed to accept", () => {
-    // evidence/2094-s7-acceptance/live-reverify-results.json, check R10 — the run
+    // https://github.com/cinatra-ai/cinatra/blob/ec30b7513c6541ec01af7dbef1d0a1979dc074f0/evidence/2094-s7-acceptance/live-reverify-results.json, check R10 — the run
     // that drove the SHIPPED client (round 1's C10 saw 30,000,505 / 30,000,169).
     const OBSERVED_ACCEPTED_ARCHIVE_BYTES = 30_000_513;
     const OBSERVED_ACCEPTED_UNCOMPRESSED_BYTES = 30_000_189;

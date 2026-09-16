@@ -208,15 +208,31 @@ describe("saveInstanceIdentityAction Verdaccio PUT", () => {
   // `reset --purge-app-data`). It used to fall through to the generic throw and
   // surface the dead-end "registry-provision-failed" ("see server logs").
   it("maps a 401 to the actionable registry-user-credential-conflict code, not the opaque one", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     mockFetchResponse(401, { error: "unauthorized" });
     const url = await captureRedirect(() =>
       saveInstanceIdentityAction(buildValidFormData()),
     );
     expect(url).not.toBeNull();
-    expect(url).toContain("error=registry-user-credential-conflict");
+    // cinatra#3207 item 3 — the EXACT redirect target, pinned against the
+    // response measured on a real boot (303, Location
+    // `/setup/name?error=registry-user-credential-conflict`). A `toContain`
+    // alone keeps passing if the target ever gains a second parameter or moves
+    // to another path, and the target is the one thing the reproduction had to
+    // read: the settled URL is sanitized by the flash island.
+    expect(url).toBe("/setup/name?error=registry-user-credential-conflict");
     expect(url).not.toContain("error=registry-provision-failed");
     // Distinct from the 409 class — the two remedies differ.
     expect(url).not.toContain("error=namespace-taken");
+    // The refusal writes NOTHING, so the name step stays genuinely incomplete
+    // and the wizard sends the browser back to it — exactly what the walk saw.
+    expect(writeInstanceIdentity).not.toHaveBeenCalled();
+    // ...and the refusal is named in the server record, which is what makes
+    // this shape separable from an identity row that does not read back.
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining("registry-user-credential-conflict"),
+      "example-namespace",
+    );
   });
 
   it("defers registry provisioning in production when no registry/marketplace env is configured", async () => {
@@ -291,12 +307,16 @@ describe("saveInstanceIdentityAction CINATRA_ENCRYPTION_KEY pre-check", () => {
 
 describe("saveInstanceIdentityAction persistence payload", () => {
   it("persists both instanceDisplayName and instanceNamespace to writeInstanceIdentity", async () => {
-    await captureRedirect(() =>
+    const url = await captureRedirect(() =>
       saveInstanceIdentityAction(buildFormData({
         instanceDisplayName: "My Instance",
         instanceNamespace: "myinstance",
       })),
     );
+    // cinatra#3207 item 3 — the advancing shape, pinned against the same
+    // measurement: a namespace the registry provisions answers 303 with
+    // Location `/setup`, the wizard hop that re-derives the next step.
+    expect(url).toBe("/setup");
     const writeMock = vi.mocked(writeInstanceIdentity);
     expect(writeMock).toHaveBeenCalledTimes(1);
     const [payload] = writeMock.mock.calls[0] ?? [];

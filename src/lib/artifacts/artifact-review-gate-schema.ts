@@ -108,7 +108,7 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   artifact_id                text NOT NULL,
   representation_revision_id text NOT NULL,
   disposition                text NOT NULL CHECK (disposition IN ('approve','reject','comment','changes_requested')),
-  renderer_kind              text NOT NULL CHECK (renderer_kind IN ('build-map','runtime','floor')),
+  renderer_kind              text NOT NULL CHECK (renderer_kind IN ('build-map','runtime','first-party','floor')),
   renderer_package           text,
   renderer_digest            text,
   created_at                 timestamptz NOT NULL DEFAULT now()
@@ -224,8 +224,13 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   representation_revision_id text NOT NULL,
   event_kind                 text NOT NULL DEFAULT 'artifact_produced'
                                CHECK (event_kind IN ('artifact_produced')),
+  -- The closed emitter set. object_snapshot_mint is the object-backed
+  -- contract's mint (enabler 0.13 of PLAN: Agents Lifecycle (C),
+  -- cinatra#3028); the operator-upgrade twin of this widen is core__0099.
+  -- artifact_revision_append is the same-artifact revision (enabler 0.30,
+  -- cinatra#3030); the operator-upgrade twin of ITS widen is core__0104.
   emitter                    text NOT NULL
-                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture')),
+                               CHECK (emitter IN ('createSemanticArtifact','dashboard_twin_writer','object_cms_snapshot_capture','object_snapshot_mint','artifact_revision_append')),
   producer_run_id            text,
   producer_agent_id          text,
   origin_kind                text NOT NULL CHECK (origin_kind IN ('agent_produced','user_provided','intermediate')),
@@ -243,6 +248,36 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_status_idx
   ON "${q}"."artifact_produced_outbox" (status, created_at)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // THE REVISION GATE SATISFACTION RULE (enabler 0.30, cinatra#3030).
+    //
+    //   "the caller's own declared gate is recorded as the review of those
+    //    revisions, and the produced-output road, when it fires, resolves to
+    //    that gate instead of opening a second — a satisfaction rule keyed on
+    //    the artifact revision and the run."
+    //
+    // ONE revision names exactly ONE satisfying gate: the primary key IS the
+    // rule. `run_id` is carried so a reader can see WHOSE gate satisfied it —
+    // a caller can only ever record the gate of its own run, which is what
+    // keeps one organisation's gate from satisfying another's revision.
+    // The operator-upgrade twin is core__0104.
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_revision_review_satisfaction" (
+  org_id                     text NOT NULL,
+  artifact_id                text NOT NULL,
+  representation_revision_id text NOT NULL,
+  run_id                     text NOT NULL,
+  review_task_id             text NOT NULL,
+  created_at                 timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, artifact_id, representation_revision_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS artifact_revision_review_satisfaction_gate_idx
+  ON "${q}"."artifact_revision_review_satisfaction" (org_id, run_id, review_task_id)`,
     },
     {
       text: `CREATE INDEX IF NOT EXISTS artifact_produced_outbox_org_idx
@@ -948,6 +983,126 @@ export function runRecommendationSkipsSchemaQueries(schemaName: string): QueryIn
     {
       text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_SKIPS_SKIPPED_AT_INDEX}
   ON "${q}"."${RUN_RECOMMENDATION_SKIPS_TABLE}" (skipped_at DESC)`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2931 (epic #2926 W4) — `artifact_review_audit.renderer_kind` admits
+// `first-party`, the provenance of the FORM RUNG: the host's own renderer for a
+// declared text form (markdown, escaped plain text). W4 restored that rung to
+// the review card, so a markdown draft that used to reach the reviewer as
+// "cannot render" now reaches them as the draft — and a target the host rendered
+// that way is RECORDED as rendered, never as a floor, because the floor gate
+// counts floor rows.
+//
+// The CREATE TABLE above already carries the widened CHECK, which covers a
+// FRESH install. This leaf covers every OTHER database: `CREATE TABLE IF NOT
+// EXISTS` leaves an existing table's constraint exactly as core__0072 wrote it,
+// and a `renderer_kind` the CHECK refuses does not degrade the audit row — the
+// INSERT raises inside the same transaction as the gate CAS, so the whole
+// decision rolls back and the draft the reviewer just read in full becomes
+// impossible to approve, reject or comment on.
+//
+// Idempotent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT (postgres names a column
+// CHECK `<table>_<column>_check` deterministically) — a no-op on a schema this
+// bootstrap created wide, a widen on a deployed one. Strictly additive: every
+// value the old constraint admitted is still admitted. Run AFTER the S0/#1796
+// gate tables exist. Migration twin: core__0097.
+// ---------------------------------------------------------------------------
+
+export function artifactReviewFormProvenanceSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_audit" DROP CONSTRAINT IF EXISTS artifact_review_audit_renderer_kind_check`,
+    },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_audit" ADD CONSTRAINT artifact_review_audit_renderer_kind_check
+  CHECK (renderer_kind IN ('build-map','runtime','first-party','floor'))`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// run_recommendation_offered_set — WHAT THE CARD ACTUALLY OFFERED (cinatra#2906)
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT THIS TABLE CLOSES. A run pauses and offers a short list of skills.
+// The reader keeps some of it and presses Confirm. The server did not record
+// what was on the card: it asked for the list again, from scratch, and recorded
+// against that new answer. A revision published in between re-pinned a confirmed
+// skill to a version nobody saw; an assignment withdrawn in between dropped a
+// skill the reader plainly kept; and when everything dropped, the run executed
+// on the agent's ordinary skill set while the card reported success.
+//
+// SHAPE. One row per (hold, skill) — the four fields that decide an outcome, and
+// none of the ones that only decide how a chip looked. `hold_id` is the park the
+// card was drawn against, which is exactly what the row already hands back on
+// confirm, so the confirm can read its own offer without trusting the client for
+// a value that decides what executes.
+//
+// THE OFFER IS CLAIMED ONCE. The FIRST draw writes the hold's rows and every
+// later draw reads them back; nothing replaces them. The UNIQUE (hold_id,
+// skill_id) keeps a re-run of that write idempotent, and the store takes a
+// per-hold advisory lock so two concurrent first draws cannot leave a union of
+// two partial offers. A replace-on-redraw table would move the offer under a
+// reader still looking at the first card, and their confirm would then resolve
+// against revisions they were never shown - the very substitution this table
+// exists to prevent.
+//
+// NO FOREIGN KEY, on the family precedent: `run_selected_skill_revisions`,
+// `run_rejected_recommendations` and `run_recommendation_skips` all carry a bare
+// `run_id text NOT NULL`, and this table is read beside them on the same path.
+//
+// DEGRADES TO TODAY. A deployment whose bootstrap has not yet created this table
+// simply has no snapshot to read, and the confirm keeps its pre-#2906 behaviour
+// — so the table's absence costs the fix, never the decision.
+//
+// WHY THIS LEAF. The bootstrap DDL for a new table must live in a module
+// `drizzle-store.ts` ALREADY imports, or a new first-party module joins the
+// route budgets the route-graph ratchet locks. This leaf is already in that
+// graph and already hosts the rest of this family.
+// ---------------------------------------------------------------------------
+
+/** The table name, shared by the schema builder, the store, and the tests. */
+export const RUN_RECOMMENDATION_OFFERED_SET_TABLE = "run_recommendation_offered_set";
+/** Name of the by-hold index every read of an offer drives. */
+export const RUN_RECOMMENDATION_OFFERED_SET_HOLD_INDEX =
+  "run_recommendation_offered_set_hold_idx";
+/** Name of the by-run index the per-run efficacy reads drive. */
+export const RUN_RECOMMENDATION_OFFERED_SET_RUN_INDEX =
+  "run_recommendation_offered_set_run_idx";
+
+export function runRecommendationOfferedSetSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (
+  id                text PRIMARY KEY,
+  run_id            text NOT NULL,
+  -- The park the card was drawn against: the offer belongs to a HOLD, not to a
+  -- run, because one run can be parked, decided and parked again.
+  hold_id           text NOT NULL,
+  skill_id          text NOT NULL,
+  -- The EXACT revision the chip was drawn at — the pin the confirm honours.
+  skill_revision_id text NOT NULL,
+  -- Whether the scorer recommended it AT DRAW TIME, which is what the efficacy
+  -- split must be measured against.
+  recommended       boolean NOT NULL,
+  -- Its 1-based rank in the offered ordering at draw time.
+  offered_rank      integer NOT NULL,
+  offered_at        timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT run_recommendation_offered_set_uniq UNIQUE (hold_id, skill_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_OFFERED_SET_HOLD_INDEX}
+  ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (hold_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_OFFERED_SET_RUN_INDEX}
+  ON "${q}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}" (run_id)`,
     },
   ];
 }

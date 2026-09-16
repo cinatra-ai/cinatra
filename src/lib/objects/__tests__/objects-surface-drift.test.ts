@@ -15,6 +15,7 @@
 //   5. The registered legacy-primitive set drifting from the inventory
 //      `registered` flags.
 import { describe, it, expect } from "vitest";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import * as path from "node:path";
 import {
@@ -149,16 +150,19 @@ describe("no NEW raw cinatra.objects bypass (fail-closed)", () => {
 // ---------------------------------------------------------------------------
 // 4. Delegated-chat allowlist drift
 // ---------------------------------------------------------------------------
-describe("delegated-chat allowlist", () => {
-  const policy = read("packages/mcp-server/src/delegated-chat-tool-policy.ts");
+describe("delegated-chat admission", () => {
+  // cinatra#2817 removed the name allowlist this used to read out of the policy
+  // source. The question is asked of the DECISION now — the real evaluator over
+  // this build's real migrated core admissions — which is strictly stronger: a
+  // name present in a source file proved nothing about whether it was reachable.
 
-  it("every inventoried object-allowlist entry is present in the policy", () => {
+  it("every inventoried object-allowlist entry is ADMITTED", () => {
     for (const p of DELEGATED_CHAT_OBJECT_ALLOWLIST) {
-      expect(policy.includes(`"${p}"`)).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(p), p).toBe(true);
     }
   });
 
-  it("no entity MUTATION primitive is in the allowlist (read-only contract)", () => {
+  it("no entity MUTATION primitive is admitted (read-only contract)", () => {
     for (const p of [
       "accounts_create",
       "accounts_update",
@@ -167,7 +171,7 @@ describe("delegated-chat allowlist", () => {
       "contacts_update",
       "contacts_delete",
     ]) {
-      expect(policy.includes(`"${p}"`)).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(p), p).toBe(false);
     }
   });
 });

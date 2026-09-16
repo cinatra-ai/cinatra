@@ -27,6 +27,13 @@ vi.mock("next/navigation", () => ({
   // `useRouter` in.
   useRouter: () => ({ refresh: () => {} }),
 }));
+// The step is administrator-only: the page calls `requireAdminSession()`
+// before it derives anything (the gate itself is covered by
+// ./page-admin-gate.test.tsx). These renders stand in an admin session so the
+// gate is a no-op and the assertions below are unchanged.
+vi.mock("@/lib/auth-session", () => ({
+  requireAdminSession: async () => ({ user: { id: "user-1", role: "admin" } }),
+}));
 vi.mock("@cinatra-ai/sdk-extensions/llm-provider-contract", () => ({
   buildKnownWizardEligibleProviders: () => ["openai", "anthropic"],
 }));

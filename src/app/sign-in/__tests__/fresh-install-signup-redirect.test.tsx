@@ -59,17 +59,25 @@ async function mockAuthState({
   hasUsers,
   session,
   registrationClosed = false,
+  registrationReadFails = false,
 }: {
   hasUsers: boolean;
   session: unknown;
   registrationClosed?: boolean;
+  /** Make the registration read blow up, to pin what the page shows then. */
+  registrationReadFails?: boolean;
 }) {
   const { hasAnyBetterAuthUsers } = await import("@/lib/auth");
   const { getAuthSession } = await import("@/lib/auth-session");
   const { isRegistrationClosed } = await import("@/lib/authz/instance-mode");
   (hasAnyBetterAuthUsers as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(hasUsers);
   (getAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(session);
-  (isRegistrationClosed as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(registrationClosed);
+  const registrationMock = isRegistrationClosed as unknown as ReturnType<typeof vi.fn>;
+  if (registrationReadFails) {
+    registrationMock.mockRejectedValue(new Error("db unavailable"));
+  } else {
+    registrationMock.mockResolvedValue(registrationClosed);
+  }
 }
 
 async function renderAuthPage(path: string): Promise<string> {
@@ -180,5 +188,17 @@ describe("closed registration (D7 display-side notice)", () => {
     expect(html).toMatch(/data-testid="auth-view"/);
     expect(html).toMatch(/data-path="sign-up"/);
     expect(html).not.toMatch(/Registration is closed/);
+  });
+
+  it("humans + the setting cannot be read: /sign-up shows the closed notice, never the form", async () => {
+    await mockAuthState({ hasUsers: true, session: null, registrationReadFails: true });
+    const html = await renderAuthPage("sign-up");
+    expect(html).toMatch(/Registration is closed/);
+    expect(html).not.toMatch(/data-path="sign-up"/);
+  });
+
+  it("zero humans + the setting cannot be read: the first account can still be created", async () => {
+    await mockAuthState({ hasUsers: false, session: null, registrationReadFails: true });
+    await expectAuthPageRedirect("sign-up", "/setup/account");
   });
 });

@@ -72,18 +72,58 @@ const MOUNTS = {
  * THE REVIEW PAGE PLACES IT ITSELF (cinatra#2788 rework). The step is the two
  * COLUMNS of the run surface, not a row inside the rail — plan (A) §7.2 step 5,
  * "it opens to the right of the steps, never directly under a step" — so it is
- * placed where both columns are composed. On the review page that is the route
- * component, which hands it the rail on one side and the gate region on the
- * other; the rail component itself no longer places anything.
+ * placed where both columns are composed. On the review page that is the route's
+ * own run-surface module, which hands the frame the rail on one side and the
+ * gate region on the other; the rail component itself places nothing.
+ *
+ * AND IT MOVED ONE FILE (cinatra#3047). The review page grew a SECOND gate step
+ * — the Skills question, at the head of its rail, where the drawing puts it and
+ * where the change request's "one page per gate" requires it — so it composes
+ * the shared frame with both steps' rows and surfaces, exactly as the run page
+ * does. That composition is `review-run-surface.tsx`, beside the route: which
+ * steps a run has, which numeral each carries and which can be opened are the
+ * rail's own rules, and a route component restating them is the second place
+ * for them to drift. The ROUTE still reads the run's facts and mints the refs.
  */
 const RAIL_PLACEMENTS = {
   run_card: "packages/agents/src/instance-screens.tsx",
   page_gate_region:
-    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-surface.tsx",
+} as const;
+
+/**
+ * HOW each page places it. The review page has ONE gate step and places the
+ * one-step component; the run page has TWO since cinatra#2790 (S9f) — plan (A)
+ * §6.2 puts the recommendation at the trigger position, above the schedule — so
+ * it composes the shared frame with the schedule's own row and surface in it.
+ * Either way the schedule step is placed ONCE, by the module that owns both
+ * columns, and neither page mounts the card itself.
+ */
+const RAIL_STEP_TAGS = {
+  run_card: [/<\s*ScheduleRailStepRow\b/, /<\s*ScheduleStepSurface\b/],
+  // BOTH PAGES COMPOSE THE SHARED FRAME NOW (cinatra#3047): the review page
+  // carries the Skills step as well as the schedule, so it places the
+  // schedule's own row and surface in that frame rather than the one-step
+  // component. Same two pieces, same module, one rail.
+  page_gate_region: [/<\s*ScheduleRailStepRow\b/, /<\s*ScheduleStepSurface\b/],
 } as const;
 
 const REVIEW_PAGE =
   "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx";
+
+/**
+ * THE RUN'S OWN HOST HAS A SECOND ADAPTER (cinatra#3004): the schedule tab of
+ * the run's page. It is the SAME card, declared on the SAME host, drawn without
+ * a rail — the tab is its own page region and has no steps to be a row of. The
+ * two are exclusive by ROUTE, and `runScheduleAdapterFor` is the picker that
+ * says which one a screen draws; its totality is pinned in
+ * `packages/agents/src/__tests__/schedule-run-card-adapters-3004.test.ts`.
+ *
+ * What it REPLACED is why it exists: the tab used to draw a second thing out of
+ * the same facts — a "Trigger configuration" summary, a held-steps tree, and a
+ * Cancel that deleted the trigger row.
+ */
+const SCHEDULE_TAB = "packages/agents/src/run-schedule-tab.tsx";
 
 describe("the four mounts exist and are host-declared", () => {
   it("the transcript hosts are served by the ONE registry row — not by a second table", () => {
@@ -121,18 +161,18 @@ describe("the four mounts exist and are host-declared", () => {
     expect(source).toMatch(/host:\s*"run_card"\s*\|\s*"page_gate_region"/);
   });
 
-  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the review
-  // page's gate region holds the review card alone.
-  it("both pages place the rail STEP and neither mounts the card — the gate region is the review card's alone", () => {
+  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the
+  // review page's gate region draws no schedule card at all.
+  it("both pages place the rail STEP and neither mounts the card — the gate region draws no schedule card", () => {
     for (const [host, rel] of Object.entries(RAIL_PLACEMENTS)) {
       const source = read(rel);
-      expect(source, `${host}: ${rel} places the rail step`).toMatch(
-        /<\s*ScheduleRailStep\b/,
-      );
-      expect(
-        source.match(/<\s*ScheduleRailStep\b/g),
-        `${host}: ${rel} places it ONCE`,
-      ).toHaveLength(1);
+      for (const tag of RAIL_STEP_TAGS[host as keyof typeof RAIL_STEP_TAGS]) {
+        expect(source, `${host}: ${rel} places the rail step (${tag})`).toMatch(tag);
+        expect(
+          source.match(new RegExp(tag.source, "g")),
+          `${host}: ${rel} places it ONCE (${tag})`,
+        ).toHaveLength(1);
+      }
       expect(source).toContain(`host="${host}"`);
       // THE TWO COLUMNS TRAVEL WITH IT. A placement that passed no rail and no
       // detail would be drawing the step somewhere it does not own the frame —
@@ -148,10 +188,11 @@ describe("the four mounts exist and are host-declared", () => {
         /<\s*ScheduleProposalCard\b/,
       );
     }
-    // THE GATE REGION. The review page's `page_gate_region` provider now wraps
-    // the review card and nothing else — the composition the plan requires. The
-    // schedule step opens IN that region, in place of the card, which is what
-    // makes "the two can never appear together" structural.
+    // THE GATE REGION. The review page's `page_gate_region` provider wraps the
+    // recommendation hold card above the review gate card (S9f, cinatra#2790)
+    // and no schedule drawing of any kind — the composition the plan requires.
+    // The schedule step opens IN that region, in place of a schedule card, which
+    // is what makes "the two can never appear together" structural.
     const reviewPage = read(REVIEW_PAGE);
     expect(reviewPage).not.toMatch(/<\s*ScheduleProposalCard\b/);
     expect(reviewPage).toMatch(/<LifecycleCardSurfaceProvider host="page_gate_region">/);
@@ -163,6 +204,26 @@ describe("the four mounts exist and are host-declared", () => {
     expect(region).not.toContain("Schedule");
   });
 
+  it("the run's schedule tab mounts the same card ONCE, on the same host, with no rail", () => {
+    const tab = read(SCHEDULE_TAB);
+    expect(tab.match(/<\s*ScheduleProposalCard\b/g)).toHaveLength(1);
+    expect(tab).toContain('<LifecycleCardSurfaceProvider host="run_card">');
+    // No second drawing travels with it — the surface is the form. Read as the
+    // DRAWINGS this module composes; the retired card's own strings are pinned
+    // as an absence in real DOM by
+    // `packages/agents/src/__tests__/schedule-surface-agent-page-3004.test.tsx`,
+    // which is where a rendered absence belongs.
+    expect(tab).not.toMatch(/<\s*ScheduleRailStep\b/);
+    expect(tab).not.toMatch(/data-testid="gated-step-tree/);
+    expect(tab).not.toMatch(/<\s*AlertDialog\b/);
+    // And the retired module is gone from the tree rather than left unmounted.
+    expect(() => read("packages/agents/src/trigger-tab-client.tsx")).toThrow();
+    // The screen PLACES it and draws no schedule of its own.
+    const screens = read(RAIL_PLACEMENTS.run_card);
+    expect(screens.match(/<\s*RunScheduleTab\b/g)).toHaveLength(1);
+    expect(screens).not.toMatch(/<\s*ScheduleProposalCard\b/);
+  });
+
   it("both pages mint a SERVER-side ref and draw no step when they cannot", () => {
     const screens = read(RAIL_PLACEMENTS.run_card);
     const reviewPage = read(REVIEW_PAGE);
@@ -171,13 +232,34 @@ describe("the four mounts exist and are host-declared", () => {
     }
     // The client is never handed a run id to name; the ref is the whole binding.
     expect(screens).toMatch(/cardRef=\{scheduleRailRef\}/);
-    expect(reviewPage).toMatch(/cardRef=\{scheduleCardRef\}/);
+    // The ref is minted by the ROUTE and handed to the composition beside it,
+    // which is the module that gives it to the card (cinatra#3047).
+    expect(reviewPage).toMatch(/scheduleCardRef=\{scheduleCardRef\}/);
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/cardRef=\{scheduleCardRef\}/);
     // A run with no schedule row mints no ref, and neither page draws a step:
     // each falls back to the two columns it composed before the step existed.
-    expect(screens).toMatch(/run && trigger \? encodeScheduleRunRef/);
+    // Since cinatra#3004 the run screen asks the picker for that answer, so the
+    // run detail and the run's schedule tab read one rule instead of two.
+    // The run detail's call carries the one fact the trigger row cannot answer
+    // — whether a confirmed conversation proposal created this run — so it is
+    // matched on its parts rather than on one line of source.
+    expect(screens).toMatch(
+      /runScheduleAdapterFor\(\{[\s\S]{0,200}screen: "run_detail",[\s\S]{0,200}\}\) === "rail_step"[\s\S]{0,60}encodeScheduleRunRef/,
+    );
+    expect(screens).toMatch(
+      /runScheduleAdapterFor\(\{ screen: "schedule_tab", trigger \}\) === "schedule_tab"[\s\S]{0,60}encodeScheduleRunRef/,
+    );
     expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
-    expect(reviewPage).toMatch(/if \(scheduleCardRef\) \{/);
-    expect(screens).toMatch(/if \(scheduleRailRef\) \{/);
+    // "No schedule row, no step" is asked once, where the steps are built.
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/if \(scheduleCardRef\)/);
+    // AND ON THE RUN PAGE IT IS ASKED OF THE TRIGGER ROW (cinatra#3478, the
+    // re-cut's first leg). The ref answers which CARD the step opens onto, and
+    // it is null for a run dispatched with "Run right after setup"; the rail's
+    // own question is whether the run CARRIES a schedule, which is the trigger
+    // row. The rule this line pins is unchanged — a run with no trigger row
+    // draws no step — and `runCarriesScheduleStep` is where it is now asked.
+    expect(screens).toMatch(/const runCarriesScheduleStep = trigger !== null;/);
+    expect(screens).toMatch(/if \(runCarriesScheduleStep\) \{/);
   });
 
   it("the card is defined in exactly ONE module in the whole first-party tree", () => {

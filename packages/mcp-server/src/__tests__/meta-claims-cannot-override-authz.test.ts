@@ -12,7 +12,10 @@ import {
   type DelegatedMcpActor,
   type McpRequestContext,
 } from "../request-context";
-import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import {
+  coreDelegatedChatAdmissionSnapshot,
+  isCoreDelegatedChatAdmitted,
+} from "../core-delegated-chat-surface";
 import { resourceWithinCeiling, type OboCeilingChain } from "../obo-ceiling";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +42,8 @@ import { resourceWithinCeiling, type OboCeilingChain } from "../obo-ceiling";
 //     `serveLegacyEra`, `createModernEraHandler`;
 //   - the per-request runtime server and its registration-time tool filter —
 //     `createMcpRuntimeServer` + `selectDelegatedToolPolicy`;
-//   - the delegated-chat allowlist — `isDelegatedChatMcpToolAllowed`;
+//   - the delegated-chat admission decision —
+//     `evaluateDelegatedChatAdmission`;
 //   - the request-frame composition helpers — `resolveRequestRunContext`,
 //     `shouldMintSessionOrgWriteAuthority`;
 //   - the on-behalf-of ceiling predicate — `resourceWithinCeiling`;
@@ -305,6 +309,11 @@ async function buildRuntimeServer(actor: DelegatedMcpActor | null) {
     version: "0.0.1",
     // The REAL fail-closed policy dispatch over the VERIFIED delegation type.
     ...selectDelegatedToolPolicy(actor),
+    // cinatra#2817 slice 3 — the request's admission snapshot. The CORE one:
+    // this fixture's admitted primitive (`extensions_search`) is a core
+    // primitive, and a build handed no snapshot admits nothing at all, which
+    // would make the "denied tool stays invisible" assertions pass vacuously.
+    delegatedChatAdmissionSnapshot: coreDelegatedChatAdmissionSnapshot(),
     registerCapabilities: (toolServer) => {
       // A real write primitive, registered through the POLICED path. Under a
       // chat delegation the registration filter drops it, so it can be neither
@@ -595,8 +604,8 @@ describe("_meta capability claims cannot lift the delegated-chat tool policy", (
   // delegation and `extensions_search` is allowed. If that ever changes, this
   // suite must be re-grounded rather than silently pass.
   it("grounds the fixture tools against the real chat allowlist", () => {
-    expect(isDelegatedChatMcpToolAllowed("objects_save")).toBe(false);
-    expect(isDelegatedChatMcpToolAllowed("extensions_search")).toBe(true);
+    expect(isCoreDelegatedChatAdmitted("objects_save")).toBe(false);
+    expect(isCoreDelegatedChatAdmitted("extensions_search")).toBe(true);
   });
 
   it.each(LEGS)(

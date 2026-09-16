@@ -99,12 +99,22 @@ export type RunOutputHint = "transcript" | "steps" | "no-steps";
 export type RunCompletionCardProps = {
   runId: string;
   /**
-   * Template slug, used by "Start new run". Omitted by callers that don't have
-   * one (chat surfaces) — the button is then left out rather than mounted
-   * broken, matching the failed-run recovery affordance's rule.
+   * Template slug, used by "Start new run". Omitted only by callers that do not
+   * HAVE one — the button is then left out rather than mounted broken, matching
+   * the failed-run recovery affordance's rule. A caller that holds the slug
+   * always passes it: the ratified drawing's host rule is that a host "never
+   * drops a region, a state or an affordance the card's own section draws, and
+   * never adds one", and this control is one the card's own section draws.
    */
   agentId?: string;
   outputHint: RunOutputHint;
+  /**
+   * THE HOST'S OWN SYNCHRONOUS FACT (cinatra#3002, fix leg 4): the host is
+   * already rendering rows that carry THIS run's produced output, right below
+   * this card, and knows it without a read. Purely additive — see the floor in
+   * the body. Callers that cannot know it leave it out.
+   */
+  transcriptCarriesOutput?: boolean;
   /**
    * Test seam: pre-resolved evidence. When provided (including as `null`) the
    * card renders it directly and performs no read.
@@ -117,25 +127,40 @@ export function RunCompletionCard({
   agentId,
   outputHint,
   initialEvidence,
+  transcriptCarriesOutput,
 }: RunCompletionCardProps) {
   // Evidence is stored WITH the run it was read for, and the effective value is
   // derived during render. Keying it this way means a card reused for a
   // different `runId` (or handed different `initialEvidence`) never shows the
   // previous run's outputs while the new read is in flight — and it needs no
   // synchronous setState inside an effect to stay correct.
+  // The read's OWN state travels with the evidence it produced (cinatra#3002,
+  // fix leg 5). A null evidence used to mean two things at once — "still
+  // asking" and "asked, and could not be told" — and the card drew the second
+  // one's sentence for both, so a run whose row was a beat away was reported as
+  // a load failure. Storing the read state alongside the answer, keyed by the
+  // same runId, keeps the two apart without a second effect or a second render.
   const [resolved, setResolved] = useState<{
     runId: string;
     evidence: RunOutputEvidence | null;
-  }>({ runId, evidence: initialEvidence ?? null });
+    read: "pending" | "settled";
+  }>({ runId, evidence: initialEvidence ?? null, read: "pending" });
 
   useEffect(() => {
     if (initialEvidence !== undefined) return;
     let cancelled = false;
     readRunOutputEvidence({ runId })
       .then((result) => {
-        if (cancelled || !result.ok) return;
+        if (cancelled) return;
+        if (!result.ok) {
+          // The read CAME BACK and could not look. That is the state the
+          // load-failure reading belongs to, so record it as settled.
+          setResolved({ runId, evidence: null, read: "settled" });
+          return;
+        }
         setResolved({
           runId,
+          read: "settled",
           evidence: {
             outputs: result.outputs,
             hasTranscript: result.hasTranscript,
@@ -147,7 +172,10 @@ export function RunCompletionCard({
       })
       .catch(() => {
         // Fail soft — unresolved evidence takes the conservative
-        // "output may exist" branch, never a false "produced nothing".
+        // "output may exist" branch, never a false "produced nothing". The read
+        // is over, though, so it is settled: a thrown read HAS failed.
+        if (cancelled) return;
+        setResolved({ runId, evidence: null, read: "settled" });
       });
     return () => {
       cancelled = true;
@@ -161,7 +189,47 @@ export function RunCompletionCard({
         ? resolved.evidence
         : null;
 
-  const outcome = resolveRunTerminalOutcome({ status: "completed", evidence });
+  // Pre-resolved evidence is, by definition, an answer the caller already has.
+  // A card reused for a different runId is back to asking.
+  const evidenceRead: "pending" | "settled" =
+    initialEvidence !== undefined
+      ? "settled"
+      : resolved.runId === runId
+        ? resolved.read
+        : "pending";
+
+  // THE FLOOR THE HOST ALREADY STANDS ON (cinatra#3002, fix leg 4).
+  //
+  // The read above is asynchronous, and while it is in flight `evidence` is
+  // null — which `resolveRunTerminalOutcome` reads as indeterminate, whose
+  // sentence is "its output could not be loaded here". That is the TRUE reading
+  // when nothing is known. It is false when the host mounting this card is
+  // already drawing the run's output directly beneath it, and the fourth proof
+  // round read exactly that: on the conversation, at the live completion
+  // instant, the card drew the fallback sentence with the run's Final response
+  // row present below it, and a reload — which bought the read nothing but time
+  // — turned the same card to the ratified sentence. The conversation mounts a
+  // completed run off the stream hand-off with no head start, so the window is
+  // a whole paint wide there.
+  //
+  // So a host that knows the fact states it, and the card takes it as a FLOOR:
+  // this can only ADD the transcript fact, never remove one the read
+  // established, and it touches nothing else. A genuinely indeterminate run —
+  // a read in flight, a failed read, only unlinkable rows — keeps the
+  // conservative branch, because the host has no rows to point at either.
+  const groundedEvidence: RunOutputEvidence | null = !transcriptCarriesOutput
+    ? evidence
+    : evidence === null
+      ? { outputs: [], hasTranscript: true, hasStepResults: false }
+      : evidence.hasTranscript
+        ? evidence
+        : { ...evidence, hasTranscript: true };
+
+  const outcome = resolveRunTerminalOutcome({
+    status: "completed",
+    evidence: groundedEvidence,
+    evidenceRead,
+  });
   if (outcome.kind === "not-terminal") return null;
 
   const producedNothing = outcome.kind === "completed-no-output";
@@ -173,21 +241,60 @@ export function RunCompletionCard({
   // same species of false claim as "produced nothing".
   const evidenceIndeterminate =
     outcome.kind === "completed-with-output" && outcome.evidenceIndeterminate;
+  // …and the read has not come back yet (cinatra#3002, fix leg 5). Nothing has
+  // failed here, so the card must not say anything has. It stays exactly as
+  // conservative as the branch below — it names no place and claims no
+  // emptiness — but the only thing it asserts is the thing that is true: the
+  // run finished, and its output is on its way.
+  const evidencePending =
+    outcome.kind === "completed-with-output" && outcome.evidencePending;
+  // WHICH evidence the outcome rests on (cinatra#3002). A run executed on the
+  // agent runtime records its answer in `step_results` and nowhere else, and
+  // this card used to describe that run exactly like a run with a transcript:
+  // "its output is in the run transcript below", above an empty page. The card
+  // names a place only when the evidence is the thing that place renders.
+  const outputEvidence =
+    outcome.kind === "completed-with-output" ? outcome.outputEvidence : "none";
 
   const description = producedNothing
     ? "This run reached the end of its steps but produced no output — nothing was returned and nothing was saved. Start a new run to try again."
     : linkedOutputs.length > 0
       ? "This run finished and saved its output."
-      : evidenceIndeterminate
-        ? "This run finished. Its output could not be loaded here — reload the page to try again."
-        : outputHint === "transcript"
-          ? "This run finished. Its output is in the run transcript below."
-          : outputHint === "steps"
-            ? "This run finished. Its output is recorded on the run's steps — select a completed step to review it."
-            : "This run finished. Its output was recorded during the run, but there is no step list here to select from.";
+      : evidencePending
+        ? "This run finished. Its output is still loading."
+        : evidenceIndeterminate
+          ? "This run finished. Its output could not be loaded here — reload the page to try again."
+          : outputHint === "transcript"
+            ? outputEvidence === "transcript"
+              ? "This run finished. Its output is in the run transcript below."
+              : // Step results only: something WAS recorded, so neither the
+                // transcript pointer (there is no transcript) nor the no-output
+                // reading (the run did not finish empty) is true. Say the true
+                // thing instead of choosing which falsehood to tell.
+                "This run finished. Its output was recorded during the run, but it is not part of this run's transcript."
+            : outputHint === "steps"
+              ? "This run finished. Its output is recorded on the run's steps — select a completed step to review it."
+              : "This run finished. Its output was recorded during the run, but there is no step list here to select from.";
 
   return (
-    <Card data-run-completion={producedNothing ? "no-output" : "with-output"}>
+    <Card
+      data-run-completion={producedNothing ? "no-output" : "with-output"}
+      // WHICH state the reading rests on, readable from the DOM (cinatra#3002,
+      // fix leg 5) so a proof round can tell "still loading" from "could not be
+      // loaded" without matching prose. `pending` and `unresolved` are the two
+      // the fifth round could not tell apart.
+      data-run-completion-evidence={
+        producedNothing
+          ? "none"
+          : evidencePending
+            ? "pending"
+            : evidenceIndeterminate
+              ? "unresolved"
+              : linkedOutputs.length > 0
+                ? "outputs"
+                : outputEvidence
+      }
+    >
       <CardHeader>
         <CardTitle className="text-sm font-semibold text-foreground">
           {producedNothing ? "Run finished without output" : "Run complete"}
