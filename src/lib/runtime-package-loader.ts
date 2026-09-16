@@ -154,6 +154,31 @@ async function refreshPreResolvedEdgeMaps(): Promise<void> {
   }
 }
 
+/**
+ * THE sanctioned runtime-store import seam (the variable-URL `import()` ratchet
+ * allowlists this file, and the ratchet's allowlist is not grown for a second
+ * import site).
+ *
+ * It imports ONE file out of a materialized package dir, REALPATH-BOUND to that
+ * dir: a link inside the tree that resolves outside it is refused before
+ * anything is imported. The serverEntry activation below goes through it, and so
+ * does any other host road that has to run a file out of a package's own tree at
+ * its pinned lock — so the containment discipline lives in ONE place instead of
+ * being restated (and drifting) at a second site.
+ */
+export async function importFileFromPackageDirRealpathBound(
+  absPath: string,
+  packageDir: string,
+): Promise<unknown> {
+  const [realAbs, realStore] = await Promise.all([realpath(absPath), realpath(packageDir)]);
+  if (!isContainedRealpath(realAbs, realStore)) {
+    throw new Error(
+      `[runtime-package-loader] ${absPath} resolves outside its package dir — refusing import`,
+    );
+  }
+  return import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(realAbs).href);
+}
+
 export async function loadRuntimePackageExtensions(
   storeRoot?: string,
   hostDeps: RuntimeLoaderHostDeps = {},
@@ -570,7 +595,10 @@ export async function loadRuntimePackageExtensions(
           `[runtime-package-loader] serverEntry for ${rec.packageName} resolves outside its package dir — refusing import`,
         );
       }
-      return import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(realAbs).href);
+      // THROUGH THE SANCTIONED SEAM (it re-checks containment on the realpaths —
+      // the check above stays, so the serverEntry-shaped refusal message is the
+      // one a mis-linked entry still gets).
+      return importFileFromPackageDirRealpathBound(realAbs, realStore);
     },
     // `record.envOverrides` is the RAW `cinatra.envOverrides` pass-through
     // (cinatra#982); `resolution` is deliberately omitted for a materialized

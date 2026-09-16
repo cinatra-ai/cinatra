@@ -32,6 +32,12 @@ import {
 } from "@/lib/extension-data-tool";
 import { parseDeclaredTables } from "@cinatra-ai/sdk-extensions/manifest";
 import {
+  ExtensionToolRefusal,
+  dispatchExtensionTool,
+  type ExtensionToolPorts,
+} from "@/lib/extension-tool-dispatch";
+import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
+import {
   ArtifactAdmissionRefusal,
   resolveArtifactDependencyAdmission,
 } from "@/lib/artifacts/extension-artifact-admission";
@@ -46,6 +52,12 @@ import { ArtifactCursorRefusal } from "@/lib/artifacts/artifact-service";
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
   "extension_data",
+  // The second generic layer (cinatra#3249): ONE passthrough tool that runs a
+  // module the CALLING extension declares in its own manifest. It names no
+  // package either — the caller comes from the run, the name is resolved against
+  // that caller's own declaration, and the ports it is handed are the scoped
+  // primitives beside it.
+  "extension_tool",
   "artifacts_list",
   "artifacts_get",
   "artifact_content_read",
@@ -95,10 +107,15 @@ export async function dispatchExtensionScopedTool(input: {
     if (input.tool === "extension_data") {
       return { ok: true, result: await runDataTool(context, input) };
     }
+    if (input.tool === "extension_tool") {
+      return { ok: true, result: await runExtensionTool(context, input) };
+    }
     return { ok: true, result: await runArtifactRead(context, input) };
   } catch (e) {
     if (
       e instanceof ExtensionDataRefusal ||
+      e instanceof ExtensionToolRefusal ||
+      e instanceof ExtensionToolModuleRefusal ||
       e instanceof ArtifactAdmissionRefusal ||
       e instanceof ArtifactCursorRefusal
     ) {
@@ -149,6 +166,44 @@ async function runDataTool(
   } finally {
     client.release();
   }
+}
+
+/**
+ * THE CALLING EXTENSION'S OWN MODULE, run under the same declaration that
+ * admits everything else here (cinatra#3249, epic #3023).
+ *
+ * The ports handed to it are the scoped primitives beside this function, bound
+ * to THIS run: the caller's own table operations, the two artifact reads over
+ * the types it declares as dependencies, the review-gate filing, and the clock.
+ * The run's identity rides in the envelope and in those bindings, never into
+ * the module's input — `dispatchExtensionTool` refuses a call that tries to.
+ */
+async function runExtensionTool(
+  context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
+  input: { tool: string; input: Record<string, unknown>; run: ExtensionScopedToolRun; actor?: ActorContext },
+): Promise<unknown> {
+  const ports: Omit<ExtensionToolPorts, "review"> = {
+    data: {
+      select: (request) => runDataTool(context, { ...input, input: { ...request, operation: "select" } }),
+      insertIfAbsent: (request) =>
+        runDataTool(context, { ...input, input: { ...request, operation: "insertIfAbsent" } }),
+      updateWhere: (request) =>
+        runDataTool(context, { ...input, input: { ...request, operation: "updateWhere" } }),
+    },
+    artifacts: {
+      list: (request) => runArtifactRead(context, { ...input, tool: "artifacts_list", input: request }),
+      contentRead: (request) =>
+        runArtifactRead(context, { ...input, tool: "artifact_content_read", input: request }),
+    },
+    clock: { now: () => new Date() },
+  };
+  return dispatchExtensionTool({
+    packageName: context.packageName,
+    packageVersion: context.packageVersion,
+    cinatra: context.cinatra,
+    request: input.input,
+    ports,
+  });
 }
 
 async function runArtifactRead(
