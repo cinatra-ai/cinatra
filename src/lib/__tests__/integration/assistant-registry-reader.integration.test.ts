@@ -79,6 +79,7 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
     await admin.query(`CREATE TABLE "${schema}".agent_templates (
       id text PRIMARY KEY,
       name text,
+      description text,
       package_name text,
       agent_kind text NOT NULL DEFAULT 'executor',
       assistant_config text,
