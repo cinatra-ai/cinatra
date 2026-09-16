@@ -622,6 +622,84 @@ export async function revokeExternalMcpApiKeyConnection(
 }
 
 /**
+ * The connection id the `externalMcp` connection IDENTITY of a KEYLESS
+ * external-MCP server row carries (cinatra#3485).
+ *
+ * A server registered through the MCP Servers connector's own Setup form with
+ * the API-key field left blank stores NO credential — its row's
+ * `nangoConnectionId` stays null, so `apiKeyConfigured` stays false and
+ * `resolveExternalMcpServerBearer` mints nothing. The Sharing tab, however,
+ * lists connection IDENTITY rows, so a keyless registration still needs one.
+ * The id is DERIVED from the row id (stable, so the delete road addresses the
+ * identity without a stored pointer) and lives in its OWN namespace — it can
+ * never collide with the keyed road's unique `external-mcp-<uuid>` credential
+ * ids, which address a real vault entry.
+ */
+export function externalMcpKeylessConnectionId(serverId: string): string {
+  return `external-mcp-keyless-${serverId}`;
+}
+
+/**
+ * Register the `externalMcp` connection identity of a KEYLESS external-MCP
+ * server row (cinatra#3485) — the IDENTITY half of
+ * `importExternalMcpApiKeyConnection` without its credential half: no Nango
+ * integration, no import, no readback, no token. A keyless server therefore
+ * never advertises a key it does not have, while still being one of the
+ * person's saved connections on the connector's Sharing tab.
+ *
+ * Idempotent: the seam returns an existing live identity row unchanged and
+ * seeds the one-time grant only when no policy row exists, so re-saving a
+ * keyless server never mints a second identity or resets a widened policy.
+ * Its foreign-row HARD-FAIL is preserved — the caller decides what a failure
+ * means for its own write.
+ */
+export async function registerExternalMcpKeylessConnectionIdentity(
+  connectionId: string,
+  identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
+): Promise<void> {
+  const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
+  await registerSavedConnectionIdentity({
+    connectorKey: "externalMcp",
+    connectionId,
+    ownerUserId: identity.ownerUserId,
+    organizationId: identity.organizationId,
+    seed: identity.seed,
+  });
+}
+
+/**
+ * Retire the `externalMcp` connection IDENTITY of a KEYLESS external-MCP server
+ * row (cinatra#3485) — the IDENTITY half of
+ * `revokeExternalMcpApiKeyConnection` with no credential half.
+ *
+ * A keyless connection id addresses NO vault entry at all, so routing it
+ * through the credential road would ask the connection service to delete a
+ * credential the row never had — and, because the derived id is computed for
+ * every row, would fire that request on every KEYED delete too. This soft-
+ * deletes the live identity row and stops there: never a credential call,
+ * never a throw (the server row is already gone or its key already retired),
+ * logged NON-SECRETLY, and a no-op on an empty id or a row that never had an
+ * identity.
+ */
+export async function revokeExternalMcpKeylessConnectionIdentity(
+  connectionId: string | null | undefined,
+): Promise<void> {
+  if (!connectionId) return;
+  try {
+    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    const identity = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
+    if (identity) await softDeleteNangoConnection(identity.id);
+  } catch (err) {
+    console.warn(
+      "[external-mcp-registry] best-effort keyless identity revoke failed",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/**
  * Decide the URL to inject into the LLM provider's tool definition for an
  * external MCP server. Rows with a non-null `allowedCatalogTools` (Layer B
  * enforcement enabled) route through the cinatra-side proxy at

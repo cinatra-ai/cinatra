@@ -48,6 +48,10 @@ const authzOverride = new Map<string, Row | null>();
 // asserts anything a real log would leak beyond the key the TEST itself supplies.
 const importedApiKeys: { connectionId: string; apiKey: string; identity: unknown }[] = [];
 const revokedConnections: string[] = [];
+// cinatra#3485 (codex convergence finding 4): the KEYLESS identity road is
+// identity-only, so its retirements are recorded apart from the credential
+// revokes above — a keyed delete must still make exactly ONE credential call.
+const retiredKeylessIdentities: string[] = [];
 let apiKeyImportShouldFail = false;
 
 class ExternalMcpServerWriteConflictError extends Error {
@@ -135,6 +139,18 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   revokeExternalMcpApiKeyConnection: async (connectionId: string | null | undefined) => {
     if (connectionId) revokedConnections.push(connectionId);
   },
+  // cinatra#3485 — the KEYLESS identity road. A row that lands with NO stored
+  // credential still registers its `externalMcp` connection IDENTITY, and the
+  // delete road derives the SAME id to retire it. The derivation mirrors the real
+  // helper’s own namespace so the revoke recorder above reads exactly the string
+  // production writes; the registration has no credential half to record at all
+  // (its identity write is proved over the REAL seam in
+  // `mcp-server-connection-workspace-share.test.ts`).
+  externalMcpKeylessConnectionId: (serverId: string) => `external-mcp-keyless-${serverId}`,
+  registerExternalMcpKeylessConnectionIdentity: async () => {},
+  revokeExternalMcpKeylessConnectionIdentity: async (connectionId: string | null | undefined) => {
+    if (connectionId) retiredKeylessIdentities.push(connectionId);
+  },
 }));
 
 // Import AFTER the mocks are registered.
@@ -148,6 +164,7 @@ beforeEach(() => {
   authzOverride.clear();
   importedApiKeys.length = 0;
   revokedConnections.length = 0;
+  retiredKeylessIdentities.length = 0;
   apiKeyImportShouldFail = false;
 });
 
@@ -482,12 +499,27 @@ describe("deleteServerHandler authz", () => {
     const r = await deleteServerHandler({ id: "k1" });
     expect(r.banner).toBe("deleted");
     expect(revokedConnections).toContain("external-mcp-x");
+    // The keyed delete road is UNCHANGED at the credential store: exactly the
+    // row's own stored connection, and no request for the derived keyless id
+    // (codex convergence finding 4).
+    expect(revokedConnections).toEqual(["external-mcp-x"]);
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k1"]);
   });
 
-  it("a KEYLESS row delete revokes nothing", async () => {
+  it("a KEYLESS row delete retires its own identity and revokes NOTHING at the credential store", async () => {
     servers.set("k2", { id: "k2", scope: "user", userId: "u1", label: "K2", serverUrl: "https://k2" });
     await deleteServerHandler({ id: "k2" });
-    expect(revokedConnections).toHaveLength(0);
+    // cinatra#3485 CHANGED this case’s expectation. A keyless row now carries an
+    // `externalMcp` connection identity of its own (addressed by the id derived
+    // from the row, not by a credential pointer), so the delete takes the same
+    // identity-first road to soft-delete it — previously it revoked nothing at
+    // all and the identity would have outlived the server on the Sharing tab.
+    // The row still stores no credential, so no credential connection id is
+    // revoked: the credential road is not travelled at all, and the identity is
+    // retired identity-ONLY (codex convergence finding 4 changed this from a
+    // credential-road revoke of the derived id).
+    expect(revokedConnections).toEqual([]);
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k2"]);
   });
 
   it("delete guard CONFLICTS when the row was re-keyed under the actor (keeps the live connection)", async () => {
