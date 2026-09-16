@@ -194,10 +194,10 @@ describe("parseGitHubArchiveLink (the link says which archive to fetch)", () => 
   });
 
   it("takes a release page and remembers that the ref is a TAG", () => {
-    expect(parseGitHubArchiveLink("https://github.com/acme/thing/releases/tag/v1.2.3")).toEqual({
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/releases/tag/sample-release-tag")).toEqual({
       owner: "acme",
       repo: "thing",
-      ref: "v1.2.3",
+      ref: "sample-release-tag",
       archive: "release",
     });
   });
@@ -211,8 +211,8 @@ describe("parseGitHubArchiveLink (the link says which archive to fetch)", () => 
       parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/heads/main.zip"),
     ).toEqual({ owner: "acme", repo: "thing", ref: "refs/heads/main", archive: "repository" });
     expect(
-      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/tags/v1.2.3.zip"),
-    ).toEqual({ owner: "acme", repo: "thing", ref: "refs/tags/v1.2.3", archive: "release" });
+      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/tags/sample-release-tag.zip"),
+    ).toEqual({ owner: "acme", repo: "thing", ref: "refs/tags/sample-release-tag", archive: "release" });
     expect(parseGitHubArchiveLink("https://github.com/acme/thing/archive/main.zip")).toEqual({
       owner: "acme",
       repo: "thing",
@@ -284,8 +284,8 @@ describe("gitHubArchiveZipUrl (where the bytes come from)", () => {
       }),
     ).toBe("https://codeload.github.com/acme/thing/zip/feature/nested-name");
     expect(
-      gitHubArchiveZipUrl({ owner: "acme", repo: "thing", ref: "v1.2.3", archive: "release" }),
-    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3");
+      gitHubArchiveZipUrl({ owner: "acme", repo: "thing", ref: "sample-release-tag", archive: "release" }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/sample-release-tag");
   });
 
   it("keeps an already-qualified ref exactly as the link qualified it", () => {
@@ -301,10 +301,10 @@ describe("gitHubArchiveZipUrl (where the bytes come from)", () => {
       gitHubArchiveZipUrl({
         owner: "acme",
         repo: "thing",
-        ref: "refs/tags/v1.2.3",
+        ref: "refs/tags/sample-release-tag",
         archive: "release",
       }),
-    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3");
+    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/sample-release-tag");
   });
 });
 
