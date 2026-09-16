@@ -15,7 +15,11 @@
 import "./access-picker-jsdom-shims";
 import { afterEach, describe, it, expect } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { AccessCombobox, type AccessComboboxProps } from "@/components/access-combobox";
+import {
+  AccessCombobox,
+  type AccessComboboxProps,
+  type AvailableScopes,
+} from "@/components/access-combobox";
 
 afterEach(() => cleanup());
 
@@ -287,5 +291,123 @@ describe("AccessCombobox — the helper line is gone from the picker itself", ()
     );
     fireEvent.click(screen.getByRole("combobox"));
     expect(screen.queryByText(/Targets you cannot install at are disabled/i)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3523 — the CLOSED trigger draws its PREFIX as the drawing gives it.
+//
+// The ratified drawing (app-permissions.html §III) gives the closed trigger's
+// prefix node its own rule, beside the value:
+//
+//   .pk-trigger .pfx { font-size: 10px; text-transform: uppercase;
+//                      letter-spacing: 0.08em; color: var(--muted);
+//                      font-family: var(--font-mono); flex: none; }
+//   .pk-trigger .val { font-size: 14px; color: var(--ink); … }
+//
+// jsdom loads no Tailwind stylesheet, so a computed-style read would report the
+// UA default for every one of those declarations; the rendered assertion below
+// therefore reads the CLASS LIST the prefix node carries — the app's own token
+// utilities for the drawing's rule, never a raw value:
+//
+//   font-mono             -> var(--font-mono)           (design theme.css)
+//   text-badge-xs         -> the scale's 10px ("The drawing's 10px tags need no
+//                            token of their own: text-badge-xs IS 10px")
+//   uppercase             -> the drawing's text-transform — the STRING stays the
+//                            label module's own (cinatra#3523 C14), which is why
+//                            "trigger ≡ row, verbatim" (c-3.1) still reads the
+//                            same DOM text above.
+//   text-muted-foreground -> var(--muted) (--muted-foreground: var(--muted))
+//   tracking-picker-prefix -> var(--picker-prefix-tracking), the drawing's own
+//                            0.08em, named beside the scale's other tracking
+//                            tokens by this change: the scale carried no 0.08em
+//                            token and the design-system gate refuses the
+//                            bracket literal (`tracking-[0.08em]` is a
+//                            no-restricted-syntax ERROR), so the value is
+//                            NAMED, never written as an arbitrary value.
+//
+// Every declaration of the drawing's rule is pinned below.
+//
+// Both selection modes share the closed trigger, so both are pinned here.
+// ---------------------------------------------------------------------------
+
+const PREFIX_TREATMENT = [
+  "font-mono",
+  "text-badge-xs",
+  "uppercase",
+  "tracking-picker-prefix",
+  "text-muted-foreground",
+];
+
+const MULTI_SCOPES: AvailableScopes = {
+  orgs: [{ id: "org-acme", name: "Acme Corp", teams: [{ id: "t1", name: "Revenue" }] }],
+  projects: [{ id: "p1", name: "Atlas" }],
+  canGrantWorkspace: true,
+};
+
+// The closed trigger's label is TWO adjacent spans — the prefix and the value.
+function closedTriggerParts() {
+  const btn = screen.getByRole("combobox");
+  const wrap = btn.querySelector("span.flex.items-center") as Element;
+  const spans = Array.from(wrap.querySelectorAll(":scope > span"));
+  expect(spans).toHaveLength(2);
+  return { prefix: spans[0], value: spans[1] };
+}
+
+describe("AccessCombobox — the closed trigger's prefix treatment (cinatra#3523)", () => {
+  it("single mode: the prefix node carries the drawing's treatment, the value node does not", () => {
+    render(<AccessCombobox value="workspace" onValueChange={() => {}} availableScopes={SCOPES} isAdmin />);
+    const { prefix, value } = closedTriggerParts();
+
+    // The prefix STRING is the label module's own — the uppercase is the
+    // drawing's transform, never a re-cased string (cinatra#3523 C14).
+    expect(prefix.textContent?.trim()).toBe("Workspace:");
+    for (const cls of PREFIX_TREATMENT) expect(Array.from(prefix.classList)).toContain(cls);
+
+    // The value keeps its own ink and takes none of the prefix's treatment.
+    expect(value.textContent?.trim()).toBe("All");
+    expect(Array.from(value.classList)).toContain("text-foreground");
+    for (const cls of PREFIX_TREATMENT) expect(Array.from(value.classList)).not.toContain(cls);
+
+    // The reading is unchanged (c-3.1).
+    expect(triggerText()).toBe("Workspace: All");
+  });
+
+  it("multi mode: the same prefix treatment on the other selection mode's closed trigger", () => {
+    render(
+      <AccessCombobox
+        selectionMode="multiple"
+        value={["workspace"]}
+        onChange={() => {}}
+        scopes={MULTI_SCOPES}
+      />,
+    );
+    const { prefix, value } = closedTriggerParts();
+
+    expect(prefix.textContent?.trim()).toBe("Workspace:");
+    for (const cls of PREFIX_TREATMENT) expect(Array.from(prefix.classList)).toContain(cls);
+
+    expect(value.textContent?.trim()).toBe("All");
+    expect(Array.from(value.classList)).toContain("text-foreground");
+    for (const cls of PREFIX_TREATMENT) expect(Array.from(value.classList)).not.toContain(cls);
+
+    // The trigger's READING is unchanged — the summary line every caller
+    // asserts ("Workspace: All") still reads with its single space.
+    expect(screen.getByRole("combobox").textContent?.trim()).toBe("Workspace: All");
+  });
+
+  it("multi mode: an N>1 composed summary keeps today's single unsplit value node", () => {
+    render(
+      <AccessCombobox
+        selectionMode="multiple"
+        value={["team:t1", "project:p1"]}
+        onChange={() => {}}
+        scopes={MULTI_SCOPES}
+      />,
+    );
+    const btn = screen.getByRole("combobox");
+    const wrap = btn.querySelector("span.flex.items-center") as Element;
+    expect(Array.from(wrap.querySelectorAll(":scope > span"))).toHaveLength(1);
+    expect(btn.textContent ?? "").toMatch(/1 project, 1 team/i);
   });
 });
