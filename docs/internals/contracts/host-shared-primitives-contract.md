@@ -26,6 +26,29 @@ the host design-token module already uses). It is never a product-internal path
 such as
 `@/components/ui` — that coupling is exactly what decision 407 removes.
 
+## Two roads, and which package takes which
+
+A self-rendering package reaches the host's primitives one of two ways, and
+which one it takes is decided by HOW its code enters the host, never by what it
+imports: the import line is identical on both roads
+(`import { Alert } from "@cinatra-ai/design-primitives"`). What differs is who
+resolves that id.
+
+| | The BUILD-TIME road | The RUN-TIME road |
+| --- | --- | --- |
+| Taken by | **source-compiled** parts — a connector's setup and settings pages, an artifact package's server-rendered parts: everything the host's own build compiles through its `@cinatra-ai/<package>/<entry>` path map (e.g. `extensions/cinatra-ai/linkedin-connector/src/linkedin-setup-impl.tsx`, a `server-only` module) | **dynamically loaded** client renderers — an artifact renderer bundle the loader seam imports at run time |
+| Resolved by | the host's own `compilerOptions.paths` entry `@cinatra-ai/design-primitives` → `./src/lib/artifacts/host-shared-primitives.ts`, honoured by the host compiler and by Next's resolution. The entry is GENERATED: `config/build-config.manifest.json` is the source of truth and `node scripts/config/generate-build-config.mjs --check` fails closed on a hand-edit | the externals allowlist, `src/lib/artifacts/host-module-registry.ts` and the bundle preamble checks — the road described in the section above |
+| What it serves | the host module itself: the named import lands on the very bindings `HOST_DESIGN_PRIMITIVES` carries, so there is no copy to drift | the same frozen object, handed over by the `Symbol.for` singleton |
+| Needs a `next.config.ts` entry | **no.** `transpilePackages` is for packages RESOLVED through `node_modules` in the build graph; a specifier served by a tsconfig path compiles as source, which is why no connector compiled that way has an entry either | not applicable |
+| How it fails when it is wrong | the host build refuses to compile the package (`TS2307`), before anything ships | the loader throws the named error at load |
+
+Neither road is a fallback for the other, and nothing chooses between them at
+run time. The part of a package the host COMPILES takes the build-time road; the
+part the host LOADS takes the run-time road. A package with both — a connector
+that ships a setup page and a client renderer — takes both, and both land on the
+same instance, because the tsconfig path and the module registry point at the
+same module.
+
 ## The road (the same one React takes)
 
 1. A package leaves `@cinatra-ai/design-primitives` **external** in its client
