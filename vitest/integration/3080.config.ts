@@ -66,6 +66,11 @@ export default defineConfig({
       // second artifact. Read out of a real store, both pins, the way a proof
       // round reads them off the two gate rows.
       "src/lib/artifacts/__tests__/artifact-revision-append.integration.test.ts",
+      // AND THE ROAD THE SECOND PROOF ROUND ACTUALLY WALKED (cinatra#3080, the
+      // fix leg after it): the COALESCED production — a step that yields several
+      // artifacts — raises ONE GATE PER ARTIFACT, in the step's output order,
+      // through the batch road the first fix leg did not touch.
+      "packages/agents/src/__tests__/review-batch-one-gate-per-artifact.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

@@ -369,6 +369,14 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           ) : null}
           <ReviewTargetPanel
             prepared={prepared}
+            // ONE PANEL PER TARGET, AND THE CARD OWNS ITS FRAME (cinatra#3080,
+            // the fix leg after the second proof round). A gate that pins ONE
+            // target is drawn by the card as the immutable header over this
+            // document inside a single border; a border here too is the nested
+            // body card §IV does not draw. Only the LEGACY multi-target reading
+            // — the one where this document pairs each header with its own body
+            // — frames its targets itself.
+            framed={surface.targets.length > 1}
             // The TRUSTED organization scope, from the reader this island just
             // authorized — never from the query string and never from the
             // display props. The form rung reads the pinned bytes under it.

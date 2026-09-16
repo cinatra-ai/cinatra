@@ -135,6 +135,17 @@ const HOST_STANDARD_IDS = new Set([
   // painted at all — the loading skeleton and the preview-recovery panel — and
   // an anchor is what makes "exactly one header per pinned target" checkable.
   "review-target-header",
+  // cinatra#3080, the fix leg after the SECOND proof round — the TARGET PANEL the
+  // card draws around that header and the representation beneath it. Not a new
+  // part of the surface: it is the one panel §IV has always drawn ("Every target
+  // opens with a header … Beneath the header sits the representation slot"), and
+  // whose own markup is one bordered box holding both. It is anchored because
+  // the two halves live on different sides of the island frame — the header in
+  // the card, the representation in the island's document — so "one panel, no
+  // second card, no gap" is only checkable if the frame that holds them has a
+  // name. The LEGACY multi-target reading draws no such panel; the island's
+  // `review-target` keeps its own frame there.
+  "review-target-panel",
   // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
   // it is the SAME `review-prompt-window` the run-embedded closed set below
   // already carries, and it appears in this list only because the window moved

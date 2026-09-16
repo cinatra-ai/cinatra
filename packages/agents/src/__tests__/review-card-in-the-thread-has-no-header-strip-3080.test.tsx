@@ -123,8 +123,14 @@ describe("cinatra#3080 — the chat-hosted review card puts the floor around the
 
     // WHAT IS LEFT IS THE DRAWING'S TWO PARTS, in the drawing's order: the
     // target panel naming what is under review, then the floor that governs it.
+    // ONE PANEL (cinatra#3080, the fix leg after the second proof round): the
+    // immutable header and the representation share one border, so the card's
+    // first child is the panel and the header is the first thing inside it.
     const first = card.firstElementChild!;
-    expect(first.getAttribute("data-conformance-id")).toBe("review-target-header");
+    expect(first.getAttribute("data-conformance-id")).toBe("review-target-panel");
+    expect(
+      first.firstElementChild!.getAttribute("data-conformance-id"),
+    ).toBe("review-target-header");
     expect(first.textContent).toContain("Q3 re-engagement email");
     expect(card.querySelectorAll('[data-conformance-id="review-decision-bar"]')).toHaveLength(1);
   });

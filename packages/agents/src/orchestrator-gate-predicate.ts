@@ -32,30 +32,44 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 // ladder module the gated surfaces already reach. Keeping it in
 // run-stepper-steps.ts pulled that module onto four locked route graphs for
 // one pure helper, which the route-graph ratchet measured as +1 on each.
+
 /**
- * WHERE THE GATED STEP SITS, for the review gate header's naming line
- * (cinatra#3080, fix leg 7, corrected at convergence).
+ * WHERE A REVIEW GATE SITS ON THE RUN'S RAIL — THE ONE READING BOTH SURFACES USE
+ * (cinatra#3080, the fix leg after the second proof round).
  *
- * The header draws "step 4 of 6" from the ladder the rail already draws. The
- * live interrupt names the step while the run is parked on it — and names
- * NOTHING once the run has resumed and completed, which is the reading a
- * reviewer arrives at most often. So a run with no live interrupt falls back to
- * the step the rail is showing, bounded by the ladder's own length (a completed
- * run's rail points one past the end). A run with no ladder names no step at
- * all rather than inventing one.
+ * THE DRAWING DRAWS THE LINE. `specs/app-lifecycle-cards.html` §XIII.1 draws the
+ * in-run review gate outside a conversation as the word over a mono line —
+ * "Review" beside "Outreach agent · run rn_8f31… · step 4 of 6" — pending and
+ * settled alike. What the second proof round caught is not the line but a
+ * DISAGREEMENT: the run page read "step 2 of 2" and the review page "step 1 of 1"
+ * for ONE gate, because each named the gate's place from a different list — the
+ * run's work ladder on one side, the ladder plus a row per review on the other.
+ *
+ * A GATE IS A RAIL ENTRY, NOT A WORK STEP. `app-artifact-review.html` §I.3 draws
+ * a run that wrote a post and its featured image as two review entries NUMBERED
+ * AFTER the work steps ("Review · the post" 4, "Review · featured image" 5), and
+ * the run page's own rail already draws its trailing rows as `ladder + i + 1`. So
+ * the gate's place is the RAIL's place, and this is the single projection both
+ * surfaces read it from — the same lockstep guarantee `buildRunStepperSteps` gives
+ * the step list itself.
+ *
+ * TOTAL and pure. A rail that draws no review row yet still places THIS review as
+ * the row it is about to draw (the review page's own fail-soft reading: one
+ * synthetic Review row after the steps), so the two surfaces answer alike even
+ * where one of them has nothing on its rail to count.
  */
-export function gateNamingStep(input: {
-  /** How many steps the rail draws. */
+export function reviewGateStepPosition(input: {
+  /** The run's work-step spine — the numerals the rail draws 1..N. */
   ladderLength: number;
-  /** The live interrupt's step as a display index, or null when there is none. */
-  currentDisplayIndex: number | null;
-  /** The step the rail is showing right now. */
-  activeStep: number;
-}): { index: number; total: number } | null {
-  if (input.ladderLength <= 0) return null;
-  const index =
-    input.currentDisplayIndex !== null
-      ? input.currentDisplayIndex
-      : Math.min(input.activeStep, input.ladderLength);
-  return { index, total: input.ladderLength };
+  /** The rail's trailing review rows, in the rail's own order. */
+  gateRowCount: number;
+  /** Which of those rows is THIS gate (0-based), or null when the surface cannot
+   * place it — in which case it is the last row, the one the run is at. */
+  gateOrdinal: number | null;
+}): { index: number; total: number } {
+  const ladder = Math.max(Math.floor(input.ladderLength), 0);
+  const rows = Math.max(Math.floor(input.gateRowCount), 1);
+  const asked = input.gateOrdinal === null ? rows - 1 : Math.floor(input.gateOrdinal);
+  const ordinal = Math.min(Math.max(asked, 0), rows - 1);
+  return { index: ladder + ordinal + 1, total: ladder + rows };
 }

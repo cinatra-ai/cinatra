@@ -52,6 +52,7 @@ export function ReviewTargetPanel({
   prepared,
   orgId,
   capturePair = null,
+  framed = true,
 }: {
   prepared: PreparedReviewTarget;
   /** The reviewing surface's TRUSTED organization scope, from the host that
@@ -63,6 +64,15 @@ export function ReviewTargetPanel({
    * pictures are additive context beneath the decided representation, never a
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
+  /** DOES THIS PANEL DRAW ITS OWN FRAME (cinatra#3080, the fix leg after the
+   * second proof round)? §IV draws ONE panel per target — the immutable header
+   * over the representation, inside one border — and for a gate that pins ONE
+   * target that frame is the CARD's, drawn around the header it holds and this
+   * document together. A second border inside it is the nested body card the
+   * round graded. The LEGACY reading, where the island's own document pairs each
+   * of several headers with its own body, is the one that still frames each
+   * target here: nothing outside the frame can draw those pairs. */
+  framed?: boolean;
 }): ReactNode {
   const { props, mount } = prepared;
   const provenance = reviewProvenanceLabel(mount);
@@ -80,7 +90,9 @@ export function ReviewTargetPanel({
     <div
       data-conformance-id="review-target"
       data-field="name=type.displayName"
-      className="rounded-control border border-line bg-surface-strong"
+      className={
+        framed ? "rounded-control border border-line bg-surface-strong" : "bg-surface-strong"
+      }
     >
       {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
           The header used to be drawn here, inside the island document, which is

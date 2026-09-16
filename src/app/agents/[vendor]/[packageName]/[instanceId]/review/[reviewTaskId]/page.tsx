@@ -31,7 +31,11 @@ import { redirect } from "next/navigation";
 import { Lock } from "lucide-react";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
-import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
+import {
+  buildRunStepperSteps,
+  reviewGateStepPosition,
+  type RunStepperPolicyStep,
+} from "@cinatra-ai/agents/run-stepper-steps";
 import {
   readReviewGate,
   enforceReviewRunAccess,
@@ -109,6 +113,11 @@ async function loadRunStepsContext(
 ): Promise<{
   steps: ReviewRunStep[];
   activeStep: number;
+  /** WHERE THIS GATE SITS ON THE RUN'S RAIL (cinatra#3080, the fix leg after the
+   * second proof round), read through the projection the run page's own panel
+   * reads it through — so the two surfaces cannot name the same gate "step 1 of
+   * 1" here and "step 2 of 2" there. */
+  gateStep: { index: number; total: number };
   templateId: string | null;
   /** The agent as a person names it, for the gate header's own naming line. */
   templateName: string | null;
@@ -182,6 +191,11 @@ async function loadRunStepsContext(
     return {
       steps: [...runSteps, { index: reviewIndex, label: "Review" }],
       activeStep: reviewIndex,
+      gateStep: reviewGateStepPosition({
+        ladderLength: runSteps.length,
+        gateRowCount: 0,
+        gateOrdinal: null,
+      }),
       templateId,
       templateName,
     };
@@ -189,6 +203,11 @@ async function loadRunStepsContext(
   return {
     steps: [...runSteps, ...gateSteps],
     activeStep: runSteps.length + 1 + activeOffset,
+    gateStep: reviewGateStepPosition({
+      ladderLength: runSteps.length,
+      gateRowCount: gateSteps.length,
+      gateOrdinal: activeOffset,
+    }),
     templateId,
     templateName,
   };
@@ -306,7 +325,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
   // gate is the prompt window at the foot — see below.
 
-  const { steps, activeStep, templateId, templateName } = await loadRunStepsContext(
+  const { steps, activeStep, gateStep, templateId, templateName } = await loadRunStepsContext(
     runId,
     reviewTaskId,
   );
@@ -490,14 +509,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   // exchange with the RUN (cinatra#3141 item 1); the card draws
                   // the window now, so the page names the run and mounts none.
                   runId={runId}
-                  // AND THE HEADER'S NAMING (fix leg 7 convergence). Every
+                  // AND THE HEADER'S NAMING (fix leg 7 convergence; the
+                  // gate's place corrected after the second proof round). Every
                   // segment is one THIS page already resolved for the rail on
                   // its left, so the line and the rail cannot disagree: the
-                  // agent's own name, and where this gate sits in the ladder
-                  // the rail draws. A run whose template cannot be read hands
-                  // down null and the header draws the word alone.
+                  // agent's own name, and where this gate sits on the rail —
+                  // read through the projection the run page reads it through,
+                  // so the two surfaces cannot disagree either. A run whose
+                  // template cannot be read hands down null and the header
+                  // draws the word alone.
                   agentLabel={templateName}
-                  step={steps.length > 0 ? { index: activeStep, total: steps.length } : null}
+                  step={gateStep}
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>

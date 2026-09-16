@@ -34,16 +34,21 @@ describe("the review screen names the gate the way the drawing draws it", () => 
   });
 
   it("hands the card the step the rail on the same page is showing", () => {
-    expect(PAGE_CODE).toMatch(
-      /step=\{steps\.length > 0 \? \{ index: activeStep, total: steps\.length \} : null\}/,
-    );
+    // THROUGH THE ONE PROJECTION (cinatra#3080, the fix leg after the second
+    // proof round). This page used to count its own list — the ladder plus a row
+    // per review — while the run page counted the ladder alone, so one gate read
+    // "step 1 of 1" here and "step 2 of 2" there. Both surfaces now read the
+    // gate's place off the rail through `reviewGateStepPosition`.
+    expect(PAGE_CODE).toContain("reviewGateStepPosition({");
+    expect(PAGE_CODE).toContain("step={gateStep}");
+    expect(PAGE_CODE).not.toContain("total: steps.length");
   });
 
   it("carries the naming down from the ONE context that resolves the rail", () => {
     // Not a second read of the run: the naming rides the context the rail is
     // built from, so the two readings cannot drift apart.
     expect(PAGE_CODE).toMatch(
-      /const \{ steps, activeStep, templateId, templateName \} = await loadRunStepsContext/,
+      /const \{ steps, activeStep, gateStep, templateId, templateName \} = await loadRunStepsContext/,
     );
   });
 

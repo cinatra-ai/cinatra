@@ -40,7 +40,7 @@ import {
   isBatchAutoReviewTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { partitionBatchTargets, type BatchTarget } from "@/lib/lifecycle/lifecycle-batch";
+import { partitionBatchTargetsPerArtifact, type BatchTarget } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -499,8 +499,10 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
 
     // Simulate the CRASH-after-emit: manually emit the FIRST partition's gate
     // (events left pending + unlinked — the exact window S1 documented).
-    const frozenPartitions = partitionBatchTargets(epoch.membership);
-    expect(frozenPartitions).toHaveLength(2); // 50 + 5
+    // ONE PARTITION PER ARTIFACT (cinatra#3080): the frozen membership is cut one
+    // target at a time, in its own order, so each member's gate is its own.
+    const frozenPartitions = partitionBatchTargetsPerArtifact(epoch.membership);
+    expect(frozenPartitions).toHaveLength(N);
     await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
@@ -517,10 +519,11 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     await orch.sweepReviewOrchestration();
 
     // Every BATCH gate for the run pins ONLY the frozen membership (no overlap with
-    // the new revisions); exactly ceil(55/50) = 2 partition gates.
+    // the new revisions); one gate per frozen member.
     const gates = await gatesForRun(runId);
     const batchGates = gates.filter((g) => isBatchAutoReviewTaskId(g.reviewTaskId));
-    expect(batchGates).toHaveLength(2);
+    expect(batchGates).toHaveLength(N);
+    for (const g of batchGates) expect(g.pinned).toHaveLength(1);
     const pinnedIds = new Set(batchGates.flatMap((g) => g.pinned.map((p) => p.artifactId)));
     expect(pinnedIds.size).toBe(N);
     expect(pinnedIds.has(newer1.artifactId)).toBe(false);
@@ -551,7 +554,7 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     void open2;
   });
 
-  it("SEAL: a SOLE remaining frozen member resumes via the frozen partition gate, never an overlapping per-event gate", async () => {
+  it("SEAL: a SOLE remaining frozen member resumes via ITS OWN frozen partition gate, never an overlapping per-event gate", async () => {
     const runId = `run-sole-${randomUUID()}`;
     const a = await produce("document", { producerRunId: runId, destinationClass: "external_publish", artifactId: `sole-${runId}-a` });
     const b = await produce("document", { producerRunId: runId, destinationClass: "external_publish", artifactId: `sole-${runId}-b` });
@@ -561,7 +564,7 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     // (its partition gate emitted + `a` linked + marked), leaving `b` the sole
     // pending frozen member.
     const { epoch } = await repairStore.sealBatchEpoch({ orgId: ORG, producerRunId: runId, candidateMembers: membersM });
-    const [partition] = partitionBatchTargets(epoch.membership);
+    const [partition] = partitionBatchTargetsPerArtifact(epoch.membership);
     const partTask = batchPartitionReviewTaskId(partition);
     const emitted = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: partTask, targets: partition });
     await pool(
@@ -569,13 +572,25 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
       [a.eventId, emitted.gateId],
     );
 
-    // Re-sweep: `b` is the SOLE pending member — it MUST resume via the frozen
-    // partition gate (batch prefix), never a per-event `lifecycle-review:<eventId>` gate.
+    // Re-sweep: `b` is the SOLE pending member — it MUST resume through the FROZEN
+    // membership (a batch-prefixed gate derived from the sealed set), never a
+    // per-event `lifecycle-review:<eventId>` gate. Under one-review-per-artifact
+    // (cinatra#3080) that gate is `b`'s OWN partition gate, not the one `a` was
+    // gated on: "one gate per artifact … never one gate combining them".
     await orch.sweepReviewOrchestration();
     const brow = await eventRow(b.eventId);
     expect(brow?.status).toBe("processed");
-    expect(brow?.continuation_address).toBe(emitted.gateId); // the SAME frozen partition gate
     const gates = await gatesForRun(runId);
+    const bTask = batchPartitionReviewTaskId([
+      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
+    ]);
+    const bGate = gates.find((g) => g.reviewTaskId === bTask);
+    expect(bGate).toBeDefined();
+    expect(bGate!.pinned).toEqual([
+      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
+    ]);
+    expect(brow?.continuation_address).toBe(bGate!.id);
+    expect(brow?.continuation_address).not.toBe(emitted.gateId); // `a`'s gate is `a`'s
     const perEventGate = gates.find((g) => g.reviewTaskId === autoReviewTaskId(b.eventId));
     expect(perEventGate).toBeUndefined(); // NO overlapping per-event gate
     expect((await repairStore.readBatchEpoch(epoch.id))?.status).toBe("partitioned");

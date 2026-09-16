@@ -168,7 +168,7 @@ export function isVerificationReopenTaskId(reviewTaskId: string): boolean {
 // ---------------------------------------------------------------------------
 
 /** The prefix a BATCH PARTITION gate's `reviewTaskId` carries — a coalesced
- * multi-artifact production, partitioned into ≤50-target atomicity units per the
+ * multi-artifact production, partitioned into one-artifact atomicity units per the
  * S0 batch contract (`lifecycle-batch.ts`). A superset of `AUTO_REVIEW_TASK_PREFIX`
  * so `isAutoReviewTaskId` still recognizes it (the expiry drain reasons over it;
  * the resume-delivery worker still skips it, being non-`wayflow-`). */

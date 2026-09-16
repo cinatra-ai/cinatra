@@ -34,7 +34,7 @@ import {
   autoReviewTaskId,
   batchPartitionReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
+import { sealBatch, partitionBatchTargetsPerArtifact } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
@@ -903,11 +903,18 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect((disp.rows[0] as { applied_at: Date | null }).applied_at).not.toBeNull();
   });
 
-  it("BATCH: a >50-target production COALESCES → sealed membership → deterministic ≤50 partitions → one aggregate gate per partition", async () => {
+  it("BATCH: a multi-artifact production COALESCES → sealed membership → ONE GATE PER ARTIFACT", async () => {
     // A single production (ONE producerRunId) emits 120 durable agent-produced
-    // artifacts with an EXTERNAL effect — a >50-target production the S0 batch
-    // contract must partition, each partition holding its members' external effect
-    // until the aggregate decision.
+    // artifacts with an EXTERNAL effect — a multi-artifact production the S0 batch
+    // contract seals as one membership, each member holding its own external
+    // effect until its own decision.
+    //
+    // ONE GATE PER ARTIFACT (cinatra#3080, the fix leg after the second proof
+    // round). The membership used to be cut into ≤50-target partitions, one gate
+    // each — which is how a five-artifact run came to raise ONE review over all
+    // five. `app-artifact-review.html` §III: "Work that made several artifacts
+    // raises one gate per artifact, in order … never one gate combining them."
+    // The partition is still the per-gate atomicity unit; it now holds one target.
     const runId = `run-batch-${randomUUID()}`;
     const N = 120;
     const events: ArtifactProducedEvent[] = [];
@@ -940,11 +947,11 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect(sealed.ok && sealed.sealed).toBe(true);
     if (!sealed.ok) throw new Error("seal failed");
     expect(sealed.targets.length).toBe(N);
-    const partitions = partitionBatchTargets(sealed.targets);
-    expect(partitions.length).toBe(Math.ceil(N / MAX_BATCH_PARTITION)); // 3
-    for (const p of partitions) expect(p.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
+    const partitions = partitionBatchTargetsPerArtifact(sealed.targets);
+    expect(partitions.length).toBe(N);
+    for (const p of partitions) expect(p.length).toBe(1);
     const expectedTaskIds = new Set(partitions.map((p) => batchPartitionReviewTaskId(p)));
-    expect(summary.gatesCreated).toBe(partitions.length); // one aggregate gate per partition
+    expect(summary.gatesCreated).toBe(partitions.length); // one gate per artifact
 
     // The gates the store actually created for this run.
     const gateRows = await pool(
@@ -961,12 +968,12 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     // Every gate's task id is one of the deterministically-derived partition ids.
     expect(new Set(gates.map((g) => g.review_task_id))).toEqual(expectedTaskIds);
 
-    // Each partition gate is a SINGLE aggregate commit unit: ≤50 pinned targets,
-    // an auto-gate expiry, and together the partitions cover EXACTLY the 120
-    // distinct targets (disjoint, complete).
+    // Each gate is a SINGLE aggregate commit unit over ONE pinned target, with an
+    // auto-gate expiry, and together they cover EXACTLY the 120 distinct targets
+    // (disjoint, complete).
     const coveredKeys = new Set<string>();
     for (const g of gates) {
-      expect(g.pinned_targets.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
+      expect(g.pinned_targets.length).toBe(1);
       expect(g.expires_at).not.toBeNull();
       for (const t of g.pinned_targets) coveredKeys.add(`${t.artifactId} ${t.representationRevisionId}`);
     }
@@ -1007,8 +1014,9 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       expect(v.held).toBe(true);
     }
 
-    // SINGLE AGGREGATE COMMIT: resolving ONE partition gate releases exactly its
-    // members' effects in one shot; the OTHER partitions' effects stay held.
+    // SINGLE AGGREGATE COMMIT: resolving ONE gate releases exactly the effect of
+    // the artifact it pins; every other artifact's effect stays held behind its
+    // own review.
     const first = gates[0];
     const firstKeys = new Set(
       first.pinned_targets.map((t) => `${t.artifactId} ${t.representationRevisionId}`),
@@ -1020,17 +1028,19 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
         artifactId: e.artifactId,
         representationRevisionId: e.representationRevisionId,
       });
-      // A member of the resolved partition is RELEASED; a member of a still-pending
-      // partition stays HELD — the aggregate commit is per-partition-atomic.
+      // The resolved gate's artifact is RELEASED; an artifact whose own review is
+      // still pending stays HELD — the commit is per-gate-atomic, and a gate is
+      // one artifact.
       expect(v.held).toBe(firstKeys.has(key) ? false : true);
     }
   });
 
-  it("BATCH: a >50 CHECKPOINTED production seals COMPLETELY even at limit=1 (per-production budget), and parks every member", async () => {
+  it("BATCH: a large CHECKPOINTED production seals COMPLETELY even at limit=1 (per-production budget), and parks every member", async () => {
     // 55 checkpointed revisions from ONE run. The pass budget is PRODUCTIONS, not
     // raw events: even limit=1 fetches this production's COMPLETE pending membership
-    // (55) and seals it whole → deterministic ⌈55/50⌉ = 2 partitions (50, 5). This
-    // is the property that makes the seal independent of the fetch window.
+    // (55) and seals it whole → 55 deterministic single-artifact partitions
+    // (cinatra#3080). This is the property that makes the seal independent of the
+    // fetch window.
     const runId = `run-cp-batch-${randomUUID()}`;
     const N = 55;
     const events: ArtifactProducedEvent[] = [];
@@ -1040,7 +1050,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
 
     const summary = await orch.sweepReviewOrchestration({ limit: 1 });
     expect(summary.batchesCoalesced).toBe(1);
-    expect(summary.gatesCreated).toBe(2); // 50 + 5
+    expect(summary.gatesCreated).toBe(N); // one gate per artifact
 
     // Every member PARKS on its partition gate (the checkpointed continuation) and
     // is linked — proving park precedes the atomic link.
@@ -1058,13 +1068,14 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       expect(p?.policy_decision_id).toBe(row!.continuation_address);
     }
 
-    // The two partition gates cover exactly the 55 distinct targets.
+    // The 55 gates cover exactly the 55 distinct targets, one each.
     const gateRows = await pool(
       `SELECT id, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1`,
       [runId],
     );
     const gates = gateRows.rows as Array<{ id: string; pinned_targets: Array<{ artifactId: string }> }>;
-    expect(gates.length).toBe(2);
+    expect(gates.length).toBe(N);
+    for (const g of gates) expect(g.pinned_targets.length).toBe(1);
     const total = gates.reduce((n, g) => n + g.pinned_targets.length, 0);
     expect(total).toBe(N);
   });

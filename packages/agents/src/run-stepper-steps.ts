@@ -69,3 +69,14 @@ export function buildRunStepperSteps(
       _policyDescription: s.description ?? null,
     }));
 }
+
+/**
+ * WHERE A REVIEW GATE SITS ON THE RUN’S RAIL is defined beside the gate
+ * predicate in orchestrator-gate-predicate.ts — the PURE leaf module every
+ * gated surface already reaches. Defining it here pulled this module (and
+ * step-work-name) onto four locked route graphs for one pure helper, which the
+ * route-graph ratchet measured as +2 on each. It is re-exported from this
+ * module’s published subpath so the review route keeps reading the run’s step
+ * list and the gate’s place from one import.
+ */
+export { reviewGateStepPosition } from "./orchestrator-gate-predicate";

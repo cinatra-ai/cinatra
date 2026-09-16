@@ -643,9 +643,16 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
 
     const gatesFirst = await gatesPinning(first.artifactId, first.representationRevisionId);
     const gatesSecond = await gatesPinning(second.artifactId, second.representationRevisionId);
+    // STILL COALESCES — ONE sealed epoch over the production's two members, which
+    // is what this case guards. What the epoch FANS INTO changed with
+    // cinatra#3080: "Work that made several artifacts raises one gate per
+    // artifact, in order … never one gate combining them", so each artifact is
+    // pinned by its OWN batch gate rather than the two sharing one row.
     expect(gatesFirst.length).toBe(1);
-    expect(gatesFirst[0].id).toBe(gatesSecond[0]?.id);
+    expect(gatesSecond.length).toBe(1);
+    expect(gatesFirst[0].id).not.toBe(gatesSecond[0].id);
     expect(isBatchAutoReviewTaskId(gatesFirst[0].review_task_id)).toBe(true);
+    expect(isBatchAutoReviewTaskId(gatesSecond[0].review_task_id)).toBe(true);
     const memberships = await batchEpochMemberships(runId);
     expect(memberships.length).toBe(1);
     expect(memberships[0].length).toBe(2);

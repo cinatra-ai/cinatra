@@ -1102,16 +1102,16 @@ function renderState(args: {
         <>
           {insideConversation ? null : <ReviewGateHeader pending={false} naming={naming} />}
           {/* §IV — the header the decision was taken on, kept over the reviewed
-              work: a settled gate names what was reviewed whether or not its
-              read-only preview has painted. */}
-          <ReviewTargetHeaders headers={targetHeaders} multiTarget={multiTargetGate} />
-          {/* §III — the reviewed target(s), read-only, exactly as the pending
-              reading drew them: one island, every pinned target, the renderer
-              resolved from the artifact's own type. The island carries no
-              decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+              work, inside the one panel the drawing draws: a settled gate names
+              what was reviewed whether or not its read-only preview has painted.
+              §III — the reviewed target, read-only, exactly as the pending reading
+              drew it, the renderer resolved from the artifact's own type. The
+              island carries no decision chrome on either reading. */}
+          <ReviewTargetPanel
+            headers={targetHeaders}
+            multiTarget={multiTargetGate}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -1151,13 +1151,16 @@ function renderState(args: {
               below it — the skeleton while the preview is still arriving and the
               recovery panel when it never did. Inert: no control, no revision
               picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} multiTarget={multiTargetGate} />
-          {/* §III — the target(s). ONE island renders every pinned target as
-              sibling panels, exactly as the page stacks them, because the
-              decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+          {/* §III/§IV — ONE PANEL: the immutable header over the representation,
+              inside one border. A LEGACY gate that still pins several targets
+              draws no panel and no header here — its bodies are composed together
+              in the island's one document, where each header can sit directly
+              over its own. */}
+          <ReviewTargetPanel
+            headers={targetHeaders}
+            multiTarget={multiTargetGate}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1790,12 +1793,18 @@ function ReviewTargetIsland({
   src,
   credentialed,
   onRetryResolve,
+  inPanel = false,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
+  /** Drawn INSIDE the target panel's frame (cinatra#3080), which owns the border
+   * and the rounding — §IV draws ONE panel per target, not a header card above a
+   * separate body card. Unframed (a legacy multi-target gate, whose bodies the
+   * island's own document pairs with their headers) it keeps its own frame. */
+  inPanel?: boolean;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -1857,7 +1866,11 @@ function ReviewTargetIsland({
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
-      className="relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      className={
+        inPanel
+          ? "relative overflow-hidden bg-surface-strong"
+          : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      }
     >
       <iframe
         // Keyed by src+attempt so a retry (or a genuinely new target) forces a
@@ -2036,12 +2049,27 @@ function revisionMarker(revisionId: string): { short: string; full: string } {
 /**
  * The header for ONE target. Drawn above the island, inside the gate's frame.
  */
-export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }): ReactElement {
+export function ReviewTargetHeader({
+  header,
+  inPanel = false,
+}: {
+  header: LifecycleTargetHeader;
+  /** Drawn INSIDE the target panel's own frame (cinatra#3080, the fix leg after
+   * the second proof round), where the panel draws the border and the header
+   * draws only the rule that separates it from the work beneath it. The island's
+   * own document still draws a header per target on the LEGACY multi-target
+   * reading, where each header tops its own framed panel and this is false. */
+  inPanel?: boolean;
+}): ReactElement {
   const revision = revisionMarker(header.revisionId);
   return (
     <div
       data-conformance-id="review-target-header"
-      className="rounded-control border border-line bg-surface-strong px-4 py-3"
+      className={
+        inPanel
+          ? "border-b border-line px-4 py-3"
+          : "rounded-control border border-line bg-surface-strong px-4 py-3"
+      }
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-sans text-sm font-bold text-foreground">{header.title}</span>
@@ -2107,6 +2135,69 @@ export function ReviewTargetHeaders({
         <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
       ))}
     </>
+  );
+}
+
+/**
+ * THE TARGET PANEL — ONE BORDER AROUND THE HEADER AND THE WORK (cinatra#3080,
+ * the fix leg after the second proof round).
+ *
+ * §IV of the ratified review drawing, in its own markup, draws ONE container per
+ * target: a bordered, rounded box whose first child is the immutable header
+ * (carrying the rule that separates it) and whose second is the representation
+ * slot. "Every target opens with a header that names what is under review and
+ * fixes it in place … Beneath the header sits the representation slot."
+ *
+ * WHAT THE SECOND ROUND GRADED. The card drew the header as its own rounded card
+ * and the island as another beneath it, with the frame's twelve-pixel gap between
+ * them — three boxes for one target once the island's document drew its own panel
+ * inside. The header and the work now share one frame, and the two halves draw
+ * none of their own (the island's document drops its panel's frame for a
+ * one-target gate; `review-target-panel.tsx` on the review route).
+ *
+ * A LEGACY GATE THAT PINS SEVERAL TARGETS draws NO panel here, exactly as it drew
+ * no header here: its bodies are composed together inside the island's one
+ * document, which is the only place each header can sit directly over its own
+ * body. That reading keeps the island's own frame.
+ */
+export function ReviewTargetPanel({
+  headers,
+  multiTarget = false,
+  islandSrc,
+  islandCredentialed,
+  onRetryResolve,
+}: {
+  headers: readonly LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target — read off the gate, never off
+   *  the header list this reader happened to be shown. */
+  multiTarget?: boolean;
+  islandSrc: string;
+  islandCredentialed: boolean;
+  onRetryResolve: () => void;
+}): ReactElement {
+  const only = !multiTarget && headers && headers.length === 1 ? headers[0] : null;
+  if (!only) {
+    return (
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        onRetryResolve={onRetryResolve}
+      />
+    );
+  }
+  return (
+    <div
+      data-conformance-id="review-target-panel"
+      className="overflow-hidden rounded-control border border-line bg-surface-strong"
+    >
+      <ReviewTargetHeader header={only} inPanel />
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        onRetryResolve={onRetryResolve}
+        inPanel
+      />
+    </div>
   );
 }
 
