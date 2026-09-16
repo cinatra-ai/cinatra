@@ -90,6 +90,7 @@ export function ReviewDecisionBar({
   suggestionDecisionsFor,
   suggestionSummary,
   picturePrompt,
+  regenerateRefusal,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
@@ -130,6 +131,23 @@ export function ReviewDecisionBar({
    * shows no suggestions or the reader cannot decide.
    */
   suggestionSummary?: { accepted: number; total: number };
+  /**
+   * WHY REGENERATE CANNOT BE PRESSED ON THIS GATE, when it cannot (cinatra#3080
+   * item 4). Absent on every ordinary review, and the floor is then
+   * byte-identical to what it was before this parameter existed.
+   *
+   * The issue's sentence: "A gate that still pins more than one target (legacy
+   * rows from before one-review-per-artifact) refuses Regenerate with a stated
+   * reason and allows Comment and Continue." The decision operation already
+   * refuses it; drawing the control LIVE anyway made that refusal something a
+   * person discovers by pressing, which is a control that fails on press. So
+   * the reason is drawn beside a disabled Regenerate, and the two acts the
+   * sentence keeps stay live.
+   *
+   * It is the REASON ITSELF, worded by the surface model and carried here
+   * verbatim, so a person hears the same answer on the button as at the API.
+   */
+  regenerateRefusal?: string | null;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -141,6 +159,9 @@ export function ReviewDecisionBar({
   const [outcome, setOutcome] = useState<ReviewSubmitOutcome | null>(null);
 
   const disabledReason = reviewDecideDisabledReason(permissions);
+  // The refusal is REGENERATE'S ALONE: it never disables Comment or Continue,
+  // which is the half of the sentence that keeps a legacy gate decidable.
+  const regenerateRefused = typeof regenerateRefusal === "string" && regenerateRefusal.length > 0;
   const decided = outcome?.kind === "decided";
   // A landed `changes-requested` (Regenerate) also RESOLVES the gate — as
   // superseded — so it settles the bar exactly like a Continue.
@@ -362,8 +383,8 @@ export function ReviewDecisionBar({
                 // `--surface`, which is genuinely per-palette.
                 className="border-input bg-surface text-foreground dark:border-input dark:bg-surface"
                 data-action="regenerate-review -> changes-requested"
-                disabled={!permissions.canDecide || pending}
-                aria-disabled={!permissions.canDecide}
+                disabled={!permissions.canDecide || regenerateRefused || pending}
+                aria-disabled={!permissions.canDecide || regenerateRefused}
                 onClick={() => submit("regenerate")}
               >
                 <RotateCcw aria-hidden="true" />
@@ -400,6 +421,19 @@ export function ReviewDecisionBar({
               </Button>
             </div>
           </div>
+
+          {/* ITEM 4 — WHY REGENERATE IS OUT, on screen rather than behind a
+              press. Drawn under the row it is about, in the same place and the
+              same treatment the permission reason below uses, because it
+              answers the same question: why can I not press that. */}
+          {regenerateRefused ? (
+            <p
+              data-conformance-id="review-regenerate-refused"
+              className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-muted-foreground"
+            >
+              {regenerateRefusal}
+            </p>
+          ) : null}
 
           {/* §V — disabled reason (a viewer who may see but not decide). */}
           {disabledReason ? (

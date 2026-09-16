@@ -71,13 +71,20 @@ function artifact(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function read(state: LifecycleCardState) {
+function reading(state: LifecycleCardState) {
   return readReviewTargetHeaders({
     viewType: "artifact_review_gate",
     ref: REF,
     state,
     actorCtx: ACTOR,
   });
+}
+
+/** The HEADERS alone — what every case below this file's cardinality section
+ *  reads, and what the answer carried before the gate's own pinned count rode
+ *  beside them (the convergence round of 2026-09-16). */
+async function read(state: LifecycleCardState) {
+  return (await reading(state))?.headers ?? null;
 }
 
 beforeEach(() => {
@@ -126,12 +133,14 @@ describe("a state that presents no target carries no header", () => {
 
   it("a kind with no review target never reads a gate", async () => {
     expect(
-      await readReviewTargetHeaders({
-        viewType: "verification_summary",
-        ref: REF,
-        state: PENDING,
-        actorCtx: ACTOR,
-      }),
+      (
+        await readReviewTargetHeaders({
+          viewType: "verification_summary",
+          ref: REF,
+          state: PENDING,
+          actorCtx: ACTOR,
+        })
+      )?.headers ?? null,
     ).toBeNull();
     expect(readReviewGate).not.toHaveBeenCalled();
   });
@@ -175,5 +184,55 @@ describe("a legal row can cost the header's wording, never the card", () => {
   it("a store that throws costs the header, never the card", async () => {
     readReviewGate.mockRejectedValue(new Error("gate store down"));
     expect(await read(PENDING)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE GATE'S PINNED CARDINALITY IS NOT THE READER'S HEADER COUNT
+// (cinatra#3080, the convergence round of 2026-09-16).
+// ---------------------------------------------------------------------------
+
+describe("the pinned count rides beside the headers, and is never derived from them", () => {
+  const TWO = [
+    { artifactId: "art-1", representationRevisionId: "rev_1" },
+    { artifactId: "art-2", representationRevisionId: "rev_2" },
+  ];
+
+  it("a LEGACY two-target gate with ONE unreadable row still answers TWO", async () => {
+    readReviewGate.mockResolvedValue(gate(TWO));
+    readArtifactForDetail
+      .mockReturnValueOnce(artifact())
+      .mockReturnValueOnce({ kind: "not-found" });
+
+    const answer = await reading(PENDING);
+
+    // One header — the row this reader may read — over a gate that pins two.
+    // Item 4's refusal of Regenerate is a fact about the GATE, so a surface that
+    // counted the headers here would draw the control live on exactly the gate
+    // that must refuse it.
+    expect(answer!.headers).toHaveLength(1);
+    expect(answer!.pinnedTargetCount).toBe(2);
+  });
+
+  it("a gate whose rows this reader may read NONE of still names its cardinality", async () => {
+    readReviewGate.mockResolvedValue(gate(TWO));
+    readArtifactForDetail.mockReturnValue({ kind: "denied" });
+
+    const answer = await reading(PENDING);
+
+    expect(answer).not.toBeNull();
+    expect(answer!.headers).toBeNull();
+    expect(answer!.pinnedTargetCount).toBe(2);
+  });
+
+  it("the ordinary one-target gate answers ONE, with its header", async () => {
+    const answer = await reading(PENDING);
+    expect(answer!.headers).toHaveLength(1);
+    expect(answer!.pinnedTargetCount).toBe(1);
+  });
+
+  it("a reading that never reached the gate carries no count either", async () => {
+    readReviewGate.mockRejectedValue(new Error("gate store down"));
+    expect(await reading(PENDING)).toBeNull();
   });
 });

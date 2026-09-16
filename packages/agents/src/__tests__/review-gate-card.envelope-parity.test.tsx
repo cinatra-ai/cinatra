@@ -318,8 +318,20 @@ describe("review card render parity across the resolve envelope", () => {
           }),
         );
       }
+      // THE STRIP IS THE PAGE'S (cinatra#3080, the fix leg after the first proof
+      // round). `app-artifact-review.html` §III gives the gate header to the run
+      // detail; `app-lifecycle-cards.html` §II gives the card in a thread the
+      // target panel and the floor and no third part. So every page host's
+      // reading MINUS that one strip is the conversation's reading — subtracted
+      // here rather than asserted away, so any other divergence still fails.
+      const withoutTheStrip = (html: string): string => {
+        const holder = document.createElement("div");
+        holder.innerHTML = html;
+        holder.querySelector('[data-conformance-id="review-gate-header"]')?.remove();
+        return holder.innerHTML;
+      };
       for (const host of HOSTS) {
-        expect(drawn[host], `${host} draws its own settled card`).toBe(
+        expect(withoutTheStrip(drawn[host]!), `${host} draws its own settled card`).toBe(
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);

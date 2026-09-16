@@ -322,7 +322,7 @@ export async function POST(request: Request): Promise<Response> {
   // top of that. The header rides the resolve answer rather than the wire
   // payload, so the DATA_PART in the persisted, LLM-visible transcript still
   // carries a ref and nothing else.
-  const targetHeaders = await readReviewTargetHeaders({
+  const targetReading = await readReviewTargetHeaders({
     viewType: parsed.data.viewType,
     ref: parsed.data.ref,
     state: withOutcome,
@@ -343,7 +343,10 @@ export async function POST(request: Request): Promise<Response> {
       state: withOutcome,
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
-      ...(targetHeaders ? { targetHeaders } : {}),
+      ...(targetReading?.headers ? { targetHeaders: targetReading.headers } : {}),
+      // The gate's own pinned cardinality, beside the reader's header list and
+      // never derived from it — see `ReviewTargetHeaderReading`.
+      ...(targetReading ? { pinnedTargetCount: targetReading.pinnedTargetCount } : {}),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

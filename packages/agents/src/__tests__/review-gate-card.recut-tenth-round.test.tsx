@@ -197,10 +197,13 @@ describe("every pinned target gets a representation slot on the card", () => {
       const { container } = mountCard();
       await settle();
 
-      // One header per pinned target — the card's reading of the pinned set.
+      // The card's reading of the pinned set: one header for a ONE-target gate
+      // (every gate minted under one-review-per-artifact), and none for a legacy
+      // multi-target row, whose headers ride their own bodies inside the island
+      // (cinatra#3080, the fix leg after the first proof round).
       expect(
         container.querySelectorAll('[data-conformance-id="review-target-header"]').length,
-      ).toBe(count);
+      ).toBe(count > 1 ? 0 : count);
 
       // Room for one representation slot per header beneath them: the island
       // draws every panel in one document and names how tall that came out, so

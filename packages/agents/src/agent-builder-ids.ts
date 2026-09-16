@@ -71,3 +71,61 @@ export const ARTIFACT_REVIEW_REDIRECT_RENDERER_ID = id("artifact-review-redirect
 
 /** Skill id: the agentic agent-builder compiler skill. */
 export const COMPILER_AGENTIC_SKILL_ID = id("agent-builder-compiler-agentic");
+
+// ---------------------------------------------------------------------------
+// THE DECLARED REVIEW'S GATE IDS — one review per artifact (cinatra#3080).
+// ---------------------------------------------------------------------------
+
+/**
+ * The mark a COMPANION declared-review gate's `reviewTaskId` carries.
+ *
+ * A marked step that produced several artifacts raises ONE REVIEW PER ARTIFACT
+ * (issue #3080 item 4: "no new multi-target gate is minted"; the drawing, twice:
+ * `app-lifecycle-cards.html` §II "a card carries one target panel over one
+ * floor", `app-artifact-review.html` §VI "One artifact per review, one reference
+ * per gate"). The FIRST artifact keeps the run's own `wayflow-<taskId>` gate —
+ * the id the resume wire, the card ref, the park moment and the deep link all
+ * already name, so nothing that addresses this run's review moves — and every
+ * further artifact opens a COMPANION gate whose id is that carrier plus this
+ * mark and the artifact's 1-based ordinal.
+ *
+ * It is DISJOINT from every other family by construction: an auto-gate id starts
+ * `lifecycle-review:` and a carrier id is `wayflow-<taskId>` with no mark in it,
+ * so `isDeclaredReviewCompanionTaskId` recognizes exactly the companions and the
+ * resume-delivery worker keeps resuming the run on the carrier alone.
+ */
+export const DECLARED_REVIEW_COMPANION_MARK = "~artifact:";
+
+/** The companion gate id for the `ordinal`-th artifact (1-based) of a declared
+ *  review whose carrier gate is `carrierTaskId`. Deterministic and injective on
+ *  `(carrier, ordinal)`, so a re-driven emit of the same artifact re-derives the
+ *  same id and the gate emitter (idempotent on `(run, task)`) is a no-op. */
+export function declaredReviewCompanionTaskId(carrierTaskId: string, ordinal: number): string {
+  return `${carrierTaskId}${DECLARED_REVIEW_COMPANION_MARK}${ordinal}`;
+}
+
+/** The EXACT shape `declaredReviewCompanionTaskId` mints: a non-empty carrier,
+ *  the mark, and the artifact's ordinal — which is never 1, because the first
+ *  artifact keeps the carrier gate itself. Built from the mark so the minter and
+ *  the reader can never drift apart. */
+const DECLARED_REVIEW_COMPANION_SHAPE = new RegExp(
+  `^.+${DECLARED_REVIEW_COMPANION_MARK.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([0-9]+)$`,
+);
+
+/** Whether a `reviewTaskId` names a COMPANION gate of a declared review — a real
+ *  review of a real artifact that carries no WayFlow resume wire of its own,
+ *  because its run is parked on the carrier gate.
+ *
+ *  READ AS THE MINTED SHAPE, NEVER AS A SUBSTRING (the convergence round of
+ *  2026-09-16). A carrier id is a WayFlow task id this module does not author,
+ *  so "contains the mark" is a claim about a string nothing here controls: a
+ *  carrier that merely CARRIED the mark would be read as a companion and the
+ *  resume-delivery worker would mark its intent delivered without ever resuming
+ *  the parked run. The shape — the mark, then an ordinal of 2 or more, then the
+ *  end — is what the minter above produces and nothing else, so the two families
+ *  are disjoint by construction rather than by assumption. */
+export function isDeclaredReviewCompanionTaskId(reviewTaskId: string): boolean {
+  const match = DECLARED_REVIEW_COMPANION_SHAPE.exec(reviewTaskId);
+  if (!match) return false;
+  return Number.parseInt(match[1], 10) >= 2;
+}

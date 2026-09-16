@@ -296,9 +296,25 @@ describe("one renderer, four first-party hosts", () => {
       unmount();
       cleanup();
     }
-    expect(drawn.run_card).toBe(drawn.chat_thread);
-    expect(drawn.page_gate_region).toBe(drawn.chat_thread);
-    expect(drawn.site_widget).toBe(drawn.chat_thread);
+    // THE THREE PAGE HOSTS ARE BYTE-IDENTICAL, as they always were.
+    expect(drawn.page_gate_region).toBe(drawn.run_card);
+    expect(drawn.site_widget).toBe(drawn.run_card);
+
+    // AND THE CONVERSATION DIFFERS BY EXACTLY ONE THING: the gate header strip
+    // (cinatra#3080, the fix leg after the first proof round).
+    // `app-artifact-review.html` §III gives that strip to the run detail — "the
+    // gate opens with a gate header ..., then the review target, then the
+    // decision bar" — while `app-lifecycle-cards.html` §II gives the card in a
+    // thread two parts and no third: "the target panel naming what is under
+    // review and pinning its exact revision, then the decision floor that
+    // governs it". The strip is subtracted here rather than asserted away, so
+    // any OTHER difference between the two readings still fails this case.
+    const pageWithoutTheStrip = document.createElement("div");
+    pageWithoutTheStrip.innerHTML = drawn.run_card!;
+    pageWithoutTheStrip
+      .querySelector('[data-conformance-id="review-gate-header"]')!
+      .remove();
+    expect(drawn.chat_thread).toBe(pageWithoutTheStrip.innerHTML);
   });
 
   // The ratified root contract, asserted on real DOM: the card's own identity,

@@ -158,6 +158,7 @@ import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
+import { REGENERATE_MULTI_TARGET_REASON } from "@/lib/artifacts/review-surface-model";
 
 import {
   useComposerFocusBinding,
@@ -613,6 +614,21 @@ export function ReviewGateCard({
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
   const targetHeaders: LifecycleTargetHeader[] | null = resolved?.targetHeaders ?? null;
+  // IS THIS A LEGACY GATE THAT STILL PINS MORE THAN ONE TARGET (#3080 item 4)?
+  //
+  // READ OFF THE GATE, NOT OFF THE HEADER LIST (the convergence round of
+  // 2026-09-16). The answer composes no header for a target whose actor-scoped
+  // read is not `ok`, so a two-target gate with one unreadable row hands this
+  // card ONE header: reading the cardinality there would draw Regenerate live on
+  // exactly the gate that must refuse it — a control that fails on press — and
+  // would put the card's own header back above the island that is already
+  // pairing each header with its own panel. An answer composed before the field
+  // existed carries `null` and falls back to the header list, which is the
+  // reading this card had then.
+  const multiTargetGate: boolean =
+    resolved?.pinnedTargetCount != null
+      ? resolved.pinnedTargetCount > 1
+      : (targetHeaders?.length ?? 0) > 1;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -875,6 +891,8 @@ export function ReviewGateCard({
   const body = renderState({
     state,
     targetHeaders,
+    multiTargetGate,
+    insideConversation,
     naming: {
       agentLabel: agentLabel ?? null,
       runId: runId ?? null,
@@ -969,6 +987,30 @@ function renderState(args: {
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target — a legacy row from before
+   * one-review-per-artifact (#3080 item 4). Never derived from `targetHeaders`;
+   * see where it is read. */
+  multiTargetGate: boolean;
+  /**
+   * IS THIS CARD DRAWN INSIDE A CONVERSATION (cinatra#3080, the fix leg after
+   * the first proof round)?
+   *
+   * THE HEADER STRIP IS THE PAGE'S, NOT THE CARD'S. `app-artifact-review.html`
+   * §III gives the strip to the run detail — "the gate opens with a gate header
+   * ..., then the review target, then the decision bar and the conversational
+   * prompt window" — and `app-lifecycle-cards.html` §II gives the card in a
+   * thread two parts and no third: "the target panel naming what is under
+   * review and pinning its exact revision, then the decision floor that governs
+   * it", with §II.1 saying it again from the other side ("what the card puts
+   * around the display is the floor"). The turn's own prose is the assistant's
+   * line ABOVE the card; a strip inside it repeats in the card's voice what the
+   * thread already said in the assistant's.
+   *
+   * READ AS CONTAINMENT, NOT AS A HOST, exactly as #3481's window is: the
+   * inline run panel mounts this same card under its own `run_card` declaration
+   * while being drawn between the thread's turns.
+   */
+  insideConversation: boolean;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
    * the request road (cinatra#3481). Taken as a factory so the one permission
@@ -989,6 +1031,8 @@ function renderState(args: {
     state,
     naming,
     targetHeaders,
+    multiTargetGate,
+    insideConversation,
     promptWindow,
     islandSrc,
     islandCredentialed,
@@ -1006,7 +1050,7 @@ function renderState(args: {
     case "loading":
       return (
         <>
-          <ReviewGateHeader pending naming={naming} />
+          {insideConversation ? null : <ReviewGateHeader pending naming={naming} />}
           <ReviewGateLoading />
         </>
       );
@@ -1056,11 +1100,11 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} naming={naming} />
+          {insideConversation ? null : <ReviewGateHeader pending={false} naming={naming} />}
           {/* §IV — the header the decision was taken on, kept over the reviewed
               work: a settled gate names what was reviewed whether or not its
               read-only preview has painted. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
+          <ReviewTargetHeaders headers={targetHeaders} multiTarget={multiTargetGate} />
           {/* §III — the reviewed target(s), read-only, exactly as the pending
               reading drew them: one island, every pinned target, the renderer
               resolved from the artifact's own type. The island carries no
@@ -1100,14 +1144,14 @@ function renderState(args: {
       const suggestions = state.suggestions ?? [];
       return (
         <>
-          <ReviewGateHeader pending naming={naming} />
+          {insideConversation ? null : <ReviewGateHeader pending naming={naming} />}
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
               below it — the skeleton while the preview is still arriving and the
               recovery panel when it never did. Inert: no control, no revision
               picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
+          <ReviewTargetHeaders headers={targetHeaders} multiTarget={multiTargetGate} />
           {/* §III — the target(s). ONE island renders every pinned target as
               sibling panels, exactly as the page stacks them, because the
               decision below is all-or-nothing across the whole gate. */}
@@ -1137,6 +1181,13 @@ function renderState(args: {
             permissions={permissions}
             submitAction={submit}
             picturePrompt={picturePrompt}
+            // ITEM 4 — A LEGACY MULTI-TARGET GATE REFUSES REGENERATE, and says
+            // so before it is pressed. The pinned set is read off the GATE (see
+            // `multiTargetGate`), never off the header list this reader happened
+            // to be shown. The sentence is the surface model's, the same one the
+            // decision operation refuses with — never a second wording of the
+            // same refusal.
+            regenerateRefusal={multiTargetGate ? REGENERATE_MULTI_TARGET_REASON : null}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1671,7 +1722,10 @@ export function ReviewGateHeader({
 }): ReactElement {
   const namingLine = reviewGateNamingLine(naming);
   return (
-    <div className="flex flex-wrap items-baseline gap-2 border-b border-line pb-2.5">
+    <div
+      data-conformance-id="review-gate-header"
+      className="flex flex-wrap items-baseline gap-2 border-b border-line pb-2.5"
+    >
       <span className="font-sans text-sm font-bold text-foreground">
         {pending ? "Review requested" : "Review"}
       </span>
@@ -2020,10 +2074,33 @@ export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }
  */
 export function ReviewTargetHeaders({
   headers,
+  multiTarget = false,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target, which is not the same question
+   *  as how many headers this reader was given — the convergence round of
+   *  2026-09-16. */
+  multiTarget?: boolean;
 }): ReactElement | null {
   if (!headers || headers.length === 0) return null;
+  // EACH ARTIFACT IS ONE BLOCK — ITS HEADER DIRECTLY OVER ITS OWN BODY
+  // (cinatra#3080, the fix leg after the first proof round; the ruling of
+  // 2026-09-13, and §IV: "Every target OPENS with a header ... Beneath the
+  // header sits the representation slot").
+  //
+  // ONE header is the ordinary reading and it stays HERE, above the island,
+  // where it survives the skeleton and the recovery panel (#3141 item 7) — and
+  // it is the only reading a gate minted under one-review-per-artifact can have.
+  //
+  // SEVERAL headers is a LEGACY gate, and stacking them here is exactly the
+  // grouping the ruling forbids: the bodies are composed together inside the
+  // island's one document, so a block drawn outside that frame can only be every
+  // header over every body. That reading is the island's to draw, where each
+  // header can sit directly over its own panel, so the card draws none. The
+  // trade is knowingly taken and it is bounded by history: a legacy multi-target
+  // gate carries no header while its frame is still arriving, and no gate minted
+  // from now on can be one.
+  if (multiTarget || headers.length > 1) return null;
   return (
     <>
       {headers.map((header) => (

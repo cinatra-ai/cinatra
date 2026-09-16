@@ -148,6 +148,65 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect((delivered as { review: { decision: string } }).review.decision).toBe("rejected");
   });
 
+  // ONE REVIEW PER ARTIFACT (cinatra#3080 item 4). A marked step that made
+  // several artifacts raises one gate per artifact: the FIRST keeps the run's
+  // own `wayflow-<taskId>` carrier — the gate the run is parked on and the only
+  // one with a resume wire — and each further artifact opens a COMPANION gate.
+  // A companion's terminal decision still commits a resume intent (the decision
+  // core commits one for every terminal decision), and that intent has no
+  // WayFlow wire to travel: its run continuation is the carrier's. Left to the
+  // `wayflow-` prefix test alone the companion id passes it, the worker slices a
+  // task id no run has, and the intent churns toward dead-letter.
+  it("a COMPANION gate has no resume wire of its own — marked done, never re-sent down the carrier's", async () => {
+    // The latest-task map has LAPSED, which is the reading that otherwise
+    // delivers best-effort: without the companion being recognized the worker
+    // slices `task-1~artifact:2`, resolves the run anyway (the column read is
+    // by run, not by the sliced id) and sends the companion's decision down the
+    // CARRIER's wire — resuming the run on a review it is not parked on.
+    resolveLatestSpy.mockResolvedValue(null);
+    const outcome = await deliverArtifactReviewResumeIntent(
+      intent({ gateId: "gate-companion", reviewTaskId: "wayflow-task-1~artifact:2" }),
+    );
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith(
+      "gate-companion",
+      "lease-abc",
+    );
+  });
+
+  // THE FAMILY IS READ AS A SHAPE, NOT AS A SUBSTRING (the convergence round of
+  // 2026-09-16). A carrier `reviewTaskId` is `wayflow-` plus a task id this
+  // product does not author, so "contains the mark" is a claim about a string
+  // nothing in the mint controls. A carrier whose own task id happens to carry
+  // it would be read as a companion, its intent marked delivered, and the run it
+  // is actually parked on would never be resumed — a dead-ended run, which is
+  // the one outcome the companion branch exists to avoid.
+  it("a CARRIER whose task id merely contains the mark is NOT a companion — it resumes its run", async () => {
+    resolveLatestSpy.mockResolvedValue("task-1~artifact:notes");
+    const outcome = await deliverArtifactReviewResumeIntent(
+      intent({ gateId: "gate-carrier", reviewTaskId: "wayflow-task-1~artifact:notes" }),
+    );
+    expect(outcome).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith(
+      "gate-carrier",
+      "lease-abc",
+    );
+  });
+
+  // An ordinal of 1 is never minted — the first artifact keeps the carrier gate
+  // — so a row shaped that way is not a companion either.
+  it("the mark with a ONE ordinal is not a companion: the first artifact keeps the carrier", async () => {
+    resolveLatestSpy.mockResolvedValue("task-1~artifact:1");
+    const outcome = await deliverArtifactReviewResumeIntent(
+      intent({ gateId: "gate-ord1", reviewTaskId: "wayflow-task-1~artifact:1" }),
+    );
+    expect(outcome).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("is idempotent: a run that already left pending_approval is marked done WITHOUT re-sending", async () => {
     storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "completed" }));
     const outcome = await deliverArtifactReviewResumeIntent(intent());

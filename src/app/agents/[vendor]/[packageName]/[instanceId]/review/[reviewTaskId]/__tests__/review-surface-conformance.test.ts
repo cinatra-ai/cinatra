@@ -156,6 +156,23 @@ const HOST_STANDARD_IDS = new Set([
   // the identical reason the anchors above are: this suite's closed set is the
   // older ratified revision's, and the redrawn floor is not in it.
   "review-regenerate-prompt-field",
+  // cinatra#3080, the fix leg after the first proof round — the GATE HEADER
+  // STRIP. Not a new part of the surface: it is the strip this route has always
+  // drawn at the head of the gate, which `app-artifact-review.html` §III fixes
+  // there ("the gate opens with a gate header ..., then the review target, then
+  // the decision bar"). It is anchored now because the card drawn inside a
+  // CONVERSATION must not carry it — `app-lifecycle-cards.html` §II gives that
+  // card the target panel and the floor and no third part — and an anchor is
+  // what makes "the page keeps it, the thread drops it" checkable.
+  "review-gate-header",
+  // cinatra#3080 item 4 — WHY REGENERATE IS OUT on a legacy multi-target gate.
+  // The issue's own sentence: "A gate that still pins more than one target
+  // (legacy rows from before one-review-per-artifact) refuses Regenerate with a
+  // stated reason and allows Comment and Continue." It is the same kind of
+  // reading as `review-decision-disabled` — why a control cannot be pressed,
+  // drawn where that one is drawn — and it is anchored separately because it is
+  // about ONE control rather than about the reader's access.
+  "review-regenerate-refused",
   // cinatra#2997 — the RUN CARD'S placeholder for the review screen. It is not a
   // review-page anchor at all: this route never draws it, and the module it
   // lives in is scanned here only because that module owns the review screen's

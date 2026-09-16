@@ -103,7 +103,15 @@ describe("the settled gate keeps its header, minus the request and the ask", () 
       const container = await settledOn(host, "changes_requested");
       // The heading itself, as its own element — not a substring of the page.
       const spans = Array.from(container.querySelectorAll("span")).map((s) => s.textContent);
-      expect(spans).toContain("Review");
+      // THE STRIP IS THE PAGE'S, NOT THE CARD IN A THREAD'S (cinatra#3080, the
+      // fix leg after the first proof round). `app-lifecycle-cards.html` §II
+      // gives the card in a conversation two parts and no third — the target
+      // panel, then the floor — while `app-artifact-review.html` §III gives the
+      // gate header to the run detail. So the settled reading is headed on the
+      // page hosts and headless in the thread, where the assistant's own line
+      // above the card already says what it is.
+      if (host === "chat_thread") expect(spans).not.toContain("Review");
+      else expect(spans).toContain("Review");
       expect(container.textContent).not.toContain("Review requested");
       expect(container.textContent).not.toContain("Awaiting your decision");
       // The floor is what the settled annotation takes away, and it is gone.

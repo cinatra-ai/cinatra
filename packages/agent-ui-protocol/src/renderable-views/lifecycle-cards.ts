@@ -1246,6 +1246,12 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
     /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
      * answer carried none. See {@link LifecycleTargetHeader}. */
     targetHeaders: LifecycleTargetHeader[] | null;
+    /** HOW MANY TARGETS THE GATE PINS (cinatra#3080), or `null` when the answer
+     * carried none — an answer composed before this field existed, which the
+     * card reads exactly as it read one then. NEVER `targetHeaders.length`: a
+     * header is withheld for a target this reader may not read, and the refusal
+     * of Regenerate on a legacy multi-target gate is a fact about the GATE. */
+    pinnedTargetCount: number | null;
   };
 
 /**
@@ -1354,6 +1360,17 @@ const LIFECYCLE_RESOLVE_ASIDE_READERS: {
  * that attached one of those is a producer whose other answers cannot be
  * trusted either — the same posture `absent` + body already takes.
  */
+function readPinnedTargetCount(raw: unknown): number | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return undefined;
+  if (raw > LIFECYCLE_PINNED_TARGET_COUNT_MAX) return undefined;
+  return raw;
+}
+
+/** A pinned set this large is not a gate any road in this product mints; a count
+ *  beyond it is a shape this build cannot have composed. */
+const LIFECYCLE_PINNED_TARGET_COUNT_MAX = 10_000;
+
 function readIslandSrc(raw: unknown): string | null | undefined {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "string") return undefined;
@@ -1392,24 +1409,31 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     if (islandSrc === undefined) return null;
     const targetHeaders = readTargetHeaders(record.targetHeaders);
     if (targetHeaders === undefined) return null;
+    const pinnedTargetCount = readPinnedTargetCount(record.pinnedTargetCount);
+    if (pinnedTargetCount === undefined) return null;
     // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
     // a wrong body is. Only the review gate has a review target, so a header
     // arriving beside a verification summary or a schedule proposal is an answer
     // to a question that kind never asks — a shape this build cannot have
     // composed, and therefore one it will not read.
     if (expectedKind !== "artifact_review_gate" && targetHeaders !== null) return null;
+    // The cardinality belongs to the same one kind, and is refused beside every
+    // other exactly as a header is.
+    if (expectedKind !== "artifact_review_gate" && pinnedTargetCount !== null) return null;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
       if (bodyPresent || islandSrc !== null || targetHeaders !== null) return null;
+      if (pinnedTargetCount !== null) return null;
       return {
         kind: expectedKind,
         state: state.data,
         body: null,
         islandSrc: null,
         targetHeaders: null,
+        pinnedTargetCount: null,
         aside: null,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -1429,6 +1453,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         body: null,
         islandSrc,
         targetHeaders,
+        pinnedTargetCount,
         aside,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -1442,6 +1467,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       body: body.data,
       islandSrc,
       targetHeaders,
+      pinnedTargetCount,
       aside,
     } as LifecycleResolveAnswerFor<K>;
   } catch {

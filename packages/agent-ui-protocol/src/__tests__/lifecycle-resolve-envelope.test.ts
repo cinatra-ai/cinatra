@@ -105,7 +105,13 @@ describe("each kind round-trips the body it is authorized to carry", () => {
     // The answer adds the two fields the envelope itself does not carry: the
     // server-minted island URL (cinatra#2754), and the kind's own aside
     // (cinatra#3193) — `null` on a kind that declares none.
-    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
+    expect(parsed).toEqual({
+      ...wire,
+      islandSrc: null,
+      targetHeaders: null,
+      pinnedTargetCount: null,
+      aside: null,
+    });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -127,7 +133,13 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
+    ).toEqual({
+      ...wire,
+      islandSrc: null,
+      targetHeaders: null,
+      pinnedTargetCount: null,
+      aside: null,
+    });
   });
 
   it("verification_summary tells `null` advisory comments apart from none", () => {
@@ -169,6 +181,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         ...wire,
         islandSrc: null,
         targetHeaders: null,
+        pinnedTargetCount: null,
         // The schedule kind declares an aside; an answer that carried no
         // fired signal reads as "not fired" rather than refusing (#3193).
         aside: { firedOnce: false, durationCopy: null },
@@ -421,6 +434,7 @@ describe("`absent` reveals nothing about the target", () => {
         // next to the collapse of every denial would be the oracle the collapse
         // exists to close.
         targetHeaders: null,
+        pinnedTargetCount: null,
         // And its kind's own aside with it (cinatra#3193), for the same reason.
         aside: null,
       });
@@ -434,6 +448,7 @@ describe("`absent` reveals nothing about the target", () => {
         body: null,
         islandSrc: null,
         targetHeaders: null,
+        pinnedTargetCount: null,
         // An absence carries nothing beside itself, on every kind.
         aside: null,
       });
@@ -595,6 +610,7 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
       body: null,
       islandSrc: null,
       targetHeaders: null,
+      pinnedTargetCount: null,
       aside: null,
     });
   });
@@ -699,5 +715,71 @@ describe("the island URL rides the answer", () => {
     });
     expect(parsed?.body).toEqual(VERIFICATION_BODY);
     expect(parsed?.islandSrc).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE GATE'S PINNED CARDINALITY ON THE WIRE (cinatra#3080, the convergence
+// round of 2026-09-16).
+// ---------------------------------------------------------------------------
+//
+// It rides the answer BESIDE the headers because it is not derivable from them:
+// a header is withheld for a pinned target this reader may not read, and item
+// 4's refusal of Regenerate is a fact about the gate. Read like every other
+// field on this answer — by name, refused on a shape this build cannot have
+// composed, and `null` for an answer composed before it existed.
+
+describe("the pinned target count", () => {
+  const REVIEW_STATE = { state: "pending", canDecide: true, canComment: true };
+
+  it("rides through on the review kind", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: REVIEW_STATE,
+      body: null,
+      pinnedTargetCount: 3,
+    });
+    expect(parsed!.pinnedTargetCount).toBe(3);
+  });
+
+  it("is `null` on an answer composed before the field existed", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: REVIEW_STATE,
+      body: null,
+    });
+    expect(parsed!.pinnedTargetCount).toBeNull();
+  });
+
+  it("REFUSES a shape this build cannot have composed", () => {
+    for (const bad of ["2", 2.5, -1, Number.NaN, 10_001, {}, []]) {
+      expect(
+        parseLifecycleResolveEnvelope("artifact_review_gate", {
+          kind: "artifact_review_gate",
+          state: REVIEW_STATE,
+          body: null,
+          pinnedTargetCount: bad,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("is refused beside a kind that has no review target, and beside `absent`", () => {
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", {
+        kind: "verification_summary",
+        state: { state: "advisory" },
+        body: VERIFICATION_BODY,
+        pinnedTargetCount: 1,
+      }),
+    ).toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "absent" },
+        body: null,
+        pinnedTargetCount: 1,
+      }),
+    ).toBeNull();
   });
 });
