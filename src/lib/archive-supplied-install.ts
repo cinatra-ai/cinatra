@@ -68,6 +68,15 @@ export type SuppliedKindValidatorResolver = (
 export type SuppliedArchivePreview = ResolvedSuppliedPackageTree & {
   /** Ready to record: honest `local` provenance, never a registry claim. */
   provenance: Extract<SuppliedPackageProvenance, { type: "local" }>;
+  /**
+   * The single generated wrapper folder this read STRIPPED, when it stripped
+   * one ("thing-main"). A repository host names that folder after the
+   * repository and the ref the archive was generated for, so it is the one
+   * thing a downloaded archive says about WHERE its bytes come from, and the
+   * repository road reads it rather than inventing a name. Absent whenever
+   * nothing was stripped.
+   */
+  generatedRootFolder?: string;
 };
 
 /**
@@ -105,14 +114,14 @@ export type SuppliedArchiveReadOptions = {
  */
 function unwrapGeneratedRootFolder(
   entries: Map<string, Uint8Array>,
-): Map<string, Uint8Array> {
+): { entries: Map<string, Uint8Array>; root: string | null } {
   const roots = new Set<string>();
   for (const name of entries.keys()) {
     const slash = name.indexOf("/");
-    if (slash <= 0) return entries; // something already sits at the root
+    if (slash <= 0) return { entries, root: null }; // something already sits at the root
     roots.add(name.slice(0, slash));
   }
-  if (roots.size !== 1) return entries;
+  if (roots.size !== 1) return { entries, root: null };
   const [root] = roots;
   const prefix = `${root}/`;
   const unwrapped = new Map<string, Uint8Array>();
@@ -128,7 +137,10 @@ function unwrapGeneratedRootFolder(
     }
     unwrapped.set(rel, bytes);
   }
-  return unwrapped.size > 0 ? unwrapped : entries;
+  // THE NAME IS REPORTED, NEVER ACTED ON HERE. What was stripped is said out
+  // loud so a caller that knows what the folder means can read it; nothing on
+  // this road trusts it, and a strip that produced nothing reports nothing.
+  return unwrapped.size > 0 ? { entries: unwrapped, root } : { entries, root: null };
 }
 
 /**
@@ -149,11 +161,12 @@ export async function previewSuppliedArchive(
         ) as ArrayBuffer)
       : archive;
   const entries = await readZipEntries(buffer);
-  const resolved = await resolveSuppliedArchive(
-    options?.unwrapGeneratedRootFolder === true ? unwrapGeneratedRootFolder(entries) : entries,
-  );
+  const stripped =
+    options?.unwrapGeneratedRootFolder === true ? unwrapGeneratedRootFolder(entries) : null;
+  const resolved = await resolveSuppliedArchive(stripped ? stripped.entries : entries);
   return {
     ...resolved,
+    ...(stripped?.root ? { generatedRootFolder: stripped.root } : {}),
     provenance: {
       type: "local",
       path: SUPPLIED_ARCHIVE_PENDING_PATH,

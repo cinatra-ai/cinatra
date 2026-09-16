@@ -311,8 +311,15 @@ export type FetchedRepositoryArchive = {
   archive: Uint8Array;
   /** The immutable commit id the archive itself declares. */
   resolvedSha: string;
-  /** The ref as submitted, or "HEAD" when the link named none. */
-  ref: string;
+  /** The ref as submitted, or null when the link named none. */
+  ref: string | null;
+  /**
+   * The repository name the bytes ACTUALLY came from — the last endpoint in the
+   * redirect chain, which is the repository's current name when the link named
+   * one it has since been renamed away from. The generated root folder is named
+   * after THAT name, so it is that name the folder is read against.
+   */
+  effectiveRepo: string;
   /** The public endpoint the bytes came from - shown, so the operator can check it. */
   archiveUrl: string;
 };
@@ -453,7 +460,14 @@ export async function fetchSuppliedRepositoryArchive(
   return {
     archive: new Uint8Array(buffer),
     resolvedSha: declared,
-    ref: input.ref ?? "HEAD",
+    // A LINK THAT NAMED NO REF SAYS SO, and says it as nothing rather than as a
+    // word. "HEAD" is the sentinel the canonical row's validator rejects, so a
+    // download that minted it here was minting the refusal three steps later.
+    ref: input.ref,
+    // READ OFF THE ENDPOINT THAT SERVED THE BYTES, not off the link as typed: a
+    // renamed repository is served under its current name, and its archive's
+    // root folder carries that name.
+    effectiveRepo: readArchiveEndpointParts(target)?.repo || input.repo,
     archiveUrl,
   };
 }
@@ -498,6 +512,101 @@ async function readCappedBody(
   return out.buffer;
 }
 
+/**
+ * The sentinels a canonical row may NEVER carry — the set
+ * `validateExtensionSource` refuses a source for (`canonical-types.ts`,
+ * PROVENANCE_PLACEHOLDERS). They are stand-ins written before a real
+ * resolution, so one arriving from a caller means "nothing was named here",
+ * never "this is the ref the operator typed".
+ */
+const REF_PLACEHOLDERS = new Set(["pending-resolution", "latest", "HEAD"]);
+
+/** Whether a value is one of those stand-ins rather than a name. */
+export function isPlaceholderRefName(value: string | null | undefined): boolean {
+  return typeof value === "string" && REF_PLACEHOLDERS.has(value.trim());
+}
+
+/**
+ * The ref the operator TYPED, or null when nothing was typed. A stand-in
+ * arriving from a caller is nothing, never a typed ref.
+ */
+function usableSubmittedRef(value: string | null | undefined): string | null {
+  const submitted = value?.trim() ?? "";
+  if (submitted.length === 0 || isPlaceholderRefName(submitted)) return null;
+  return submitted;
+}
+
+/**
+ * THE BRANCH NAME THE DOWNLOADED ARCHIVE ITSELF CARRIES.
+ *
+ * A generated source archive has exactly one root folder and the host names it
+ * after the repository and the ref it was generated for - "thing-main". For a
+ * link that named no ref that folder is the only place the bytes say which
+ * branch they came from, and reading it costs nothing: the archive is already
+ * downloaded and the folder is already stripped.
+ *
+ * NOTHING IS GUESSED. A root that does not begin with the repository's own
+ * name, an empty remainder, a stand-in, or the commit id the archive declares
+ * (which is exactly what a download BY COMMIT names its folder after) all yield
+ * null, and the caller refuses instead of recording a name the repository never
+ * used. The host flattens a slash in a ref into a dash, so what comes back is
+ * the name the archive carries, not a reconstruction of a namespaced ref.
+ */
+export function defaultBranchNameFromGeneratedRoot(input: {
+  /** The name the archive was generated under — the endpoint that served it. */
+  repo: string;
+  rootFolder: string | null | undefined;
+  resolvedSha: string;
+}): string | null {
+  const root = input.rootFolder?.trim() ?? "";
+  const prefix = `${input.repo}-`;
+  if (!root.startsWith(prefix)) return null;
+  const name = root.slice(prefix.length);
+  if (name.length === 0 || isPlaceholderRefName(name)) return null;
+  if (/^[0-9a-f]{7,40}$/.test(name) && input.resolvedSha.startsWith(name)) return null;
+  return name;
+}
+
+/**
+ * THE NAME THE ROW WILL RECORD, settled before any row is written.
+ *
+ * It is the ref the operator typed when they typed one, and otherwise the
+ * default branch as the archive itself names it. When it can be neither, this
+ * refuses and says which of the two it could not have - a row carrying a
+ * stand-in is refused by the install's own validator anyway, so recording one
+ * would only move the refusal somewhere the operator cannot act on it.
+ */
+function finalizeRecordedRef(input: {
+  owner: string;
+  repo: string;
+  /**
+   * The repository name the downloaded archive was generated under. It is the
+   * link's own name except when the download was redirected to a repository
+   * that has been renamed, and it is the only name the root folder can be read
+   * against - reading "thing-new-main" against a stale "thing" would strip the
+   * wrong prefix and record "new-main", a ref no repository ever had.
+   */
+  archiveRepo?: string;
+  submitted: string | null | undefined;
+  rootFolder: string | null | undefined;
+  resolvedSha: string;
+}): string {
+  const submitted = usableSubmittedRef(input.submitted);
+  if (submitted !== null) return submitted;
+  const derived = defaultBranchNameFromGeneratedRoot({
+    repo: input.archiveRepo ?? input.repo,
+    rootFolder: input.rootFolder,
+    resolvedSha: input.resolvedSha,
+  });
+  if (derived !== null) return derived;
+  throw new Error(
+    `[supplied-install] ${input.owner}/${input.repo}: this install could not resolve the branch, tag or ` +
+      `release name to record - the link named none and the archive that was downloaded does not name the ` +
+      `branch it was generated from. Type the branch, tag or release to install from and try again. ` +
+      `Nothing was written.`,
+  );
+}
+
 export type SuppliedRepositoryArchivePreview = SuppliedArchivePreview & {
   repo: string;
   ref: string;
@@ -516,10 +625,20 @@ export async function previewSuppliedRepositoryArchive(
   const preview = await previewSuppliedArchive(fetched.archive, {
     unwrapGeneratedRootFolder: true,
   });
+  // WHAT THE SCREEN SHOWS IS WHAT THE ROW WILL RECORD. The preview settles the
+  // name here, so the operator approves the same ref the install writes.
+  const ref = finalizeRecordedRef({
+    owner: input.owner,
+    repo: input.repo,
+    archiveRepo: fetched.effectiveRepo,
+    submitted: fetched.ref,
+    rootFolder: preview.generatedRootFolder,
+    resolvedSha: fetched.resolvedSha,
+  });
   return {
     ...preview,
     repo: `${input.owner}/${input.repo}`,
-    ref: fetched.ref,
+    ref,
     resolvedSha: fetched.resolvedSha,
     archiveUrl: fetched.archiveUrl,
   };
@@ -575,7 +694,6 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
       : input,
   );
   const repository = `${input.owner}/${input.repo}`;
-  const recordedRef = input.ref ?? fetched.ref;
 
   // The archive asked for by commit id must still DECLARE that commit: a host
   // that served something else is not serving the approved tree.
@@ -585,6 +703,26 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
         `the downloaded archive was generated from (${fetched.resolvedSha}) - refusing before any write.`,
     );
   }
+
+  // THE NAME IS SETTLED BEFORE ANYTHING IS STAGED. What arrives from the screen
+  // is the name the operator typed - or the stand-in the preview once produced
+  // for a bare link, which is read here as "nothing was typed" and resolved from
+  // the archive's own root folder. Neither resolvable is a refusal taken HERE,
+  // before the intake below writes the snapshot to the store, so a refused
+  // install leaves nothing behind at all. The root folder costs one read of the
+  // bytes already in memory, and only on the road that has no typed ref.
+  const recordedRef = finalizeRecordedRef({
+    owner: input.owner,
+    repo: input.repo,
+    archiveRepo: fetched.effectiveRepo,
+    submitted: input.ref,
+    rootFolder:
+      usableSubmittedRef(input.ref) === null
+        ? (await previewSuppliedArchive(fetched.archive, { unwrapGeneratedRootFolder: true }))
+            .generatedRootFolder
+        : undefined,
+    resolvedSha: fetched.resolvedSha,
+  });
 
   // THE FILE ROAD'S OWN INTAKE. Nothing below this line is repository-specific.
   const prepared = await prepareSuppliedArchiveSnapshot({

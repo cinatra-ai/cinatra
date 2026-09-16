@@ -59,7 +59,9 @@ import {
   installSuppliedCandidate,
   prepareSuppliedRepositoryArchiveSnapshot,
   prepareSuppliedRepositorySnapshot,
+  previewSuppliedRepositoryArchive,
 } from "@/lib/supplied-package-install";
+import { validateExtensionSource } from "@cinatra-ai/extensions/canonical-types";
 import { buildStoredZip } from "@cinatra-ai/agents/upload-archive";
 import { SUPPLIED_PACKAGE_ORIGIN } from "@/lib/extension-install-pipeline";
 
@@ -720,5 +722,211 @@ describe("the dispatch entry registers the handler set in its OWN worker (cinatr
     // first, is the registration — never a dispatch into an unpopulated registry.
     expect(order.events[0]).toBe("handlers-registered");
     expect(order.events).toContain("dispatch");
+  });
+});
+
+describe("the LINK road records a FINALIZED ref, so its row is written (cinatra#3204)", () => {
+  // THE ORDER THE PRODUCT TAKES, not a shortcut through it: a bare link is
+  // previewed, and the install action hands back the ref the preview showed
+  // beside the pin the operator approved.
+  async function previewThenInstall(archive: Uint8Array, typedRef: string | null) {
+    const preview = await previewSuppliedRepositoryArchive({
+      owner: "acme",
+      repo: "thing",
+      ref: typedRef,
+      archiveUrl: `https://codeload.github.com/acme/thing/zip/${typedRef ?? "HEAD"}`,
+      fetchImpl: respondWith(archive),
+    });
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      // The form passes the PREVIEW's ref straight through.
+      ref: preview.ref,
+      archiveUrl: `https://codeload.github.com/acme/thing/zip/${typedRef ?? "HEAD"}`,
+      pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: respondWith(archive),
+    });
+    return { preview, prepared };
+  }
+
+  it("installs a kind:skill package at a resolved pin and writes the canonical row, its source naming the repository, the ref and the sha", async () => {
+    const { preview, prepared } = await previewThenInstall(gitHubSourceArchive(), null);
+
+    expect(prepared.kind).toBe("skill");
+
+    // THE VERY CHECK THE INSTALL RUNS before it writes the row. Its failure is
+    // the sentence the operator was shown on the upload screen, so a red here
+    // says exactly what a refused install says.
+    const errors = validateExtensionSource(prepared.provenance);
+    const verdict =
+      errors.length === 0
+        ? "the canonical install row is written"
+        : `install refused \u2014 source provenance invalid/missing: ${errors.join(", ")}`;
+    expect(verdict).toBe("the canonical install row is written");
+
+    // ...and the name the screen showed is the name the row carries.
+    expect(preview.ref).toBe("main");
+
+    expect(prepared.provenance).toMatchObject({
+      type: "github",
+      repo: "acme/thing",
+      ref: "main",
+      resolvedSha: SHA,
+      path: `${prepared.contentDigest}.tgz`,
+    });
+
+    // ...and the row that reaches the dispatcher carries that same source.
+    await installSuppliedCandidate({
+      candidate: {
+        kind: prepared.kind,
+        packageName: prepared.packageName,
+        version: prepared.version,
+        provenance: prepared.provenance,
+        validatorRan: prepared.validatorRan,
+      },
+      actor: { actorType: "human", source: "ui", userId: "u1", orgId: "org-1" },
+      rowOwnership: { ownerLevel: "workspace", ownerId: null, organizationId: null },
+    });
+    const [typeId, ref] = registry.extensionRegistry.install.mock.calls.at(-1) as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(typeId).toBe("skill");
+    expect(ref.provenance).toMatchObject({
+      type: "github",
+      repo: "acme/thing",
+      ref: "main",
+      resolvedSha: SHA,
+    });
+    expect(validateExtensionSource(ref.provenance)).toEqual([]);
+  });
+
+  it("records the repository's DEFAULT BRANCH NAME for a bare link, and never the sentinel the validator rejects", async () => {
+    // The tab and the row read the same name: the preview stops producing the
+    // sentinel, so the pass-through carries a real name.
+    const { preview, prepared } = await previewThenInstall(gitHubSourceArchive(), null);
+    expect(preview.ref).toBe("main");
+    expect(prepared.ref).toBe("main");
+    expect(prepared.provenance).toMatchObject({ ref: "main" });
+
+    // A sentinel arriving from a caller is "no ref was typed", never a typed
+    // ref - an unpinned bare-link install resolves the name from the archive.
+    const fromSentinel = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "HEAD",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: respondWith(gitHubSourceArchive()),
+    });
+    expect(fromSentinel.ref).toBe("main");
+    expect(fromSentinel.provenance).toMatchObject({ ref: "main" });
+    expect(validateExtensionSource(fromSentinel.provenance)).toEqual([]);
+
+    // And a name that cannot be had is a refusal naming what it could not
+    // resolve, with no row dispatched - never a placeholder written down.
+    registry.extensionRegistry.install.mockClear();
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: `https://codeload.github.com/acme/thing/zip/${SHA}`,
+        resolveValidator: async () => null,
+        stageSnapshot: async (digest: string) => `${digest}.tgz`,
+        // A download BY COMMIT names its root folder after the commit, so the
+        // archive says nothing about a branch.
+        fetchImpl: respondWith(gitHubSourceArchive({ root: `thing-${SHA}` })),
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+  });
+
+  it("stages NOTHING when the name cannot be resolved - the refusal comes before the store is written", async () => {
+    // The snapshot is a durable write of its own: a refusal that arrives after
+    // it leaves an orphan behind in the store. So the name is settled first.
+    const stageSnapshot = vi.fn(async (digest: string) => `${digest}.tgz`);
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: `https://codeload.github.com/acme/thing/zip/${SHA}`,
+        resolveValidator: async () => null,
+        stageSnapshot,
+        fetchImpl: respondWith(gitHubSourceArchive({ root: `thing-${SHA}` })),
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+    expect(stageSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reads the root folder against the repository that SERVED the bytes, so a renamed repository records a real branch", async () => {
+    // A link to a repository that has since been renamed is redirected to its
+    // current name, and the archive's root folder carries THAT name. Read
+    // against the stale name, "thing-new-main" would record the branch
+    // "new-main", which no repository ever had.
+    const renamed = (async (url: string) => {
+      if (url === "https://codeload.github.com/acme/thing/zip/HEAD") {
+        return new Response(null, {
+          status: 301,
+          headers: { location: "https://codeload.github.com/acme/thing-new/zip/HEAD" },
+        });
+      }
+      return new Response(
+        gitHubSourceArchive({ root: "thing-new-main" }) as unknown as BodyInit,
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: renamed,
+    });
+    expect(prepared.ref).toBe("main");
+    expect(prepared.provenance).toMatchObject({ ref: "main" });
+    expect(validateExtensionSource(prepared.provenance)).toEqual([]);
+  });
+
+  it("refuses a PINNED install that was handed only a sentinel - a commit archive names no branch", async () => {
+    // The pinned download is asked for BY COMMIT, so its root folder is named
+    // after the commit and says nothing about a branch. A caller that passed
+    // the stand-in rather than the preview's finalized name therefore gets a
+    // refusal that says what could not be resolved - never a placeholder row.
+    const stageSnapshot = vi.fn(async (digest: string) => `${digest}.tgz`);
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: "HEAD",
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        pin: { resolvedSha: SHA, contentDigest: "c".repeat(64) },
+        resolveValidator: async () => null,
+        stageSnapshot,
+        fetchImpl: respondWith(gitHubSourceArchive({ root: `thing-${SHA}` })),
+      }),
+    ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
+    expect(stageSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ref the operator typed exactly as they typed it", async () => {
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "v1.2.3",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3",
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: respondWith(gitHubSourceArchive({ root: "thing-1.2.3" })),
+    });
+    expect(prepared.ref).toBe("v1.2.3");
+    expect(prepared.provenance).toMatchObject({ ref: "v1.2.3" });
   });
 });

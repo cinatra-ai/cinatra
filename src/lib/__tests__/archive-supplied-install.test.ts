@@ -181,3 +181,32 @@ describe("the File road feeds leg 1's pipeline entry (criteria 18, 20)", () => {
     expect(stageSnapshot).not.toHaveBeenCalled();
   });
 });
+
+describe("the read SAYS which generated wrapper folder it stripped (cinatra#3204)", () => {
+  const skill = {
+    name: "@acme/thing-skill",
+    version: "1.0.0",
+    cinatra: { kind: "skill" },
+  };
+
+  it("reports the root folder a downloaded archive was generated under", async () => {
+    const bytes = buildStoredZip([
+      { name: "thing-main/package.json", content: JSON.stringify(skill) },
+      { name: "thing-main/skills/one/SKILL.md", content: "---\nname: one\n---\nbody" },
+    ]);
+    const preview = await previewSuppliedArchive(bytes, { unwrapGeneratedRootFolder: true });
+    expect(preview.generatedRootFolder).toBe("thing-main");
+    expect(preview.packageName).toBe("@acme/thing-skill");
+  });
+
+  it("reports nothing when no wrapper folder was stripped", async () => {
+    const preview = await previewSuppliedArchive(
+      buildStoredZip([
+        { name: "package.json", content: JSON.stringify(skill) },
+        { name: "skills/one/SKILL.md", content: "---\nname: one\n---\nbody" },
+      ]),
+      { unwrapGeneratedRootFolder: true },
+    );
+    expect(preview.generatedRootFolder).toBeUndefined();
+  });
+});
