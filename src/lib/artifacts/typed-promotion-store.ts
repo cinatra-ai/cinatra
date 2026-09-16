@@ -220,10 +220,11 @@ export async function promoteMatchedArtifactType(input: {
   artifactId: string;
   extension: string;
   ownType: ExtensionOwnType | null;
-  /** The extension's own declared matcher threshold, or NULL where the pack
-   *  declares no matcher machinery at all — in which case the matcher road does
-   *  not exist for it and only the person's own assertion can promote. */
-  threshold: number | null;
+  /** The extension's OWN declared matcher threshold, or null/absent where the
+   *  pack declares no matcher machinery at all — which no threshold can be
+   *  invented for, and in which case the matcher road does not exist for it and
+   *  only the person's own assertion can promote. */
+  threshold?: number | null;
   confirmed: boolean;
   createdBy?: string | null;
   /** WHO IS ACTING. The person's own road (§XI.10) is the ACTING person's own,
@@ -248,15 +249,22 @@ export async function promoteMatchedArtifactType(input: {
   retype?: TypedPromotionRetype;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
+  // A pack that declares NO matcher has no threshold to compare a confidence
+  // against, so there is no matcher road for it at all — the association is not
+  // read, rather than read and measured against an invented number.
   const matcher =
-    input.threshold === null
-      ? null
-      : readMatcherAssociation({
+    typeof input.threshold === "number"
+      ? readMatcherAssociation({
           orgId: input.orgId,
           artifactId: input.artifactId,
           extension: input.extension,
           threshold: input.threshold,
-        });
+        })
+      : null;
+  // THE PERSON'S OWN ASSERTION, PROVED FROM THE DURABLE ROW (§XI.10). The
+  // authority is this store's read, never a caller flag: it must be provable
+  // after the fact, and a converging re-run — which writes no second assertion —
+  // has only the durable row to prove it by.
   const personAsserted = readPersonAssertion({
     orgId: input.orgId,
     artifactId: input.artifactId,
@@ -476,6 +484,12 @@ function appendPromotionRevision(input: {
     sharedResourceId: input.sharedResourceId,
     toType: input.toType,
   });
+  // The append AND its writer witness, in the ONE advisory-locked transaction.
+  // The witness is not decoration: a promoted row is a CLAIMED pack-typed row,
+  // and the serve resolver admits such a row's own representation only through
+  // it — without it the promotion appends a revision whose bytes no read path
+  // will hand out (measured live: the featured image's display drew an empty box
+  // on a 404).
   const results = runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,

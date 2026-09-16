@@ -11,6 +11,7 @@ import "server-only";
 // than reaching into the objects registry directly.
 
 import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects";
+import { forgetCrossNamespaceClaimsOf } from "@cinatra-ai/objects/register-artifact-extensions";
 
 /**
  * Remove every object type the package registered (across all categories),
@@ -20,6 +21,13 @@ import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects
  * types without a restart; durable rows (if any) are handled separately.
  */
 export function invalidateObjectTypesForPackage(packageName: string): string[] {
+  // The CROSS-NAMESPACE CLAIM LEDGER reaps at PARITY (cinatra#3033, a
+  // convergence). A pack's claim on a type in ANOTHER namespace registers no
+  // type of its own, so `removeByPackage` cannot reach it — without this, an
+  // uninstalled pack keeps a claim on the books and the type map keeps naming a
+  // gap nobody is asking about any more. It is a reading, not a registration,
+  // so reaping it can never delete a live type.
+  forgetCrossNamespaceClaimsOf(packageName);
   return objectTypeRegistry.removeByPackage(packageName);
 }
 

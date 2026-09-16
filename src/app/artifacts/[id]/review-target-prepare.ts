@@ -176,6 +176,14 @@ export function bindArtifactReviewPorts(ctx: {
    * The file arm is tried first and stays byte-identical: nothing about a
    * file-backed review moved.
    */
+  // WHICH PINNED REVISION'S BYTES A READER MAY SEE (lifecycle-c W9,
+  // cinatra#3033) is decided in the member resolution above — live for the
+  // ordinary reading, tombstone tolerant only for the gate-authorized settled
+  // one. That decision travels forward on the answer itself
+  // (`RevisionMemberOutcome.historical`) and `buildProps` hands it to the
+  // substance reader as its `liveOnly` bound, so the content read resolves the
+  // same revision under the same rule and cannot widen it by guessing.
+
   const memberFor = (
     artifactId: string,
     representationRevisionId: string,
@@ -478,6 +486,18 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS
+      // CONSUMER — read above, at the pinned revision, under the membership
+      // answer's own bound.
+      //
+      // The ratified drawing, §I.3 verbatim: "what that display renders is
+      // the post itself: its title and its body text."
+      //
+      // It used to pass the named absence here, and the consequence was the
+      // whole of the defect: a display that draws from `props.content` — the
+      // build-map renderer a text artifact resolves to — was handed "nothing is
+      // pinned" for a revision holding a real draft, and drew its own floor over
+      // it. The slot read as empty on a run whose work was right there.
       content,
       bytes,
     });

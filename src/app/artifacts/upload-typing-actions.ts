@@ -329,11 +329,38 @@ export async function assertUploadMeaning(input: {
  */
 async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return (await extensionOwnedTypeIds(extension)).includes(objectType);
   } catch {
     return false;
   }
+}
+
+/**
+ * The artifact type ids this extension owns — the ones its package REGISTERED
+ * plus the ones it CLAIMED over a namespace nothing else has provenance for
+ * (`extension-owned-types.ts` states why both count). Registry-read; the caller
+ * has already warmed the registries.
+ */
+async function extensionOwnedTypeIds(extension: string): Promise<string[]> {
+  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  const { crossNamespaceClaimsBy } = await import(
+    "@cinatra-ai/objects/register-artifact-extensions"
+  );
+  const { selectExtensionOwnedTypeIds } = await import(
+    "@/lib/artifacts/extension-owned-types"
+  );
+  const registeredTypeIds = objectTypeRegistry.getTypesForPackage(extension);
+  const claimedTypeIds = crossNamespaceClaimsBy(extension);
+  return selectExtensionOwnedTypeIds({
+    extension,
+    registeredTypeIds,
+    claimedTypeIds,
+    candidates: claimedTypeIds.map((typeId) => ({
+      typeId,
+      registeringPackage: objectTypeRegistry.getRegisteringPackage(typeId),
+      resolves: objectTypeRegistry.resolve(typeId) != null,
+    })),
+  });
 }
 
 /**
@@ -363,10 +390,17 @@ async function promoteOnConfirmedMeaning(input: {
     const { semanticRendererRegistry } = await import(
       "@cinatra-ai/objects/artifact-renderer-registry"
     );
-    // THE EXTENSION'S OWN TYPE: the one artifact type its package REGISTERED.
+    // THE EXTENSION'S OWN TYPE: the one artifact type it OWNS — registered by
+    // its package, or claimed over a namespace nothing else has provenance for
+    // (a host-registered type, which is how `@cinatra-ai/linkedin:post-draft`
+    // reaches its pack). `extensionOwnedTypeIds` is the reading of "owns", and it
+    // is what the entry plan below is handed: a pack whose only road to its type
+    // is such a claim OWNS that type, so it enters the road rather than reading
+    // as a pack that registered nothing.
+    //
     // The count is not always one, and `planPromotionEntry` names every outcome
     // rather than folding them into one silence — because two very different
-    // worlds both register zero types:
+    // worlds both own zero types:
     //
     //   a PURE MATCHER PACK declares none, so the road does not apply; and
     //   a PACK CARRYING AN UNREACHABLE DISPLAY — it registered a display whose
@@ -380,10 +414,10 @@ async function promoteOnConfirmedMeaning(input: {
     //
     // The second is what the wave-3 proof leg measured (cinatra#3091): a deck
     // confirmation that retyped nothing and reported nothing. It is separated
-    // from the first by the pack's OWN registration state — a semantic display
-    // registered for an object type no package registers.
-    const owned = objectTypeRegistry
-      .getTypesForPackage(input.extension)
+    // from the first by the pack's OWN ownership state — a semantic display
+    // registered for an object type no package registers and this pack does not
+    // claim.
+    const owned = (await extensionOwnedTypeIds(input.extension))
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
     const entryPlan = planPromotionEntry({
@@ -398,13 +432,19 @@ async function promoteOnConfirmedMeaning(input: {
     const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
-    // the matcher itself resolved it from — never a default invented here. A
-    // package with no matcher declaration has no matcher road at all, and says
-    // so with a null threshold rather than a fabricated one; the drawing's
-    // second road — the person's own assertion (§XI.10) — is still open to it,
-    // which is why a missing declaration no longer ends the call. Returning
+    // the matcher itself resolved it from — never a default invented here.
+    //
+    // A PACK THAT DECLARES NO MATCHER IS STILL PROMOTABLE, ON THE PERSON'S OWN
+    // ASSERTION. The ratified drawing (app-artifact-review §XI.10): "Promotion
+    // happens only on the matcher's assertion at its threshold and with the
+    // person's confirmation, or on the person's own assertion, which outranks the
+    // matcher." This call site IS the person's own assertion — it runs directly
+    // after the user-sourced meaning assertion it just wrote — so a missing
+    // matcher declaration leaves the pack with no threshold, not without a road:
+    // it says so with a null threshold rather than a fabricated one. Returning
     // early here is what made a person's assertion on a matcher-less pack a
-    // silent no-op.
+    // silent no-op. Every pack whose display registers for its own type and ships
+    // no classifier reaches its display through here and nowhere else.
     const entry = matcherManifestRegistry
       .list()
       .find((e) => e.packageName === input.extension);
