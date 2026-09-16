@@ -151,12 +151,24 @@ describe("NewAgentPage merged discovery table", () => {
   // + Active/Archived indicator (cinatra#1007): reuse <InstalledExtensionCard>
   // without those two props, description clamped to 2 lines (since cinatra#1005
   // the default is also 2, so the explicit prop is belt-and-braces).
+  //
+  // WHERE THE TWO NEGATIVES NOW LIVE (cinatra#2808). The card gained `version`
+  // and `status` BY NAME, because the per-scope Agents tab supplies them. The
+  // ratified drawing governs THIS surface — the /agents "All Agents" tab — and
+  // what it rules ("without the version and the Active / Archived indicator")
+  // is a fact about what /agents RENDERS, not about which prop names the shared
+  // component understands. So the source-text negatives moved onto the /agents
+  // renderer, which is what decides it: this page's client builds every row and
+  // passes neither. The RENDERED half is pinned behaviourally beside the card
+  // itself, by the case that draws an /agents-shaped row and asserts it carries
+  // no version, no status indicator and no Settings control.
   it("renders cards via InstalledExtensionCard without version/status, 3-line description clamp (cinatra#3227)", () => {
     const card = readAgentCardSource();
     expect(card).toMatch(/<InstalledExtensionCard/);
     expect(card).toMatch(/descriptionLineClamp=\{3\}/);
-    expect(card).not.toMatch(/\bversion=\{/);
-    expect(card).not.toMatch(/\bstatus=\{/);
+    const client = readClientSource();
+    expect(client).not.toMatch(/\bversion=\{/);
+    expect(client).not.toMatch(/\bstatus=\{/);
   });
 
   // cinatra#1121 — AgentRunClient delegates each row to AgentAllCard, which lifts
