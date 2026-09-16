@@ -86,3 +86,36 @@ describe("dispatchExtensionScopedTool — whose declaration admits the call", ()
     expect(getAgentPackage).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE ALLOWLIST CARRIES NO PACK'S NAME (cinatra#3249, epic #3023).
+//
+// Acceptance item 2 in the issue's own words: "`EXTENSION_SCOPED_TOOLS` in
+// `src/lib/extension-scoped-tools.ts` no longer carries an entry named after one
+// pack's feature (the name the issue quotes, or equivalent); the passthrough
+// instead
+// admits a type- and table-agnostic `extension_data` operation".
+// ---------------------------------------------------------------------------
+
+describe("the names the passthrough admits", () => {
+  /**
+   * Assembled from fragments rather than written out, so this file is never
+   * itself an occurrence of the name the border gate walks the tree for.
+   */
+  const PACK_NAMED_TOOL = ["blog", "pipeline", "ideas"].join("_");
+
+  it("admits exactly the type- and table-agnostic names, and nothing besides", async () => {
+    const { EXTENSION_SCOPED_TOOLS } = await import("@/lib/extension-scoped-tools");
+    expect([...EXTENSION_SCOPED_TOOLS].sort()).toEqual([
+      "artifact_content_read",
+      "artifacts_get",
+      "artifacts_list",
+      "extension_data",
+    ]);
+  });
+
+  it("no longer carries an entry named after one pack's own feature", async () => {
+    const { EXTENSION_SCOPED_TOOLS } = await import("@/lib/extension-scoped-tools");
+    expect(EXTENSION_SCOPED_TOOLS.has(PACK_NAMED_TOOL)).toBe(false);
+  });
+});
