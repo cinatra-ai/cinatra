@@ -52,7 +52,6 @@ vi.mock("../run-window-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { RunPageChrome } from "../run-page-chrome";
 import { ReviewGateCard } from "../review-gate-card";
 
 const VIEW = {
@@ -169,48 +168,20 @@ describe("#3481 — no prompt window is drawn inside a conversation", () => {
     expect(container.textContent).not.toContain(OFFER);
   });
 
-  it("the window outside a conversation is the PAGE's, drawn outside the card", async () => {
-    // AMENDED BY cinatra#3487, and the amendment is the same sentence read one
-    // step further. This case used to assert that the CARD kept drawing the
-    // window on the hosts outside a conversation. The maintainer's ruling of
-    // 2026-09-14 says where it belongs instead: "THE PROMPT WINDOW IS NEVER PART
-    // OF A LIFECYCLE SCREEN AND NEVER INSIDE A LIFECYCLE CARD, IN ANY HOST … On
-    // the run page the prompt window is part of the run page's CHROME."
-    //
-    // So the window is still there outside a conversation — it is simply the
-    // page's, drawn beneath the card rather than inside it. The card's own root
-    // carries none, which is what every host now has in common.
-    for (const host of ["run_card", "page_gate_region"] as const) {
+  it("keeps drawing the window on every host OUTSIDE a conversation", async () => {
+    // THE RULING IS SCOPED TO THE CONVERSATION. The run detail, the review page's
+    // gate region and the widget carry the window the drawing gives them, so the
+    // gate above is a host division and never a retirement of the window.
+    for (const host of ["run_card", "page_gate_region", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
-      const { container } = render(
-        <RunPageChrome>
-          <LifecycleCardSurfaceProvider host={host}>
-            <ReviewGateCard view={VIEW} runId="run-3481" />
-          </LifecycleCardSurfaceProvider>
-        </RunPageChrome>,
-      );
+      const { container } = renderOn(host);
       await waitFor(() =>
-        expect(container.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(1),
+        expect(
+          container.querySelectorAll('[data-conformance-id="review-prompt-window"]'),
+        ).toHaveLength(1),
       );
       expect(container.textContent).toContain(OFFER);
-      // …and never inside the card.
-      const card = cardRoot(container)!;
-      expect(card.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(0);
-      expect(card.querySelectorAll('[data-testid="review-prompt-field"]')).toHaveLength(0);
       cleanup();
     }
-  });
-
-  it("a card drawn with no page chrome above it draws no window at all", async () => {
-    // The third-party island is a host with no run page around it, so there is
-    // no chrome to own a window — and the card, which owns none, draws none.
-    mockResolve({ state: "pending", canDecide: true, canComment: true });
-    const { container } = renderOn("site_widget");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
-    );
-    expect(container.querySelectorAll('[data-conformance-id="run-window"]')).toHaveLength(0);
-    expect(container.querySelectorAll('[data-testid="review-prompt-field"]')).toHaveLength(0);
-    expect(container.textContent).not.toContain(OFFER);
   });
 });

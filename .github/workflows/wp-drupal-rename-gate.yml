@@ -24,6 +24,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the job below reads?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group) there is no changed-file set
+  # to read, so the output is forced true and the job below runs for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (wp-drupal-rename-gate)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rename: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rename == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            rename:
+              # Derived from the reusable scan this job calls: an rg sweep of the
+              # tracked tree for the old widget-identity tokens. It can only flag
+              # a TEXT file, so the list is the whole tree minus the binary assets
+              # rg never reports; an asset-only pull request skips the gate and a
+              # change to any text file (code, docs, plugin/module source) runs it.
+              - '**'
+              - '!**/*.png'
+              - '!**/*.jpg'
+              - '!**/*.jpeg'
+              - '!**/*.gif'
+              - '!**/*.webp'
+              - '!**/*.ico'
+              - '!**/*.woff'
+              - '!**/*.woff2'
+              - '!**/*.pdf'
+
   rename-gate:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    needs: [changes]
+    # cinatra#3508. A SKIPPED reusable-workflow caller posts no
+    # "<caller> / <called>" check at all — unlike a skipped normal job, which
+    # posts a skipped one that branch protection counts as a pass. So this
+    # guard is correct only while `wp-drupal-rename-gate / rename-gate` is NOT
+    # in the branch-protection required set; it is not (read from the live
+    # protection, 2026-09-15). Requiring that context means dropping this
+    # guard again, or moving the path condition inside the reusable gate.
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.changes.outputs.rename == 'true' }}
     uses: cinatra-ai/ci/.github/workflows/wp-drupal-rename-gate.yml@696c647dbbd8eb605e6e71a2243605b0a50c7dd1 # v1.0.0-next.4c903fe
