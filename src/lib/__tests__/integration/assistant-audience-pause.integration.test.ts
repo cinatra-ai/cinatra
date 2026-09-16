@@ -118,7 +118,7 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
       await admin.query(q.text);
     }
     await admin.query(`CREATE TABLE "${schema}".agent_templates (
-      id text PRIMARY KEY, name text, package_name text,
+      id text PRIMARY KEY, name text, description text, package_name text,
       agent_kind text NOT NULL DEFAULT 'executor', assistant_config text,
       assistant_user_id text, status text
     )`);
