@@ -27,8 +27,63 @@ permissions:
   contents: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the jobs below read?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group, schedule, dispatch) there is
+  # no changed-file set to read, so the output is forced true and the jobs below
+  # run for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (knip-report)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            code:
+              # Derived from the `Generate route types (next typegen)` and `knip`
+              # steps: knip resolves the workspace graph from the manifests and the
+              # knip.json config and reports on the source trees it lists
+              # (extensions/** is ignored by knip.json itself), and the pinned
+              # clone-back locks decide the extension universe the install resolves.
+              - '.github/workflows/**'
+              - 'src/**'
+              - 'packages/**'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'knip.json'
+              - 'next.config.ts'
+              - 'tsconfig.json'
+              - '**/package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'cinatra-required-extensions.lock.json'
+              - 'cinatra-dev-extensions.lock.json'
+              # the install hook and the composite action the clone step runs
+              - '.pnpmfile.cjs'
+              - '.github/actions/**'
+
   knip-report:
     name: knip dead-code report (non-blocking)
+    needs: [changes]
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:

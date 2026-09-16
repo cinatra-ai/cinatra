@@ -19,8 +19,67 @@ permissions:
   contents: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the jobs below read?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group, schedule, dispatch) there is
+  # no changed-file set to read, so the output is forced true and the jobs below
+  # run for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (codeql)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            code:
+              # Derived from the `Initialize CodeQL` / `Perform CodeQL analysis`
+              # steps: the javascript-typescript pack analyses the tree's JS/TS
+              # sources and the workspace manifests that define the source set.
+              # A change that touches none of them cannot move a query result.
+              - '.github/workflows/**'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/*.mts'
+              - '**/*.cts'
+              - '**/*.js'
+              - '**/*.jsx'
+              - '**/*.mjs'
+              - '**/*.cjs'
+              # the javascript-typescript extractor also analyses embedded
+              # script in HTML and reads JSON / YAML / XML inputs, so the list is
+              # every extension it can extract from, not just JS and TS.
+              - '**/*.html'
+              - '**/*.htm'
+              - '**/*.vue'
+              - '**/*.json'
+              - '**/*.yml'
+              - '**/*.yaml'
+              - '**/*.xml'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+
   analyze:
     name: Analyze
+    needs: [changes]
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     strategy:
       fail-fast: false
