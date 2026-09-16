@@ -6,8 +6,16 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
 
-export const metadata: Metadata = { title: "Agent — Skills" };
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). The static title this
+// route used to export was re-applied over the mirrored one on every live-poll
+// re-render, so the derivation moved to the server, behind one helper every
+// id-bearing route under the run shares.
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { vendor, packageName, instanceId } = await params;
+  return resolveAgentInstanceMetadata({ vendor, packageName, instanceId, subRoute: "skills" });
+}
 
 // Selection-source → run-visible ledger label (cinatra#2067 item 6). A ledger
 // skill sourced from a run's authoritative selection set is labeled by HOW it

@@ -42,7 +42,7 @@ export type FieldRendererContext = {
   runId?: string;                             // agent_run ID from /agents list — used by HITL renderers to look up the campaign without relying on ToolMessage extraction
   templateId?: string;
   // Agent template ID for HITL renderers POSTing to
-  // /api/agents/builder/[templateId]/hitl-assist. Optional because non-HITL
+  // the fill road (cinatra#2934). Optional because non-HITL
   // renderers (gmail-sender, contact-source, etc.) do not need it.
   // HITL renderers do not subscribe to AI-assist structured actions;
   // suggestions flow through parent-provided props below.
@@ -107,7 +107,7 @@ export type FieldRendererProps = {
    * (no internal button) can safely ignore this prop.
    */
   hideSubmit?: boolean;
-  // Parent-injected callback for hitl-assist suggestions, applied by
+  // Parent-injected callback for the fill road's placed values, applied by
   // renderers when mode === "edit" (the parent's sticky-bottom PromptField
   // sources the suggestions — see `aiSuggestions` below).
   onApply?: (suggestions: Record<string, unknown>) => void;
@@ -124,7 +124,7 @@ export type FieldRendererProps = {
   aiSuggestions?: Record<string, unknown>;
   /**
    * Called by the renderer whenever its local data changes, so the parent
-   * panel can include it as supplemental currentValue in hitl-assist requests.
+   * panel can include it as supplemental screen context the fill road reads.
    * Renderers that manage array state (recipients, drafts) should implement this.
    * The parent merges the supplied object into currentValue before the fetch.
    */

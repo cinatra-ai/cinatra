@@ -5,7 +5,14 @@
 // sees the box), AC4 (the tool-less message when the model cannot act).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// The ref codec derives its key from the app secret; a window with no secret
+// mints no ref at all, which is a different case from the one below.
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-run-window-turn";
 import { readFileSync } from "node:fs";
+import {
+  decodeScheduleFormRef,
+  decodeScheduleRunRef,
+} from "../lifecycle-card-ref";
 import { join } from "node:path";
 
 type EnforceRunAccess = (
@@ -62,7 +69,7 @@ const artifactsById: Record<string, { artifactId: string; title: string; objectT
     objectType: "@cinatra-ai/email:draft",
   },
 };
-const appended: Array<{ role: string; text: string; surface: string; replyToSequence: number | null }> = [];
+const appended: Array<{ role: string; text: string; surface: string; replyToSequence: number | null; attachments?: readonly Record<string, unknown>[] | null }> = [];
 const stored: Array<{ role: "user" | "assistant"; text: string; surface: string; id: string; runId: string; sequence: number; replyToSequence: number | null; createdAt: Date }> = [];
 let session: unknown = { user: { id: "u-owner", role: "user" }, session: { activeOrganizationId: "org-1" } };
 let turnBehaviour: (send: (e: string, d: unknown) => void) => void = (send) => {
@@ -86,12 +93,14 @@ vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
     surface: string;
     text: string;
     replyToSequence?: number | null;
+    attachments?: readonly Record<string, unknown>[] | null;
   }) => {
     appended.push({
       role: input.role,
       text: input.text,
       surface: input.surface,
       replyToSequence: input.replyToSequence ?? null,
+      attachments: input.attachments ?? null,
     });
     const row = {
       id: `m${stored.length + 1}`,
@@ -589,9 +598,16 @@ describe("the window hands the assistant the run it sits under", () => {
     // ONE argument to the turn and it is a string; a tool, a grant, an
     // allowlist or a control smuggled in beside it fails this line, which a
     // "does it contain the word grant" check would not.
+    //
+    // AMENDED for cinatra#2934 (lifecycle-b W5c): a form window now also names
+    // the RUN whose waiting screen it sits under, so `boundCard` is present on
+    // this surface. W5b withheld it because the road that binds a screen did
+    // not exist; it does now. The set stays TOTAL, so a further argument fails
+    // here as loudly as this one would have.
     expect(Object.keys(lastTurnArgs ?? {}).sort()).toEqual(
       [
         "actorContext",
+        "boundCard",
         "messages",
         "platformRole",
         "runFrame",
@@ -602,9 +618,15 @@ describe("the window hands the assistant the run it sits under", () => {
       ].sort(),
     );
     expect(typeof (lastTurnArgs as { runFrame?: unknown }).runFrame).toBe("string");
-    // No binding is invented where the window offered none, and no grant is
-    // minted here: W5c owns acting.
-    expect((lastTurnArgs as { boundCard?: unknown }).boundCard).toBeUndefined();
+    // WHAT THE WINDOW NAMES, EXHAUSTIVELY: the run its screen belongs to, and
+    // nothing else. No ref it invented — the server mints the screen's ref from
+    // the run's own durable row under this reader's access — no control, and no
+    // grant: the grant is minted by the runtime, never here.
+    expect((lastTurnArgs as { boundCard?: unknown }).boundCard).toEqual({
+      candidateRefs: [],
+      focusedRef: null,
+      screenRunIds: ["run-1"],
+    });
     expect(JSON.stringify(lastTurnArgs)).not.toContain("grant");
   });
 
@@ -664,5 +686,154 @@ describe("the window hands the assistant the run it sits under", () => {
     expect((lastTurnArgs as { runFrame?: unknown }).runFrame).toBeUndefined();
     // …and what the person typed is still stored with the run.
     expect(appended.map((a) => a.role)).toEqual(["user", "assistant"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W5C ADDITIONS (cinatra#2934) — what the window is BOUND to, what travels with
+// the message, and what the screen learns from the turn.
+//
+// AMENDED, and named: the append mock above now records `attachments`, because
+// the row the turn writes carries them. Nothing W5b asserted changed.
+// ---------------------------------------------------------------------------
+describe("the window is bound to the run's own waiting screen", () => {
+  // AMENDED TWICE (cinatra#2934). The SCHEDULE screen left this set after the
+  // picture leg — the surface in front of the person there is the scheduler
+  // form, not the run's waiting screen, and binding the run's HITL gate row to
+  // it offered the setup step's fields on a screen that draws none of them. The
+  // ARMED-TRIGGER tab left it for exactly the same reason, on the maintainer's
+  // reading of this pull request's Deviation 1: its window sits under the ARMED
+  // scheduler form, which carries a ref of its own. TWO remain.
+  it("names the RUN for the two windows that sit under the run's own screen", async () => {
+    for (const surface of ["run-page", "step-by-step"] as const) {
+      lastTurnArgs = null;
+      await mod.runWindowTurn({ runId: "run-1", surface, prompt: "make it say hello" });
+      const claim = (lastTurnArgs as unknown as {
+        boundCard?: { screenRunIds?: string[] };
+      }).boundCard;
+      expect(claim?.screenRunIds, surface).toEqual(["run-1"]);
+    }
+  });
+
+  it("the ARMED-trigger tab carries its own card's ref and names no run screen", async () => {
+    lastTurnArgs = null;
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "armed-trigger",
+      prompt: "move it to Tuesdays at 9",
+    });
+    const claim = (lastTurnArgs as unknown as {
+      boundCard?: { screenRunIds?: string[]; candidateRefs?: string[] };
+    }).boundCard;
+    expect(claim?.screenRunIds ?? []).toEqual([]);
+    expect(claim?.candidateRefs).toHaveLength(1);
+    // It is the RUN-SCOPED SCHEDULE ref the card itself is drawn from — the box
+    // and the form it is about name one thing.
+    expect(decodeScheduleRunRef(claim!.candidateRefs![0]!)).toEqual({ runId: "run-1" });
+  });
+
+  it("the SCHEDULE screen carries its own form's ref and names no run screen", async () => {
+    lastTurnArgs = null;
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "schedule",
+      prompt: "set it for tomorrow at 9 in the morning, Berlin time",
+    });
+    const claim = (lastTurnArgs as unknown as {
+      boundCard?: { screenRunIds?: string[]; candidateRefs?: string[] };
+    }).boundCard;
+    expect(claim?.screenRunIds).toBeUndefined();
+    expect(claim?.candidateRefs).toHaveLength(1);
+    // The ref is the server's own, minted from this run — never a client claim.
+    expect(decodeScheduleFormRef(claim!.candidateRefs![0]!)).toEqual({ runId: "run-1" });
+  });
+
+  it("leaves the REVIEW page's own claim alone — its card carries a ref of its own", async () => {
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "review",
+      prompt: "tighten the opening paragraph",
+      boundCard: { candidateRefs: ["gate-ref"], focusedRef: "gate-ref" },
+    });
+    const claim = (lastTurnArgs as unknown as {
+      boundCard?: { screenRunIds?: string[]; candidateRefs: string[]; focusedRef: string | null };
+    }).boundCard;
+    expect(claim?.screenRunIds).toBeUndefined();
+    expect(claim?.candidateRefs).toEqual(["gate-ref"]);
+    expect(claim?.focusedRef).toBe("gate-ref");
+  });
+});
+
+describe("the files travel with the message, and the screen learns what the turn did", () => {
+  it("records the attached files on the person's own row and on no other", async () => {
+    await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "run-page",
+      prompt: "use the brief I attached",
+      attachments: [{ artifactId: "a1" }],
+    });
+    expect(appended[0]?.role).toBe("user");
+    expect(appended[0]?.attachments).toEqual([{ artifactId: "a1" }]);
+    expect(appended[1]?.attachments).toBeNull();
+  });
+
+  it("reports a PRESS the turn actually made, read off the platform's own result", async () => {
+    turnBehaviour = (send) => {
+      send("tool_result", {
+        name: "lifecycle_bound_card_decide",
+        result: JSON.stringify({ ok: true, outcome: { kind: "changes-requested" } }),
+      });
+      send("text", { content: "Changes requested." });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "review",
+      prompt: "tighten the opening paragraph",
+    });
+    expect(out.acted).toBe(true);
+  });
+
+  it("reports NO press for a turn that only answered, or whose press did nothing", async () => {
+    turnBehaviour = (send) => send("text", { content: "It is waiting for a subject." });
+    expect((await mod.runWindowTurn({ runId: "run-1", surface: "review", prompt: "what is this?" })).acted)
+      .toBe(false);
+    turnBehaviour = (send) => {
+      send("tool_result", {
+        name: "lifecycle_bound_card_decide",
+        result: JSON.stringify({ ok: false, message: "not allowed" }),
+      });
+    };
+    expect((await mod.runWindowTurn({ runId: "run-1", surface: "review", prompt: "file it" })).acted)
+      .toBe(false);
+  });
+
+  it("a FILL is not a press: the screen fills, and nothing settles", async () => {
+    turnBehaviour = (send) => {
+      send("tool_result", {
+        name: "lifecycle_bound_screen_fill",
+        result: JSON.stringify({ ok: true, placed: ["subject"] }),
+      });
+      send("text", { content: "I put a subject in for you." });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "run-page",
+      prompt: "give it a subject",
+    });
+    expect(out.acted).toBe(false);
+  });
+});
+
+describe("what the window reads a press off", () => {
+  it("the platform's own relayed result, never the assistant's sentence", () => {
+    // "Where your sentence and the card disagree, the card is right", so the
+    // sentence is not the evidence. Defensive by construction: the result
+    // arrives as transport text and may be truncated, absent or something else.
+    expect(mod.didPress(JSON.stringify({ ok: true }))).toBe(true);
+    expect(mod.didPress(JSON.stringify({ ok: false }))).toBe(false);
+    expect(mod.didPress('{"ok": true')).toBe(false);
+    expect(mod.didPress("not json at all")).toBe(false);
+    expect(mod.didPress(undefined)).toBe(false);
+    expect(mod.didPress("")).toBe(false);
   });
 });

@@ -456,6 +456,14 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   // code blocks + tracking-[0.1em] table headers — normalization decisions
   // tracked in cinatra#886 like the JSX sites above.
   "packages/chat/src/markdown-render.ts",
+  // cinatra#2934 moved the markup half of that renderer DOWN into the agents
+  // package so the per-run prompt window draws the same assistant prose /chat
+  // draws (chat depends on agents, so the import can only run that way). The
+  // tracking-[0.1em] table header came with it — SAME grandfathered site, new
+  // file, exactly as cinatra#918 above. Still tracked in cinatra#886; changing
+  // it here would silently restyle every /chat table, which is a design
+  // decision that belongs to that migration and not to this move.
+  "packages/agents/src/markdown-render-core.ts",
 ];
 
 // AND a path-zone glob with an extension glob. ESLint flat config treats a
@@ -1176,6 +1184,35 @@ const eslintConfig = defineConfig([
             ...GRID_LAYOUT_BAN,
           ],
         },
+      ],
+    },
+  },
+
+  // ONE HARNESS FILE KEEPS A PLAIN <input>, AND THIS IS WHERE THAT IS SAID
+  // (cinatra#2934, lifecycle-b W5c).
+  //
+  // `run-window-fill-through-drawn-panel.test.tsx` mounts the real window over a
+  // real field and asserts THE VALUE THE TURN PLACED. Nothing about a wrapper's
+  // own controlled-input behaviour may stand between the fill and what is read
+  // back, or the test would be proving the wrapper rather than the road. The
+  // design-system rule is about product surfaces; this is a harness.
+  //
+  // IT IS STATED HERE RATHER THAN ON THE LINE because the gate runs ESLint with
+  // `--no-inline-config`: an `eslint-disable-next-line` is invisible to it, so a
+  // carve-out that is not in this file is not a carve-out at all. Everything
+  // else the zone bans still applies to this file — only the raw-`<input>`
+  // selector is dropped, and only for this one path.
+  {
+    files: [
+      "packages/agents/src/__tests__/run-window-fill-through-drawn-panel.test.tsx",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...RAW_JSX_RESTRICTIONS.filter(
+          (r) => r.selector !== "JSXOpeningElement[name.name='input']",
+        ),
+        ...DYNAMIC_BANS_L1,
       ],
     },
   },

@@ -137,6 +137,19 @@ const ALLOWED_PROPOSAL_OVERRIDE = new Set<string>([
   // `agent_creation_request_decide` stay unreachable: this is one named
   // primitive, not a lifted backstop.
   "lifecycle_bound_card_decide",
+  // cinatra#2934 (lifecycle-b W5c) — THE FILL. The other half of what a waiting
+  // screen lends, and NOT a decision: it places values in the fields of the ONE
+  // screen the person's own message was bound to and submits nothing at all —
+  // the person presses the screen's own button. It carries no deciding verb, so
+  // the backstop below does not deny it; it is here because the allowlist is
+  // deny-by-default and every reachable primitive must be named. Its handler
+  // (src/lib/lifecycle/bound-screen-fill-mcp.ts) refuses unless the request
+  // frame carries a verified grant matching the person, the organization and
+  // that card — never spent, never matched on its control — then resolves the
+  // person's OWN live standing, re-resolves the screen under it, and drops
+  // every key the form does not declare. A prompt-injected model holds no grant
+  // and the primitive does nothing for it.
+  "lifecycle_bound_screen_fill",
 ]);
 
 // Defense-in-depth: even if a primitive is mistakenly admitted, deny anything
@@ -418,3 +431,4 @@ export function declarationPermitsDelegatedChat(
   if (declared === undefined) return false;
   return CHAT_ELIGIBLE_DECLARED_CLASSES.has(declared);
 }
+
