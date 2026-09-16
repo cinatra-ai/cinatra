@@ -241,24 +241,32 @@ describe("the terminal value is a reading, not a control that has been switched 
   // field beside it, which carries the control's own border (var(--line-strong))
   // over the raised surface (var(--surface-strong)).
   //
+  // THE INK IS THE DRAWING'S (cinatra#3282, fix leg 2). §VI's spent example
+  // draws the VALUE inside that hairline box in the muted ink —
+  // color:var(--muted) on "14.07.2026, 09:00" and on "Europe/Berlin" — and
+  // the LABEL above it in the ink colour, color:var(--ink) on "Run at" and
+  // "Timezone". The app's tokens map --muted-foreground to var(--muted) and
+  // --border to var(--line) (packages/design/src/tokens.css), so the drawn
+  // value ink is `text-muted-foreground` and the drawn box border is
+  // `border-border`.
+  //
   // The reading used to carry `border-input` — the control's border, token for
   // token the one the live Input draws — so a spent reading was a field with
-  // its control taken out rather than a value where a field stood, and its ink
-  // was `text-muted-foreground`, which is the ink §VI gives a LABEL, not the
-  // ink it gives the value the reader came to read ("the values still
-  // legible") — hardest to read of all in the dark palette.
+  // its control taken out rather than a value where a field stood. That border
+  // is the one thing the reading trades away; the fill, the measure and the
+  // drawn inks stay.
   for (const [name, body, aside] of [
     ["the spent one-off", SPENT_ONE_OFF, { firedOnce: true }],
     ["the stopped recurring schedule", STOPPED_RECURRING, {}],
   ] as const) {
-    it(`${name} draws its values in the legible ink, never the muted label ink`, async () => {
+    it(`${name} draws its values in the drawing's muted ink, never the label ink`, async () => {
       const nodes = valueNodes(await rowsOf(mount(body, aside)));
       expect(nodes).toHaveLength(2);
       for (const node of nodes) {
-        expect(node.classList.contains("text-foreground"), node.textContent ?? "").toBe(true);
         expect(node.classList.contains("text-muted-foreground"), node.textContent ?? "").toBe(
-          false,
+          true,
         );
+        expect(node.classList.contains("text-foreground"), node.textContent ?? "").toBe(false);
       }
     });
 

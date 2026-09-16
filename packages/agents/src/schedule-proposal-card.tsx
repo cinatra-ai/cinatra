@@ -1623,22 +1623,28 @@ function defaultRunAt(): string {
  * platform, because there is nothing here to change.
  *
  * A READING, NOT A CONTROL THAT WAS SWITCHED OFF (cinatra#3282). The reading
- * used to be drawn with the control's OWN border and the muted label ink, so
- * on screen it was the field beside it with the picker taken out, and the
- * value the reader came to read was the palest thing in the row — hardest of
- * all in the dark palette. §VI's spent example draws the pair differently
- * from the editable field above it: the editable field takes the control
- * border over the raised surface, while the spent reading takes the soft
- * hairline over the recessed paper fill. So the reading keeps the recessed
- * fill and the measure, trades the control border for that hairline, and
- * carries the value in the ordinary ink — §VI asks for the values "still
- * legible", and it is the LABEL above that is muted, never the value.
+ * used to be drawn with the control's OWN border, so on screen it was the
+ * field beside it with the picker taken out. §VI's spent example draws the
+ * pair differently from the editable field above it: the editable field takes
+ * the control border over the raised surface, while the spent reading takes
+ * the soft hairline over the recessed paper fill. So the reading keeps the
+ * recessed fill and the measure, and trades the control border for that
+ * hairline.
+ *
+ * THE INK IS THE DRAWING'S (cinatra#3282, fix leg 2). §VI's spent example
+ * draws the VALUE inside that hairline box in the muted ink —
+ * color:var(--muted) on "14.07.2026, 09:00" and on "Europe/Berlin" — and the
+ * LABEL above it in the ink colour, color:var(--ink) on "Run at" and
+ * "Timezone". The app's tokens map --muted-foreground to var(--muted) and
+ * --border to var(--line), so the drawn value ink is `text-muted-foreground`
+ * inside the `border-border` hairline, and the label above keeps the ink
+ * colour.
  */
 function ReadOnlyValue({ value }: { value: string }): ReactElement {
   return (
     <div
       data-schedule-value
-      className="flex h-9 w-56 items-center rounded-control border border-border bg-background px-3 text-sm text-foreground"
+      className="flex h-9 w-56 items-center rounded-control border border-border bg-background px-3 text-sm text-muted-foreground"
     >
       {value}
     </div>
