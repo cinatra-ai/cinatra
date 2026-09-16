@@ -1224,15 +1224,10 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       const readRows =
         view.container.querySelector('[data-conformance-id="schedule-option-rows"]')?.textContent ??
         "";
-      // The whole wall clock, drawn as itself and never shifted by a zone
-      // (converge round) — the year and the hour alone would pass a formatter
-      // that moved the day.
-      expect(readRows, host).toContain(
-        new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-        }),
-      );
+      // The whole wall clock, drawn as itself and never shifted by a zone, in
+      // the drawing's fixed DD.MM.YYYY, HH:mm format (cinatra#3282) — the year
+      // and the hour alone would pass a formatter that moved the day.
+      expect(readRows, host).toContain("04.03.2020, 09:00");
       view.unmount();
       cleanup();
     }
