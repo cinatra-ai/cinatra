@@ -127,11 +127,6 @@ export function buildMarketplaceCardNodes({
       packageName: card.packageName,
     });
 
-    // Per-card DOM id for the registry-gated refusal line, so the disabled
-    // control can point at its own reason with aria-describedby without two
-    // cards on the same grid colliding on one id.
-    const refusalDomId = `extension-card-cta-refusal-${card.packageName.replace(/[^a-zA-Z0-9]+/g, "-")}`;
-
     const ctaControl =
       cta.state === "restore" ? (
         // Restore re-activates an already-installed (archived) template. A failure
@@ -175,64 +170,30 @@ export function buildMarketplaceCardNodes({
         // when the registry is connected; otherwise a disabled button so
         // we never present an Install that cannot actually install.
         cta.disabled ? (
-          // THE REGISTRY-GATED REFUSAL IS SPOKEN, NOT SILENT (cinatra#3494).
+          // THE GREYED INSTALL OF A CLOSED INSTALL ROAD (cinatra#3494).
           //
           // `registryConnected` is resolved from the instance's Verdaccio read
           // config (src/lib/marketplace-browse.ts), not from the registry URL
           // the operator set, so an instance whose package registry genuinely
-          // offers the listing can still land here. This branch used to render
-          // a bare disabled Button: the Button primitive carries
-          // `disabled:pointer-events-none`, which swallows the hover that would
-          // show its `title`, and nothing on the card body said a word — so the
-          // card drew "Install now" and pressing it completed NOTHING (no
-          // panel, no toast, no request, no console error, no install row).
+          // offers the listing can still land here.
           //
-          // The refusal now takes the anatomy the drawing gives a blocked
-          // Install (design specs/app-extensions.html,
-          // `extension-listing-card-incompatible`): the greyed control keeps
-          // its reason reachable — the same
-          // `disabled:pointer-events-auto` override the incompatible branch
-          // above already carries — and the reason is READABLE ON THE CARD,
-          // in the same plain mono-10px anatomy the footer verdict uses.
-          //
-          // ONE FLEX ITEM, NOT TWO (codex convergence, cinatra#3494). The CTA
-          // slot in marketplace-listing-card.tsx is `className="contents"`, so
-          // whatever this branch returns becomes a DIRECT child of the
-          // `flex flex-row flex-wrap` CTA row — and `detailsControl` ("More
-          // details") is the next child of that same row. A `basis-full`
-          // sibling here would therefore sit BETWEEN the two and force "More
-          // details" onto a third line, breaking the drawn CTA + details pair
-          // (cinatra#2363: "details to the RIGHT of the CTA, wrapping only when
-          // the pair does not fit"). The control and its reason are wrapped in
-          // one column instead: the pair is unchanged and the reason sits under
-          // the control it explains.
-          //
-          // The reason is bound to the control with `aria-describedby`: a
-          // disabled button is not keyboard-focusable and its native `title` is
-          // hover-only, so proximity alone is not a programmatic association.
-          <div className="flex flex-col items-center gap-1">
-            <Button
-              size="sm"
-              disabled
-              aria-describedby={`${refusalDomId}`}
-              className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
-              title="Connect the package registry to install"
-            >
-              Install now
-            </Button>
-            <span
-              id={refusalDomId}
-              data-testid="extension-card-cta-refusal"
-              data-slot="extension-card-cta-refusal"
-              // Plain concat, not cn(): the app's plain tailwind-merge drops
-              // the `text-badge-xs` SIZE token when it is merged alongside a
-              // text-COLOUR class in one call (see CompatMeta in
-              // marketplace-listing-card.tsx — cinatra#1003).
-              className={"text-center font-mono text-badge-xs " + "text-muted-foreground"}
-            >
-              Connect the package registry to install
-            </span>
-          </div>
+          // The drawing (design specs/app-extensions.html §I, and the
+          // `extension-listing-card-incompatible` card of §I) greys the install
+          // out and draws NO reason line under the control — the only line it
+          // draws for a greyed card is the Incompatible verdict that "replaces
+          // the compatible check". So the reason travels in the drawn hover
+          // title alone, exactly as the incompatible branch above carries it,
+          // and the same `disabled:pointer-events-auto` override keeps that
+          // title reachable (the Button primitive ships
+          // `disabled:pointer-events-none`, which would swallow the hover).
+          <Button
+            size="sm"
+            disabled
+            className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
+            title="Connect the package registry to install"
+          >
+            Install now
+          </Button>
         ) : usesInstallPanel ? (
           // connector / artifact / workflow: the pre-install access selector
           // (cinatra#805) now lives IN the card (cinatra#2373, spec §I.1) —

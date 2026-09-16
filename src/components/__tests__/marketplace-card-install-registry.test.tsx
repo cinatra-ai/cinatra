@@ -31,11 +31,14 @@
 //   exactly as it was and replaces only the body — price, rating, description —
 //   with the install panel: the access-scope picker, preselected to
 //   Workspace: All, and Cancel / Install now actions."
-//   `extension-listing-card-incompatible` — a BLOCKED Install now is drawn as a
-//   greyed control that still carries its reason
-//   (`disabled title="Requires a newer Cinatra version"`) with the verdict
-//   readable on the card. A blocked action is never a control that simply does
-//   nothing.
+//   §I — "When an extension can't run on this Cinatra instance its install
+//   greys out and an Incompatible line replaces the compatible check."
+//   `extension-listing-card-incompatible` — the drawn BLOCKED Install now is a
+//   greyed control carrying its hover title alone
+//   (`disabled title="Requires a newer Cinatra version"`) beside More details.
+//   The drawing puts NO reason line under a greyed control (maintainer ruling,
+//   2026-09-16): the only line it draws for a greyed card is the Incompatible
+//   verdict that replaces the compatible check.
 //
 // Two mocks, both OFF the install road and both file-scoped (vitest gives each
 // test file its own module registry, so nothing here reaches another file):
@@ -159,16 +162,18 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. THE SILENT GUARD — a state that produces the reported symptom.
+// 1. THE CLOSED ROAD — a state that produces the reported symptom.
 //
 // `registryConnected` is resolved from the instance's Verdaccio read config
 // (src/lib/marketplace-browse.ts `loadInstallableRegistryConfigOrNull`), NOT
 // from CINATRA_AGENT_REGISTRY_URL, so an instance that HAS a package registry
 // offering the fleet's packs can still resolve it false. In that state the card
 // still draws an "Install now" control — and before cinatra#3494 that control
-// was a bare disabled Button whose only reason was a native `title` the
-// Button primitive's own `disabled:pointer-events-none` made unreachable, with
-// nothing on the card body saying a word. Pressing it completed nothing.
+// was a bare disabled Button whose native `title` the Button primitive's own
+// `disabled:pointer-events-none` made unreachable, so pressing it completed
+// nothing and hovering it said nothing. The greyed control now carries that
+// title reachably, and — per the drawing — nothing else: no reason line is
+// drawn under it.
 //
 // HONEST SCOPE (codex convergence): this reproduces the registryConnected=false
 // branch, which PRODUCES the reported symptom set; it does not prove the
@@ -179,57 +184,37 @@ afterEach(() => {
 // report hit.
 // ---------------------------------------------------------------------------
 
-describe("cinatra#3494 — a registry-offered listing whose install road is closed refuses VISIBLY", () => {
-  it("names the reason on the card body instead of drawing a control that does nothing", () => {
+describe("cinatra#3494 — a registry-offered listing whose install road is closed greys the control out", () => {
+  it("greys Install now with its drawn hover title and draws NO reason line on the card", () => {
     mountCards({ cards: [REGISTRY_ARTIFACT], registryConnected: false });
 
     const cta = screen.getByTestId("extension-card-cta");
     expect(cta.getAttribute("data-cta-state")).toBe("install");
     expect(cta.textContent).toContain("Install now");
 
-    // The refusal is READABLE ON THE CARD — not only in a tooltip nobody can
-    // reach. This is the drawing's incompatible card: a blocked Install states
-    // why on the card itself.
-    const refusal = screen.getByTestId("extension-card-cta-refusal");
-    expect(refusal.textContent).toBe("Connect the package registry to install");
-  });
-
-  it("keeps the blocked control's own reason reachable, as the drawn incompatible card does", () => {
-    mountCards({ cards: [REGISTRY_ARTIFACT], registryConnected: false });
-
-    const button = screen
-      .getByTestId("extension-card-cta")
-      .querySelector("button") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.getAttribute("title")).toBe("Connect the package registry to install");
-    // The Button primitive ships `disabled:pointer-events-none`, which swallows
-    // the hover that would surface `title`. The drawn incompatible control
-    // overrides it; this one must too, or its reason is unreachable.
-    expect(button.className).toContain("disabled:pointer-events-auto");
-  });
-
-  it("does not split the drawn CTA + More details pair (one flex item, not two)", () => {
-    mountCards({ cards: [REGISTRY_ARTIFACT], registryConnected: false });
-
-    // The CTA slot in marketplace-listing-card.tsx is `className="contents"`,
-    // so EVERY child this branch returns is a direct child of the
-    // `flex flex-row flex-wrap` CTA row, and `detailsControl` ("More details")
-    // is the next child of that same row. A full-width sibling between them
-    // would push "More details" onto its own line and break the drawn pair
-    // (cinatra#2363). The refusal must therefore contribute ONE item that
-    // carries both the control and its reason.
-    const cta = screen.getByTestId("extension-card-cta");
-    expect(cta.children.length).toBe(1);
-
-    const refusal = screen.getByTestId("extension-card-cta-refusal");
     const button = cta.querySelector("button") as HTMLButtonElement;
-    expect(refusal.parentElement).toBe(button.parentElement);
-    expect(refusal.className).not.toContain("basis-full");
+    expect(button.disabled).toBe(true);
+    // The reason travels in the DRAWN HOVER TITLE alone. The Button primitive
+    // ships `disabled:pointer-events-none`, which swallows the hover that would
+    // surface `title`; the drawn incompatible control overrides it and so must
+    // this one, or the reason is unreachable.
+    expect(button.getAttribute("title")).toBe("Connect the package registry to install");
+    expect(button.className).toContain("disabled:pointer-events-auto");
 
-    // The reason is bound to the control it explains — a disabled button is not
-    // keyboard-focusable and its native title is hover-only.
-    expect(refusal.id).not.toBe("");
-    expect(button.getAttribute("aria-describedby")).toBe(refusal.id);
+    // NO REASON LINE UNDER A GREYED CONTROL (maintainer ruling, 2026-09-16):
+    // design specs/app-extensions.html §I greys the install out, and the only
+    // line it draws for a greyed card is the Incompatible verdict that replaces
+    // the compatible check. The card never repeats the reason in its body.
+    expect(screen.queryByTestId("extension-card-cta-refusal")).toBeNull();
+    expect(cta.textContent).not.toContain("Connect the package registry to install");
+    expect(button.getAttribute("aria-describedby")).toBeNull();
+
+    // The greyed control is ONE flex item, so the drawn CTA + More details pair
+    // (cinatra#2363) stays unbroken: the CTA slot in marketplace-listing-card.tsx
+    // is `className="contents"`, so every child here is a direct child of the
+    // card's `flex flex-row flex-wrap` CTA row.
+    expect(cta.children.length).toBe(1);
+    expect(cta.children[0]).toBe(button);
   });
 
   it("dispatches nothing while the road is closed", () => {
@@ -309,10 +294,5 @@ describe("cinatra#3494 — with the road open, a registry-offered listing instal
       .getAttribute("data-availability");
 
     expect(registryOffered).toBe(bundled);
-  });
-
-  it("no refusal line is drawn while the road is open", () => {
-    mountCards({ cards: [REGISTRY_ARTIFACT, REGISTRY_SKILL] });
-    expect(screen.queryByTestId("extension-card-cta-refusal")).toBeNull();
   });
 });
