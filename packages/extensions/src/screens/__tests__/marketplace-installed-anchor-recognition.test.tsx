@@ -251,7 +251,14 @@ async function renderGrid(): Promise<ControlReading[]> {
     return {
       packageName: meta.packageName,
       ctaState,
-      text: (button?.[2] ?? "").replace(/<[^>]*>/g, "").trim(),
+      // The control label is read WHOLE: the CTA button renders its label as
+      // plain text, so the reading is the button body itself and the
+      // assertions below compare it as a whole string. Nothing is stripped out
+      // of the markup here — a tag-stripping replace would be an incomplete
+      // sanitizer (CodeQL js/incomplete-multi-character-sanitization), and a
+      // card that ever nested markup inside the control must fail this reading
+      // loudly rather than be quietly flattened into it.
+      text: (button?.[2] ?? "").trim(),
       disabled: /(^|\s)disabled(=|\s|$)/.test(button?.[1] ?? ""),
     };
   });
