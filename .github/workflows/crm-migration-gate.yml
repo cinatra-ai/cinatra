@@ -43,8 +43,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the jobs below read?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group, schedule, dispatch) there is
+  # no changed-file set to read, so the output is forced true and the jobs below
+  # run for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (crm-migration-gate)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      crm: ${{ github.event_name != 'pull_request' || steps.filter.outputs.crm == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # The scanners below walk the WHOLE tracked tree, so the rule is the
+          # tree minus their own skip lists; `every` makes the negations bite (the same quantifier build-image.yml and e2e-app-suites.yml already use for their inverse filters)
+          # (the default `some` would let '**' match on its own).
+          predicate-quantifier: 'every'
+          filters: |
+            crm:
+              # Derived from the gate's four scan steps: crm-pointer-gate.mjs and
+              # oas-banned-primitives-gate.mjs walk REPO_ROOT itself
+              # (scripts/audit/crm-pointer-gate.mjs:278 `walk(REPO_ROOT)`), so the
+              # honest rule is the WHOLE tree minus the scanners' own SKIP_DIRS
+              # (crm-pointer-gate.mjs:147) and SKIP_FILE_EXTS — a four-directory
+              # list would have let a banned primitive land in, say,
+              # docker-compose.yml with this gate skipped. The two test steps run
+              # their suites under scripts/audit/__tests__ and the extension trees
+              # the OAS scan reads are materialised by the `Clone companion
+              # extension repos` step from the pinned clone-back locks; both are
+              # inside the tree below.
+              - '**'
+              - '!docs/**'
+              - '!.planning/**'
+              - '!.claude/**'
+              - '!README.md'
+              - '!**/*.png'
+              - '!**/*.jpg'
+              - '!**/*.jpeg'
+              - '!**/*.gif'
+              - '!**/*.webp'
+              - '!**/*.svg'
+              - '!**/*.ico'
+              - '!**/*.woff'
+              - '!**/*.woff2'
+              - '!**/*.ttf'
+              - '!**/*.eot'
+
   gate:
     name: CRM migration gates
+    needs: [changes]
+    # A skipped job still reports `CRM migration gates` as skipped, which the
+    # branch protection counts as a pass — the required context never hangs.
+    if: ${{ needs.changes.outputs.crm == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     steps:
       - name: Checkout
