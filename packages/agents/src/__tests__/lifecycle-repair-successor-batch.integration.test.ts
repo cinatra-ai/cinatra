@@ -27,11 +27,13 @@
  *                  event PENDING" too), and after the repair lands the successor
  *                  settles while the sibling gets its own gate.
  *   STILL BATCHES— three productions on a landed repair run: the two SIBLINGS
- *                  coalesce into one batch partition gate (batching is not disabled
- *                  on a repair run) while the successor is excluded from the sealed
- *                  membership.
- *   NON-REPAIR   — the ordinary multi-artifact production still coalesces into a
- *                  single batch partition gate (no regression).
+ *                  coalesce into ONE sealed epoch (batching is not disabled on a
+ *                  repair run) while the successor is excluded from that frozen
+ *                  membership — and the membership FANS INTO one gate per artifact
+ *                  (cinatra#3080), one per sibling in the membership's own order.
+ *   NON-REPAIR   — the ordinary multi-artifact production still coalesces into ONE
+ *                  sealed epoch, which likewise fans into one gate per artifact
+ *                  (no regression).
  *   PRE-FIX EPOCH— an OPEN batch epoch only a pre-fix seal can have produced —
  *                  `sealBatchEpoch` REUSES a frozen membership regardless of the
  *                  candidate set, so excluding the successor from new candidates does
@@ -508,14 +510,20 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
     const successorGateId = await landRepair(ctx, successorRev);
     await runAppSweeps();
 
-    // Batching is NOT disabled on a repair run: the two siblings are a genuine
-    // multi-artifact production and coalesce into ONE batch partition gate.
+    // STILL COALESCES — batching is NOT disabled on a repair run: the sealed epoch
+    // still holds the two siblings in ONE frozen membership and still excludes the
+    // successor, which is what this case guards. What that membership FANS INTO
+    // changed with cinatra#3080: "Work that made several artifacts raises one gate
+    // per artifact, in order … never one gate combining them", and the repair road
+    // reaches the same orchestration as the ordinary one, so each sibling is pinned
+    // by its OWN batch gate, in the membership's own order.
     const gatesA = await gatesPinning(siblingA.artifactId, siblingA.representationRevisionId);
     const gatesB = await gatesPinning(siblingB.artifactId, siblingB.representationRevisionId);
     expect(gatesA.length).toBe(1);
     expect(gatesB.length).toBe(1);
-    expect(gatesA[0].id).toBe(gatesB[0].id);
+    expect(gatesA[0].id).not.toBe(gatesB[0].id);
     expect(isBatchAutoReviewTaskId(gatesA[0].review_task_id)).toBe(true);
+    expect(isBatchAutoReviewTaskId(gatesB[0].review_task_id)).toBe(true);
 
     // …and the successor is NOT in the sealed membership, nor in the batch gate.
     const memberships = await batchEpochMemberships(ctx.repairRunId);
