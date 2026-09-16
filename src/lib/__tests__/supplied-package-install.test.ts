@@ -44,10 +44,23 @@ vi.mock("@cinatra-ai/skills/repository-package-intake", async (importOriginal) =
     intake.fetchGitHubSuppliedPackageAtPin(...(a as [])),
 }));
 
+// The FILE road's own intake, spied rather than replaced: the repository road's
+// claim is that it ends up in exactly this call, so the test has to see the
+// real one run AND see what it was handed.
+const fileRoad = vi.hoisted(() => ({ prepareSuppliedArchiveSnapshot: vi.fn() }));
+vi.mock("@/lib/archive-supplied-install", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const real = actual.prepareSuppliedArchiveSnapshot as (input: unknown) => Promise<unknown>;
+  fileRoad.prepareSuppliedArchiveSnapshot.mockImplementation((input: unknown) => real(input));
+  return { ...actual, prepareSuppliedArchiveSnapshot: fileRoad.prepareSuppliedArchiveSnapshot };
+});
+
 import {
   installSuppliedCandidate,
+  prepareSuppliedRepositoryArchiveSnapshot,
   prepareSuppliedRepositorySnapshot,
 } from "@/lib/supplied-package-install";
+import { buildStoredZip } from "@cinatra-ai/agents/upload-archive";
 import { SUPPLIED_PACKAGE_ORIGIN } from "@/lib/extension-install-pipeline";
 
 const SHA = "b".repeat(40);
@@ -161,6 +174,316 @@ describe("the repository road re-reads AT THE PIN (criterion 7)", () => {
       }),
     ).rejects.toThrow(/did not pass the skill validator/);
     expect(stageSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ANONYMOUS ARCHIVE (cinatra#3204 fix leg)
+//
+// The maintainer's ruling, in their words: "Anyone can download a ZIP of
+// origin/main of a repo or a ZIP of a release — no need to be logged in at
+// GitHub. The user provides that link and Cinatra gets the ZIP."
+//
+// The claim under test is the one that keeps this honest: the downloaded ZIP is
+// handed to the FILE road's own intake, byte for byte. There is no second
+// install road, no second reader and no second gate set — only different bytes
+// arriving by a different door.
+// ---------------------------------------------------------------------------
+
+/** A GitHub-shaped source archive: one generated wrapper folder, and the commit
+ *  id GitHub stamps into the ZIP's archive comment. */
+function gitHubSourceArchive(over: { comment?: string; root?: string } = {}): Uint8Array {
+  const root = over.root ?? "thing-main";
+  const zip = buildStoredZip([
+    {
+      name: `${root}/package.json`,
+      content: JSON.stringify({
+        name: "@acme/thing-skill",
+        version: "1.0.0",
+        cinatra: { kind: "skill" },
+      }),
+    },
+    { name: `${root}/SKILL.md`, content: "# thing\n" },
+  ]);
+  const comment = new TextEncoder().encode(over.comment ?? SHA);
+  // Rewrite the end-of-central-directory record's comment field.
+  const out = new Uint8Array(zip.byteLength + comment.byteLength);
+  out.set(zip, 0);
+  out.set(comment, zip.byteLength);
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  view.setUint16(zip.byteLength - 22 + 20, comment.byteLength, true);
+  return out;
+}
+
+function respondWith(bytes: Uint8Array): typeof fetch {
+  return (async () =>
+    new Response(bytes as unknown as BodyInit, { status: 200 })) as unknown as typeof fetch;
+}
+
+function respondStatus(status: number, statusText = ""): typeof fetch {
+  return (async () => new Response(null, { status, statusText })) as unknown as typeof fetch;
+}
+
+describe("the GitHub tab's archive enters the FILE road's install path", () => {
+  it("hands the downloaded ZIP to the file road's own intake and records github provenance", async () => {
+    const archive = gitHubSourceArchive();
+    const stageSnapshot = vi.fn(async (digest: string) => `${digest}.tgz`);
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "main",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/main",
+      resolveValidator: async () => null,
+      stageSnapshot,
+      fetchImpl: respondWith(archive),
+    });
+
+    expect(fileRoad.prepareSuppliedArchiveSnapshot).toHaveBeenCalledTimes(1);
+    const handed = fileRoad.prepareSuppliedArchiveSnapshot.mock.calls[0]![0] as {
+      archive: Uint8Array;
+    };
+    expect(Array.from(handed.archive)).toEqual(Array.from(archive));
+
+    expect(prepared.kind).toBe("skill");
+    expect(prepared.packageName).toBe("@acme/thing-skill");
+    expect(prepared.repo).toBe("acme/thing");
+    expect(prepared.ref).toBe("main");
+    expect(prepared.resolvedSha).toBe(SHA);
+    expect(prepared.provenance).toMatchObject({
+      type: "github",
+      repo: "acme/thing",
+      ref: "main",
+      resolvedSha: SHA,
+      path: `${prepared.contentDigest}.tgz`,
+    });
+  });
+
+  it("refuses a link the anonymous download cannot serve, naming the reason", async () => {
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "private-thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/private-thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: respondStatus(404, "Not Found"),
+      }),
+    ).rejects.toThrow(/HTTP 404[\s\S]*anonymously/);
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: respondStatus(429, "Too Many Requests"),
+      }),
+    ).rejects.toThrow(/rate limit/i);
+  });
+
+  it("refuses an archive that carries no commit id, so nothing installs off a moving ref", async () => {
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: respondWith(gitHubSourceArchive({ comment: "not-a-commit-id" })),
+      }),
+    ).rejects.toThrow(/immutable 40-character commit sha/);
+  });
+
+  it("refuses when the download no longer delivers the previewed bytes", async () => {
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: "main",
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/main",
+        pin: { resolvedSha: SHA, contentDigest: OTHER },
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: respondWith(gitHubSourceArchive()),
+      }),
+    ).rejects.toThrow(/refusing before any write/);
+  });
+});
+
+describe("the anonymous download is PINNED, BOUNDED and single-hosted", () => {
+  it("downloads the APPROVED COMMIT, not the ref, so a branch that advanced still installs what was approved", async () => {
+    const approved = gitHubSourceArchive({ root: "thing-approved" });
+    // The same branch, one commit later: different bytes, a different commit id.
+    const moved = gitHubSourceArchive({ root: "thing-moved", comment: "d".repeat(40) });
+
+    // Learn the digest the operator was shown, from the approved archive alone.
+    const previewed = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "main",
+      archiveUrl: `https://codeload.github.com/acme/thing/zip/${SHA}`,
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: respondWith(approved),
+    });
+
+    const asked: string[] = [];
+    const serve = (async (url: string) => {
+      asked.push(url);
+      // The BRANCH now serves the newer commit; only the commit path serves the
+      // tree the operator approved.
+      return new Response((url.endsWith(SHA) ? approved : moved) as unknown as BodyInit, {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      owner: "acme",
+      repo: "thing",
+      ref: "main",
+      archiveUrl: "https://codeload.github.com/acme/thing/zip/main",
+      pin: { resolvedSha: SHA, contentDigest: previewed.contentDigest },
+      resolveValidator: async () => null,
+      stageSnapshot: async (digest: string) => `${digest}.tgz`,
+      fetchImpl: serve,
+    });
+
+    expect(asked).toEqual([`https://codeload.github.com/acme/thing/zip/${SHA}`]);
+    expect(prepared.resolvedSha).toBe(SHA);
+    expect(prepared.contentDigest).toBe(previewed.contentDigest);
+    // The row still records WHERE it was found, while naming WHAT was installed.
+    expect(prepared.ref).toBe("main");
+    expect(prepared.provenance).toMatchObject({ ref: "main", resolvedSha: SHA });
+  });
+
+  it("refuses an over-cap download from its DECLARED LENGTH, cancelling the body instead of draining it", async () => {
+    let cancelled = false;
+    const declared = (async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }) as unknown as BodyInit,
+        { status: 200, headers: { "content-length": String(512 * 1024 * 1024) } },
+      )) as unknown as typeof fetch;
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "huge",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/huge/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: declared,
+      }),
+    ).rejects.toThrow(/over the 134217728-byte limit/);
+    // The body was let go, never read to the end.
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels an over-cap download WHILE it arrives, rather than allocating it first", async () => {
+    // One 16 MiB chunk, served over and over: the running total passes the cap
+    // long before anything that large is held in memory.
+    const chunk = new Uint8Array(16 * 1024 * 1024);
+    let served = 0;
+    let cancelled = false;
+    const endless = (async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            served += 1;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }) as unknown as BodyInit,
+        { status: 200 },
+      )) as unknown as typeof fetch;
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "endless",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/endless/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: endless,
+      }),
+    ).rejects.toThrow(/over the 134217728-byte limit/);
+    expect(cancelled).toBe(true);
+    // 128 MiB is nine 16 MiB chunks; the tenth is where the running total passes
+    // it. Nothing anywhere near a whole oversized archive was ever held.
+    expect(served).toBeLessThanOrEqual(10);
+  });
+
+  it("refuses a redirect off the archive host instead of following it", async () => {
+    const asked: string[] = [];
+    const redirecting = (async (url: string) => {
+      asked.push(url);
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://evil.example.com/payload.zip" },
+      });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: redirecting,
+      }),
+    ).rejects.toThrow(/downloads only from codeload\.github\.com/);
+    // The off-host destination was never requested.
+    expect(asked).toEqual(["https://codeload.github.com/acme/thing/zip/HEAD"]);
+  });
+
+  it("re-checks every entry name AFTER the generated wrapper folder is stripped", async () => {
+    // "thing-main//escape.txt" is harmless with the wrapper on and an absolute
+    // path with it off, so the strip is what has to refuse it.
+    const zip = buildStoredZip([
+      {
+        name: "thing-main/package.json",
+        content: JSON.stringify({
+          name: "@acme/thing-skill",
+          version: "1.0.0",
+          cinatra: { kind: "skill" },
+        }),
+      },
+      { name: "thing-main//escape.txt", content: "x" },
+    ]);
+    const comment = new TextEncoder().encode(SHA);
+    const out = new Uint8Array(zip.byteLength + comment.byteLength);
+    out.set(zip, 0);
+    out.set(comment, zip.byteLength);
+    new DataView(out.buffer, out.byteOffset, out.byteLength).setUint16(
+      zip.byteLength - 22 + 20,
+      comment.byteLength,
+      true,
+    );
+
+    await expect(
+      prepareSuppliedRepositoryArchiveSnapshot({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        resolveValidator: async () => null,
+        stageSnapshot: async () => "never.tgz",
+        fetchImpl: respondWith(out),
+      }),
+    ).rejects.toThrow(/absolute path/);
   });
 });
 

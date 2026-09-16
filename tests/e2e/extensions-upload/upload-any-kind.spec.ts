@@ -14,10 +14,10 @@
  *   name through the app's toast surface, the panel never appears, and nothing
  *   is written.
  *
- *   GITHUB ROAD — the tab states its precondition instead of leaking a raw
- *   capability refusal, and Submit is disabled while it holds; and, where a
- *   usable connection exists, a repository is resolved to ONE immutable commit
- *   which is displayed, beside the resolved kind and the same install panel.
+ *   GITHUB ROAD — the tab asks for a LINK and nothing else: no connection is
+ *   required, nothing is gated, and Submit goes live the moment a link is typed;
+ *   and a link resolves to ONE immutable commit which is displayed, beside the
+ *   archive it was downloaded from, the resolved kind and the same install panel.
  *
  *   THE COMPLETED INSTALL — an agent, a skill, an artifact and a connector
  *   package are installed through the screen at a chosen scope and then OBSERVED
@@ -320,7 +320,7 @@ const RETIRED_ZIP = storedZip([
 
 const PALETTES = ["light", "dark"] as const;
 
-async function usePalette(page: Page, palette: (typeof PALETTES)[number]): Promise<void> {
+async function applyPalette(page: Page, palette: (typeof PALETTES)[number]): Promise<void> {
   await page.emulateMedia({ colorScheme: palette });
   await page.evaluate((mode) => {
     document.documentElement.classList.toggle("dark", mode === "dark");
@@ -335,7 +335,7 @@ async function shot(page: Page, name: string): Promise<void> {
 
 async function openUpload(page: Page, palette: (typeof PALETTES)[number]): Promise<void> {
   await page.goto("/configuration/extensions/upload");
-  await usePalette(page, palette);
+  await applyPalette(page, palette);
   await expect(page.getByRole("heading", { name: "Upload Extension" })).toBeVisible();
 }
 
@@ -456,30 +456,26 @@ for (const palette of PALETTES) {
       await shot(page, `cell5-${palette}`);
     });
 
-    test(`CELL3 ${palette}: the GitHub tab states its precondition and disables Submit`, async ({
+    test(`CELL3 ${palette}: the GitHub tab takes a link with NO GitHub connection`, async ({
       page,
     }) => {
       await openUpload(page, palette);
       await page.getByRole("tab", { name: "GitHub" }).click();
 
-      const precondition = page.getByTestId("github-upload-precondition");
+      // THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+      // origin/main of a repo or a ZIP of a release — no need to be logged in at
+      // GitHub. The user provides that link and Cinatra gets the ZIP."
+      //
+      // So this walk runs under the session that holds NO GitHub connection, and
+      // what it measures is that nothing is gated: no precondition banner exists
+      // at all, and Submit goes live the moment a link is typed.
+      await expect(page.getByTestId("github-upload-precondition")).toHaveCount(0);
       const submit = page.getByTestId("github-upload-submit");
-      // On an instance WITHOUT a usable GitHub connection the tab must say which
-      // of the two preconditions is missing, and Submit must be dead. On an
-      // instance that HAS one, the banner is absent and Submit is live once a
-      // URL is typed. Both are legitimate; the walk asserts the pair is
-      // consistent, which is the contract.
-      if ((await precondition.count()) > 0) {
-        await expect(precondition).toBeVisible();
-        await expect(precondition).toContainText(/connector|connection/i);
-        await expect(submit).toBeDisabled();
-      } else {
-        await expect(submit).toBeDisabled(); // no URL typed yet
-        await page
-          .getByLabel("Repository URL")
-          .fill("https://github.com/cinatra-ai/cinatra");
-        await expect(submit).toBeEnabled();
-      }
+      await expect(submit).toBeDisabled(); // no link typed yet
+      await page
+        .getByLabel("Repository URL")
+        .fill("https://github.com/cinatra-ai/cinatra");
+      await expect(submit).toBeEnabled();
       await shot(page, `cell3-${palette}`);
     });
   });
@@ -529,7 +525,7 @@ for (const palette of PALETTES) {
         // have let the ARTIFACT kind "arrive" at its own listing without ever
         // leaving the form — a green cell for a navigation that never happened.
         await page.waitForURL(new RegExp(`${observable}/?(?:[?#].*)?$`), { timeout: 60_000 });
-        await usePalette(page, palette);
+        await applyPalette(page, palette);
         // The package itself is on the surface that kind is listed on. The
         // agents listing titles a card with the flow's OWN declared name and
         // carries the package only in the addresses that card links to, so the
@@ -572,7 +568,7 @@ for (const palette of PALETTES) {
         new RegExp(`/connectors/acme/${slug}/setup/?(?:[?#].*)?$`),
         { timeout: 60_000 },
       );
-      await usePalette(page, palette);
+      await applyPalette(page, palette);
       // The surface the admin was handed to is the connector's OWN
       // configuration page, rendered — never the not-found page a wrong address
       // or a refusing gate produces.
@@ -633,12 +629,10 @@ for (const palette of PALETTES) {
 // ---------------------------------------------------------------------------
 // CELL2 — the GITHUB road with a repository actually RESOLVED.
 //
-// Driven under the SECOND session (auth.setup.ts step 6): the GitHub tab reads
-// its precondition per the organization the screen runs in, so the walk's own
-// organization — which holds no connection of its own — is where CELL3 measures
-// the precondition, and the organization that holds the connection is the only
-// place a repository can be resolved. One instance, two organizations, both
-// halves of criteria 9 and 10 measurable.
+// Since the fix leg there is nothing to be connected to: the tab downloads the
+// public source archive the link names, anonymously. The cell is kept on its own
+// session so a boot that cannot reach the archive host still produces every
+// other cell, and so the reason it could not be measured is STATED by the run.
 // ---------------------------------------------------------------------------
 const GITHUB_STORAGE_STATE = "tests/e2e/extensions-upload/.auth/github-admin-state.json";
 const DEFAULT_WALK_REPOSITORY = "https://github.com/cinatra-ai/contract-matcher-skill";
@@ -652,16 +646,6 @@ for (const palette of PALETTES) {
     }) => {
       await openUpload(page, palette);
       await page.getByRole("tab", { name: "GitHub" }).click();
-
-      const precondition = page.getByTestId("github-upload-precondition");
-      if ((await precondition.count()) > 0) {
-        const stated = (await precondition.innerText()).replace(/\s+/g, " ").trim();
-        test.skip(
-          true,
-          `CELL2 not measurable — the connected-organization session met a precondition: ${stated}`,
-        );
-        return;
-      }
 
       // A PUBLIC repository whose manifest declares one of the four kinds, so
       // the cell measures the road rather than the reader's refusal. Named here
@@ -685,6 +669,11 @@ for (const palette of PALETTES) {
       await expect(pinned).toBeVisible({ timeout: 60_000 });
       await expect(pinned).toHaveText(/pinned at [0-9a-f]{40}$/);
       await expect(page.getByTestId("upload-resolved-kind")).toBeVisible();
+      // The RESOLVED state names the archive the bytes actually came from: the
+      // repository, the ref and the public archive URL the download used.
+      await expect(page.getByTestId("upload-resolved-source")).toContainText(
+        /https:\/\/codeload\.github\.com\//,
+      );
 
       // The SAME panel the File tab mounts, with the same preselection.
       await expect(page.getByTestId("extension-install-panel-body")).toBeVisible();
@@ -790,7 +779,7 @@ for (const palette of PALETTES) {
       // walk would then be measuring the window, not the offer.
       await page.setViewportSize({ width: 1440, height: 1800 });
       await page.goto("/artifacts");
-      await usePalette(page, palette);
+      await applyPalette(page, palette);
 
       // The area's OWN upload control, and its own type picker.
       await page.locator('input[data-testid="artifacts-upload-input"]').setInputFiles({

@@ -11,12 +11,13 @@
  *     and the round measured exactly that: the toast named the agents list and
  *     the listing's own search reported no match.
  *
- *   - THE GITHUB PRECONDITION. The connector client's status is an INSTANCE
- *     answer (its contract takes no scope at all), so a second admin session in
- *     another organization read the first organization's connection as its own
- *     and neither precondition state of criteria 9-10 could occur for it. The
- *     precondition is the organization's question, so it is read per
- *     organization.
+ *   - THE GITHUB PRECONDITION IS GONE (the fix leg). It used to be proven here,
+ *     read per organization. The maintainer ruled that anyone can download a ZIP
+ *     of a repository or a release without being logged in at GitHub, so the
+ *     repository road downloads a public archive anonymously and there is no
+ *     connection to state a precondition about. The note further down names
+ *     where the claims that replaced it are proven; this file now carries the
+ *     agent observable alone.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -91,18 +92,6 @@ vi.mock("../store", () => ({
   readInstalledAgentTemplates: vi.fn(async () => templates.rows),
 }));
 
-const identity = vi.hoisted(() => ({
-  listNangoConnectionsByConnector: vi.fn(async () => [] as unknown[]),
-}));
-vi.mock("@cinatra-ai/extensions/connection-identity-store", () => identity);
-
-const connector = vi.hoisted(() => ({
-  resolveGitHubConnectionClient: vi.fn(
-    () => ({ getStatus: async () => ({ status: "connected", settingsConfigured: true }) }) as unknown,
-  ),
-}));
-vi.mock("@/lib/connector-client-providers", () => connector);
-
 vi.mock("@/lib/anthropic-skill-config-service", () => ({
   snapshotSkillPackageIds: () => new Set<string>(),
   resolveInstalledClosure: () => [],
@@ -116,10 +105,7 @@ vi.mock("@/lib/anthropic-skill-config-service", () => ({
   }),
 }));
 
-import {
-  installSuppliedArchiveAction,
-  readGitHubUploadPreconditionAction,
-} from "../supplied-install-actions";
+import { installSuppliedArchiveAction } from "../supplied-install-actions";
 
 const ZIP = Buffer.from("zip").toString("base64");
 const AGENT_PACKAGE = "@acme/upload-walk-agent";
@@ -159,10 +145,6 @@ beforeEach(() => {
   templates.rows = [];
   session.user = { id: "u1" };
   session.session = { activeOrganizationId: "org-1" };
-  identity.listNangoConnectionsByConnector.mockResolvedValue([] as never);
-  connector.resolveGitHubConnectionClient.mockReturnValue({
-    getStatus: async () => ({ status: "connected", settingsConfigured: true }),
-  } as never);
 });
 
 // ---------------------------------------------------------------------------
@@ -211,71 +193,19 @@ describe("the agent install points at a listing that actually carries it", () =>
 });
 
 // ---------------------------------------------------------------------------
-// Criteria 9-10 — the GitHub tab's precondition, per organization
+// The GitHub tab's precondition is GONE (cinatra#3204 fix leg).
+//
+// THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+// origin/main of a repo or a ZIP of a release — no need to be logged in at
+// GitHub. The user provides that link and Cinatra gets the ZIP."
+//
+// The organization-scoped connection probe that used to be proven here has no
+// subject any more: the repository road downloads a public archive anonymously
+// and there is nothing to be connected to. What replaced those claims is proven
+// where the new behaviour lives — the tab renders and submits with no connection
+// (import-package-from-github-form.test.tsx) and an unservable link is refused by
+// name (src/lib/__tests__/supplied-package-install.test.ts).
 // ---------------------------------------------------------------------------
-describe("the GitHub tab states the precondition of THIS organization", () => {
-  const rowFor = (organizationId: string | null, ownerUserId = "u1") => ({
-    id: "nc-1",
-    organizationId,
-    ownerUserId,
-    connectorKey: "github",
-    connectionId: "conn-1",
-  });
-
-  it("the organization that holds the connection sees the resolved road", async () => {
-    identity.listNangoConnectionsByConnector.mockResolvedValue([rowFor("org-1")] as never);
-    await expect(readGitHubUploadPreconditionAction()).resolves.toEqual({ state: "ready" });
-  });
-
-  it("a second organization with no connection of its own sees the precondition", async () => {
-    session.session = { activeOrganizationId: "org-2" };
-    // The identity read is org-scoped; the instance still answers "connected".
-    identity.listNangoConnectionsByConnector.mockResolvedValue([] as never);
-    const result = await readGitHubUploadPreconditionAction();
-    expect(result.state).toBe("no-connection");
-    if (result.state === "no-connection") {
-      expect(result.message).toMatch(/organization/i);
-      expect(result.fixHref).toBe("/configuration/connectors");
-      expect(result.fixLabel.length).toBeGreaterThan(0);
-    }
-    expect(identity.listNangoConnectionsByConnector).toHaveBeenCalledWith("org-2", "github");
-  });
-
-  it("another organization's row never counts as this organization's connection", async () => {
-    session.session = { activeOrganizationId: "org-2" };
-    identity.listNangoConnectionsByConnector.mockResolvedValue([rowFor("org-1")] as never);
-    const result = await readGitHubUploadPreconditionAction();
-    expect(result.state).toBe("no-connection");
-  });
-
-  it("a legacy row with no organization counts for its OWN admin only", async () => {
-    session.session = { activeOrganizationId: "org-2" };
-    identity.listNangoConnectionsByConnector.mockResolvedValue([rowFor(null, "u1")] as never);
-    await expect(readGitHubUploadPreconditionAction()).resolves.toEqual({ state: "ready" });
-
-    identity.listNangoConnectionsByConnector.mockResolvedValue([rowFor(null, "someone-else")] as never);
-    const foreign = await readGitHubUploadPreconditionAction();
-    expect(foreign.state).toBe("no-connection");
-  });
-
-  it("no owning connector is still its own state, named separately", async () => {
-    connector.resolveGitHubConnectionClient.mockReturnValue(null as never);
-    const result = await readGitHubUploadPreconditionAction();
-    expect(result.state).toBe("no-connector");
-    if (result.state === "no-connector") {
-      expect(result.fixHref).toBe("/configuration/marketplace");
-    }
-  });
-
-  it("an instance with no connection at all still reports no connection", async () => {
-    connector.resolveGitHubConnectionClient.mockReturnValue({
-      getStatus: async () => ({ status: "not_connected", settingsConfigured: false }),
-    } as never);
-    const result = await readGitHubUploadPreconditionAction();
-    expect(result.state).toBe("no-connection");
-    expect(identity.listNangoConnectionsByConnector).not.toHaveBeenCalled();
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Criterion 21 — the skill kind's observable

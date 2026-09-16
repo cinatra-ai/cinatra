@@ -86,6 +86,8 @@ vi.mock("./compile-agent-skills", () => ({
 
 import {
   parseGitHubRepositoryReference,
+  parseGitHubArchiveLink,
+  gitHubArchiveZipUrl,
   installSkillPackageFromGitHub,
   fetchGitHubRepoMetadata,
 } from "./github";
@@ -143,6 +145,166 @@ describe("parseGitHubRepositoryReference (host validation)", () => {
       owner: "octo-org",
       repo: "my.repo_name-2",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ARCHIVE LINK (cinatra#3204 fix leg)
+//
+// The maintainer's ruling, in their words: "Anyone can download a ZIP of
+// origin/main of a repo or a ZIP of a release - no need to be logged in at
+// GitHub. The user provides that link and Cinatra gets the ZIP."
+//
+// So the link itself has to say everything the download needs: which
+// repository, which ref (none = the default branch), and whether the link named
+// a RELEASE - because a release's source archive lives under `refs/tags/`.
+// ---------------------------------------------------------------------------
+describe("parseGitHubArchiveLink (the link says which archive to fetch)", () => {
+  it("takes a repository page and names no ref", () => {
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archive: "repository",
+    });
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing.git")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archive: "repository",
+    });
+    expect(parseGitHubArchiveLink("acme/thing")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archive: "repository",
+    });
+  });
+
+  it("takes a branch page, including a branch name with slashes", () => {
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/tree/main")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: "main",
+      archive: "repository",
+    });
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/tree/feature/nested-name"),
+    ).toEqual({ owner: "acme", repo: "thing", ref: "feature/nested-name", archive: "repository" });
+  });
+
+  it("takes a release page and remembers that the ref is a TAG", () => {
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/releases/tag/v1.2.3")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: "v1.2.3",
+      archive: "release",
+    });
+  });
+
+  it("takes a direct source-archive ZIP link and KEEPS the namespace it named", () => {
+    // A link that says refs/heads asked for a BRANCH, and one that says
+    // refs/tags asked for a TAG. A repository carrying both a branch and a tag
+    // called "main" has two different archives, so the qualification survives
+    // the parse instead of being collapsed to the bare name.
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/heads/main.zip"),
+    ).toEqual({ owner: "acme", repo: "thing", ref: "refs/heads/main", archive: "repository" });
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/tags/v1.2.3.zip"),
+    ).toEqual({ owner: "acme", repo: "thing", ref: "refs/tags/v1.2.3", archive: "release" });
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/archive/main.zip")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: "main",
+      archive: "repository",
+    });
+    expect(parseGitHubArchiveLink("https://codeload.github.com/acme/thing/zip/HEAD")).toEqual({
+      owner: "acme",
+      repo: "thing",
+      ref: null,
+      archive: "repository",
+    });
+  });
+
+  it("REFUSES a link whose ref segments are present but unreadable, never falling back to the default branch", () => {
+    // Every one of these SAYS it names a ref. Reading them as "no ref" would
+    // download the default branch - other bytes than the operator pasted.
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/tree/%ZZ")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/tree/")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/archive/%ZZ.zip")).toBeNull();
+    // An empty path segment is not a shape the host serves, and collapsing it
+    // would silently change which ref was asked for.
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/tree/main//other")).toBeNull();
+    // A qualified archive path with no ref after the namespace.
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/heads.zip"),
+    ).toBeNull();
+  });
+
+  it("refuses a link outside the repository host", () => {
+    expect(parseGitHubArchiveLink("https://gitlab.com/acme/thing")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.example.com/acme/thing")).toBeNull();
+    expect(parseGitHubArchiveLink("https://example.com/acme/thing/archive/main.zip")).toBeNull();
+  });
+
+  it("refuses a link that names no repository, an unknown shape, or a traversing ref", () => {
+    expect(parseGitHubArchiveLink("")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.com/acme")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/issues/12")).toBeNull();
+    expect(parseGitHubArchiveLink("https://github.com/acme/thing/releases")).toBeNull();
+    // A percent-encoded traversal survives URL normalization, so the ref guard
+    // is what has to refuse it.
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/tree/%2e%2e%2f%2e%2e%2fevil"),
+    ).toBeNull();
+    expect(
+      parseGitHubArchiveLink("https://github.com/acme/thing/archive/refs/heads/main.tar.gz"),
+    ).toBeNull();
+  });
+});
+
+describe("gitHubArchiveZipUrl (where the bytes come from)", () => {
+  it("fetches the default branch when the link named no ref", () => {
+    expect(
+      gitHubArchiveZipUrl({ owner: "acme", repo: "thing", ref: null, archive: "repository" }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/HEAD");
+  });
+
+  it("fetches the named branch or tag, and a release under refs/tags", () => {
+    expect(
+      gitHubArchiveZipUrl({ owner: "acme", repo: "thing", ref: "main", archive: "repository" }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/main");
+    expect(
+      gitHubArchiveZipUrl({
+        owner: "acme",
+        repo: "thing",
+        ref: "feature/nested-name",
+        archive: "repository",
+      }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/feature/nested-name");
+    expect(
+      gitHubArchiveZipUrl({ owner: "acme", repo: "thing", ref: "v1.2.3", archive: "release" }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3");
+  });
+
+  it("keeps an already-qualified ref exactly as the link qualified it", () => {
+    expect(
+      gitHubArchiveZipUrl({
+        owner: "acme",
+        repo: "thing",
+        ref: "refs/heads/main",
+        archive: "repository",
+      }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/refs/heads/main");
+    expect(
+      gitHubArchiveZipUrl({
+        owner: "acme",
+        repo: "thing",
+        ref: "refs/tags/v1.2.3",
+        archive: "release",
+      }),
+    ).toBe("https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3");
   });
 });
 

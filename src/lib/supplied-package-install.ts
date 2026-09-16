@@ -36,10 +36,13 @@ import {
 } from "@cinatra-ai/extension-types";
 import type { InstallRowOwnership } from "@cinatra-ai/extensions/canonical-types";
 import type { GitHubTreeClient } from "@cinatra-ai/skills/repository-package-intake";
+import { MAX_ARCHIVE_TOTAL_BYTES, readZipArchiveComment } from "@cinatra-ai/agents/upload-archive";
 import {
   prepareSuppliedArchiveSnapshot,
+  previewSuppliedArchive,
   validateSuppliedPackageForKind,
   type PreparedSuppliedSnapshot,
+  type SuppliedArchivePreview,
   type SuppliedKindValidatorResolver,
 } from "@/lib/archive-supplied-install";
 import { SUPPLIED_PACKAGE_ORIGIN } from "@/lib/extension-install-pipeline";
@@ -145,6 +148,358 @@ export async function prepareSuppliedRepositorySnapshot(input: {
     entryCount: staged.entryCount,
     totalBytes: staged.totalBytes,
     contentDigest: staged.contentDigest,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE ANONYMOUS ARCHIVE (cinatra#3204 fix leg)
+//
+// THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+// origin/main of a repo or a ZIP of a release - no need to be logged in at
+// GitHub. The user provides that link and Cinatra gets the ZIP."
+//
+// So the repository road stops being a connected-account road. It downloads the
+// public source archive the link names and then does the one thing that keeps
+// this honest: it hands those bytes to `prepareSuppliedArchiveSnapshot` - the
+// FILE road's own intake - unchanged. Same reader, same caps, same entry-name
+// and symlink refusals, same kind resolution, same validator, same packer, same
+// staging, same dispatcher. The only thing this module adds is where the bytes
+// came from and how that is recorded.
+//
+// THE PIN SURVIVES THE CHANGE. A generated archive carries the commit id of the
+// tree it packed in its ZIP comment, so the road still names ONE immutable
+// commit - read off the bytes that actually arrived rather than off a ref that
+// can move between the preview and the install - and the previewed digest is
+// still re-checked before anything is staged.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the link said to fetch. The screen's server boundary parses the link (the
+ * parser and the URL builder are `@cinatra-ai/skills`) and hands the RESULT down
+ * here, so this module never needs the parser's import graph — and never gets to
+ * invent a URL of its own.
+ */
+export type SuppliedRepositoryArchiveTarget = {
+  owner: string;
+  repo: string;
+  /** The ref as submitted, or null for the default branch. */
+  ref: string | null;
+  /** The public archive endpoint, as the link parser's builder produced it. */
+  archiveUrl: string;
+};
+
+/**
+ * The ONLY host this road downloads from. The URL arrives as data from the
+ * boundary above, so it is re-checked here rather than trusted: a road that
+ * fetches whatever URL it is handed is a request-forgery sink, whatever the
+ * caller meant.
+ */
+const ARCHIVE_HOST = "codeload.github.com";
+
+export type FetchedRepositoryArchive = {
+  /** The ZIP bytes exactly as they arrived. */
+  archive: Uint8Array;
+  /** The immutable commit id the archive itself declares. */
+  resolvedSha: string;
+  /** The ref as submitted, or "HEAD" when the link named none. */
+  ref: string;
+  /** The public endpoint the bytes came from - shown, so the operator can check it. */
+  archiveUrl: string;
+};
+
+const COMMIT_ID_PATTERN = /^[0-9a-f]{40}$/;
+
+/**
+ * DOWNLOAD the public source archive, anonymously.
+ *
+ * Every way this can fail is a sentence an operator can act on, because the one
+ * thing they cannot see from here is why a link did not work. A private
+ * repository and a wrong link are indistinguishable from outside (the host
+ * answers 404 to both, deliberately), so the refusal names both possibilities
+ * instead of asserting the one it cannot know.
+ */
+export async function fetchSuppliedRepositoryArchive(
+  input: SuppliedRepositoryArchiveTarget & { fetchImpl?: typeof fetch },
+): Promise<FetchedRepositoryArchive> {
+  const archiveUrl = input.archiveUrl;
+  const repository = `${input.owner}/${input.repo}`;
+  const refLabel = input.ref ?? "its default branch";
+  const get = input.fetchImpl ?? fetch;
+
+  let host: string;
+  try {
+    host = new URL(archiveUrl).hostname;
+  } catch {
+    host = "";
+  }
+  if (host !== ARCHIVE_HOST) {
+    throw new Error(
+      `[supplied-install] refusing to download an extension package from "${archiveUrl}" — ` +
+        `this road downloads only from ${ARCHIVE_HOST}.`,
+    );
+  }
+
+  // EVERY HOP IS CHECKED, not just the first. `redirect: "follow"` would hand the
+  // request to whatever Location came back, which is the one thing the host
+  // allow-list above exists to prevent, so redirects are followed BY HAND and
+  // each destination is re-checked against the same allow-list before it is
+  // fetched. Three hops is more than the archive endpoint has ever needed.
+  let response: Response;
+  let target = archiveUrl;
+  for (let hop = 0; ; hop++) {
+    try {
+      response = await get(target, { redirect: "manual" });
+    } catch (err) {
+      throw new Error(
+        `[supplied-install] the archive for ${repository} could not be downloaded from ${target}: ` +
+          `${err instanceof Error ? err.message : String(err)}.`,
+      );
+    }
+    if (response.status < 300 || response.status > 399) break;
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new Error(
+        `[supplied-install] the archive download for ${repository} was redirected (HTTP ` +
+          `${response.status}) without saying where - refusing.`,
+      );
+    }
+    let next: URL;
+    try {
+      next = new URL(location, target);
+    } catch {
+      throw new Error(
+        `[supplied-install] the archive download for ${repository} was redirected to "${location}", ` +
+          `which is not a URL this road can follow - refusing.`,
+      );
+    }
+    if (next.protocol !== "https:" || next.hostname !== ARCHIVE_HOST) {
+      throw new Error(
+        `[supplied-install] the archive download for ${repository} was redirected to "${next.href}" - ` +
+          `this road downloads only from ${ARCHIVE_HOST} over https, so it stops here.`,
+      );
+    }
+    if (hop >= 3) {
+      throw new Error(
+        `[supplied-install] the archive download for ${repository} redirected more than three times - ` +
+          `refusing.`,
+      );
+    }
+    target = next.href;
+  }
+
+  if (response.status === 404) {
+    throw new Error(
+      `[supplied-install] GitHub served no archive for ${repository} at ${refLabel} (HTTP 404). ` +
+        `This instance downloads the archive anonymously, so a private repository - or a branch, tag ` +
+        `or release that does not exist - cannot be read. Check the link, or upload the package as a file.`,
+    );
+  }
+  if (response.status === 403 || response.status === 429) {
+    throw new Error(
+      `[supplied-install] GitHub refused the anonymous archive download for ${repository} ` +
+        `(HTTP ${response.status}) - its rate limit for this instance. Wait and try again, or upload ` +
+        `the package as a file.`,
+    );
+  }
+  if (!response.ok) {
+    throw new Error(
+      `[supplied-install] GitHub could not serve the archive for ${repository} at ${refLabel} ` +
+        `(HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`,
+    );
+  }
+
+  const overCap = (bytes: number) =>
+    new Error(
+      `[supplied-install] the archive for ${repository} at ${refLabel} is ${bytes} bytes, ` +
+        `over the ${MAX_ARCHIVE_TOTAL_BYTES}-byte limit - refusing.`,
+    );
+
+  // THE CAP IS ENFORCED WHILE THE BODY ARRIVES, not after it. A repository whose
+  // archive is far over the limit must never be allocated in full first: the
+  // stream is read chunk by chunk, the running total is checked against the cap
+  // on every chunk, and the download is cancelled the moment it is exceeded.
+  const declaredLength = Number(response.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_TOTAL_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw overCap(declaredLength);
+  }
+
+  const buffer = await readCappedBody(response, MAX_ARCHIVE_TOTAL_BYTES, overCap);
+
+  // THE PIN, read off the bytes that arrived (see the module note above).
+  const declared = readZipArchiveComment(buffer)?.trim() ?? "";
+  if (!COMMIT_ID_PATTERN.test(declared)) {
+    throw new Error(
+      `[github-install] "${declared}" is not an immutable 40-character commit sha - ` +
+        `the archive downloaded for ${repository} at ${refLabel} declares no commit it was generated ` +
+        `from, so this install cannot be pinned. Refusing.`,
+    );
+  }
+
+  return {
+    archive: new Uint8Array(buffer),
+    resolvedSha: declared,
+    ref: input.ref ?? "HEAD",
+    archiveUrl,
+  };
+}
+
+/**
+ * READ a response body under a hard byte cap, cancelling the download the moment
+ * the cap is passed. Falls back to `arrayBuffer()` only when the response
+ * carries no readable stream (a stubbed Response in a test), and checks the cap
+ * there too.
+ */
+async function readCappedBody(
+  response: Response,
+  cap: number,
+  overCap: (bytes: number) => Error,
+): Promise<ArrayBuffer> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== "function") {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > cap) throw overCap(buffer.byteLength);
+    return buffer;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => undefined);
+      throw overCap(total);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
+
+export type SuppliedRepositoryArchivePreview = SuppliedArchivePreview & {
+  repo: string;
+  ref: string;
+  resolvedSha: string;
+  archiveUrl: string;
+};
+
+/**
+ * PREVIEW a link: download the archive and read it with the FILE road's reader.
+ * Writes nothing and stages nothing, exactly as the file tab's preview does.
+ */
+export async function previewSuppliedRepositoryArchive(
+  input: SuppliedRepositoryArchiveTarget & { fetchImpl?: typeof fetch },
+): Promise<SuppliedRepositoryArchivePreview> {
+  const fetched = await fetchSuppliedRepositoryArchive(input);
+  const preview = await previewSuppliedArchive(fetched.archive, {
+    unwrapGeneratedRootFolder: true,
+  });
+  return {
+    ...preview,
+    repo: `${input.owner}/${input.repo}`,
+    ref: fetched.ref,
+    resolvedSha: fetched.resolvedSha,
+    archiveUrl: fetched.archiveUrl,
+  };
+}
+
+/**
+ * DOWNLOAD, then READ, VALIDATE, PACK and STAGE through the FILE road's intake -
+ * the repository road's twin of `prepareSuppliedArchiveSnapshot`, and now
+ * literally a call to it.
+ *
+ * The pin is re-checked twice: the commit the archive declares must be the
+ * commit the operator approved, and the digest the file road computes over the
+ * delivered tree must be the digest they were shown. Either mismatch refuses
+ * before anything is packed. The provenance recorded is `github` - the file
+ * road's honest `local` provenance would name the staged snapshot and forget the
+ * repository it came from.
+ */
+export async function prepareSuppliedRepositoryArchiveSnapshot(
+  input: SuppliedRepositoryArchiveTarget & {
+    pin?: { resolvedSha: string; contentDigest: string };
+    resolveValidator?: SuppliedKindValidatorResolver;
+    stageSnapshot?: (contentDigest: string, tarball: Uint8Array) => Promise<string>;
+    fetchImpl?: typeof fetch;
+  },
+): Promise<PreparedRepositorySnapshot> {
+  if (input.pin) {
+    const { assertWellFormedPin } = await import("@/lib/repository-supplied-install");
+    assertWellFormedPin(input.pin);
+  }
+
+  // THE INSTALL DOWNLOADS AT THE APPROVED COMMIT, not at the ref the operator
+  // typed. A ref moves; a commit does not. Once a pin exists the archive is
+  // asked for BY ITS COMMIT ID - the same public endpoint, the same host, an
+  // immutable path - so a branch that advanced between the preview and the click
+  // installs exactly what was approved instead of failing the comparison below.
+  // The submitted ref is still what the row records: it is where the package was
+  // found, and the commit is what was installed.
+  const fetched = await fetchSuppliedRepositoryArchive(
+    input.pin
+      ? {
+          ...input,
+          ref: input.pin.resolvedSha,
+          archiveUrl: `https://${ARCHIVE_HOST}/${input.owner}/${input.repo}/zip/${input.pin.resolvedSha}`,
+        }
+      : input,
+  );
+  const repository = `${input.owner}/${input.repo}`;
+  const recordedRef = input.ref ?? fetched.ref;
+
+  // The archive asked for by commit id must still DECLARE that commit: a host
+  // that served something else is not serving the approved tree.
+  if (input.pin && fetched.resolvedSha !== input.pin.resolvedSha) {
+    throw new Error(
+      `[supplied-install] ${repository}: the approved commit ${input.pin.resolvedSha} is not the commit ` +
+        `the downloaded archive was generated from (${fetched.resolvedSha}) - refusing before any write.`,
+    );
+  }
+
+  // THE FILE ROAD'S OWN INTAKE. Nothing below this line is repository-specific.
+  const prepared = await prepareSuppliedArchiveSnapshot({
+    archive: fetched.archive,
+    unwrapGeneratedRootFolder: true,
+    ...(input.pin ? { expectedContentDigest: input.pin.contentDigest } : {}),
+    ...(input.resolveValidator ? { resolveValidator: input.resolveValidator } : {}),
+    ...(input.stageSnapshot ? { stageSnapshot: input.stageSnapshot } : {}),
+  });
+
+  const provenance: SuppliedPackageProvenance = {
+    type: "github",
+    repo: repository,
+    ref: recordedRef,
+    resolvedSha: fetched.resolvedSha,
+    contentDigest: prepared.package.contentDigest,
+    ...(prepared.provenance.path ? { path: prepared.provenance.path } : {}),
+  };
+  if (!isSuppliedPackageProvenance(provenance)) {
+    throw new Error(
+      `[supplied-install] ${prepared.package.packageName}: the staged snapshot did not produce complete ` +
+        `github provenance - refusing before any write.`,
+    );
+  }
+
+  return {
+    kind: prepared.package.kind,
+    packageName: prepared.package.packageName,
+    version: prepared.package.version,
+    provenance,
+    validatorRan: prepared.validatorRan,
+    repo: repository,
+    ref: recordedRef,
+    resolvedSha: fetched.resolvedSha,
+    entryCount: prepared.package.deliveredEntries.size,
+    totalBytes: prepared.tarball.byteLength,
+    contentDigest: prepared.package.contentDigest,
   };
 }
 
