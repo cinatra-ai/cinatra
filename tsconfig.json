@@ -357,6 +357,7 @@
       "@cinatra-ai/extensions/screens/extension-settings-view": ["./packages/extensions/src/screens/extension-settings-view.tsx"],
       "@cinatra-ai/extensions/screens/extension-access-control": ["./packages/extensions/src/screens/extension-access-control.tsx"],
       "@cinatra-ai/extensions/screens/installed-rows": ["./packages/extensions/src/screens/installed-rows.ts"],
+      "@cinatra-ai/extensions/screens/installed-visibility": ["./packages/extensions/src/screens/installed-visibility.ts"],
       "@cinatra-ai/extensions/mcp-handlers": ["./packages/extensions/src/mcp/handlers.ts"],
       "@cinatra-ai/extensions/mcp-module": ["./packages/extensions/src/mcp/module.ts"],
       "@cinatra-ai/extensions/actions": ["./packages/extensions/src/actions.ts"],
