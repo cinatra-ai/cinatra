@@ -140,6 +140,14 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // that never meant this. Decoding here instead would put the decoder in
     // four locked route graphs whose module counts may only ever shrink.
     launchScopeAnchor: row.launchScopeAnchor ?? null,
+    // The ASSIGNMENT SCOPES this run FROZE at creation (cinatra#2815 S3,
+    // epic #2812), surfaced AS STORED. Not decoded here: an absent,
+    // malformed or unknown-version payload has exactly ONE meaning, and the
+    // module that owns the payload states it once
+    // (`assignment-scope-snapshot.ts` -> workspace plus the durable
+    // organization and nothing else). A decoder here would be a second
+    // authority on which scopes a run may read assignments from.
+    assignmentScopeSnapshot: row.assignmentScopeSnapshot ?? null,
   };
 }
 

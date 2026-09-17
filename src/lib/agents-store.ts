@@ -11,7 +11,10 @@ import {
 } from "@/lib/database";
 // The DIRECTLY ASSIGNED skill tier (cinatra#2347, epic #2345) — read +
 // resolution-time revalidation behind one non-rejecting seam.
-import { resolveAssignedSkillTierIds } from "@/lib/agent-assigned-skills-injection";
+import {
+  resolveAssignedSkillTierIds,
+  type AssignedSkillDeliveryScope,
+} from "@/lib/agent-assigned-skills-injection";
 
 // Actor filter shape used by the read-path union below.
 // Includes `platformRole` so the visibility predicate
@@ -997,7 +1000,21 @@ function filterToRuntimeDeliverableSkillIds(ids: string[]): string[] {
 export async function getAssignedSkillIdsForAgent(
   agentId: string,
   actor?: AssignedSkillsActorContext,
+  runScope?: AssignedSkillDeliveryScope,
 ) {
+  // cinatra#2815 S3 (epic #2812) — WHICH assigned skills this resolution
+  // receives is decided by the scopes the run FROZE at creation. The surface
+  // that holds the vetted run row passes that immutable payload; a caller with
+  // no run passes none, and the chain then resolves the SOLE legacy fallback
+  // (workspace plus the instance's durable organization, which the actor frame
+  // names when it has one). With neither, the chain narrows once more to the
+  // workspace layer alone — never wider. The rest of this resolver is
+  // untouched: the other tiers, their union and the lifecycle chokepoint below
+  // all behave exactly as before.
+  const deliveryScope: AssignedSkillDeliveryScope = {
+    snapshot: runScope?.snapshot,
+    durableOrgId: runScope?.durableOrgId ?? actor?.organizationId ?? null,
+  };
   // When an ActorContext is provided, union in custom_skill_assignments DB
   // rows filtered by principalId/teamIds/
   // projectIds/organizationId. Existing system-globals + agent self-match +
@@ -1102,7 +1119,9 @@ export async function getAssignedSkillIdsForAgent(
     // the agent itself (no population survived the failed Promise.all above) and
     // is fail-closed end to end: a read error, a revalidation throw or an
     // unresolvable reference yields the EMPTY set and the run still proceeds.
-    const degradedAssignedIds = await resolveAssignedSkillTierIds(agentId, null);
+    const degradedAssignedIds = await resolveAssignedSkillTierIds(agentId, null, {
+      runScope: deliveryScope,
+    });
     return filterToRuntimeDeliverableSkillIds(
       Array.from(
         new Set([...degradedAssignedIds, ...systemGlobalIds, ...customAssignmentIds]),
@@ -1133,7 +1152,9 @@ export async function getAssignedSkillIdsForAgent(
   // canonical resolver rather than `canonicalPackageId` — that local fallback is
   // `agentId` itself when nothing matched, which would key an assignment read on
   // a slug the store never writes.
-  const assignedTierPromise = resolveAssignedSkillTierIds(agentId, agents);
+  const assignedTierPromise = resolveAssignedSkillTierIds(agentId, agents, {
+    runScope: deliveryScope,
+  });
 
   try {
     matchRows = await skillMatchesStore.readSkillMatchesByAgent(canonicalPackageId);
