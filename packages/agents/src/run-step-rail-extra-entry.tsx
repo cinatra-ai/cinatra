@@ -332,6 +332,14 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
+  // THE ENTRY IS MARKED THE WAY THE FRAME'S OWN ROWS MARK THEIRS, which is what
+  // this file already says it intends below: "one reading of the rail answers
+  // for every row of it". An entry the run has not got to yet is not reached;
+  // an entry whose state is terminal -- resolved, completed or skipped -- is
+  // settled. The vocabulary is `RailStatus`'s own, not a second one.
+  const railReached = entry.status !== "upcoming";
+  const railSettled =
+    entry.status === "resolved" || entry.status === "completed" || entry.status === "skipped";
 
   // THE GATE THE RUN IS PARKED ON OPENS IN PLACE (cinatra#3478, the click leg).
   // The run detail is where a gate's own surface is drawn, so the row that
@@ -414,6 +422,13 @@ export function RailExtraEntry({
       className="flex w-full min-w-0 items-center gap-1"
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
+      // THE ENTRY IS ONE ROW OF THE RAIL, and it is the wrapper that stands for
+      // it: the row's own marks live here beside the other rail anchors, so a
+      // reading of the rail finds ONE node per entry and never the box and the
+      // control inside it as two.
+      data-run-surface-rail-step=""
+      data-run-surface-rail-reached={railReached ? "true" : "false"}
+      data-run-surface-rail-settled={railSettled ? "true" : "false"}
       // The row that opens nothing says so here on BOTH rails, so one reading
       // of the rail answers for both mounts (cinatra#3002).
       data-rail-openable={entry.openable === false ? "false" : undefined}

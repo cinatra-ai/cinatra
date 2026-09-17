@@ -361,10 +361,25 @@ function joinedReading(): Reading {
     />,
   );
   const column = container.querySelector<HTMLElement>("[data-run-step-rail-column]")!;
-  const rows = Array.from(
+  const matched = Array.from(
     column.querySelectorAll<HTMLElement>(
       '[data-run-surface-rail-step], [data-slot="stepper-trigger"], a[data-rail-gate-link], a[data-rail-verification-link]',
     ),
+  );
+  // ONE ROW PER ENTRY, AND THE SUPPRESSION IS THE PANEL ENTRY'S ALONE. A panel
+  // entry states its rail marks on the box that stands for the entry
+  // (run-step-rail-extra-entry, the one node here carrying `data-rail-kind`),
+  // so this union matches that entry twice — the box, and the control inside
+  // it. Only THAT box is dropped, and only when it contains another match, so
+  // the row the pitch is measured on stays the control, which is the element
+  // this reading has always measured. Every other nesting is left to count
+  // twice, so a row doubled anywhere else still fails the count below.
+  const rows = matched.filter(
+    (el) =>
+      !(
+        el.hasAttribute("data-rail-kind") &&
+        matched.some((other) => other !== el && el.contains(other))
+      ),
   );
   const marks = Array.from(
     column.querySelectorAll<HTMLElement>(
