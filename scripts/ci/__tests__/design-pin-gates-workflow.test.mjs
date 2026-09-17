@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { INVENTORY_PATH } from "../merge-readiness.mjs";
 import {
   ANCHOR_RESOLUTION_CHECKER_PATH,
   FRESHNESS_CHECKER_PATH,
@@ -154,5 +155,36 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
       return running[0][0];
     });
     expect(new Set(jobs).size).toBe(GATES.length);
+  });
+
+  // THE ANCHOR GATE REPORTS, IT DOES NOT BLOCK (cinatra#3144 G1 item 6, G4).
+  // Its checker's own header says it is landed WARN-FIRST "so the state is
+  // visible without blocking anything", and this repository offers exactly one
+  // mechanism that makes that sentence true: a JOB-LEVEL `continue-on-error:
+  // true`, which keeps the workflow RUN green while the job's own check run
+  // still carries the finding. The STEP-level key on the token-mint step is a
+  // different thing entirely — it exists so a refused credential cannot abort
+  // the job silently, and the checker still fails CLOSED behind it — so the
+  // INDENT is the assertion here: the job's own indent + 2, never a step's.
+  //
+  // The readiness inventory is the other half and cannot be left out: its
+  // generator reads that same declaration and drops the context into
+  // `excluded` as report-only. A context still sitting in `expected` is one a
+  // merge waits on, so the disposition would be undone while the workflow key
+  // still looked right.
+  it("reports the anchor-resolution gate without blocking a merge", () => {
+    const running = [...jobBlocks(workflow())].filter(([, block]) =>
+      block.includes(ANCHOR_RESOLUTION_CHECKER_PATH),
+    );
+    expect(running).toHaveLength(1);
+    const [job, block] = running[0];
+
+    expect(block, `${job} - job-level continue-on-error`).toMatch(/^ {4}continue-on-error: true$/m);
+
+    const readiness = JSON.parse(readFileSync(resolve(REPO_ROOT, INVENTORY_PATH), "utf8"));
+    expect(readiness.expected.map((row) => row.context), `${job} - expected`).not.toContain(job);
+    const dropped = readiness.excluded.find((row) => row.context === job);
+    expect(dropped, `${job} - excluded row`).toBeDefined();
+    expect(dropped.reason, `${job} - exclusion reason`).toMatch(/^report-only:/);
   });
 });

@@ -15,6 +15,11 @@
       "reason": "dynamic-name: the job name is a ${{ }} expression (a matrix leg), so the check-run name is not knowable statically"
     },
     {
+      "context": "design-anchor-resolution",
+      "workflow": ".github/workflows/gates.yml",
+      "reason": "report-only: the job declares continue-on-error: true"
+    },
+    {
       "context": "merge-readiness / merge-readiness",
       "workflow": ".github/workflows/merge-readiness.yml",
       "reason": "self: the merge-readiness context itself — the job never waits on itself"
@@ -317,16 +322,6 @@
       ],
       "skippable": false,
       "timeoutMinutes": 5
-    },
-    {
-      "context": "design-anchor-resolution",
-      "app": "github-actions",
-      "workflow": ".github/workflows/gates.yml",
-      "paths": [
-        "**"
-      ],
-      "skippable": false,
-      "timeoutMinutes": 10
     },
     {
       "context": "design-pin-drift",
