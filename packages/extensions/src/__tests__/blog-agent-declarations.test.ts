@@ -88,13 +88,12 @@ const TABLE: Array<{
   },
   {
     agent: "blog-linkedin-publish-agent",
-    // A KNOWN NON-PRODUCER, and its pinned head says so explicitly. The
-    // publisher is handed a draft that already exists, writes the published
-    // address back onto that same artifact and persists no revision, so no
-    // recognised write road reaches a new artifact: the pack declares an empty
-    // produces set in both its manifest and its flow document, and the fleet's
-    // adoption gate reads that emptiness directly. Its EDGE stays: it says what
-    // the run touches, which is true either way.
+    // NOT a producer at this pin. The publisher takes the post-draft artifact
+    // revision the person continued with, posts it, and merges the published
+    // address onto THAT artifact through `objects_update`; the LinkedIn writer
+    // is what authors the artifact. Its manifest declares `produces: []`
+    // accordingly — a receipt, never a new artifact. The EDGE stays: it says
+    // what the run touches, which is true either way.
     produces: [],
     edges: [LINKEDIN],
   },
@@ -139,12 +138,13 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(14);
   });
 
-  it("declares five of the eight typed produces entries", () => {
-    // Eight after the prototype, not nine: the publisher's entry is RETIRED
-    // rather than waiting, because its flow files nothing of its own. Three of
-    // the eight wait for their write roads, not for their packages: the image
-    // agent's own entry and the pipeline's idea and picture entries. No road an
-    // agent can take reaches a picture today.
+  it("declares five of the nine typed produces entries", () => {
+    // Nine after the prototype. Three wait for their write roads, not for their
+    // packages: the image agent's own entry and the pipeline's idea and picture
+    // entries. No road an agent can take reaches a picture today. The fourth
+    // absence is different in kind: the LinkedIn PUBLISHER's entry is RETIRED,
+    // not waiting — at its pin it writes an address onto the writer's artifact
+    // instead of producing one, so it declares no produces entry at all.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
     expect(total).toBe(5);
     for (const row of TABLE) {
