@@ -11,28 +11,30 @@
  * the host's read of the pinned result, so a pin bump that LOSES a declaration
  * reddens here instead of passing quietly.
  *
- * Every case names the acceptance sentence it pins. Two parts of the wave are
- * NOT here as assertions of presence but as pinned ABSENCES carrying their
- * reason — the same shape the previous slice used — because landing either
- * under the now-blocking gate would refuse a package at its own publish seam.
+ * Every case names the acceptance sentence it pins. ONE part of the wave is
+ * NOT here as an assertion of presence but as a pinned ABSENCE carrying its
+ * reason — the same shape the previous slice used — because landing it under
+ * the now-blocking gate would refuse a package at its own publish seam.
  *
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
  *
- * TWO PINS ARE HELD at their previous sha, and each held part is recorded
- * below as a pinned absence carrying its reason. The wave's own change in
- * those two repositories also carries a defect the host refuses, and the
- * border keeps the remedy in the package's own repository rather than in a
- * host special case:
+ * ONE PIN IS HELD at its previous sha, and the held part is recorded below as
+ * a pinned absence carrying its reason. The wave's own change in that
+ * repository also carries a defect the host refuses, and the border keeps the
+ * remedy in the package's own repository rather than in a host special case:
  *
  *   - media-transcript-agent: its head declares a preferred model outside the
  *     host provider policy allowlist, which the L1 service-description check
  *     refuses. The model arrived in a later, unrelated change in
  *     that repository, not in the declaration itself.
- *   - email-delivery-agent: its head drops the output renderer id from
- *     `hitlScreens`, and that id is a live renderer binding this host resolves
- *     for the send screen, so the agent card would stop advertising a surface
- *     the host still serves.
+ *
+ * email-delivery-agent's pin is no longer held: its advanced head declares the
+ * send screen under `@cinatra-ai/email-delivery-agent:send-confirmation` and
+ * carries the consumer edge on the body kind, and the host's generated
+ * field-renderer map resolves that id to the send-confirmation renderer, so
+ * the surface the host serves is proven rather than assumed and this file
+ * follows that declaration below instead of pinning the gap.
  *
  * company-discovery-agent's pin is no longer held: its corrected head names
  * the two fields a person supplies in `required`, which is how the host makes
@@ -50,6 +52,12 @@ import * as path from "node:path";
 import { describe, it, expect } from "vitest";
 
 const extensionsRoot = path.resolve(__dirname, "../../../../extensions/cinatra-ai");
+
+/** The host's OWN generated field-renderer map, regenerated with the pins. */
+const FIELD_RENDERER_MAP = path.resolve(
+  __dirname,
+  "../../../../src/lib/generated/field-renderer-components.ts",
+);
 
 /** The fifteen agents of the wave, by their directory slug. */
 const IN_SCOPE = [
@@ -283,25 +291,44 @@ describe("acceptance 2 — the drafting and follow-up agents' typed ids and paus
 
 describe("acceptance 2 — the delivery agent's consumer edge on the body kind", () => {
   // The consumer edge is written and merged in cinatra-ai/email-delivery-agent,
-  // but the same head drops the output renderer id from `hitlScreens`, and that
-  // id is a live host renderer binding. Taking the pin would trade the edge for
-  // a lost surface, so the pin is held and the edge is a pinned absence until a
-  // follow-up in that repository restores the id.
-  it("the delivery agent's consumer edge is ABSENT at this pin, and the absence carries its reason", () => {
+  // and this host now carries that head: the edge is PRESENT below. The same
+  // head names one screen in `hitlScreens` instead of two, and the host's own
+  // generated field-renderer map still resolves the send screen under that id,
+  // so the file follows the declaration rather than holding the pin.
+  it("the delivery agent's consumer edge on the body kind is present at this pin", () => {
     const a = agent("email-delivery-agent");
-    expect(a.artifactEdges).toEqual([]);
+    expect(a.artifactEdges).toEqual([
+      {
+        packageName: "@cinatra-ai/email-artifacts",
+        requirement: "required",
+        edgeType: "runtime",
+      },
+    ]);
     // It reads the kind; it does not file one — that half already holds.
     expect(a.produces).toEqual([]);
     expect(a.producesMirror).toEqual([]);
   });
 
-  it("the delivery agent still declares the send confirmation and the output renderer", () => {
+  it("the delivery agent declares the send confirmation screen", () => {
     const a = agent("email-delivery-agent");
     expect(a.declaredPauses).toEqual([
       "@cinatra-ai/email-delivery-agent:send-confirmation",
-      "@cinatra-ai/email-delivery-agent:output",
     ]);
     expect(a.approvalNodes).toBe(1);
+  });
+
+  // The surface the host serves, read from the host's OWN regenerated map:
+  // the declared id resolves to a renderer, so nothing is advertised that the
+  // host cannot draw.
+  it("the regenerated field-renderer map resolves the send screen under the declared id", () => {
+    const generated = fs.readFileSync(FIELD_RENDERER_MAP, "utf8");
+    const declared = agent("email-delivery-agent").declaredPauses[0];
+    expect(declared).toBe("@cinatra-ai/email-delivery-agent:send-confirmation");
+    const row = generated
+      .split("\n")
+      .find((line) => line.includes(`"${declared}":`));
+    expect(row).toBeDefined();
+    expect(row).toContain("@cinatra-ai/email-artifacts/src/renderers/send-confirmation");
   });
 });
 
@@ -522,19 +549,19 @@ describe("acceptance 5 — the declaring count at this pin", () => {
     "web-scrape-agent",
   ];
 
-  /** The two the held pins keep short of the row, each with its own reason. */
-  const HELD: Slug[] = ["email-delivery-agent", "media-feed-lister-agent"];
+  /** The one the held pin keeps short of the row, with its own reason. */
+  const HELD: Slug[] = ["media-feed-lister-agent"];
 
-  it("six of the eight carry a declaration at this pin", () => {
+  it("seven of the eight carry a declaration at this pin", () => {
     const declaring = IN_SCOPE.map((slug) => agent(slug))
       .filter(carriesADeclaration)
       .map((a) => a.slug)
       .sort();
     expect(declaring).toEqual(THE_EIGHT.filter((s) => !HELD.includes(s)).sort());
-    expect(declaring).toHaveLength(6);
+    expect(declaring).toHaveLength(7);
   });
 
-  it("the eight are short exactly the feed lister and the delivery agent, each one pull request in its own repository", () => {
+  it("the eight are short exactly the feed lister, one pull request in its own repository", () => {
     const declaring = new Set(
       IN_SCOPE.map((slug) => agent(slug))
         .filter(carriesADeclaration)
@@ -543,12 +570,12 @@ describe("acceptance 5 — the declaring count at this pin", () => {
     expect(THE_EIGHT.filter((slug) => !declaring.has(slug))).toEqual(HELD);
   });
 
-  it("the remaining nine of the fifteen declare nothing", () => {
+  it("the remaining eight of the fifteen declare nothing", () => {
     const silent = IN_SCOPE.map((slug) => agent(slug))
       .filter((a) => !carriesADeclaration(a))
       .map((a) => a.slug);
-    expect(silent).toHaveLength(9);
+    expect(silent).toHaveLength(8);
     expect(silent).toContain("media-feed-lister-agent");
-    expect(silent).toContain("email-delivery-agent");
+    expect(silent).not.toContain("email-delivery-agent");
   });
 });

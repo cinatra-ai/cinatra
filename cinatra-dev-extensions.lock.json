@@ -205,7 +205,7 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "fb3b0d362d1ef707e15df582d0d81fe444369cb8"
+      "resolvedSha": "b68dab6c5efb063b45dadd7a4c96c1dc01e473b9"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
