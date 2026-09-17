@@ -19,6 +19,16 @@ concurrency:
   group: gates-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# cinatra#3355 — the committed worker cap for every vitest invocation in this
+# workflow (a workflow-level `env:` is in scope for the steps of every job in
+# the file). The value is the INTERIM worker count cinatra#3355 records, now
+# given a committed home in the tree; that issue's criterion-3 comparison of
+# runner and worker configurations may replace it. It makes no claim about what
+# the runner services on the box carry today.
+# Enforced by scripts/audit/vitest-worker-cap.mjs.
+env:
+  VITEST_MAX_WORKERS: "3"
+
 jobs:
   # ---------------------------------------------------------------------------
   # changes — does this pull request touch anything the jobs below read?
