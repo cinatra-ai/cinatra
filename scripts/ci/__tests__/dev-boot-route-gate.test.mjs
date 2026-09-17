@@ -23,7 +23,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseGateArgs } from "../dev-boot-route-gate.mjs";
+import {
+  COMPILE_READER_MAX_LINE_CHARS,
+  createCompileAnnouncementReader,
+  parseGateArgs,
+  requestTimeoutMs,
+} from "../dev-boot-route-gate.mjs";
 
 const GATE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -54,13 +59,16 @@ const STANDIN = `
 import http from "node:http";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const [port, counterPath, poisonedBoots, dieAfterMs, dieAfterRouteHits] = process.argv.slice(2);
+const [port, counterPath, poisonedBoots, dieAfterMs, dieAfterRouteHits, compileForMs] =
+  process.argv.slice(2);
+const startedAt = Date.now();
+let announced = false;
 let routeHits = 0;
 let boots = 0;
 try { boots = Number(readFileSync(counterPath, "utf8")) || 0; } catch {}
 boots += 1;
 writeFileSync(counterPath, String(boots));
-const poisoned = boots <= Number(poisonedBoots);
+const poisonedBoot = boots <= Number(poisonedBoots);
 
 const server = http.createServer((request, response) => {
   if (request.url === "/api/health") {
@@ -73,6 +81,16 @@ const server = http.createServer((request, response) => {
   // COUNTING rather than by a timer — the sequence the gate sees is then the
   // same on a fast machine and a loaded one.
   const dieNow = Number(dieAfterRouteHits) > 0 && routeHits >= Number(dieAfterRouteHits);
+  // A COMPILE THE RUNTIME ANNOUNCES AND HAS NOT FINISHED (cinatra#3553): the
+  // announcement goes to stdout on the first request, exactly as the real
+  // runtime prints it, and the path serves the not-found DOCUMENT until the
+  // compile "finishes" — which is what the recorded member-B boot did.
+  const compiling = Number(compileForMs) > 0 && Date.now() - startedAt < Number(compileForMs);
+  if (Number(compileForMs) > 0 && !announced) {
+    announced = true;
+    console.log("\u25cb Compiling " + request.url + " ...");
+  }
+  const poisoned = poisonedBoot || compiling;
   if (poisoned) {
     // The development runtime's own not-found DOCUMENT: the page tree rendered
     // because nothing was routable at this path.
@@ -150,6 +168,7 @@ function runGate({
   gatePort,
   dieAfterMs = 0,
   dieAfterRouteHits = 0,
+  compileForMs = 0,
 }) {
   const dir = mkdtempSync(path.join(tmpdir(), "cinatra-3194-"));
   const standin = path.join(dir, "standin.mjs");
@@ -175,7 +194,7 @@ function runGate({
       "--shutdown-grace-ms",
       String(GATE_SHUTDOWN_GRACE_MS),
       "--child-command",
-      `"${process.execPath}" "${standin}" ${appPort} "${counter}" ${poisonedBoots} ${dieAfterMs} ${dieAfterRouteHits}`,
+      `"${process.execPath}" "${standin}" ${appPort} "${counter}" ${poisonedBoots} ${dieAfterMs} ${dieAfterRouteHits} ${compileForMs}`,
     ],
     { detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -431,4 +450,120 @@ describe("a development server that dies on its own", () => {
     expect(run.read()).not.toContain("boot 2/2");
     expect(await gateAnswers(gatePort)).toBe(false);
   });
+});
+
+describe("requestTimeoutMs", () => {
+  /**
+   * ONE ATTEMPT IS BOUNDED BY WHAT IS LEFT OF THE BOUND, AND BY NOTHING ELSE
+   * (cinatra#3553).
+   *
+   * This arithmetic used to narrow every attempt to at most 60 s — a second,
+   * tighter bound no comment in either file declared, and one that contradicted
+   * the probe module's own contract paragraph. It is what ended the recorded
+   * member-B request at exactly 60.0 s while the runtime was still compiling the
+   * route it had announced, after which that path served the not-found document
+   * for the rest of the process. The green boot of the same job answered the same
+   * route after 37.6 s, so the cap was the line between the two.
+   */
+  it("hands an attempt the whole of what is left of the readiness bound", () => {
+    expect(requestTimeoutMs(120_000)).toBe(120_000);
+    expect(requestTimeoutMs(90_000)).toBe(90_000);
+  });
+
+  it("never hands out a non-positive timeout", () => {
+    expect(requestTimeoutMs(0)).toBe(1);
+    expect(requestTimeoutMs(-5_000)).toBe(1);
+  });
+});
+
+describe("the compile-announcement reader", () => {
+  const ROUTE = "/api/auth/sign-up/email";
+
+  it("reads an announcement split across two chunks of the same stream", () => {
+    const reader = createCompileAnnouncementReader();
+    reader.write("\u25cb Compiling /api/auth/", "stdout");
+    reader.write("sign-up/email ...\n", "stdout");
+    expect(reader.has(ROUTE)).toBe(true);
+  });
+
+  it("frames each stream on its own, so interleaved output neither loses nor invents one", () => {
+    // LOSS: the two halves of a real stdout announcement, with a stderr line
+    // arriving in between — a shared buffer would splice the warning into the
+    // middle of the path and the announcement would vanish.
+    const loses = createCompileAnnouncementReader();
+    loses.write("\u25cb Compiling /api/auth/", "stdout");
+    loses.write("warning: something\n", "stderr");
+    loses.write("sign-up/email ...\n", "stdout");
+    expect(loses.has(ROUTE)).toBe(true);
+
+    // SYNTHESIS, which is the half that matters for safety: neither stream ever
+    // printed an announcement, and a shared buffer would manufacture one — an
+    // extension for a boot that never earned it.
+    const invents = createCompileAnnouncementReader();
+    invents.write("\u25cb Compiling ", "stdout");
+    invents.write("/api/auth/sign-up/email ...\n", "stderr");
+    expect(invents.has(ROUTE)).toBe(false);
+  });
+
+  it("discards a line past the ceiling, and the rest of that line with it", () => {
+    const reader = createCompileAnnouncementReader();
+    // Progress output that never sends a newline: it must not be buffered for the
+    // life of the boot, and its tail must not be re-read as a line of its own.
+    reader.write("x".repeat(COMPILE_READER_MAX_LINE_CHARS + 1), "stdout");
+    reader.write(" Compiling /api/auth/sign-up/email ...\n", "stdout");
+    expect(reader.has(ROUTE)).toBe(false);
+    // ...and the stream is readable again on the next line.
+    reader.write("\u25cb Compiling /api/auth/sign-up/email ...\n", "stdout");
+    expect(reader.has(ROUTE)).toBe(true);
+  });
+});
+
+describe("a boot whose route is still compiling (cinatra#3553)", () => {
+  /**
+   * THE GATE READS ITS CHILD'S STDOUT, and that is the whole of the new signal.
+   *
+   * This stand-in announces a compile of the probed path and then serves the
+   * runtime's own not-found DOCUMENT for longer than the route bound this tier
+   * hands the gate — so under the old rule the bound is spent, the boot is called
+   * unrouted, and with a single boot in the budget the gate exits without ever
+   * opening. Under the new rule the announcement buys this boot its one bounded
+   * extension, the route answers inside it, and the gate opens.
+   *
+   * The poisoned-boot case above is the other half of the pin: a stand-in that
+   * announces NOTHING still spends the same bound and is still replaced.
+   */
+  it("keeps probing a route the runtime announced, and opens the gate when it answers", async () => {
+    const appPort = await freePort();
+    const gatePort = await freePort();
+    const COMPILE_FOR_MS = 4_000;
+    const run = runGate({
+      poisonedBoots: 0,
+      maxBoots: 1,
+      appPort,
+      gatePort,
+      compileForMs: COMPILE_FOR_MS,
+    });
+
+    const deadline = Date.now() + GATE_HEALTH_BOUND_MS + COMPILE_FOR_MS + GATE_ROUTE_BOUND_MS;
+    const announced = await waitForGateLine(
+      run,
+      `opening the gate on :${gatePort}`,
+      GATE_HEALTH_BOUND_MS + COMPILE_FOR_MS + GATE_ROUTE_BOUND_MS,
+    );
+    const opened =
+      announced &&
+      (await waitUntil(
+        () => gateAnswers(gatePort),
+        Math.max(GATE_ROUTE_BOUND_MS, deadline - Date.now()),
+      ));
+
+    // It must have spent the bound on the not-found document first — this is not
+    // a route that simply answered.
+    expect(run.read()).toContain("[runtime-not-found]");
+    // ...and then read the announcement off its own child's stdout and said so.
+    expect(run.read()).toContain("ANNOUNCED, UNFINISHED compile");
+    expect(run.read()).toContain("every route is routable");
+    expect(run.read()).not.toContain("boot budget is spent");
+    expect(opened).toBe(true);
+  }, GATE_HEALTH_BOUND_MS + 10_000 + GATE_ROUTE_BOUND_MS + 15_000);
 });
