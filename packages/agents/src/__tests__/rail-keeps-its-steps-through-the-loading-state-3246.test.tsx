@@ -17,6 +17,11 @@
  * drawing therefore keeps the steps still to come at exactly the moment the
  * code dropped them.
  *
+ * AND IT INVENTS NONE. The same section: "Where the run carries a schedule, the
+ * rail's first entry is Schedule" -- so a run that carries none is drawn none,
+ * which is cinatra#3478's ratified acceptance and the reading the third arm
+ * below pins at the very moment this fix widens.
+ *
  * WHERE IT WENT. `runHasExecutionRecord` answers `running` from the status
  * alone -- deliberately, and cinatra#3184's table is not touched here -- so at
  * the first render in which the status reads `running` and the run has written
@@ -28,17 +33,17 @@
  * screen makes and rendered through the run's own `RunSurfaceRail`, with the
  * gate row drawn by `RecommendationRailStepRow`, and the rows are read back the
  * way a conformance walk reads them -- `[data-run-surface-rail-step]` and
- * `[data-recommendation-rail-step]`, in order. The fourth arm reads the
- * screen's own source, so a suite that composes the calls itself cannot drift
- * from the screen.
+ * `[data-recommendation-rail-step]`, in order. The last arm reads the screen's
+ * own source, so a suite that composes the calls itself cannot drift from the
+ * screen.
  *
  * WHY THE PREDICATE IS READ OFF THE MODULE BY NAME. Each arm below is meant to
  * carry its OWN reading at the branch base: the loading and monotonic arms red
- * there, the history arm green there. A bare named import of a predicate the
- * base does not have would fail the whole file and take the history arm's
- * reading with it, so the composed argument falls back to the bare record
- * answer when the predicate is absent -- which is precisely what the screen
- * computed at the base.
+ * there, the carried-keys and history arms green there. A bare named import of
+ * a predicate the base does not have would fail the whole file and take the
+ * green arms' readings with it, so the composition falls back to the plain
+ * record answer when the predicate is absent -- which is precisely what the
+ * screen computed at the base.
  *
  * Run:
  *   cd packages/agents && npx vitest run \
@@ -100,6 +105,19 @@ const THE_FIRST_ROW_RENDER: RunRow = {
   streamedTextLength: 0,
 };
 
+/**
+ * THE STILL-TO-COME KEYS A RUN ACTUALLY CARRIES, as the screen reads them from
+ * the run's own rows: its recommendation park, its trigger row, its gate list.
+ * A run that holds neither a trigger row nor a pending review gate carries
+ * neither key, and the rail draws neither for it.
+ */
+const CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW = [
+  "recommendation",
+  "schedule",
+  "review",
+] as const;
+const CARRIES_NEITHER = ["recommendation"] as const;
+
 const runInExecutionWithoutRecord = (
   instanceScreens as unknown as {
     runInExecutionWithoutRecord?: (params: RunRow) => boolean;
@@ -107,33 +125,47 @@ const runInExecutionWithoutRecord = (
 ).runInExecutionWithoutRecord;
 
 /**
- * The ONE argument the screen hands the rail's answer: the run's record, minus
- * the moment it is inside an execution and has produced nothing.
- */
-function railHasExecutionArgument(row: RunRow): boolean {
-  const hasExecution = runHasExecutionRecord(row);
-  const nothingYet = runInExecutionWithoutRecord
-    ? runInExecutionWithoutRecord(row)
-    : false;
-  return hasExecution && !nothingYet;
-}
-
-/**
  * The run page's rail for a run whose first gate is its Skills question --
  * composed from the same three calls the screen makes, with the gate row
- * standing in for the screen's own `recommendation` entry.
+ * standing in for the screen's own `recommendation` entry, and the carried keys
+ * handed over exactly where the screen hands them over: only while the run is
+ * inside its execution with nothing of its own written yet.
  */
-function railForRunRow(row: RunRow): RunSurfaceRailStep[] {
-  const railSteps: RunSurfaceRailStep[] = [skillsGateRow()];
+function railForRun(params: {
+  row: RunRow;
+  carries: readonly string[];
+  railEligible?: boolean;
+}): RunSurfaceRailStep[] {
+  // THE RAIL'S OWN ELIGIBILITY, the second fact the screen's own condition
+  // reads (convergence): a rail that carries neither the run's input steps nor
+  // its gate row was never owed a forecast row, and the loading moment does not
+  // make it owed one.
+  const railCarriesAGateRow = params.railEligible !== false;
+  const railSteps: RunSurfaceRailStep[] = railCarriesAGateRow
+    ? [skillsGateRow()]
+    : [];
+  const insideExecutionWithNothingYet =
+    railCarriesAGateRow &&
+    (runInExecutionWithoutRecord
+      ? runInExecutionWithoutRecord(params.row)
+      : false);
   const upcoming = upcomingRunRailStepKeys({
     drawUpcoming: railDrawsUpcomingRunSteps({
       inputStepIsOpen: false,
       inputStepsInRail: false,
-      gateStepInRail: true,
-      hasExecution: railHasExecutionArgument(row),
+      gateStepInRail: railCarriesAGateRow,
+      hasExecution: runHasExecutionRecord(params.row),
     }),
     drawnKeys: railSteps.map((step) => step.key),
-  });
+    ...(insideExecutionWithNothingYet
+      ? {
+          runCarries: {
+            keys: params.carries,
+            throughTheLoadingMoment: true,
+          },
+        }
+      : {}),
+  } as Parameters<typeof upcomingRunRailStepKeys>[0]);
   const asStep = (key: (typeof upcoming)[number]) => ({
     key,
     reached: false,
@@ -182,10 +214,13 @@ function railRowTitles(container: HTMLElement): string[] {
 }
 
 /** Render the composed rail the way the run page draws it, and read its rows. */
-function renderRail(row: RunRow): { titles: string[]; count: number } {
+function renderRail(params: {
+  row: RunRow;
+  carries: readonly string[];
+}): { titles: string[]; count: number } {
   const view = render(
     <RunSurfaceRail
-      steps={railForRunRow(row)}
+      steps={railForRun(params)}
       detail="the run detail"
       initialSelection="recommendation"
     />,
@@ -196,7 +231,10 @@ function renderRail(row: RunRow): { titles: string[]; count: number } {
 
 describe("cinatra#3246 acceptance 1 — the loading state keeps every entry the reader was shown", () => {
   it("draws Skills, Schedule and Review while the run works with nothing produced yet", () => {
-    const reading = renderRail(THE_LOADING_RENDER);
+    const reading = renderRail({
+      row: THE_LOADING_RENDER,
+      carries: CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW,
+    });
 
     expect(reading.titles).toEqual(["Skills", "Schedule", "Review"]);
     // And never the Skills entry alone, which is the issue's headline.
@@ -206,40 +244,107 @@ describe("cinatra#3246 acceptance 1 — the loading state keeps every entry the 
 
 describe("cinatra#3246 acceptance 2 — the entry count never drops", () => {
   it("keeps at least the rows the prior render carried when the run starts working", () => {
-    const prior = renderRail(THE_PRIOR_RENDER);
+    const prior = renderRail({
+      row: THE_PRIOR_RENDER,
+      carries: CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW,
+    });
     cleanup();
-    const loading = renderRail(THE_LOADING_RENDER);
+    const loading = renderRail({
+      row: THE_LOADING_RENDER,
+      carries: CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW,
+    });
 
     expect(prior.count).toBe(3);
     expect(loading.count).toBeGreaterThanOrEqual(prior.count);
   });
 });
 
-describe("cinatra#3246 — the run's own history still stops the still-to-come rows", () => {
-  it("draws none once the run has written its first row", () => {
-    expect(railForRunRow(THE_FIRST_ROW_RENDER).map((step) => step.key)).toEqual([
-      "recommendation",
-    ]);
+describe("cinatra#3246 — the rail invents no step the run does not carry", () => {
+  it("draws no Schedule and no Review row at the loading moment for a run that carries neither", () => {
+    const reading = renderRail({
+      row: THE_LOADING_RENDER,
+      carries: CARRIES_NEITHER,
+    });
+
+    expect(reading.titles).toEqual(["Skills"]);
+    expect(reading.titles).not.toContain("Schedule");
+    expect(reading.titles).not.toContain("Review");
   });
 });
 
-describe("cinatra#3246 — the screen composes the fact into the rail's one argument", () => {
+describe("cinatra#3246 — the ride lifts only the execution suppression", () => {
+  it("draws none at the loading moment for a rail carrying no input step and no gate row", () => {
+    expect(
+      railForRun({
+        row: THE_LOADING_RENDER,
+        carries: CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW,
+        railEligible: false,
+      }).map((step) => step.key),
+    ).toEqual([]);
+  });
+});
+
+describe("cinatra#3246 — the run's own history still stops the still-to-come rows", () => {
+  it("draws none once the run has written its first row", () => {
+    expect(
+      railForRun({
+        row: THE_FIRST_ROW_RENDER,
+        carries: CARRIES_ITS_SCHEDULE_AND_ITS_REVIEW,
+      }).map((step) => step.key),
+    ).toEqual(["recommendation"]);
+  });
+});
+
+describe("cinatra#3246 — the screen hands the rail the keys this run carries", () => {
   const SCREEN_SRC = fs.readFileSync(
     path.join(__dirname, "..", "instance-screens.tsx"),
     "utf-8",
   );
 
-  it("hands the rail's answer the composed value, not the bare record answer", () => {
-    const callStart = SCREEN_SRC.indexOf("drawUpcoming: railDrawsUpcomingRunSteps({");
+  it("passes the carried keys after drawnKeys and leaves the rail's own answer alone", () => {
+    const callStart = SCREEN_SRC.indexOf(
+      "const upcomingRailStepKeys = upcomingRunRailStepKeys({",
+    );
     expect(callStart).toBeGreaterThan(-1);
-    const call = SCREEN_SRC.slice(callStart, SCREEN_SRC.indexOf("}),", callStart));
+    const call = SCREEN_SRC.slice(callStart, SCREEN_SRC.indexOf("});", callStart));
 
-    // The composition, in the screen's own spelling: the record answer minus the
-    // moment the run is inside an execution and has produced nothing.
-    expect(call).toMatch(/hasExecution:\s*runHasExecution\s*&&\s*!\w+/);
-    // And never the bare reading the loading state collapsed on.
-    expect(call).not.toMatch(/hasExecution:\s*runHasExecution\s*,/);
-    // The fact itself is read from the run's row, beside the other two.
+    // THE RAIL'S OWN ANSWER IS UNTOUCHED: the four arguments the screen has
+    // always handed `railDrawsUpcomingRunSteps` stand, and the execution
+    // reading it takes is the plain one -- which is what keeps every existing
+    // source pin over this call green.
+    expect(call).toMatch(/hasExecution: runHasExecution,/);
+    // AND THE ONE NEW ARGUMENT IS WRITTEN AFTER `drawnKeys`, so a pin anchored
+    // through `drawnKeys` still matches the call it was written for.
+    expect(call).toMatch(
+      /drawnKeys: railSteps\.map\(\(step\) => step\.key\),[\s\S]*runCarries:/,
+    );
+    // AND IT IS THE SCREEN'S OWN DERIVATION THAT IS HANDED OVER, by name, so
+    // this arm cannot stay green over a call that passes a constant, `undefined`
+    // or some other run's reading.
+    expect(call).toContain("runCarries: runCarriesStillToComeKeys,");
+    // The fact itself is read from the run's own row, not invented at the call.
     expect(SCREEN_SRC).toContain("runInExecutionWithoutRecord({");
+  });
+
+  it("derives those keys from the run's own rows, gated on the predicate and on the rail's own eligibility", () => {
+    const start = SCREEN_SRC.indexOf("const runCarriesStillToComeKeys =");
+    expect(start).toBeGreaterThan(-1);
+    const derivation = SCREEN_SRC.slice(
+      start,
+      SCREEN_SRC.indexOf(": undefined;", start),
+    );
+
+    // GATED ON BOTH HALVES (convergence): the loading moment AND the rail's own
+    // two eligibility facts, so a rail that was never owed a forecast row does
+    // not grow one here.
+    expect(derivation).toMatch(
+      /runInsideExecutionWithNothingYet &&\s*\n?\s*\(inputStepsInRail \|\| hasRecommendationStep\)/,
+    );
+    // AND EACH OF THE THREE KEYS IS READ FROM THE RUN'S OWN ROW, by the name the
+    // screen already reads that row under.
+    expect(derivation).toContain("hasRecommendationStep ?");
+    expect(derivation).toContain("runCarriesScheduleStep || parkedScheduleStep");
+    expect(derivation).toContain('railGates.some((gate) => gate.status === "pending")');
+    expect(derivation).toContain("initialReviewGate?.awaiting === true");
   });
 });
