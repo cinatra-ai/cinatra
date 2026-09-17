@@ -100,6 +100,17 @@ async function readInstalledOas(
   }
 }
 
+/** The trusted installed OAS for a package, or null when it is missing or
+ *  unreadable (both already logged by the miss recorder above). Exported for
+ *  the manifest-wide allocation gate (cinatra#2815 S3 part 3), which must read
+ *  EVERY declared slot rather than the one a callback names — it reads through
+ *  this so there is still exactly ONE trust root for an installed OAS. */
+export async function readInstalledOasForPackage(
+  packageName: string,
+): Promise<Record<string, unknown> | null> {
+  return readInstalledOas(packageName);
+}
+
 /** Load + validate the trusted slot from the parent package's installed OAS.
  *  Throws ContextRouteError(404) when missing/duplicate. NEVER trusts a
  *  caller-supplied OAS body. */
