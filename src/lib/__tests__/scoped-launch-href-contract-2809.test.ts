@@ -44,8 +44,13 @@ describe("the agent card's three hrefs, at every scope", () => {
       expect(scopeSurfaceAgentLaunchHref(scope, "@acme/writer")).toBe(
         `${base}/agents/acme/writer/new`,
       );
+      // design#156 §IV / §VII (design#156, design@a9e0c093): the
+      // Settings link "carries the address §VII gives it",
+      // `<scope-base>/agents/<vendor>/<slug>/settings?tab=skills|artifacts` —
+      // two panes named with no default for the CARD's link, so the link opens
+      // the first-named pane.
       expect(scopeSurfaceAgentSettingsHref(scope, "@acme/writer")).toBe(
-        `${base}/agents/acme/writer/settings`,
+        `${base}/agents/acme/writer/settings?tab=skills`,
       );
       expect(scopeSurfaceAgentInstanceHref(scope, "@acme/writer", "r1")).toBe(
         `${base}/agents/acme/writer/r1`,
@@ -55,9 +60,18 @@ describe("the agent card's three hrefs, at every scope", () => {
       expect(scopeSurfaceAgentLaunchHref(scope, "@acme/writer")).toBe(
         buildAgentWorkspacePath("@acme/writer", { scopeBase: base }),
       );
-      expect(scopeSurfaceAgentSettingsHref(scope, "@acme/writer")).toBe(
+      // The Settings address is the path BUILDER's answer plus the pane query
+      // §VII draws on top of it. `buildAgentSettingsPath` mints the path and no
+      // query, so the agreement is asserted on the PATH and the query pinned
+      // beside it — the cross-check is restated, never dropped.
+      const agentSettings = new URL(
+        scopeSurfaceAgentSettingsHref(scope, "@acme/writer"),
+        "https://settings.invalid",
+      );
+      expect(agentSettings.pathname).toBe(
         buildAgentSettingsPath("@acme/writer", { scopeBase: base }),
       );
+      expect(agentSettings.search).toBe("?tab=skills");
       expect(scopeSurfaceAgentInstanceHref(scope, "@acme/writer", "r1")).toBe(
         buildAgentInstancePath("@acme/writer", "r1", { scopeBase: base }),
       );
@@ -76,8 +90,11 @@ describe("the assistant card's hrefs, at every scope", () => {
       expect(
         scopeSurfaceAssistantLaunchHref(scope, { vendor: "acme", slug: "helper", instance: "i1" }),
       ).toBe(`${base}/assistants/acme/helper/i1`);
+      // §VII: "an assistant's is
+      // `<scope-base>/assistants/<vendor>/<slug>/settings?tab=skills`" — §IV:
+      // "with the Skills pane alone".
       expect(scopeSurfaceAssistantSettingsHref(scope, { vendor: "acme", slug: "helper" })).toBe(
-        `${base}/assistants/acme/helper/settings`,
+        `${base}/assistants/acme/helper/settings?tab=skills`,
       );
     });
   }
