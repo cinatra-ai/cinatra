@@ -21,6 +21,7 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 
 export type Pg = Client;
 
@@ -55,29 +56,10 @@ export async function connect(): Promise<Client> {
 export async function createTestSchema(client: Client): Promise<string> {
   const name = `cinatra_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   await client.query(`CREATE SCHEMA "${name}"`);
-  // Run only DDL (CREATE/ALTER/DROP/CREATE INDEX) — skip seed INSERT/UPDATE
-  // statements which can collide with an empty test schema's lack of FKs.
-  const queries = buildCreateStoreSchemaQueries(name);
-  for (const q of queries) {
-    const head = q.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") {
-      continue;
-    }
-    try {
-      await client.query(q.text, q.values ?? []);
-    } catch (err) {
-      // A handful of statements reference seed dependencies that don't exist
-      // in a fresh empty schema — log and continue. The columns that matter
-      // for ownership filtering (objects.{owner_level,owner_id,visibility,project_id,org_id})
-      // are added by simple ALTER TABLE ADD COLUMN IF NOT EXISTS which never
-      // fails for an empty table.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) {
-        // Re-throw genuine schema problems.
-        throw err;
-      }
-    }
-  }
+  // The replay runs the DDL heads only and skips the statements whose own
+  // target is a SHARED `public` table — a throwaway schema owns neither, and
+  // two files replaying them at once deadlock (cinatra#3559).
+  await replayStoreSchema(client, buildCreateStoreSchemaQueries(name));
   return name;
 }
 
