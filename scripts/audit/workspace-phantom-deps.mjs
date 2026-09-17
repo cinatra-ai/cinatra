@@ -62,6 +62,20 @@
  *           `coverage`, `.turbo`); no synced-extension repo is known to emit
  *           generated SOURCE outside those dirs today, so no extra carve-out
  *           is added — a future one would need its own follow-up.
+ *         - the HOST-SERVED VIRTUAL module id
+ *           (`HOST_DESIGN_PRIMITIVES_MODULE`, imported below from its one
+ *           definition) — not an npm package at all. The host serves it at run
+ *           time and nothing is published under it, so
+ *           `docs/internals/contracts/host-shared-primitives-contract.md`
+ *           requires a migrating package to declare it in NO manifest bucket:
+ *           ANY specifier, optional peer included, 404s the install. An
+ *           undeclared import of it is therefore the designed steady state, not
+ *           debt — which is why it is carved out here and NOT baselined
+ *           (`thirdPartyPhantomDepsNotes` records intentional debt, and a
+ *           baseline entry would also make the floor GROW). Matched on the RAW
+ *           specifier and only when it is EXACTLY the id: a near-miss subpath
+ *           is still a finding, the same exact-tuple discipline the externals
+ *           allowlist holds the id to (contract lines 54-58).
  *     A commented-out import is a known false-positive risk across ~100+
  *     externally-authored repos this leg can't hand-audit, so (unlike the
  *     first-party leg) it runs the shared lexical comment stripper
@@ -104,6 +118,13 @@ import { builtinModules } from "node:module";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
+// The HOST-SERVED virtual module id, imported from its ONE definition (the
+// client-bundle builder, which leaves it external as a host peer —
+// cinatra#3471/#3477), exactly as scripts/extensions/inventory.mjs does. Never
+// re-declared here: one id, one definition. The builder is
+// import-side-effect-free (its CLI is `isMain`-guarded) and pulls in no bundler
+// at import time, so this gate's zero-dependency posture is unchanged.
+import { HOST_DESIGN_PRIMITIVES_MODULE } from "../extensions/build-client-renderer-bundle.mjs";
 
 const REPO_ROOT = process.cwd();
 const WORKSPACE_FILE = join(REPO_ROOT, "pnpm-workspace.yaml");
@@ -251,6 +272,12 @@ export function extractThirdPartyImports(source, internalNames, selfName) {
     let m;
     while ((m = re.exec(cleaned)) !== null) {
       if (!isPlausibleImportSpecifier(m[1])) continue;
+      // The host-served VIRTUAL id is not an npm package (see the file header's
+      // EXCLUDED list). Matched on the RAW specifier and only when it is
+      // EXACTLY the id, BEFORE the resolver below collapses a subpath to its
+      // owning package — so a near-miss subpath falls through and stays a
+      // finding.
+      if (m[1] === HOST_DESIGN_PRIMITIVES_MODULE) continue;
       const pkg = resolveSpecifierToPackage(m[1]);
       if (!pkg || pkg === selfName || internalNames.has(pkg) || isBuiltinPackage(pkg) || pkg.includes(":")) continue;
       found.add(pkg);
