@@ -4,7 +4,7 @@
 // Mounts the REAL presentational ExtensionSettingsView against seeded props so
 // the §V surface can be proven with Playwright without a DB/auth round-trip
 // (mirrors the seeded conformance harness pattern, cinatra#986). Kept off the
-// pixel-diffed /design-fixtures index. Every state variant §V specifies is
+// now-retired /design-fixtures catalog. Every state variant §V specifies is
 // rendered: editable Permissions (connector), the deferred-note Permissions
 // (agent/skill), the not-a-registered-vendor Marketplace state, the
 // registered-vendor Publish state, the already-published state, the FOUR

@@ -554,7 +554,7 @@ async function canManageBootstrapState() {
     return Boolean(userTableResult.rows[0]?.exists) && Boolean(roleColumnResult.rows[0]?.exists);
   } catch (err) {
     // Fail-safe. A DB *connection* error (transient outage, or a no-DB render
-    // context such as the prod-standalone /design-fixtures pixel-diff harness)
+    // context such as the prod-standalone design-conformance harness)
     // means we cannot confirm the better-auth tables exist — so we CANNOT manage
     // bootstrap state. Return false (skip bootstrap) rather than letting the
     // throw escape into the React Server Components render and 500 the page.

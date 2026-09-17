@@ -90,16 +90,25 @@ describe("blog-linkedin-publish-agent — 7 structural pins", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = components.start as Record<string, unknown>;
     const meta = (start.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
+    // The flow takes an ARTIFACT REFERENCE, not a blog record: the pinned
+    // package's own contract reads "The flow takes an artifact reference
+    // (linkedinArtifactId + linkedinRepresentationRevisionId), never raw text
+    // and never a blog record". `blogPostUrl` moved off the required cover
+    // because the contract now fills it "at the publishing step from the
+    // WordPress publisher's own output, never guessed at the start".
     expect(meta.required).toEqual([
-      "projectId",
-      "postId",
+      "linkedinArtifactId",
+      "linkedinRepresentationRevisionId",
       "linkedinAccountId",
       "destinationType",
       "destinationId",
       "destinationName",
-      "blogPostUrl",
     ]);
-    expect(meta.hidden).toEqual(["linkedinAccountName"]);
+    expect(meta.hidden).toEqual([
+      "linkedinAccountName",
+      "blogPostUrl",
+      "cinatra_run_id",
+    ]);
   });
 
   it("Pin 7: EndNode outputs", () => {
@@ -108,55 +117,59 @@ describe("blog-linkedin-publish-agent — 7 structural pins", () => {
     const outputs = end.outputs as Array<{ title: string }>;
     const titles = outputs.map((o) => o.title).sort();
     expect(titles).toEqual([
+      "addressWritten",
       "approved",
-      "linkedinDraftId",
+      "linkedinArtifactId",
+      "linkedinPostExternalId",
       "linkedinPostUrl",
-      "postId",
-      "projectId",
+      "linkedinRepresentationRevisionId",
       "summary",
     ]);
   });
 });
 
 describe("blog-linkedin-publish-agent — inline instruction contract", () => {
-  it("uses status string 'succeeded' (NOT 'completed')", () => {
-    expect(skill).toMatch(/status === "succeeded"|status === \\"succeeded\\"/);
-    // Defensive: NEGATIVE assert on the obsolete "completed" string for
-    // BackgroundProcessRunStatus. Other "completed" matches (e.g. in
-    // free-text English) are OK, but the runtime status check must use
-    // the right enum value.
-    const wrongMatches = skill.match(/status === "completed"/g);
-    expect(wrongMatches ?? []).toEqual([]);
+  it("publishes an artifact revision — never raw text and never a blog record", () => {
+    expect(skill).toContain("never raw text and never a blog record");
+    expect(skill).toContain("linkedinArtifactId");
+    expect(skill).toContain("linkedinRepresentationRevisionId");
+    // The retired blog-record road is gone from the contract, not merely
+    // unused: the draft roster, its poll and the update-before-publish edit
+    // step were the shape of a blog record.
+    expect(skill).not.toContain("blog_project_get");
+    expect(skill).not.toContain("blog_post_publish_linkedin_update");
+    expect(skill).not.toContain("blog_post_publish_linkedin_publish");
+    expect(skill).not.toContain("linkedinDrafts");
   });
 
-  it("polls blog_project_get (not the non-existent linkedinPublishGeneration)", () => {
-    expect(skill).toContain("blog_project_get");
-    // The publish flow REUSES linkedinDraftGeneration with operation === "publish".
-    // There is no separate linkedinPublishGeneration field. Negative-assert.
-    expect(skill).not.toContain("linkedinPublishGeneration");
+  it("names exactly one publish primitive and forbids the rest", () => {
+    expect(skill).toContain("You may call exactly this 1 primitive");
+    expect(skill).toContain("linkedin_post_publish");
+    expect(skill).toContain("Call NOTHING else.");
+    // The reads and the write-back belong to the deterministic steps around
+    // the orchestration step, not to it.
+    expect(skill).toContain("artifacts_get");
+    expect(skill).toContain("artifact_content_read");
+    expect(skill).toContain("objects_update");
   });
 
-  it("extracts drafts from post.linkedinDrafts[]", () => {
-    expect(skill).toMatch(/post\.linkedinDrafts/);
+  it("the pinned revision is what goes out — the screen never edits it", () => {
+    expect(skill).toContain("YOU DO NOT WRITE.");
+    expect(skill).toContain("The screen shows the copy; it does not edit it.");
+    expect(skill).toContain(
+      "Ignore any `content` that comes back on the answer",
+    );
+    expect(skill).toContain(
+      "The publish returns a receipt, never a new artifact",
+    );
   });
 
-  it("filters drafts by all 4 keys (linkedinAccountId, destinationId, blogPostUrl, status='draft')", () => {
-    expect(skill).toContain("linkedinAccountId");
-    expect(skill).toContain("destinationId");
-    expect(skill).toContain("blogPostUrl");
-    // The draft entry's status field is the operative filter.
-    expect(skill).toMatch(/status === "draft"/);
-  });
-
-  it("calls blog_post_publish_linkedin_update before _publish on operator edits", () => {
-    expect(skill).toContain("blog_post_publish_linkedin_update");
-    // The SKILL must invoke update BEFORE publish — assert ordering via
-    // string-index comparison.
-    const idxUpdate = skill.indexOf("blog_post_publish_linkedin_update");
-    const idxPublish = skill.indexOf("blog_post_publish_linkedin_publish");
-    expect(idxUpdate).toBeGreaterThan(-1);
-    expect(idxPublish).toBeGreaterThan(-1);
-    expect(idxUpdate).toBeLessThan(idxPublish);
+  it("the write-back patch key space is CLOSED at exactly three keys", () => {
+    expect(skill).toContain("The patch's key space is CLOSED");
+    expect(skill).toContain("linkedinPublishedUrl");
+    expect(skill).toContain("linkedinPublishedExternalId");
+    expect(skill).toContain("linkedinPublishedRevisionId");
+    expect(skill).toMatch(/`addressPatch` is `\{\}` exactly/);
   });
 
   it("declares the HITL renderer key explicitly", () => {

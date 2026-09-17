@@ -74,7 +74,7 @@ test.describe("notifications bell (badge + link, spec §IV)", () => {
     // COMPUTED colors, not class names (PR #2472 review): the digit is WHITE
     // and the fill is the spec red (#a6384f = rgb(166, 56, 79)) in BOTH
     // themes — the pill never flips with the theme. Theme forcing mirrors
-    // design-fixtures.spec.ts (next-themes localStorage key + reload).
+    // the design harness (next-themes localStorage key + reload).
     for (const theme of ["cinatra", "dark"] as const) {
       await page.evaluate((t) => window.localStorage.setItem("theme", t), theme);
       await page.reload({ waitUntil: "domcontentloaded" });

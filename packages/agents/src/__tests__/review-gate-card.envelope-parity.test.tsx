@@ -39,6 +39,23 @@
 // entries that carry a chip, and the ONLY bytes that moved in them are those
 // two class names — the painted colour is unchanged and no other byte of DOM
 // differs. Every other entry is still its earlier capture, byte for byte.
+//
+// TWENTY ENTRIES WERE RE-TAKEN (cinatra#3189). The shared Button was graded
+// clause by clause against its section in the ratified drawing and fixed to
+// that section's sentences: the drawn 7px corner as a literal (a drawn
+// constant cannot resolve through a radius token the two palettes set to
+// different values), the primary edge moved onto the indigo fill the drawing
+// gives it, the destructive edge given the drawn tint instead of no edge at
+// all, ghost given the explicit transparent rest ground, and link given the
+// drawn underline, its offset and its narrow side padding. The review card's
+// decision bar draws four of those variants, so the twenty entries that carry
+// a Button — the five decision-bearing states (`pending`,
+// `pending-no-comment`, `pending-with-suggestions`, `restricted`, `settled`)
+// on each of the four hosts — were re-taken and nothing else was touched.
+// The regeneration diff is what keeps this guard honest: every byte that
+// moved sits inside a button opening tag, the remaining twenty-four entries
+// are still their earlier captures byte for byte, and the entry count is
+// unchanged at forty-four.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";

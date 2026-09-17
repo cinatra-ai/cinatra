@@ -3,8 +3,10 @@
  *
  *   pnpm exec vitest run src/app/__tests__/control-border-contrast.test.ts
  *
- * Every text input, textarea, select trigger and input group draws its resting
- * outline from `--input` (`border border-input`). In the dark palette that
+ * Every text input, textarea and input group draws its resting outline from
+ * `--input` (`border border-input`) — the Select trigger drew it too until
+ * rule 6 moved its hairline onto `--line-strong-control`, which keeps the navy
+ * family on the dark ramp (src/components/ui/select.tsx). In the dark palette that
  * token was aliased to `--line` — the SECTION-DIVIDER hairline, white at 10%
  * alpha — which composites to about 1.2 to 1.3 to 1 over the dark grounds: a
  * boundary nobody can find until they click into the field. The light palette
