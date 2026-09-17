@@ -33,7 +33,8 @@ import {
   readVerificationRecordsForGates,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, railStepPosition, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, type RailMessage } from "./run-step-rail";
+import { runRailNumeralPosition, runRailNumeralTotal } from "./orchestrator-gate-predicate";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 // WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
@@ -56,7 +57,7 @@ import {
 // (cinatra#2970). A leaf, so this server component can call it.
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
-import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import { LifecycleCardSurfaceProvider, RunRailGateStepProvider } from "./lifecycle-card-runtime";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
@@ -787,49 +788,6 @@ export function upcomingSkillsEntryHeadsTheRail(
     (step) =>
       RAIL_GATE_KEYS_AFTER_THE_SKILLS_QUESTION.has(step.key) && step.reached !== false,
   );
-}
-
-/**
- * THE KEYS OF THE GATE ROWS THAT HEAD THE RUN'S RAIL — in the order the rail
- * builds them (cinatra#3080, fix leg 8; a convergence finding).
- *
- * The rail's work entries are numbered `index + 1 + stepOffset`, where the
- * offset is how many NUMERALS the gate rows above them consumed
- * (`runSurfaceRailNumberedCount`, cinatra#3047). The gate header's naming line
- * has to read the same series — §XIII.1's "step 4 of 6" is the rail's own
- * numeral, not a count of the rail's work entries — and the header is composed
- * ABOVE the block that assembles those rows, because the input rows take the
- * run detail as their surface and the run detail carries the header.
- *
- * So the KEYS are answered here, from the same predicates the block below
- * builds its rows from, and the numeral both readings use is taken from this one
- * list. Only the keys: the rows themselves still need the detail node, and this
- * answer deliberately needs none of it.
- */
-export function runGateRailStepKeys(params: {
-  hasRecommendationStep: boolean;
-  inputStepsInRail: boolean;
-  inputStepKeys: readonly RunSurfaceRailStep["key"][];
-  hasScheduleStep: boolean;
-  drawUpcoming: boolean;
-}): RunSurfaceRailStep["key"][] {
-  const drawn: RunSurfaceRailStep["key"][] = [];
-  if (params.hasRecommendationStep) drawn.push("recommendation");
-  if (params.inputStepsInRail) drawn.push(...params.inputStepKeys);
-  if (params.hasScheduleStep) drawn.push("schedule");
-  // The rows still to come, de-duplicated against the ones already drawn — the
-  // same answer the block below asks — and placed the same way: the row that
-  // draws a glyph goes to the FRONT (it carries no numeral), the numbered ones
-  // continue the series beneath.
-  const upcoming = upcomingRunRailStepKeys({
-    drawUpcoming: params.drawUpcoming,
-    drawnKeys: drawn,
-  });
-  return [
-    ...upcoming.filter((key) => runSurfaceStepDrawsGlyph(key)),
-    ...drawn,
-    ...upcoming.filter((key) => !runSurfaceStepDrawsGlyph(key)),
-  ];
 }
 
 /**
@@ -2157,31 +2115,6 @@ export async function SetupScreen({
           return listRunMadeArtifacts({ orgId: run.orgId, runId: run.id });
         })()
       : [];
-  // THE STEP IS THE RAIL'S OWN NUMERAL (a convergence finding on this leg). The
-  // rail beside this column starts its work entries after the numerals the gate
-  // rows above them consumed, so a header counting `rail.entries` alone named a
-  // step one or more short of the row it points at. The offset is computed once,
-  // below, from the same keys those rows are built from, and both readings take
-  // it from there.
-  const reviewGateStep = railStepPosition(
-    rail.entries,
-    runReviewSlot?.reviewTaskId ? `gate:${runReviewSlot.reviewTaskId}` : null,
-    runSurfaceRailNumberedCount(
-      runGateRailStepKeys({
-        hasRecommendationStep,
-        inputStepsInRail,
-        inputStepKeys: runInputSteps.map((step) => step.key),
-        hasScheduleStep: scheduleRailRef !== null,
-        drawUpcoming: railDrawsUpcomingRunSteps({
-          inputStepIsOpen,
-          inputStepsInRail,
-          gateStepInRail: hasRecommendationStep,
-          hasExecution: runHasExecution,
-        }),
-      }),
-    ),
-  );
-
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
@@ -2479,7 +2412,6 @@ export async function SetupScreen({
                     traceId={run.traceId ?? undefined}
                     requiredFields={required}
                     reviewGateAgentLabel={reviewGateAgentLabel}
-                    reviewGateStep={reviewGateStep}
                     initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
                     noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
                     runHasExecuted={runHasExecuted}
@@ -2895,17 +2827,47 @@ export async function SetupScreen({
                 panel: runDetailPanel,
                 stepperStepCount: stepperSteps.length,
               });
+              // THE RAIL'S OWN NUMERAL SERIES, STATED ONCE FROM THE ROWS THIS
+              // BLOCK JUST BUILT (cinatra#3080, the fix leg after the third
+              // proof round).
+              //
+              // WHAT THE THIRD ROUND READ. Beside a rail of EIGHT numerals — the
+              // frame's two rows, five Review entries, and the run's own record
+              // row — the gate header read "step 6 of 6", and the row the rail
+              // highlighted for that gate was the THIRD. The header was counting
+              // a second universe: a work ladder plus the rail's trailing rows,
+              // with neither the numerals these rows consume nor the record row
+              // that closes the series in it.
+              //
+              // ONE SERIES, THREE READERS. The rail panel's offset, the record
+              // row's numeral and the gate header's line are the same series, so
+              // it is stated ONCE here — from the rows the page actually draws,
+              // never from a second prediction of them — and handed to all three.
+              const railNumerals = {
+                // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS ONLY
+                // (cinatra#3047). The Skills entry is unnumbered, so a run
+                // paused on its skills question numbers its first work step "1"
+                // — the drawing's own rail — instead of the "2" the re-shoot
+                // photographed.
+                numeralsAboveTheEntries: runSurfaceRailNumberedCount(
+                  railSteps.map((step) => step.key),
+                ),
+                entries: railDraws ? rail.entries : [],
+                recordRowCloses: run != null && railCarriesMadeStep,
+              };
+              // AND THE GATE'S ROW IS FOUND BY ITS OWN KEY: a gate this rail does
+              // not carry answers null, and the header then draws the segments it
+              // can name truthfully rather than being placed on the last row.
+              const gateStepOnTheRail = runRailNumeralPosition({
+                ...railNumerals,
+                key: runReviewSlot?.reviewTaskId ? `gate:${runReviewSlot.reviewTaskId}` : null,
+              });
               const railNode = railDraws ? (
                 <RunStepRailPanel
                   entries={rail.entries}
                   activeOrdinal={rail.activeOrdinal}
                   reviewHrefBase={reviewHrefBase}
-                  // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS
-                  // ONLY (cinatra#3047). The Skills entry is unnumbered, so a
-                  // run paused on its skills question numbers its first work
-                  // step "1" — the drawing's own rail — instead of the "2" the
-                  // re-shoot photographed.
-                  stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
+                  stepOffset={railNumerals.numeralsAboveTheEntries}
                 />
               ) : null;
               // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
@@ -2953,11 +2915,11 @@ export async function SetupScreen({
                     <RunSurfaceRailRow
                       selectionKey="made"
                       label={RUN_MADE_STEP_LABEL}
-                      displayStep={
-                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
-                        (railDraws ? rail.entries.length : 0) +
-                        1
-                      }
+                      // AND ITS NUMERAL IS THE SERIES' LAST (cinatra#3080, the
+                      // fix leg after the third proof round): the record row
+                      // closes the rail, so its numeral is the total of the one
+                      // series the rail and the gate header both read.
+                      displayStep={runRailNumeralTotal(railNumerals)}
                       reached={runReachedItsRecord}
                       settled={runReachedItsRecord}
                       selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
@@ -2980,7 +2942,14 @@ export async function SetupScreen({
                   <RunSurfaceRail
                     steps={railSteps}
                     rail={railNode}
-                    detail={detailNode}
+                    // AND THE DETAIL IS HANDED THE RAIL'S OWN NUMERAL FOR THE
+                    // GATE IT DRAWS (cinatra#3080, the fix leg after the third
+                    // proof round), from the one series above.
+                    detail={
+                      <RunRailGateStepProvider value={gateStepOnTheRail}>
+                        {detailNode}
+                      </RunRailGateStepProvider>
+                    }
                     initialSelection={initialStep}
                   />
                 );
@@ -3008,7 +2977,11 @@ export async function SetupScreen({
                       {railNode}
                     </div>
                   ) : null}
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    <RunRailGateStepProvider value={gateStepOnTheRail}>
+                      {detailNode}
+                    </RunRailGateStepProvider>
+                  </div>
                 </>
               );
             })()}

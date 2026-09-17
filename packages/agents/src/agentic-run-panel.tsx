@@ -39,6 +39,7 @@ import {
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  useRunRailGateStep,
   useRunReviewSlot,
   type RunReviewSlot,
   type RunReviewSlotReader,
@@ -238,9 +239,14 @@ export type AgenticRunPanelProps = {
    * rail beside this column, so the line and the rail cannot disagree.
    *
    * Absent ⇒ the header draws the segments it can name, exactly as before.
+   *
+   * THE STEP IS NOT ONE OF THESE PROPS (cinatra#3080, the fix leg after the
+   * third proof round). It is the numeral the rail beside this panel draws, and
+   * the screen settles it with those rows — after this panel's element is made —
+   * so it reaches the header through `RunRailGateStepProvider` around the same
+   * tree instead of travelling down as a prop.
    */
   reviewGateAgentLabel?: string | null;
-  reviewGateStep?: { index: number; total: number } | null;
   /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
@@ -491,11 +497,14 @@ export function AgenticRunPanel({
   inputStepInRail = false,
   railDrawsTheFrame = false,
   reviewGateAgentLabel = null,
-  reviewGateStep = null,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
   const viewerIsAdmin = useViewerIsAdmin();
+  // THE RAIL'S OWN NUMERAL FOR THE GATE THIS PANEL DRAWS (cinatra#3080, the fix
+  // leg after the third proof round) — the one series the rail beside it is
+  // drawn from, so the header's line and that rail cannot disagree.
+  const railGateStep = useRunRailGateStep();
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
   // resolution below picks them up.
@@ -1857,7 +1866,7 @@ export function AgenticRunPanel({
         // segments the review page's own mount hands down; this panel takes the
         // two it cannot source from its host.
         agentLabel={reviewGateAgentLabel ?? null}
-        step={reviewGateStep ?? null}
+        step={railGateStep}
       />
     </LifecycleCardSurfaceProvider>
   ) : null;

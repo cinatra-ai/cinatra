@@ -106,6 +106,48 @@ export const LIFECYCLE_HITL_SCREEN_SUBMIT_PATH =
   "/api/lifecycle-views/hitl-screen/submit";
 
 // ---------------------------------------------------------------------------
+// THE NUMERAL THE RUN'S RAIL DRAWS FOR THE GATE BESIDE IT (cinatra#3080, the fix
+// leg after the third proof round).
+//
+// WHY IT TRAVELS THIS WAY RATHER THAN AS A PROP. The run screen composes its run
+// DETAIL before it builds the rail's rows — the rows ask whether they can be
+// opened, and that question is answered against the detail they fall back to
+// (cinatra#3068) — so the numeral those rows settle is not known yet when the
+// detail's own elements are made. It is provided around the same tree instead,
+// computed ONCE from the rows the page actually draws and read by the gate
+// header inside it, so the line and the rail beside it cannot disagree.
+//
+// AND IT LIVES WITH THE CARD'S OTHER SURROUNDINGS, for the same reason they do:
+// what a lifecycle card can read about the frame around it is declared here, and
+// every surface that reads this one already reads this module — so the reading
+// reaches them without a module of its own on the locked route graphs (the
+// route-graph ratchet measured a separate one as +1 on four of them).
+//
+// NOTHING PROVIDED MEANS NOTHING CLAIMED: the header then draws the segments it
+// can name truthfully, exactly as `reviewGateNamingLine` already does.
+// ---------------------------------------------------------------------------
+
+export type RunRailGateStep = { index: number; total: number } | null;
+
+const RunRailGateStepContext = createContext<RunRailGateStep>(null);
+
+export function RunRailGateStepProvider({
+  value,
+  children,
+}: {
+  value: RunRailGateStep;
+  children: ReactNode;
+}) {
+  return (
+    <RunRailGateStepContext.Provider value={value}>{children}</RunRailGateStepContext.Provider>
+  );
+}
+
+export function useRunRailGateStep(): RunRailGateStep {
+  return useContext(RunRailGateStepContext);
+}
+
+// ---------------------------------------------------------------------------
 // Host declaration — absent means "no host", which means no card.
 // ---------------------------------------------------------------------------
 

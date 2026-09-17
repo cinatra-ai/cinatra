@@ -64,7 +64,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { reviewGateStepPosition } from "./orchestrator-gate-predicate";
+import { runRailNumeralPosition } from "./orchestrator-gate-predicate";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
@@ -79,6 +79,7 @@ import { RunCompletionCard } from "./run-completion-affordances";
 import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
+  useRunRailGateStep,
   useRunReviewSlot,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
@@ -1959,23 +1960,45 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     });
   })();
 
-  // AND WHERE THE GATED STEP SITS — ITS PLACE ON THE RAIL, NOT IN THE LADDER
-  // (cinatra#3080, the fix leg after the second proof round). This used to name
-  // the gate by the WORK step the run was interrupted at, bounded by the
-  // ladder's length: a rail drawing "3 Review" beside a header reading "step 2
-  // of 2", and the review page — which counts its reviews as rail rows —
-  // reading "step 1 of 1" for the same gate. A gate is a rail entry
-  // (`app-artifact-review.html` §I.3), and the rail below draws its trailing
-  // rows as `stepperSteps.length + i + 1`, which is exactly what the shared
-  // projection answers. `activeStep` is already the rail's own numeral for the
-  // row the run is parked on, so the gate's ordinal among the trailing rows is
-  // what it has past the spine; a run parked on the spine (no rail row for this
-  // gate yet) places the review as the row it is about to draw.
-  const gateStep = reviewGateStepPosition({
-    ladderLength: stepperSteps.length,
-    gateRowCount: railExtras.length,
-    gateOrdinal: activeStep > stepperSteps.length ? activeStep - stepperSteps.length - 1 : null,
-  });
+  // AND WHERE THE GATED STEP SITS — THE NUMERAL THE RAIL BESIDE IT DRAWS
+  // (cinatra#3080, the fix leg after the third proof round).
+  //
+  // WHAT THE THIRD ROUND READ. This column used to count a universe of its own —
+  // the work ladder plus the rail's trailing rows — and, for a gate it could not
+  // place, put it on the LAST review row. On a real run that read "step 6 of 6"
+  // beside a rail of eight numerals whose THIRD row was the highlighted one.
+  //
+  // WHERE THE FRAME DRAWS THE RAIL, THE SCREEN OWNS THE SERIES. It computes it
+  // once from the rows it actually draws — the numerals its own rows consume,
+  // the rail's entries, the run's record row — and hands it down around this
+  // panel, so this column derives no step of its own there.
+  //
+  // WHERE THIS COLUMN IS THE RAIL it keeps its own reading, counting THIS
+  // column's numerals: the spine it draws, then its trailing rows. The gate is
+  // found by its own key among them; failing that it is the row this column
+  // highlights — `activeStep` is that row's own numeral — and never the last
+  // review row merely because nothing could be placed.
+  const railGateStepFromTheFrame = useRunRailGateStep();
+  const gateReviewTaskId =
+    typeof effectiveInterruptContext?.reviewTaskId === "string" &&
+    effectiveInterruptContext.reviewTaskId.length > 0
+      ? effectiveInterruptContext.reviewTaskId
+      : null;
+  const gateStep = railDrawsTheFrame
+    ? railGateStepFromTheFrame
+    : (() => {
+        const byKey = runRailNumeralPosition({
+          numeralsAboveTheEntries: stepperSteps.length,
+          entries: railExtras,
+          recordRowCloses: false,
+          key: gateReviewTaskId ? `gate:${gateReviewTaskId}` : null,
+        });
+        if (byKey) return byKey;
+        const total = stepperSteps.length + railExtras.length;
+        return activeStep > stepperSteps.length && activeStep <= total
+          ? { index: activeStep, total }
+          : null;
+      })();
 
   // ---------------------------------------------------------------------------
   // Spinner label — always shows the step the user is currently waiting for.

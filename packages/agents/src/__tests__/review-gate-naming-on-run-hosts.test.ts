@@ -21,6 +21,15 @@
  * 7). The two the ninth round actually exercised — the run page's own panel, and
  * the setup run page's review step — handed down the run alone. This suite pins
  * every mount, so a fifth host cannot be added silently with two of three.
+ *
+ * AND WHERE THE STEP ITSELF COMES FROM, AFTER THE THIRD PROOF ROUND
+ * (cinatra#3080). The run screen no longer PREDICTS the keys of the rows its rail
+ * will draw in order to count them for the header: it states the rail's numeral
+ * series once, from the rows it actually draws, and hands that one series to the
+ * rail and to the header. `runGateRailStepKeys` was that prediction and is gone
+ * with the count it existed to feed, so the two cases below that called it now
+ * state the rail's rows themselves — the same rows, in the same order — and read
+ * the gate's place through the one projection. No case is dropped.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -28,8 +37,9 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { reviewGateNamingLine } from "../review-gate-card";
+import { runRailNumeralPosition } from "../orchestrator-gate-predicate";
 import { railStepPosition } from "../run-step-rail";
-import { runGateRailStepKeys, setupReviewStepPosition } from "../instance-screens";
+import { setupReviewStepPosition } from "../instance-screens";
 import { runSurfaceRailNumberedCount } from "../run-surface-rail-step";
 
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf-8");
@@ -141,40 +151,46 @@ describe("§XIII.1 — the header's numeral is the RAIL's numeral, not a count o
     expect(railStepPosition(entries, "gate:rt-1", stepOffset)?.index).toBe(railNumeralForTheGate);
   });
 
-  it("takes its offset from the rail's own key list, in the rail's own order", () => {
-    // The keys the run screen hands the numeral count come from one list, built
-    // from the same predicates the rail's rows are built from — a recommendation
-    // hold and an armed schedule each consume a numeral, and the Skills row that
-    // draws a glyph consumes none (cinatra#3047).
-    const keys = runGateRailStepKeys({
-      hasRecommendationStep: true,
-      inputStepsInRail: true,
-      inputStepKeys: ["input:0", "input:1"] as never,
-      hasScheduleStep: true,
-      drawUpcoming: false,
-    });
-    expect(keys).toEqual(["recommendation", "input:0", "input:1", "schedule"]);
-    // "recommendation" is the glyph row and consumes NO numeral; the two input
-    // forms and the schedule consume three between them.
+  it("takes its offset from the rail's own rows, in the rail's own order", () => {
+    // The rows the run screen draws above the entries, in the order it builds
+    // them — a recommendation hold, the run's two input forms, an armed
+    // schedule. The recommendation row draws a glyph and consumes NO numeral;
+    // the two input forms and the schedule consume three between them
+    // (cinatra#3047).
+    const keys = ["recommendation", "input:0", "input:1", "schedule"] as never[];
     expect(runSurfaceRailNumberedCount(keys)).toBe(3);
     expect(railStepPosition(entries, "gate:rt-1", runSurfaceRailNumberedCount(keys))).toEqual({
       index: 5,
       total: 6,
     });
+    // AND THE RECORD ROW CLOSES THE SERIES (cinatra#3080, the fix leg after the
+    // third proof round): the rail the reader sees is those rows, then its
+    // entries, then the run's own record — one numeral more, and the gate keeps
+    // its own row.
+    expect(
+      runRailNumeralPosition({
+        numeralsAboveTheEntries: runSurfaceRailNumberedCount(keys),
+        entries,
+        recordRowCloses: true,
+        key: "gate:rt-1",
+      }),
+    ).toEqual({ index: 5, total: 7 });
   });
 
   it("answers nothing extra where no gate row heads the rail", () => {
-    const keys = runGateRailStepKeys({
-      hasRecommendationStep: false,
-      inputStepsInRail: false,
-      inputStepKeys: [],
-      hasScheduleStep: false,
-      drawUpcoming: false,
-    });
-    expect(keys).toEqual([]);
+    const keys = [] as never[];
+    expect(runSurfaceRailNumberedCount(keys)).toBe(0);
     expect(railStepPosition(entries, "gate:rt-1", runSurfaceRailNumberedCount(keys))).toEqual({
       index: 2,
       total: 3,
     });
+    expect(
+      runRailNumeralPosition({
+        numeralsAboveTheEntries: runSurfaceRailNumberedCount(keys),
+        entries,
+        recordRowCloses: false,
+        key: "gate:rt-1",
+      }),
+    ).toEqual({ index: 2, total: 3 });
   });
 });

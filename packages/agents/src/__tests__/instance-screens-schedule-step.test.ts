@@ -167,7 +167,14 @@ describe("runDetailOpensOnSchedule — which step the surface opens on", () => {
 describe("the screen composes THROUGH the step, not beside it", () => {
   it("hands the rail and the run detail to the schedule step, with the first paint it derived", () => {
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
-    expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
+    // AND THE DETAIL IT HANDS OVER CARRIES THE RAIL'S OWN NUMERAL FOR THE GATE
+    // (cinatra#3080, the fix leg after the third proof round). The run detail is
+    // composed above the rows, so the numeral those rows settle reaches the gate
+    // header through the provider around the SAME detail node rather than as a
+    // prop made before the rows exist.
+    expect(SCREEN_SRC).toMatch(
+      /detail=\{\s*<RunRailGateStepProvider value=\{gateStepOnTheRail\}>\s*\{detailNode\}/,
+    );
     // The screen derives its first paint through the whole ladder since
     // cinatra#2790 (S9f) — `runDetailInitialStep`, which composes this
     // predicate — so the pin follows the composition rather than the spelling

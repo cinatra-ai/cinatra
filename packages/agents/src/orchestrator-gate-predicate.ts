@@ -73,3 +73,64 @@ export function reviewGateStepPosition(input: {
   const ordinal = Math.min(Math.max(asked, 0), rows - 1);
   return { index: ladder + ordinal + 1, total: ladder + rows };
 }
+
+/**
+ * THE WHOLE SERIES THE RUN'S RAIL DRAWS, AND WHERE ONE GATE SITS IN IT
+ * (cinatra#3080, the fix leg after the third proof round).
+ *
+ * WHAT THE THIRD ROUND READ, on a real run parked at review: for ONE gate the
+ * run page's header read "step 6 of 6" while the rail beside it highlighted the
+ * THIRD of its eight entries — Schedule, Setup, five Review entries and the run's
+ * own record row. The header was counting a universe nobody draws.
+ *
+ * THE SERIES THE READER SEES HAS THREE PARTS, and this reading takes all three:
+ * the numerals the frame's rows above the entries consume, the rail's entries in
+ * the rail's own order, and the run's record row where the rail closes with it
+ * ("The rail's last entry is the run's own record", `app-artifact-review.html`
+ * §I.2). `specs/app-lifecycle-cards.html` §XIII.1 draws exactly ONE such line per
+ * gate — "Outreach agent · run rn_8f31… · step 4 of 6" — pending and settled
+ * alike, so the header's two numerals are the rail's own: the index is the
+ * numeral drawn on the gate's row, the total is how many numerals that rail
+ * draws.
+ *
+ * A KEY THE RAIL DOES NOT CARRY ANSWERS NULL, and the header then draws the
+ * segments it can name truthfully (`review-gate-card.tsx`): no gate is placed on
+ * a row it does not sit on because its own row could not be found.
+ *
+ * AND IT LIVES HERE, beside the ladder projection, for the reason the note above
+ * this one gives: this is the PURE module the gated surfaces already reach, so
+ * the run page's own column reads its rail's numeral without pulling the rail's
+ * merge module onto the locked route graphs — which the route-graph ratchet
+ * measures as growth (it measured +3 on four of them when this reading was
+ * reached through `run-step-rail.ts`).
+ */
+export function runRailNumeralTotal(input: {
+  /** How many numerals the frame's rows above the entries consume. */
+  numeralsAboveTheEntries: number;
+  /** The rail's entries, in the rail's own order. */
+  entries: ReadonlyArray<{ key: string }>;
+  /** Does the run's own record row close the series? */
+  recordRowCloses: boolean;
+}): number {
+  return (
+    Math.max(Math.floor(input.numeralsAboveTheEntries), 0) +
+    input.entries.length +
+    (input.recordRowCloses ? 1 : 0)
+  );
+}
+
+export function runRailNumeralPosition(input: {
+  numeralsAboveTheEntries: number;
+  entries: ReadonlyArray<{ key: string }>;
+  recordRowCloses: boolean;
+  /** The gate's own rail key, or null where the surface has none to name. */
+  key: string | null;
+}): { index: number; total: number } | null {
+  if (!input.key) return null;
+  const at = input.entries.findIndex((entry) => entry.key === input.key);
+  if (at < 0) return null;
+  return {
+    index: at + 1 + Math.max(Math.floor(input.numeralsAboveTheEntries), 0),
+    total: runRailNumeralTotal(input),
+  };
+}

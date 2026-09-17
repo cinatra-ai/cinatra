@@ -193,7 +193,14 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     expect(SCREEN_SRC).toMatch(/<RunSurfaceRail\b/);
     expect(SCREEN_SRC).toMatch(/steps=\{railSteps\}/);
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
-    expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
+    // AND THE DETAIL IT HANDS OVER CARRIES THE RAIL'S OWN NUMERAL FOR THE GATE
+    // (cinatra#3080, the fix leg after the third proof round). The run detail is
+    // composed above the rows, so the numeral those rows settle reaches the gate
+    // header through the provider around the SAME detail node rather than as a
+    // prop made before the rows exist.
+    expect(SCREEN_SRC).toMatch(
+      /detail=\{\s*<RunRailGateStepProvider value=\{gateStepOnTheRail\}>\s*\{detailNode\}/,
+    );
     expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);
     expect(SCREEN_SRC).toContain("runDetailInitialStep({");
   });
@@ -209,9 +216,14 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     // counting it pushed the run's first work step to "2". The offset is the
     // rail's own rule now (`runSurfaceRailNumberedCount`), asked once, and the
     // arithmetic itself is pinned in `skills-step-glyph-and-numerals.test.tsx`.
+    // AND IT IS THE ONE SERIES THE HEADER READS TOO (cinatra#3080, the fix leg
+    // after the third proof round): the same count is stated once, beside the
+    // rail's entries and the record row that closes them, and handed to the rail
+    // panel, to that record row and to the gate header together.
     expect(SCREEN_SRC).toMatch(
-      /stepOffset=\{runSurfaceRailNumberedCount\(railSteps\.map\(\(step\) => step\.key\)\)\}/,
+      /numeralsAboveTheEntries: runSurfaceRailNumberedCount\(\s*railSteps\.map\(\(step\) => step\.key\),\s*\)/,
     );
+    expect(SCREEN_SRC).toMatch(/stepOffset=\{railNumerals\.numeralsAboveTheEntries\}/);
     expect(SCREEN_SRC).not.toMatch(/stepOffset=\{railSteps\.length\}/);
   });
 

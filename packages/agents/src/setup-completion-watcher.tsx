@@ -115,12 +115,16 @@ type SetupCompletionWatcherProps = {
    */
   railDrawsTheFrame?: boolean;
   /**
-   * Forwarded to the panel unchanged: the two naming segments the run screen
-   * resolved for the rail beside this column (cinatra#3080, fix leg 8). See
+   * Forwarded to the panel unchanged: the naming segment the run screen resolved
+   * for the rail beside this column (cinatra#3080, fix leg 8). See
    * `AgenticRunPanel`'s own props.
+   *
+   * The STEP is no longer one of them (the fix leg after the third proof round):
+   * it is the rail's own numeral, settled by the rows the screen draws after
+   * this panel's element is made, and it reaches the header through
+   * `RunRailGateStepProvider` around the same tree.
    */
   reviewGateAgentLabel?: string | null;
-  reviewGateStep?: { index: number; total: number } | null;
 };
 
 export function SetupCompletionWatcher({
@@ -148,7 +152,6 @@ export function SetupCompletionWatcher({
   initialReviewGate,
   recommendationDecided,
   reviewGateAgentLabel,
-  reviewGateStep,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -294,7 +297,6 @@ export function SetupCompletionWatcher({
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
       reviewGateAgentLabel={reviewGateAgentLabel}
-      reviewGateStep={reviewGateStep}
     />
   );
 }
