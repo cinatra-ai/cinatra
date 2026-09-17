@@ -1,0 +1,24 @@
+{
+  "name": "@fixture-scope/fixture-tool-pack",
+  "version": "1.2.3",
+  "private": true,
+  "type": "module",
+  "cinatra": {
+    "apiVersion": "cinatra.ai/v1",
+    "kind": "agent",
+    "tools": [
+      {
+        "name": "fixture_tool",
+        "module": "./cinatra/tools/fixture-tool.mjs"
+      },
+      {
+        "name": "fixture_silent_tool",
+        "module": "./cinatra/tools/fixture-silent-tool.mjs"
+      },
+      {
+        "name": "fixture_uncallable_tool",
+        "module": "./cinatra/tools/fixture-uncallable-tool.mjs"
+      }
+    ]
+  }
+}

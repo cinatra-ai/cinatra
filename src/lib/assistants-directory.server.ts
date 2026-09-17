@@ -53,6 +53,10 @@ export type AssistantDirectoryRow = {
   /** The claimed nicknames (aliases). */
   aliases: string[];
   isBuiltin: boolean;
+  /** The assistant's own description, as its registry descriptor carries it
+   *  (null where it has none) — the built-in's row has no install behind it, so
+   *  this is the description a surface drawing the row reads. */
+  description: string | null;
   /** True for a `remote`-launch assistant (expands per authorized instance). */
   remoteCapable: boolean;
   /** The single local "Chat" action: `/chat/<vendor>/<slug>`. */
@@ -206,6 +210,7 @@ export async function buildAssistantsDirectory(
       handle: entry.handle,
       aliases: entry.aliases,
       isBuiltin: entry.isBuiltin,
+      description: entry.description ?? null,
       remoteCapable,
       localChatHref: buildChatPath({ vendor, slug }),
       remoteInstances,

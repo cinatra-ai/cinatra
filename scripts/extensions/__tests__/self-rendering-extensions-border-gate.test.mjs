@@ -181,6 +181,30 @@ describe("self-rendering-extensions border gate", () => {
     expect(status).toBe(0);
   });
 
+  // cinatra#3512 (slice 2b of #3471): the BUILD-TIME road. A source-compiled
+  // package (a connector setup page, an artifact package's server part) takes
+  // the host's primitives through the host-neutral module id. The border rule
+  // bans the product-INTERNAL path, never the shared id — the gate must let the
+  // migrated form through, or slice 3 cannot land a single package.
+  it("(c) PASSES on the host-shared primitives module id @cinatra-ai/design-primitives", () => {
+    const tree = makeTree(
+      [
+        {
+          dir: "demo-connector",
+          kind: "connector",
+          files: {
+            "src/setup-page.tsx":
+              'import { Alert, AlertDescription } from "@cinatra-ai/design-primitives";\nexport default [Alert, AlertDescription];\n',
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
   it("(c) does not read the ban out of a COMMENT that merely names the host path", () => {
     const tree = makeTree(
       [

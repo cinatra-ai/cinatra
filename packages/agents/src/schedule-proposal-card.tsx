@@ -1617,17 +1617,34 @@ function defaultRunAt(): string {
 /**
  * A VALUE WHERE A FIELD STOOD (cinatra#3174 fix leg 1).
  *
- * §VI's fired one-off draws its two fields as plain bordered readings — the
- * same box, the same measure, the muted ink, and no control inside it. It is
- * not an input with `readonly` on it: a reader may not focus it, tab into it or
- * be offered a spinner by the platform, because there is nothing here to
- * change.
+ * §VI's fired one-off draws its two fields as plain readings — the same
+ * measure, and no control inside it. It is not an input with `readonly` on it:
+ * a reader may not focus it, tab into it or be offered a spinner by the
+ * platform, because there is nothing here to change.
+ *
+ * A READING, NOT A CONTROL THAT WAS SWITCHED OFF (cinatra#3282). The reading
+ * used to be drawn with the control's OWN border, so on screen it was the
+ * field beside it with the picker taken out. §VI's spent example draws the
+ * pair differently from the editable field above it: the editable field takes
+ * the control border over the raised surface, while the spent reading takes
+ * the soft hairline over the recessed paper fill. So the reading keeps the
+ * recessed fill and the measure, and trades the control border for that
+ * hairline.
+ *
+ * THE INK IS THE DRAWING'S (cinatra#3282, fix leg 2). §VI's spent example
+ * draws the VALUE inside that hairline box in the muted ink —
+ * color:var(--muted) on "14.07.2026, 09:00" and on "Europe/Berlin" — and the
+ * LABEL above it in the ink colour, color:var(--ink) on "Run at" and
+ * "Timezone". The app's tokens map --muted-foreground to var(--muted) and
+ * --border to var(--line), so the drawn value ink is `text-muted-foreground`
+ * inside the `border-border` hairline, and the label above keeps the ink
+ * colour.
  */
 function ReadOnlyValue({ value }: { value: string }): ReactElement {
   return (
     <div
       data-schedule-value
-      className="flex h-9 w-56 items-center rounded-control border border-input bg-background px-3 text-sm text-muted-foreground"
+      className="flex h-9 w-56 items-center rounded-control border border-border bg-background px-3 text-sm text-muted-foreground"
     >
       {value}
     </div>
@@ -1639,11 +1656,18 @@ function ReadOnlyValue({ value }: { value: string }): ReactElement {
  *
  * The wire carries a timezone-NAIVE wall clock ("2026-07-14T09:00") because
  * that is what the form's `datetime-local` emits and what the schema accepts.
- * A picker renders it in the reader's own locale; the drawing's fired example
- * draws it the same way, beside a Timezone row that names the zone. So the
- * read-only reading formats the same wall clock in the same locale rather than
- * putting the wire string on screen, and NO timezone conversion is applied —
- * the clock is the one that was armed.
+ *
+ * THE FORMAT IS THE DRAWING'S, NOT THE USER AGENT'S (cinatra#3282). This
+ * reading used to be handed to `toLocaleString`, so one reader met the armed
+ * moment as "Jul 14, 2026, 9:00 AM" and another as "14/07/2026, 09:00", while
+ * the recurring reading in the same card family read a 24-hour "Every day at
+ * 05:12" beside it — two clocks in one card. §VI draws one reading for every
+ * reader: its fired example is "Run at 14.07.2026, 09:00 · Timezone
+ * Europe/Berlin", and no picture in the section draws a 12-hour clock
+ * anywhere. So the components are written out as DD.MM.YYYY, HH:mm exactly as
+ * they were armed, and NO timezone conversion is applied — the clock is the
+ * one that was armed, and the Timezone row beside it names the zone it is
+ * stated in.
  *
  * A value this cannot read is returned untouched: a reading is never blanked
  * for being unfamiliar.
@@ -1667,7 +1691,8 @@ function readableRunAt(runAt: string): string {
     at.getHours() === hour &&
     at.getMinutes() === minute;
   if (!roundTrips) return runAt;
-  return at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(day)}.${pad(month)}.${year}, ${pad(hour)}:${pad(minute)}`;
 }
 
 /** The recurring selection as one legible line, for the rows that have gone
