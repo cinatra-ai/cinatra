@@ -49,7 +49,16 @@ function makeRoot({ workflows = {}, packages = {}, rootScripts = {} } = {}) {
   return root;
 }
 
-function workflow({ job = "unit", runsOn = HEAVY, env = null, run = "pnpm exec vitest run src" }) {
+function workflow({
+  job = "unit",
+  runsOn = HEAVY,
+  env = null,
+  jobEnv = null,
+  stepEnv = null,
+  jobRaw = [],
+  stepRaw = [],
+  run = "pnpm exec vitest run src",
+}) {
   return [
     "name: fixture",
     "on:",
@@ -60,14 +69,21 @@ function workflow({ job = "unit", runsOn = HEAVY, env = null, run = "pnpm exec v
     "jobs:",
     `  ${job}:`,
     `    runs-on: ${runsOn}`,
+    ...(jobEnv === null ? [] : ["    env:", ...jobEnv]),
+    ...jobRaw,
     "    steps:",
     "      - name: Run the suite",
+    ...(stepEnv === null ? [] : ["        env:", ...stepEnv]),
+    ...stepRaw,
     `        run: ${run}`,
     "",
   ].join("\n");
 }
 
 const capped = [`  VITEST_MAX_WORKERS: "${EXPECTED_VALUE}"`];
+/** A narrowing override, written at the job mapping's own depth and at a step's. */
+const jobCap = (value) => [`      VITEST_MAX_WORKERS: "${value}"`];
+const stepCap = (value) => [`          VITEST_MAX_WORKERS: "${value}"`];
 const audit = (root) => auditVitestWorkerCap({ repoRoot: root, docPath: null, suiteGatePath: null });
 
 describe("the governed set is derived by the RESOLVED runner", () => {
@@ -306,5 +322,127 @@ describe("the bypasses a resolved-runner contract must not have", () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain("FIFTH exception class");
     expect(failures[0]).toContain("jest");
+  });
+});
+
+describe("a cap is a MAXIMUM, so a narrowing override keeps the contract", () => {
+  it("RED — a JOB-level assignment ABOVE the workflow-level cap", () => {
+    const root = makeRoot({ workflows: { "a.yml": workflow({ env: capped, jobEnv: jobCap("9") }) } });
+    const { failures } = audit(root);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("a.yml");
+    expect(failures[0]).toContain("unit");
+    expect(failures[0]).toContain(`job-level \`VITEST_MAX_WORKERS\` is "9"`);
+    expect(failures[0]).toContain("a cap is a MAXIMUM");
+  });
+
+  it("RED — a STEP-level assignment ABOVE the workflow-level cap", () => {
+    const root = makeRoot({ workflows: { "a.yml": workflow({ env: capped, stepEnv: stepCap("6") }) } });
+    const { failures } = audit(root);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain(`step-level \`VITEST_MAX_WORKERS\` is "6"`);
+    expect(failures[0]).toContain("a cap is a MAXIMUM");
+  });
+
+  it("GREEN — an override BENEATH the cap, at either scope", () => {
+    const jobScoped = makeRoot({ workflows: { "a.yml": workflow({ env: capped, jobEnv: jobCap("1") }) } });
+    expect(audit(jobScoped).failures).toEqual([]);
+    expect(audit(jobScoped).governed).toEqual(["a.yml"]);
+    const stepScoped = makeRoot({ workflows: { "a.yml": workflow({ env: capped, stepEnv: stepCap("1") }) } });
+    expect(audit(stepScoped).failures).toEqual([]);
+  });
+
+  it("carries the EFFECTIVE cap into the inventory row", () => {
+    const plain = makeRoot({ workflows: { "a.yml": workflow({ env: capped }) } });
+    expect(deriveInventory(plain).entries.map((e) => e.effective)).toEqual([EXPECTED_VALUE]);
+
+    const narrowed = makeRoot({ workflows: { "a.yml": workflow({ env: capped, stepEnv: stepCap("1") }) } });
+    const { entries } = deriveInventory(narrowed);
+    expect(entries.map((e) => e.effective)).toEqual(["1"]);
+    expect(inventoryRow(entries[0]).endsWith("| governed | 1 |")).toBe(true);
+
+    const uncapped = makeRoot({ workflows: { "a.yml": workflow({ runsOn: "ubuntu-latest" }) } });
+    expect(deriveInventory(uncapped).entries.map((e) => e.effective)).toEqual(["none"]);
+
+    const jobNarrowed = makeRoot({ workflows: { "a.yml": workflow({ env: capped, jobEnv: jobCap("1") }) } });
+    expect(deriveInventory(jobNarrowed).entries.map((e) => e.effective)).toEqual(["1"]);
+  });
+
+  it("a STEP-level assignment wins over the JOB-level one that also covers it", () => {
+    const root = makeRoot({
+      workflows: { "a.yml": workflow({ env: capped, jobEnv: jobCap("3"), stepEnv: stepCap("1") }) },
+    });
+    expect(audit(root).failures).toEqual([]);
+    expect(deriveInventory(root).entries.map((e) => e.effective)).toEqual(["1"]);
+  });
+
+  it("does NOT read a whole `env:` mapping written inside a block scalar", () => {
+    const root = makeRoot({
+      workflows: {
+        "a.yml": workflow({
+          env: capped,
+          jobRaw: ["    env:", "      NOTE: |", "        env:", '          VITEST_MAX_WORKERS: "9"'],
+        }),
+      },
+    });
+    expect(audit(root).failures).toEqual([]);
+    expect(deriveInventory(root).entries.map((e) => e.effective)).toEqual([EXPECTED_VALUE]);
+  });
+
+  it("does not mistake a SERVICE container's env for the job's own", () => {
+    const root = makeRoot({
+      workflows: {
+        "a.yml": workflow({
+          env: capped,
+          jobRaw: [
+            "    services:",
+            "      db:",
+            "        image: postgres",
+            "        env:",
+            '          VITEST_MAX_WORKERS: "9"',
+          ],
+        }),
+      },
+    });
+    const { failures } = audit(root);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("not as a job-level or step-level");
+    expect(deriveInventory(root).entries.map((e) => e.effective)).toEqual([EXPECTED_VALUE]);
+  });
+
+  it("reads an assignment the `env:` key carries a trailing COMMENT above", () => {
+    const root = makeRoot({
+      workflows: {
+        "a.yml": workflow({
+          env: capped,
+          stepRaw: ["        env: # the narrowing override", '          VITEST_MAX_WORKERS: "9"'],
+        }),
+      },
+    });
+    const { failures } = audit(root);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain(`step-level \`VITEST_MAX_WORKERS\` is "9"`);
+  });
+
+  it("reads an assignment written in the FLOW form", () => {
+    const above = makeRoot({
+      workflows: { "a.yml": workflow({ env: capped, stepRaw: ['        env: { VITEST_MAX_WORKERS: "9" }'] }) },
+    });
+    const { failures } = audit(above);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain(`step-level \`VITEST_MAX_WORKERS\` is "9"`);
+
+    const beneath = makeRoot({
+      workflows: { "a.yml": workflow({ env: capped, stepRaw: ['        env: { VITEST_MAX_WORKERS: "1" }'] }) },
+    });
+    expect(audit(beneath).failures).toEqual([]);
+    expect(deriveInventory(beneath).entries.map((e) => e.effective)).toEqual(["1"]);
+  });
+
+  it("RED — a narrowing override that is not a whole number of workers", () => {
+    const root = makeRoot({ workflows: { "a.yml": workflow({ env: capped, jobEnv: jobCap("") }) } });
+    const { failures } = audit(root);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("not an integer of at least 1");
   });
 });

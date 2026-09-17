@@ -27,6 +27,25 @@ the steps of all jobs in the workflow*, which is why one block per file replaces
 a per-step edit; a **called reusable workflow does not inherit it**, so a
 reusable file could never be governed from its caller.
 
+That reach is also the qualification the sentence above needs. "All jobs in the
+workflow" includes the jobs this inventory classes `hosted-pinned`, which the
+cap is not aimed at and which a workflow-level block cannot be scoped away from.
+And the variable **overrides what a vitest config declares**: vitest 4 resolves
+`fileParallelism: false` down to one worker and then lets `VITEST_MAX_WORKERS`
+overwrite that resolution, so a suite that declares itself serial runs parallel
+under any workflow-level value above 1. The committed value is therefore a
+**MAXIMUM**, not a fixed setting: a job-level or step-level assignment between 1
+and it NARROWS the cap at the narrowest scope that owns the reason and keeps the
+contract, while one above it breaks the contract and reds the gate. That rule is
+not a fifth exception class — it is this same contract read as a maximum.
+
+The gate reads a narrowing assignment in a job's own `env:` mapping or in a
+step's, written as a block or a flow mapping. An assignment anywhere else — a
+service container's `env:`, say, which sets the service's environment and not
+the test step's — is REFUSED rather than ignored, so no override can reach a
+step without the maximum rule having read it. Text inside a block scalar sets
+nothing and is masked before the walk.
+
 `3` is the INTERIM worker count cinatra#3355 records, now
 given a committed home in the tree. It is **not** a measured optimum: that
 issue's criterion 3 compares three-, four- and six-runner configurations and
@@ -87,142 +106,145 @@ the cap's effect on that hosted job is unmeasured here.
 
 The gate holds this table to its FULL derived entry set, so an added or removed
 job or step inside an already-listed workflow reds it. The step line is the
-`run:` key's line; several invocations in one `run:` block share it.
+`run:` key's line; several invocations in one `run:` block share it. The
+**effective cap** is the value that actually reaches that step — the
+workflow-level one unless a job-level or step-level assignment narrows it, and
+`none` when no assignment reaches the step at all.
 
-| workflow | job | step line | runner class | runner | disposition |
-|----------|-----|-----------|--------------|--------|-------------|
-| build-image.yml | a2a-unit | 346 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | actions-pin-gate | 187 | CI_RUNNER_GATE | node:test | node:test |
-| build-image.yml | agents-integration-db | 1220 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | agents-integration-db | 1262 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | agents-integration-db | 1287 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | auth-schema-drift | 568 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | auth-schema-drift | 571 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | chat-hitl-held-turn-e2e | 3575 | ubuntu-latest | playwright | playwright |
-| build-image.yml | chat-hitl-held-turn-e2e | 3724 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3729 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3734 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3739 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3751 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3763 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3777 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3792 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3810 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3826 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | chat-hitl-held-turn-e2e | 3840 | ubuntu-latest | vitest | hosted-pinned |
-| build-image.yml | context-resolve-route-shape | 520 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | devperf-invariants | 1766 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | devperf-invariants | 1769 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | e2e-rbac | 3264 | CI_RUNNER_E2E | playwright | playwright |
-| build-image.yml | execution-plane-unit | 409 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 729 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 739 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 753 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 770 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 787 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 801 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 813 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 836 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 867 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 886 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 891 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | extension-lifecycle-db-tests | 912 | CI_RUNNER_E2E | vitest | governed |
-| build-image.yml | hosted-mcp-wire-gate | 1726 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | hosted-mcp-wire-gate | 1732 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1614 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1617 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1620 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1623 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1626 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1629 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1632 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1635 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1638 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1641 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1644 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1647 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1650 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1653 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1656 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1659 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1662 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | package-unit-suites | 1665 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | perpetual-core | 1900 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 1912 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 1929 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 1945 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 1974 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 1999 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2010 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2027 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2044 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2061 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2077 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2099 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2112 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2131 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2149 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2170 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2190 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2205 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2231 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2256 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2273 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2296 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2312 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2321 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2333 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2352 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2369 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2387 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2407 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2425 | CI_RUNNER_POOL | node:test | node:test |
-| build-image.yml | perpetual-core | 2447 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2474 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2514 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2522 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2579 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2627 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2693 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2696 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2811 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2823 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2833 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2840 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2849 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-core | 2854 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | perpetual-extension-suites | 2959 | CI_RUNNER_HEAVY | vitest | extension-suite-gate |
-| build-image.yml | presence-degraded-build | 4701 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | rbac-authz-unit | 485 | CI_RUNNER_POOL | vitest | governed |
-| build-image.yml | schema-migration-gate | 670 | CI_RUNNER_GATE | node:test | node:test |
-| build-image.yml | skills-unit | 303 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | test | 264 | CI_RUNNER_HEAVY | vitest | governed |
-| build-image.yml | v64-invariants | 1521 | CI_RUNNER_POOL | vitest | governed |
-| crm-migration-gate.yml | gate | 152 | CI_RUNNER_HEAVY | vitest | governed |
-| crm-migration-gate.yml | gate | 155 | CI_RUNNER_HEAVY | node:test | node:test |
-| dashboard-live-verify.yml | smoke | 440 | CI_RUNNER_E2E | playwright | playwright |
-| dev-hmr-smoke.yml | hmr-smoke | 192 | CI_RUNNER_E2E | playwright | playwright |
-| e2e-app-suites.yml | agents-run-invariants | 613 | CI_RUNNER_E2E | playwright | playwright |
-| e2e-app-suites.yml | notifications-e2e | 544 | CI_RUNNER_E2E | playwright | playwright |
-| e2e-app-suites.yml | render-smoke-e2e | 321 | CI_RUNNER_E2E | playwright | playwright |
-| execution-plane-e2e.yml | batteries | 301 | CI_RUNNER_E2E | vitest | governed |
-| extension-readme-gate.yml | tests | 155 | CI_RUNNER_HEAVY | vitest | governed |
-| gates.yml | gates | 104 | CI_RUNNER_GATE | node:test | node:test |
-| gates.yml | gates | 200 | CI_RUNNER_GATE | node:test | node:test |
-| gates.yml | gates | 272 | CI_RUNNER_GATE | node:test | node:test |
-| gates.yml | gates-pnpm | 309 | CI_RUNNER_HEAVY | vitest | governed |
-| gates.yml | gates-pnpm | 312 | CI_RUNNER_HEAVY | vitest | governed |
-| gates.yml | gates-pnpm | 315 | CI_RUNNER_HEAVY | vitest | governed |
-| gates.yml | gates-pnpm | 318 | CI_RUNNER_HEAVY | vitest | governed |
-| gates.yml | gates-pnpm | 325 | CI_RUNNER_HEAVY | vitest | governed |
-| mcp-route-gate.yml | mcp-route-gate | 126 | CI_RUNNER_HEAVY | vitest | governed |
-| org-write-boundary-gate.yml | org-write-boundary-gate | 122 | CI_RUNNER_HEAVY | vitest | governed |
-| org-write-boundary-gate.yml | org-write-boundary-gate | 124 | CI_RUNNER_HEAVY | vitest | governed |
-| skill-match-eval.yml | live-eval | 119 | CI_RUNNER_HEAVY | vitest | governed |
-| skill-packaging-gate.yml | tests | 122 | CI_RUNNER_HEAVY | vitest | governed |
-| trusted-read-scale-smoke.yml | scale-smoke | 149 | ubuntu-latest | vitest | hosted-pinned |
-| trusted-read-scale-smoke.yml | scale-smoke | 156 | ubuntu-latest | vitest | hosted-pinned |
-| validate-agents.yml | validate-runtime-invariants | 153 | CI_RUNNER_HEAVY | vitest | governed |
-| works-after-proof.yml | proof | 320 | CI_RUNNER_E2E | node:test | node:test |
-| wp-mcp-gateway-capture.yml | capture | 212 | CI_RUNNER_E2E | node:test | node:test |
-| wp-mcp-gateway-capture.yml | capture | 227 | CI_RUNNER_E2E | node:test | node:test |
+| workflow | job | step line | runner class | runner | disposition | effective cap |
+|----------|-----|-----------|--------------|--------|-------------|---------------|
+| build-image.yml | a2a-unit | 346 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | actions-pin-gate | 187 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| build-image.yml | agents-integration-db | 1229 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | agents-integration-db | 1271 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | agents-integration-db | 1296 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | auth-schema-drift | 568 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | auth-schema-drift | 571 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3599 | ubuntu-latest | playwright | playwright | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3748 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3753 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3758 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3763 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3775 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3787 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3801 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3816 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3834 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3850 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3864 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | context-resolve-route-shape | 520 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | devperf-invariants | 1775 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | devperf-invariants | 1778 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | e2e-rbac | 3273 | CI_RUNNER_E2E | playwright | playwright | 3 |
+| build-image.yml | execution-plane-unit | 409 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 729 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 739 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 753 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 770 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 787 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 801 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 813 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 836 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 867 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 886 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 891 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | 921 | CI_RUNNER_E2E | vitest | governed | 1 |
+| build-image.yml | hosted-mcp-wire-gate | 1735 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | hosted-mcp-wire-gate | 1741 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1623 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1626 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1629 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1632 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1635 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1638 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1641 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1644 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1647 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1650 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1653 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1656 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1659 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1662 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1665 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1668 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1671 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | 1674 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 1909 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 1921 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 1938 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 1954 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 1983 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2008 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2019 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2036 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2053 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2070 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2086 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2108 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2121 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2140 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2158 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2179 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2199 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2214 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2240 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2265 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2282 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2305 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2321 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2330 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2342 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2361 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2378 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2396 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2416 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2434 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | 2456 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2483 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2523 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2531 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2588 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2636 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2702 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2705 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2820 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2832 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2842 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2849 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2858 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2863 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-extension-suites | 2968 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
+| build-image.yml | presence-degraded-build | 4725 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | rbac-authz-unit | 485 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | schema-migration-gate | 670 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| build-image.yml | skills-unit | 303 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | test | 264 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | v64-invariants | 1530 | CI_RUNNER_POOL | vitest | governed | 3 |
+| crm-migration-gate.yml | gate | 152 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| crm-migration-gate.yml | gate | 155 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
+| dashboard-live-verify.yml | smoke | 440 | CI_RUNNER_E2E | playwright | playwright | none |
+| dev-hmr-smoke.yml | hmr-smoke | 192 | CI_RUNNER_E2E | playwright | playwright | none |
+| e2e-app-suites.yml | agents-run-invariants | 613 | CI_RUNNER_E2E | playwright | playwright | none |
+| e2e-app-suites.yml | notifications-e2e | 544 | CI_RUNNER_E2E | playwright | playwright | none |
+| e2e-app-suites.yml | render-smoke-e2e | 321 | CI_RUNNER_E2E | playwright | playwright | none |
+| execution-plane-e2e.yml | batteries | 301 | CI_RUNNER_E2E | vitest | governed | 3 |
+| extension-readme-gate.yml | tests | 155 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| gates.yml | gates | 104 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| gates.yml | gates | 200 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| gates.yml | gates | 272 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| gates.yml | gates-pnpm | 309 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| gates.yml | gates-pnpm | 312 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| gates.yml | gates-pnpm | 315 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| gates.yml | gates-pnpm | 318 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| gates.yml | gates-pnpm | 325 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| mcp-route-gate.yml | mcp-route-gate | 126 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| org-write-boundary-gate.yml | org-write-boundary-gate | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| org-write-boundary-gate.yml | org-write-boundary-gate | 124 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| skill-match-eval.yml | live-eval | 119 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| skill-packaging-gate.yml | tests | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| trusted-read-scale-smoke.yml | scale-smoke | 149 | ubuntu-latest | vitest | hosted-pinned | none |
+| trusted-read-scale-smoke.yml | scale-smoke | 156 | ubuntu-latest | vitest | hosted-pinned | none |
+| validate-agents.yml | validate-runtime-invariants | 153 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| works-after-proof.yml | proof | 320 | CI_RUNNER_E2E | node:test | node:test | none |
+| wp-mcp-gateway-capture.yml | capture | 212 | CI_RUNNER_E2E | node:test | node:test | none |
+| wp-mcp-gateway-capture.yml | capture | 227 | CI_RUNNER_E2E | node:test | node:test | none |

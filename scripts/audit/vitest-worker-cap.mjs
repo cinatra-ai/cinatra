@@ -330,8 +330,168 @@ export function workflowLevelAssignments(yamlText, name = ENV_NAME) {
 }
 
 /**
+ * The last line of the block a container opens at `startIdx`, whose own key sits
+ * at `indent`. Blank and comment lines never close a block.
+ */
+function blockLastIndex(lines, startIdx, indent) {
+  let end = startIdx;
+  for (let k = startIdx + 1; k < lines.length; k++) {
+    const ln = lines[k];
+    if (ln.trim() === "" || /^\s*#/.test(ln)) continue;
+    if (ln.length - ln.trimStart().length <= indent) return k - 1;
+    end = k;
+  }
+  return end;
+}
+
+/**
+ * The line indexes that are the TEXT of a block scalar (`key: |`, `key: >`).
+ * `workflowLevelAssignments` keeps such text out of its reading by refusing any
+ * depth but the env mapping's own; the scoped reader below has to find `env:`
+ * keys at more than one depth, so it needs the text masked outright — a
+ * `NOTE: |` whose body spells `env:` and an assignment under it sets nothing.
+ */
+function blockScalarMask(lines) {
+  const masked = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (masked.has(i)) continue;
+    const ln = lines[i];
+    if (ln.trim() === "" || /^\s*#/.test(ln)) continue;
+    if (!/:\s*[|>][-+0-9]*\s*(#.*)?$/.test(ln)) continue;
+    const indent = ln.length - ln.trimStart().length;
+    for (let k = i + 1; k < lines.length; k++) {
+      const l2 = lines[k];
+      if (l2.trim() !== "" && l2.length - l2.trimStart().length <= indent) break;
+      masked.add(k);
+    }
+  }
+  return masked;
+}
+
+/** The nearest preceding line, scalar text skipped, indented less than `indent`. */
+function parentLine(lines, masked, idx, indent) {
+  for (let k = idx - 1; k >= 0; k--) {
+    if (masked.has(k)) continue;
+    const ln = lines[k];
+    if (ln.trim() === "" || /^\s*#/.test(ln)) continue;
+    const ind = ln.length - ln.trimStart().length;
+    if (ind < indent) return { idx: k, indent: ind, text: ln };
+  }
+  return null;
+}
+
+/**
+ * Which scope an `env:` key opens: `job` for a job's own env mapping (the job id
+ * sits at column 2, the same column-anchored shape `jobContext` walks), `step`
+ * for one inside a `steps:` sequence item, and `unsupported` for an env mapping
+ * this gate does not read — a service container's, say, which sets the
+ * environment of the service and not of the test step. An unsupported mapping is
+ * never silently dropped: if it carries the variable, the rule reds it.
+ */
+function envScope(lines, masked, idx, leadIndent, isSeqItem) {
+  const unsupported = { scope: "unsupported", ownerIndex: idx, ownerIndent: leadIndent };
+  if (isSeqItem) {
+    const p = parentLine(lines, masked, idx, leadIndent);
+    if (p && /^\s*["']?steps["']?:/.test(p.text)) return { scope: "step", ownerIndex: idx, ownerIndent: leadIndent };
+    return unsupported;
+  }
+  const p = parentLine(lines, masked, idx, leadIndent);
+  if (p) {
+    if (/^\s*- /.test(p.text)) {
+      const g = parentLine(lines, masked, p.idx, p.indent);
+      if (g && /^\s*["']?steps["']?:/.test(g.text)) return { scope: "step", ownerIndex: p.idx, ownerIndent: p.indent };
+    } else if (p.indent === 2 && leadIndent === 4) {
+      return { scope: "job", ownerIndex: p.idx, ownerIndent: p.indent };
+    }
+  }
+  return unsupported;
+}
+
+/**
+ * Every JOB-level and STEP-level assignment of `name` — the narrowing overrides
+ * `workflowLevelAssignments` deliberately does not return. The two readers stand
+ * SIDE BY SIDE rather than one inside the other: the top-level reader answers the
+ * value contract (exactly one assignment, at the expected value) and must keep
+ * its top-level-only scope, while this one answers the MAXIMUM rule.
+ *
+ * The indentation discipline is the same one, for the same reason: only the env
+ * mapping's OWN keys count, and block-scalar text is masked before the walk, so
+ * neither a scalar that merely contains the assignment line nor one that spells a
+ * whole `env:` mapping inside itself sets anything. An assignment written in the
+ * FLOW form (`env: { NAME: "1" }`) is read too, and an env mapping at a scope
+ * this gate does not read is returned as `unsupported` rather than dropped — an
+ * override must never slip past the maximum rule unread. Each assignment carries
+ * the range of lines its scope covers, which is what lets the inventory say which
+ * cap actually reaches a given step.
+ */
+export function scopedAssignments(yamlText, name = ENV_NAME) {
+  const lines = yamlText.split("\n");
+  const masked = blockScalarMask(lines);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (masked.has(i)) continue;
+    const ln = lines[i];
+    if (ln.trim() === "" || /^\s*#/.test(ln)) continue;
+    const m = ln.match(/^(\s*)(- )?["']?env["']?:\s*(.*)$/);
+    if (!m) continue;
+    const keyIndent = m[1].length + (m[2] ? 2 : 0);
+    if (keyIndent === 0) continue; // the top-level block; the reader above owns it
+    const { scope, ownerIndex, ownerIndent } = envScope(lines, masked, i, m[1].length, Boolean(m[2]));
+    const coversFrom = ownerIndex + 1;
+    const coversTo = blockLastIndex(lines, ownerIndex, ownerIndent) + 1;
+    const { job } = jobContext(lines, i);
+    // A comment is all a block-form `env:` key may carry on its own line.
+    const inline = m[3].replace(/(^|\s)#.*$/, "").trim();
+    if (inline !== "") {
+      const flow = inline.match(new RegExp(`["']?${name}["']?\\s*:\\s*([^,}]+)`));
+      if (flow) {
+        const value = flow[1].trim().replace(/^["']|["']$/g, "");
+        out.push({ line: i + 1, value, scope, job, coversFrom, coversTo });
+      } else if (inline.includes(name)) {
+        out.push({ line: i + 1, value: inline, scope: "unsupported", job, coversFrom, coversTo });
+      }
+      continue;
+    }
+    let childIndent = null;
+    for (let k = i + 1; k < lines.length; k++) {
+      if (masked.has(k)) continue;
+      const l2 = lines[k];
+      if (l2.trim() === "" || /^\s*#/.test(l2)) continue;
+      const ind2 = l2.length - l2.trimStart().length;
+      if (ind2 <= keyIndent) break;
+      if (childIndent === null) childIndent = ind2;
+      if (ind2 !== childIndent) continue;
+      const a = l2.match(/^\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?:\s*(.*)$/);
+      if (!a || a[1] !== name) continue;
+      const raw = a[2].replace(/\s+#.*$/, "").trim();
+      out.push({ line: k + 1, value: raw.replace(/^["']|["']$/g, ""), scope, job, coversFrom, coversTo });
+    }
+  }
+  return out;
+}
+
+/**
+ * The cap actually in effect for the step whose `run:` key sits at `stepLine`:
+ * the narrowest assignment that covers it — a step-level one over a job-level
+ * one over the workflow-level value — and `none` when no assignment reaches it
+ * (a workflow with no top-level block, or one the value contract already reds
+ * for carrying more than one).
+ */
+export function effectiveCap(workflowLevel, scoped, stepLine) {
+  const covering = scoped.filter(
+    (s) => (s.scope === "job" || s.scope === "step") && stepLine >= s.coversFrom && stepLine <= s.coversTo,
+  );
+  const stepScoped = covering.filter((s) => s.scope === "step");
+  const narrowest = stepScoped.length ? stepScoped : covering;
+  if (narrowest.length) return narrowest[narrowest.length - 1].value;
+  if (workflowLevel.length === 1) return workflowLevel[0].value;
+  return "none";
+}
+
+/**
  * The parser-derived invocation inventory: one entry per
- * (workflow, job, step line, runner class, resolved runner, disposition).
+ * (workflow, job, step line, runner class, resolved runner, disposition,
+ * effective cap).
  */
 export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoot, WORKFLOW_DIR_REL)) {
   const ctx = { repoRoot, pkgDirs: workspacePackageDirs(repoRoot) };
@@ -341,6 +501,8 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
   for (const file of files) {
     const yamlText = readFileSync(join(workflowDir, file), "utf8");
     const lines = yamlText.split("\n");
+    const workflowLevel = workflowLevelAssignments(yamlText, ENV_NAME);
+    const scoped = scopedAssignments(yamlText, ENV_NAME);
     for (const block of extractRunBlocks(yamlText)) {
       if (!block.isStep) continue; // a `run:` key nothing executes
       let normalized = block.body.replace(/\\[ \t]*\n/g, " ");
@@ -379,9 +541,10 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
         if (res.exception) disposition = res.exception;
         else if (res.runner !== "vitest") disposition = res.runner;
         else disposition = hostedPinned ? "hosted-pinned" : "governed";
-        const key = [file, job, block.startLine, cls, res.runner, disposition].join(" | ");
+        const effective = effectiveCap(workflowLevel, scoped, block.startLine);
+        const key = [file, job, block.startLine, cls, res.runner, disposition, effective].join(" | ");
         if (!entries.has(key)) {
-          entries.set(key, { file, job, line: block.startLine, cls, runner: res.runner, disposition });
+          entries.set(key, { file, job, line: block.startLine, cls, runner: res.runner, disposition, effective });
         }
       }
     }
@@ -391,7 +554,7 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
 
 /** One inventory row, exactly as it is written in the inventory document. */
 export function inventoryRow(e) {
-  return `| ${e.file} | ${e.job} | ${e.line} | ${e.cls} | ${e.runner} | ${e.disposition} |`;
+  return `| ${e.file} | ${e.job} | ${e.line} | ${e.cls} | ${e.runner} | ${e.disposition} | ${e.effective} |`;
 }
 
 /** The rows a committed inventory document carries. */
@@ -410,6 +573,7 @@ export function auditVitestWorkerCap(opts = {}) {
   const expected = opts.expectedValue ?? EXPECTED_VALUE;
   const docPath = opts.docPath === undefined ? join(repoRoot, INVENTORY_DOC_REL) : opts.docPath;
   const suiteGatePath = opts.suiteGatePath === undefined ? join(repoRoot, SUITE_GATE_REL) : opts.suiteGatePath;
+  const capMax = Number.parseInt(expected, 10);
   const failures = [];
   const { entries, errors } = deriveInventory(repoRoot, workflowDir);
   failures.push(...errors);
@@ -421,6 +585,20 @@ export function auditVitestWorkerCap(opts = {}) {
     const found = workflowLevelAssignments(text, ENV_NAME);
     const where = entries.find((e) => e.file === file && e.disposition === "governed");
     const at = `${file} (job \`${where.job}\`, step line ${where.line})`;
+    // A cap is a MAXIMUM, so a job-level or step-level assignment that NARROWS
+    // it keeps the contract and one that raises it breaks it. Read separately
+    // from the top-level value contract above, which stays exactly as it is.
+    for (const a of scopedAssignments(text, ENV_NAME)) {
+      const n = /^\d+$/.test(a.value) ? Number.parseInt(a.value, 10) : NaN;
+      const where2 = `${file} (job \`${a.job}\`, line ${a.line})`;
+      if (a.scope === "unsupported") {
+        failures.push(`${where2}: \`${ENV_NAME}\` is set here, but not as a job-level or step-level \`env:\` assignment this gate reads — a cap is a MAXIMUM and every override must be readable, so write it at the job or the step that owns the reason`);
+      } else if (!Number.isInteger(n) || n < 1) {
+        failures.push(`${where2}: ${a.scope}-level \`${ENV_NAME}\` is "${a.value}", which is not an integer of at least 1 — a cap is a MAXIMUM, so an override may only narrow it to a whole number of workers between 1 and "${expected}"`);
+      } else if (n > capMax) {
+        failures.push(`${where2}: ${a.scope}-level \`${ENV_NAME}\` is "${a.value}", ABOVE the workflow-level "${expected}" — a cap is a MAXIMUM, so an override may only narrow it`);
+      }
+    }
     if (found.length === 0) {
       failures.push(`${at}: reaches vitest but the workflow carries NO workflow-level \`${ENV_NAME}\` — add one top-level \`env:\` assignment of "${expected}"`);
       continue;
