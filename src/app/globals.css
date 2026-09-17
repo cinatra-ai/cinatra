@@ -76,6 +76,11 @@
   --kicker-tracking: 0.18em;
   --kicker-tracking-wide: 0.2em;
   --page-label-tracking: 0.3em;
+  /* The access picker's closed-trigger prefix — the ratified drawing's own
+     lane for that node (app-permissions.html §III `.pk-trigger .pfx`:
+     `letter-spacing: 0.08em`), named here so the picker carries a token,
+     never a bracket literal. */
+  --picker-prefix-tracking: 0.08em;
   /* Badge / chip type. --badge-tracking pairs with the 2xs chip size
      through the @theme mapping. */
   --badge-text-xs: 10px;
@@ -672,8 +677,9 @@
      `text-listing-title`, `text-modal-title`, `text-rating-average`,
      `text-badge-xs`, `text-badge-2xs`,
      `tracking-title-tight`, `tracking-kicker`, `tracking-kicker-wide`,
-     `tracking-page-label`. Sizes carry their paired line-height /
-     letter-spacing, so consumers drop the bracket literals entirely. */
+     `tracking-page-label`, `tracking-picker-prefix`. Sizes carry their paired
+     line-height / letter-spacing, so consumers drop the bracket literals
+     entirely. */
   --text-page-title-sm: var(--page-title-sm);
   --text-page-title-sm--line-height: var(--page-title-line-height);
   --text-page-title-sm--letter-spacing: var(--title-tracking-tight);
@@ -735,6 +741,7 @@
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);
   --tracking-page-label: var(--page-label-tracking);
+  --tracking-picker-prefix: var(--picker-prefix-tracking);
 
   /* Body text scale — change --text-sm to shift the entire app */
   --text-sm: 0.875rem; /* 14px — body baseline (shadcn default) */
