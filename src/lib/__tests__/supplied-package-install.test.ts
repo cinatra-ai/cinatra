@@ -35,10 +35,12 @@ const registry = vi.hoisted(() => ({
 }));
 vi.mock("@cinatra-ai/extensions", () => registry);
 
-// The host's notification WRITER, spied rather than replaced: the refusal
-// claim below is that nothing is written when a reference is refused, and the
-// notification the host port emits (src/lib/extension-host-context.ts) goes
-// through exactly this function.
+// The host's notification WRITER, spied. What this pins, stated exactly: the
+// refused road writes no notification OF ITS OWN. It cannot speak for the
+// dispatcher's downstream writes, because the dispatcher is mocked here and is
+// asserted to be uncalled anyway - that assertion is what carries the claim.
+// The writer is named rather than guessed: the host port at
+// src/lib/extension-host-context.ts calls exactly this function.
 const notifications = vi.hoisted(() => ({
   createNotificationForRecipient: vi.fn(async () => undefined),
 }));
@@ -1355,6 +1357,38 @@ describe("a malformed supplied repository reference is refused BEFORE anything i
     await expect(
       installSuppliedCandidate({
         candidate: repositoryCandidate({ resolvedSha: "main" }) as never,
+        actor,
+        rowOwnership,
+      }),
+    ).rejects.toThrow(/40-character commit its bytes were read at. Nothing was written\./);
+
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+    expect(notifications.createNotificationForRecipient).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE SHAPES THAT ARE NOT STRINGS AT ALL. This entry is the road's own
+   * precondition point, so a part that is missing must leave through the
+   * product's sentence rather than as a raw TypeError, and a part that merely
+   * COERCES to a 40-character id must not read as a pinned commit.
+   */
+  it("refuses a provenance carrying no repository reference at all, in the product's own words", async () => {
+    await expect(
+      installSuppliedCandidate({
+        candidate: repositoryCandidate({ repo: undefined }) as never,
+        actor,
+        rowOwnership,
+      }),
+    ).rejects.toThrow(/this install carries no repository reference to install from/);
+
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+    expect(notifications.createNotificationForRecipient).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pinned commit that is not a string, rather than letting it coerce into one", async () => {
+    await expect(
+      installSuppliedCandidate({
+        candidate: repositoryCandidate({ resolvedSha: [SHA] }) as never,
         actor,
         rowOwnership,
       }),

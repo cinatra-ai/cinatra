@@ -908,10 +908,20 @@ export function candidateFromPreparedArchive(
  */
 function refuseMalformedSuppliedRepositoryReference(candidate: SuppliedInstallCandidate): void {
   if (candidate.provenance.type !== "github") return;
-  const parts = candidate.provenance.repo.split("/");
-  const wellFormedReference =
-    parts.length === 2 && isSafeOwnerAndRepo(parts[0] as string, parts[1] as string);
-  if (wellFormedReference && COMMIT_ID_PATTERN.test(candidate.provenance.resolvedSha)) return;
+  const { repo, resolvedSha } = candidate.provenance;
+  // A part that is not a STRING at all is refused in the product's own words
+  // too, rather than crashing the road or slipping through it: a missing
+  // repository would throw a raw TypeError out of the split, and a regular
+  // expression test COERCES its argument, so a one-element array holding a
+  // 40-character id would otherwise read as a pinned commit. This entry is the
+  // road's own precondition point, so it answers for the shapes it is handed
+  // rather than trusting them.
+  if (typeof repo === "string" && typeof resolvedSha === "string") {
+    const parts = repo.split("/");
+    const wellFormedReference =
+      parts.length === 2 && isSafeOwnerAndRepo(parts[0] as string, parts[1] as string);
+    if (wellFormedReference && COMMIT_ID_PATTERN.test(resolvedSha)) return;
+  }
   throw new Error(
     `[supplied-install] ${candidate.packageName}: this install carries no repository reference ` +
       `to install from - a package supplied from a repository needs an "owner/repo" reference ` +
