@@ -1816,14 +1816,67 @@ export function AgenticRunPanel({
   // interaction is the ANSWER, and it takes it as a prop
   // (`recommendationDecided`).
 
+  // THE FRAME IS THE HOST, AND INSIDE A CONVERSATION THE FRAME IS THE THREAD
+  // (cinatra#3484).
+  //
+  // §IX of the ratified drawing: "Four hosts, one card set … Only the frame
+  // changes — the thread, the widget's panel, the run card's detail column, the
+  // gate region of the review page." When the conversation dispatched the run
+  // this panel is drawn INSIDE the transcript, so the reader meets this card
+  // between the turn's prose and the thread's composer: the frame it is in is
+  // the thread. The declaration below used to be an unconditional `run_card`
+  // literal, and on a conversation page it was the ONLY host declaration there —
+  // the card said it belonged to a frame the reader was not in.
+  //
+  // AND IT IS WHAT KEPT THE SURFACE FROM BEING GRADED AT ALL. The repository's
+  // own capture recorder states the rule
+  // (`scripts/audit/lib/chat-hitl-capture-recorder.mjs`): chat_thread needs the
+  // `/chat` URL class AND the card root's own
+  // `data-lifecycle-card-host="chat_thread"`, which
+  // `scripts/audit/chat-hitl-anchor-contract.json` carries as a required anchor
+  // on every chat_thread row. A page publishing only `run_card` fails the host
+  // anchor, so the cell could not be concluded on.
+  //
+  // THE CONVERSATION'S DECLARATION IS INHERITED, NEVER RE-MINTED: the card is
+  // mounted under no provider of its own, so the nearest one is the
+  // transcript's (`packages/chat/src/chat-messages-view.tsx`) and its host,
+  // credential and frame readings arrive unchanged. Containment was already
+  // inherited (cinatra#3481); this is the host catching up with it.
+  //
+  // EVERY OTHER HOST KEEPS THE LITERAL BELOW, and it is a literal deliberately:
+  // the host-parity ratchet's scanner
+  // (`src/lib/lifecycle/lifecycle-host-parity-ratchet.ts`) is lexical — it
+  // matches the surface provider's opening tag carrying a literal `run_card`
+  // host and collects the component tags composed inside it — so a computed
+  // declaration would read as `host-lost` for a run page that still draws the
+  // card. THAT SCANNER READS THIS PROSE TOO, because it does not strip
+  // comments: a sentence here that spelled the opening tag out would itself
+  // open a match and pull the tags below into the run page's owner set. The
+  // shape is therefore NAMED here and never quoted.
+  //
+  // SITE_WIDGET IS NOT WIDENED HERE, and the honest reason is SCOPE rather than
+  // the credential wall. cinatra#3484 is about the card a reader meets in the
+  // chat thread, and the branch above is its whole answer; the widget arm is
+  // left exactly as it stands. The wall is recorded all the same, because it
+  // rules out the OTHER shape anyone reaching for the widget would try: a
+  // `site_widget` declaration MINTED here without an `auth` prop is refused by
+  // the runtime's fail-closed credential rule (`lifecycle-card-runtime.tsx`)
+  // and would draw no card DOM at all. INHERITING an embed's own well-formed
+  // widget declaration — the way the branch above inherits the transcript's —
+  // would carry that auth along and would draw, so the widget arm is an open
+  // question this change does not answer and NOT one the wall closes.
+  // `runCardOwnsLifecycleCopy` already treats both conversation hosts alike,
+  // which is where that question belongs; it is tracked apart from this fix.
+  //
   // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
+  const conversationHostedReview = ambientLifecycleHost === "chat_thread";
   const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
-    <LifecycleCardSurfaceProvider host="run_card">
+    conversationHostedReview ? (
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",
@@ -1834,7 +1887,20 @@ export function AgenticRunPanel({
         // the RUN (cinatra#3141 item 1).
         runId={runId}
       />
-    </LifecycleCardSurfaceProvider>
+    ) : (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard
+          view={{
+            viewType: "artifact_review_gate",
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: inPlaceReviewRef,
+          }}
+          // §VI — the gate's conversational prompt window keeps its exchange
+          // with the RUN (cinatra#3141 item 1).
+          runId={runId}
+        />
+      </LifecycleCardSurfaceProvider>
+    )
   ) : null;
 
   if (reviewScreenNode !== null || runIsWorking) {
