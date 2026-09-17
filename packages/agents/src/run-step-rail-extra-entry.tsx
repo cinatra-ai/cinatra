@@ -137,6 +137,33 @@ export const RUN_PAGE_RAIL_TITLE_CLASS =
   "min-w-0 leading-[1.15] break-words whitespace-normal text-start";
 
 /**
+ * THE RAIL'S WHOLE COLOUR RULE, IN ONE PLACE (cinatra#3240).
+ *
+ * The ratified drawing states BOTH halves of it -- ".rail .step { color:
+ * var(--muted) }", with the ink reserved for ".rail .step.active" -- and the
+ * sentence above them says why: "The step the run is paused on is highlighted;
+ * steps already passed sit above it, steps still to come below."
+ *
+ * The three rows that draw a rail title through the vendored `Stepper` stated
+ * the MUTED half only. `StepperTitle` carries no colour of its own, so at
+ * `data-state="active"` nothing applied at all and the entry the reader is
+ * standing on took whatever colour reached it by inheritance -- the ink of the
+ * unlayered `body { color: var(--foreground) }` where nothing between them
+ * says otherwise, and the container's own colour where something does. A
+ * distinction the rail is asked to draw cannot be an accident of the frame
+ * around it, so the ACTIVE half is stated here too, and the entry the run is
+ * paused on asks for the ink token by name.
+ *
+ * HELD IN ONE CLASS, exactly as `RUN_PAGE_RAIL_INDICATOR_CLASS` holds the
+ * circle's: the rule is the RAIL's, the three rows read it from here so they
+ * cannot drift apart, and the run-surface rail's own
+ * `runSurfaceRailTitleClass` already states the same two colours for the rows
+ * it draws.
+ */
+export const RUN_PAGE_RAIL_TITLE_COLOUR_CLASS =
+  "data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground";
+
+/**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
  *
  *   ".rail .sep { width: 2px; height: 8px; margin: 4px 0 4px 11px;
@@ -349,10 +376,7 @@ export function RailExtraEntry({
 
   const titleNode = (
     <StepperTitle
-      className={cn(
-        RUN_PAGE_RAIL_TITLE_CLASS,
-        "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
-      )}
+      className={cn(RUN_PAGE_RAIL_TITLE_CLASS, RUN_PAGE_RAIL_TITLE_COLOUR_CLASS)}
     >
       {entry.label}
       {isGate && isResolved ? (
