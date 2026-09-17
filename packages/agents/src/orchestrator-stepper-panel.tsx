@@ -29,6 +29,7 @@ import {
   useRef,
   useState,
   useTransition,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import Link from "next/link";
@@ -448,6 +449,49 @@ function ReviewGateStepCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#3532 — THE PRODUCT'S OWN CONTINUE FOR A SETUP FIELD THAT DRAWS NONE.
+//
+// The same control the HITL screen card draws for the same moment — the same
+// anchor `data-action="submit-hitl-screen"`, the same copy and the same
+// chrome — drawn HERE rather than imported from `agent-hitl-screen-card`.
+// WHY IT IS NOT THE IMPORT: this panel is reachable from locked server route
+// entries, and importing that card pulls its whole first-party graph (the
+// lifecycle-card runtime, the screen actions, the result renderers) onto
+// `/api/a2a`, `/api/llm-bridge` and `/api/mcp` — +8 modules over each route's
+// dev-perf ceiling, which `scripts/audit/route-graph-ratchet.mjs` refuses. The
+// send itself is not restated: the press below runs the one submit core this
+// surface's own change road uses, exactly as the card's control runs the
+// card's.
+// ---------------------------------------------------------------------------
+function SetupFieldContinue({
+  submitting,
+  alreadySent,
+  onContinue,
+}: {
+  submitting: boolean;
+  // cinatra#3532 (convergence) — this gate's answer already reached the server.
+  // The control stays drawn until the stream advances the card, but it is dead:
+  // a second press must never send the same approval twice.
+  alreadySent: boolean;
+  onContinue: () => Promise<void>;
+}): ReactElement {
+  return (
+    <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+      <Button
+        size="sm"
+        className="gap-1.5"
+        data-action="submit-hitl-screen"
+        disabled={submitting || alreadySent}
+        onClick={() => void onContinue()}
+      >
+        {submitting ? "Continuing…" : "Continue"}
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Button>
+    </div>
   );
 }
 
@@ -899,6 +943,173 @@ function HitlApprovalCard({
   // redundant alternate.
   const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
 
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
+  //
+  // This is the surface a `flow`-typed template's run page mounts
+  // (`runDetailPanelKind` answers "stepper" for orchestrator/flow, and
+  // `instance-screens.tsx` mounts this panel for that answer), so the Email
+  // Outreach Agent's wizard is drawn HERE — not by the agentic panel the first
+  // leg taught. Its setup-loop branch below submits ON CHANGE, because the
+  // renderer's own button was the send. A renderer that declares no submit
+  // control (`FieldRendererEntry.drawsOwnSubmit` absent — the pack-bound `cta`
+  // kind is the reported one) therefore offered the reader nothing to press:
+  // every keystroke went straight to the server and the field could not be
+  // passed deliberately at all.
+  //
+  // THE RULE, in the product's own words: the product draws its own Continue
+  // beneath a pack-drawn setup field whenever the package's rendering carries
+  // no submit-action control of its own — a field control (a textarea, a
+  // select, a text box) is not a submit — and that Continue passes the value
+  // the renderer holds. A renderer that declares its own control keeps it and
+  // the product draws nothing beside it, so no gate ever offers two Continues.
+  //
+  // A MID-RUN gate (its own outer Continue above) and a GROUPED-SETUP form (one
+  // submit for the whole form) are untouched, and so is the generic-object
+  // confirmation and a gate that resolves to no renderer at all.
+  const productOwnsSetupSend =
+    RendererComponent != null &&
+    !isGenericObjectSchema &&
+    !isMidRunHitl &&
+    !isGroupedSetup &&
+    entry?.drawsOwnSubmit !== true;
+  // THE GATE A STAGED ANSWER BELONGS TO, and to no other. Sequential setup
+  // gates share one xRenderer and arrive with no frame between them (the same
+  // reason the renderer's remount key carries the field name, #810), so an
+  // answer staged for one field must never be sent for the next question.
+  const setupGateKey = [
+    interruptContext.reviewTaskId,
+    interruptContext.xRenderer,
+    interruptContext.fieldName ?? "",
+  ].join("::");
+  // WHAT THE FIELD SHOWS WHILE ITS ANSWER IS STAGED. A field renderer is
+  // CONTROLLED by the `value` prop — CtaRenderer's textarea reads it and keeps
+  // no state of its own — so a staging path that changed nothing here would
+  // clear the box after every keystroke and leave the Continue passing the last
+  // character. Held as state, because it is drawn; keyed by the gate, so a
+  // draft never seeds the next question.
+  const [setupDraft, setSetupDraft] = useState<{ key: string; value: unknown } | null>(
+    null,
+  );
+  // Refs, not state: the press below reads them synchronously in the same turn
+  // the change road wrote them.
+  const setupAnswerRef = useRef<
+    { key: string; payload: unknown; payloadFieldName: string | undefined } | null
+  >(null);
+  const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
+  const setupPressRef = useRef(false);
+  // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
+  // The submit core returns without throwing for an accepted answer, for the
+  // blocked outcome and for an already-resolved gate; in every one of those the
+  // gate is decided, so the press is spent. Drawn state, because the control
+  // reads it.
+  const [setupSentKey, setSetupSentKey] = useState<string | null>(null);
+  // cinatra#3532 (convergence) — THE GATE WHOSE LAST PRESS FAILED. A renderer
+  // that BUFFERS (SchemaFieldRenderer's text field does not call onChange while
+  // typing — it hands its value over through registerFlush alone) reaches the
+  // staging road only at a flush, so a correction typed after a failed press
+  // would never be staged and the retry would resend the stale value. After a
+  // failure the next press asks the field again.
+  const setupRetryRef = useRef<string | null>(null);
+  const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
+    setupFlushRef.current = { key, fn };
+  }, []);
+
+  // THE ONE SUBMIT CORE OF THE SETUP-LOOP PATH (cinatra#3532). Lifted verbatim
+  // out of the change road below so the product's Continue and a renderer that
+  // still owns its own send submit byte-identical payloads through byte-identical
+  // handling — the envelope wrap, the blocked outcome, the already-resolved
+  // swallow and the replay-map notification are all this one place.
+  const submitSetupFieldPayload = async (
+    payload: unknown,
+    payloadFieldName: string | undefined,
+  ): Promise<void> => {
+    // Wrap setup-loop fallback submit with the attachment envelope.
+    // Setup-* gates short-circuit inside the helper because the
+    // paperclip is hidden there; for any non-setup path that
+    // resolves here we mirror the envelope rather than drop a
+    // pending chat-prompt attachment.
+    const wrappedPayload = withAttachmentEnvelope(payload);
+    try {
+      const outcome = await approveReviewTask(
+        interruptContext.reviewTaskId,
+        wrappedPayload,
+        payloadFieldName,
+        interruptContext.schema as Record<string, unknown> | undefined,
+      );
+      if (!outcome.ok) {
+        // The setup loop had already moved past this field.
+        // The blocked panel replaces the form — it never
+        // reaches SchemaFieldRenderer's submitError line.
+        setGateBlocked(outcome.blocked);
+        return;
+      }
+      pendingAttachmentsRef.current = [];
+      if (wrappedPayload && typeof wrappedPayload === "object" && !Array.isArray(wrappedPayload)) {
+        onApprovalSubmitted?.(wrappedPayload as Record<string, unknown>, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : "unknown";
+      if (isAlreadyResolvedError(m)) return;
+      throw err;
+    }
+  };
+
+  // THE PRODUCT'S CONTINUE, PRESSED (cinatra#3532). It asks the field for its
+  // value the way the renderer's own button would, then submits what the change
+  // road staged — nothing more.
+  const submitStagedSetupAnswer = async (key: string): Promise<void> => {
+    // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
+    // the flush is asynchronous and `isApproving` is React state, so two presses
+    // in one tick would both reach the submit core.
+    if (setupPressRef.current) return;
+    setupPressRef.current = true;
+    try {
+      // ASK THE FIELD FOR ITS VALUE — but ONLY where it has handed nothing over
+      // yet. A registration cannot be withdrawn when its renderer unmounts, so a
+      // gate whose renderer was replaced under it (an extension wrapper's loading
+      // floor, replaced by the loaded component on the same gate key) still
+      // carries the floor's flush; flushing it over an answer the reader has
+      // already given would overwrite that answer with the departed renderer's
+      // empty one. What is staged is the reader's own input and always wins.
+      // ALREADY ACCEPTED: this gate is decided and the press sends nothing.
+      if (setupSentKey === key) return;
+      const alreadyStaged = setupAnswerRef.current;
+      const retryingAfterFailure = setupRetryRef.current === key;
+      if (alreadyStaged === null || alreadyStaged.key !== key || retryingAfterFailure) {
+        const flush = setupFlushRef.current;
+        if (flush !== null && flush.key === key) await flush.fn();
+      }
+      // NOTHING STAGED FOR THIS GATE: nothing is sent at all and the screen is
+      // left exactly as it was — the same gate, with its own reading and its own
+      // validation, and no second card minted for the field. (The server's half
+      // of that rule is the guard in review-task-actions.ts, which refuses to
+      // resume on a submission that records nothing.)
+      const staged = setupAnswerRef.current;
+      if (staged === null || staged.key !== key) return;
+      setIsApproving(true);
+      try {
+        await submitSetupFieldPayload(staged.payload, staged.payloadFieldName);
+        // ACCEPTED (or blocked, or already resolved): the gate is spent.
+        setupRetryRef.current = null;
+        setSetupSentKey(key);
+      } catch {
+        // The next press asks the field for its value again, so a correction a
+        // buffering renderer never handed over is the one that gets sent.
+        setupRetryRef.current = key;
+        // The staged answer is NOT cleared: the reader is still looking at their
+        // own input, so the next press must be able to send it rather than
+        // making them retype. It belongs to this gate alone — the key check
+        // above is what keeps it off the next one.
+        toast.error("Could not continue this run.");
+      } finally {
+        setIsApproving(false);
+      }
+    } finally {
+      setupPressRef.current = false;
+    }
+  };
+
   const cardBody = (
     <>
         {RendererComponent && !isGenericObjectSchema ? (
@@ -924,11 +1135,20 @@ function HitlApprovalCard({
             schema={renderSchema}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
-            value={setupFieldRendererValue(
-              { ...interruptContext.values, ...bufferedHitlValue },
-              interruptContext.fieldName,
-              renderSchema,
-            )}
+            // The staged draft is this field's own reading while it waits for
+            // the product's Continue (cinatra#3532); every other case is the
+            // expression this surface always used.
+            value={
+              productOwnsSetupSend &&
+              setupDraft !== null &&
+              setupDraft.key === setupGateKey
+                ? setupDraft.value
+                : setupFieldRendererValue(
+                    { ...interruptContext.values, ...bufferedHitlValue },
+                    interruptContext.fieldName,
+                    renderSchema,
+                  )
+            }
             onChange={
               isMidRunHitl
                 ? async (next: unknown) => {
@@ -1011,35 +1231,20 @@ function HitlApprovalCard({
                             === "object",
                       },
                     );
-                    // Wrap setup-loop fallback submit with the attachment envelope.
-                    // Setup-* gates short-circuit inside the helper because the
-                    // paperclip is hidden there; for any non-setup path that
-                    // resolves here we mirror the envelope rather than drop a
-                    // pending chat-prompt attachment.
-                    const wrappedPayload = withAttachmentEnvelope(payload);
-                    try {
-                      const outcome = await approveReviewTask(
-                        interruptContext.reviewTaskId,
-                        wrappedPayload,
+                    if (productOwnsSetupSend) {
+                      // cinatra#3532 — STAGE, do not send. The Continue beneath
+                      // the field is this field's send, and it submits exactly
+                      // this payload through the same core below.
+                      setupAnswerRef.current = {
+                        key: setupGateKey,
+                        payload,
                         payloadFieldName,
-                        interruptContext.schema as Record<string, unknown> | undefined,
-                      );
-                      if (!outcome.ok) {
-                        // The setup loop had already moved past this field.
-                        // The blocked panel replaces the form — it never
-                        // reaches SchemaFieldRenderer's submitError line.
-                        setGateBlocked(outcome.blocked);
-                        return;
-                      }
-                      pendingAttachmentsRef.current = [];
-                      if (wrappedPayload && typeof wrappedPayload === "object" && !Array.isArray(wrappedPayload)) {
-                        onApprovalSubmitted?.(wrappedPayload as Record<string, unknown>, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
-                      }
-                    } catch (err) {
-                      const m = err instanceof Error ? err.message : "unknown";
-                      if (isAlreadyResolvedError(m)) return;
-                      throw err;
+                      };
+                      // …and the field goes on showing what the reader typed.
+                      setSetupDraft({ key: setupGateKey, value: next });
+                      return;
                     }
+                    await submitSetupFieldPayload(payload, payloadFieldName);
                   }
             }
             context={context}
@@ -1047,11 +1252,35 @@ function HitlApprovalCard({
             onApply={handleApply}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
+            // cinatra#3532 — where the product owns the send, the renderer's own
+            // submit is not drawn inside the field (the shared props contract
+            // says a renderer that draws its own Continue must skip it), and the
+            // product's Continue asks the field for its value through the same
+            // flush the renderer's own button would have used.
+            hideSubmit={productOwnsSetupSend}
+            registerFlush={
+              productOwnsSetupSend
+                ? (fn: () => Promise<void>) => registerSetupFlush(setupGateKey, fn)
+                : undefined
+            }
           />
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
             Waiting for input — no renderer configured for this step.
           </p>
+        ) : null}
+
+        {/* cinatra#3532 — the product's Continue for a setup field whose
+            renderer declares no submit control of its own: the same control the
+            card draws, beneath the field, passing the value the renderer holds.
+            Mutually exclusive with the outer Continue below, which is drawn only
+            for a generic-object confirmation or a mid-run gate. */}
+        {productOwnsSetupSend ? (
+          <SetupFieldContinue
+            submitting={isApproving}
+            alreadySent={setupSentKey === setupGateKey}
+            onContinue={() => submitStagedSetupAnswer(setupGateKey)}
+          />
         ) : null}
 
         {showContinueButton && (
