@@ -251,6 +251,218 @@ export function parseGitHubRepositoryReference(value: string): GitHubRepositoryR
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE ARCHIVE LINK (cinatra#3204 fix leg)
+//
+// THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+// origin/main of a repo or a ZIP of a release - no need to be logged in at
+// GitHub. The user provides that link and Cinatra gets the ZIP."
+//
+// So a LINK is the whole input the repository road takes, and what follows is
+// the whole of what a link means: which repository, which ref it names (none =
+// the default branch), whether it named a RELEASE - because a release's source
+// archive lives under `refs/tags/` - and the public endpoint the bytes come
+// from. Nothing here reaches the network, the filesystem or a credential.
+//
+// It lives beside `parseGitHubRepositoryReference` rather than in a module of
+// its own because the route-graph ratchet budgets MODULES on the routes this
+// barrel is reachable from, and a link parser is not worth a route budget.
+// ---------------------------------------------------------------------------
+
+export type GitHubArchiveLink = {
+  owner: string;
+  repo: string;
+  /** The branch, tag or commit the link names, or null when it names none. */
+  ref: string | null;
+  /** `release` when the link named a release or a tag archive; `repository` otherwise. */
+  archive: "repository" | "release";
+};
+
+/** The hosts an archive link may name. Anything else is refused, not guessed. */
+const GITHUB_ARCHIVE_HOSTS = ["github.com", "www.github.com", "codeload.github.com"];
+
+/** Characters a ref may not carry: control codes, whitespace, and the URL
+ *  punctuation that would make the archive path mean something else. */
+const UNSAFE_REF_CHARS = new RegExp("[" + "\\u0000-\\u001f\\u007f" + "\\s?#%]");
+
+/**
+ * A ref that can be spliced into an archive URL path without meaning something
+ * else there. Refused: an empty or over-long ref, a traversal, a backslash, a
+ * whitespace or control character, a query/fragment character, a leading or
+ * trailing slash, an empty or "." path segment, and a leading "-".
+ */
+function isSafeArchiveRef(ref: string): boolean {
+  if (ref.length === 0 || ref.length > 255) return false;
+  if (ref.includes("\\") || ref.includes("..")) return false;
+  if (UNSAFE_REF_CHARS.test(ref)) return false;
+  if (ref.startsWith("/") || ref.endsWith("/") || ref.startsWith("-")) return false;
+  return ref.split("/").every((segment) => segment.length > 0 && segment !== ".");
+}
+
+function archiveLink(
+  owner: string,
+  repoRaw: string,
+  ref: string | null,
+  archive: "repository" | "release",
+): GitHubArchiveLink | null {
+  const repo = normalizeRepositoryName(repoRaw);
+  if (!isSafeOwnerAndRepo(owner, repo)) return null;
+  if (ref !== null && !isSafeArchiveRef(ref)) return null;
+  return { owner, repo, ref, archive };
+}
+
+/**
+ * Read a ref out of the path segments that carry it, or null when those segments
+ * do not decode into a usable ref.
+ *
+ * NULL HERE IS A REFUSAL, NEVER "no ref". A link whose ref segments are present
+ * but unreadable (a malformed percent escape, an empty tail) names an archive
+ * nobody can identify; every caller turns that into a refused link rather than
+ * falling back to the default branch, because downloading the default branch
+ * when the operator pasted a branch link is downloading the wrong bytes.
+ */
+function refFromSegments(segments: string[]): string | null {
+  if (segments.length === 0) return null;
+  let decoded: string[];
+  try {
+    decoded = segments.map((segment) => decodeURIComponent(segment));
+  } catch {
+    return null;
+  }
+  const ref = decoded.join("/");
+  return ref.length === 0 ? null : ref;
+}
+
+/**
+ * Read a user-supplied GitHub LINK and say which archive it points at.
+ *
+ * Accepted shapes, all of them things a person can copy out of a browser:
+ *   owner/repo and https://github.com/owner/repo   - the default branch;
+ *   .../tree/REF                                   - that branch or tag;
+ *   .../releases/tag/TAG                           - that release's source ZIP;
+ *   .../archive/refs/heads/BRANCH.zip              - the branch's source ZIP,
+ *                                                    kept qualified as a BRANCH;
+ *   .../archive/refs/tags/TAG.zip                  - the tag's source ZIP, kept
+ *                                                    qualified as a TAG;
+ *   .../archive/REF.zip                            - that ref's source ZIP;
+ *   https://codeload.github.com/owner/repo/zip/... - the same, canonically.
+ *
+ * Everything else is null, which the caller turns into a refusal naming the
+ * link - a shape this parser is not sure about is a link whose archive nobody
+ * can name, and guessing would download the wrong bytes.
+ *
+ * Deliberately SEPARATE from `parseGitHubRepositoryReference`: that one answers
+ * "which repository does the skills store own" and is fed by the connector's
+ * `selectedRepositoryFullName` and by the skill-only install road, both of which
+ * expect a bare owner/repo. Widening it would change what THEY accept.
+ */
+export function parseGitHubArchiveLink(value: string): GitHubArchiveLink | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const scpLikeMatch = trimmed.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
+  if (scpLikeMatch) {
+    return archiveLink(scpLikeMatch[1]!.trim(), scpLikeMatch[2]!, null, "repository");
+  }
+
+  if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) {
+    const [ownerRaw, repoRaw] = trimmed.split("/");
+    if (!ownerRaw || !repoRaw) return null;
+    return archiveLink(ownerRaw.trim(), repoRaw, null, "repository");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (!GITHUB_ARCHIVE_HOSTS.includes(url.hostname)) return null;
+  // An empty path segment ("owner/repo/tree/main//other") is not a shape the host
+  // serves, and collapsing it would silently change which ref was asked for.
+  if (url.pathname.includes("//")) return null;
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const [ownerRaw, repoRaw, ...rest] = segments;
+  if (!ownerRaw || !repoRaw) return null;
+  const owner = ownerRaw.trim();
+
+  if (rest.length === 0) return archiveLink(owner, repoRaw, null, "repository");
+
+  const head = rest[0];
+
+  if (head === "tree") {
+    // A "/tree/" link SAYS it names a ref. If those segments do not read as one,
+    // the link is refused - never quietly turned into the default branch.
+    const ref = refFromSegments(rest.slice(1));
+    return ref === null ? null : archiveLink(owner, repoRaw, ref, "repository");
+  }
+
+  if (head === "releases") {
+    if (rest[1] !== "tag") return null;
+    const ref = refFromSegments(rest.slice(2));
+    return ref === null ? null : archiveLink(owner, repoRaw, ref, "release");
+  }
+
+  if (head === "archive" || head === "zip") {
+    const spec = rest.slice(1);
+    if (spec.length === 0) return null;
+    // "/archive/..." carries a ".zip" suffix; codeload's "/zip/..." does not.
+    if (head === "archive") {
+      const last = spec[spec.length - 1]!;
+      if (!last.toLowerCase().endsWith(".zip")) return null;
+      spec[spec.length - 1] = last.slice(0, -4);
+    }
+    if (spec[0] === "refs" && (spec[1] === "heads" || spec[1] === "tags")) {
+      // A FULLY QUALIFIED ref is kept qualified. "refs/heads/x" and "refs/tags/x"
+      // are two different archives whenever a repository carries a branch and a
+      // tag of the same name, so the qualification the operator pasted is
+      // carried through to the archive path rather than collapsed to the bare
+      // name the host would then have to disambiguate for us.
+      if (spec.length < 3) return null;
+      const kind = spec[1] === "tags" ? "release" : "repository";
+      const ref = refFromSegments(spec);
+      return ref === null ? null : archiveLink(owner, repoRaw, ref, kind);
+    }
+    const ref = refFromSegments(spec);
+    if (ref === null) return null;
+    // "HEAD" is how the default branch is named in an archive URL - it is the
+    // absence of a ref, not a ref.
+    return archiveLink(owner, repoRaw, ref === "HEAD" ? null : ref, "repository");
+  }
+
+  return null;
+}
+
+/**
+ * The PUBLIC archive endpoint the link's bytes come from. No token, no API call
+ * and no connection: codeload serves the generated source ZIP of any public
+ * repository to anyone, which is exactly what the ruling describes.
+ *
+ * "HEAD" stands for the default branch, so a link that named no ref needs no
+ * lookup to resolve one - the archive GitHub generates says which commit it was
+ * generated from, and that is the pin the install carries.
+ */
+export function gitHubArchiveZipUrl(link: {
+  owner: string;
+  repo: string;
+  ref: string | null;
+  archive: "repository" | "release";
+}): string {
+  const encode = (ref: string) => ref.split("/").map(encodeURIComponent).join("/");
+  // A ref that is ALREADY qualified ("refs/heads/x", "refs/tags/x") is used as
+  // it stands: the operator named one namespace and the archive path keeps it.
+  const path =
+    link.ref === null
+      ? "HEAD"
+      : link.ref.startsWith("refs/")
+        ? encode(link.ref)
+        : link.archive === "release"
+          ? `refs/tags/${encode(link.ref)}`
+          : encode(link.ref);
+  return `https://codeload.github.com/${link.owner}/${link.repo}/zip/${path}`;
+}
+
 export type GitHubConnectionStatus = Awaited<ReturnType<GitHubClient["getStatus"]>>;
 
 export async function getGitHubOctokit(input?: {

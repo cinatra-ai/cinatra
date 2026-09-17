@@ -39,6 +39,7 @@
 
 import {
   isSuppliedPackageProvenance,
+  suppliedEntryNameRefusal,
   type ResolvedSuppliedPackageTree,
   type SuppliedPackageKind,
   type SuppliedPackageProvenance,
@@ -67,6 +68,15 @@ export type SuppliedKindValidatorResolver = (
 export type SuppliedArchivePreview = ResolvedSuppliedPackageTree & {
   /** Ready to record: honest `local` provenance, never a registry claim. */
   provenance: Extract<SuppliedPackageProvenance, { type: "local" }>;
+  /**
+   * The single generated wrapper folder this read STRIPPED, when it stripped
+   * one ("thing-main"). A repository host names that folder after the
+   * repository and the ref the archive was generated for, so it is the one
+   * thing a downloaded archive says about WHERE its bytes come from, and the
+   * repository road reads it rather than inventing a name. Absent whenever
+   * nothing was stripped.
+   */
+  generatedRootFolder?: string;
 };
 
 /**
@@ -76,6 +86,63 @@ export type SuppliedArchivePreview = ResolvedSuppliedPackageTree & {
  */
 export const SUPPLIED_ARCHIVE_PENDING_PATH = "supplied-archive";
 
+/** How the SAME reader is asked to read bytes that did not come from a person. */
+export type SuppliedArchiveReadOptions = {
+  /**
+   * Strip the one wrapper folder a GENERATED source archive adds.
+   *
+   * A repository host names that folder after the repository and the ref
+   * ("thing-main/"), never after the package, so the shared tree resolver -
+   * which strips a single root folder only when it AGREES with the declared
+   * package name - would refuse it. Stripping it here, before the reader runs,
+   * is what lets a downloaded archive take the file road unchanged: every
+   * refusal, cap and digest that follows is the file road's own.
+   */
+  unwrapGeneratedRootFolder?: boolean;
+};
+
+/**
+ * Remove the single top-level folder every entry shares, or return the entries
+ * untouched when there is not exactly one. Nothing is trusted about its NAME -
+ * only that every entry lives under it, which is what makes the removal lossless.
+ *
+ * EVERY NAME IS RE-CHECKED AFTER THE STRIP. The reader refused these names with
+ * the wrapper still on them, and removing a segment changes what a name means:
+ * "root//file" becomes "/file" and "root/C:/file" becomes "C:/file", both of
+ * which are absolute paths that the un-stripped names were not. So the same
+ * refusal the reader applies is applied again to what the strip produced.
+ */
+function unwrapGeneratedRootFolder(
+  entries: Map<string, Uint8Array>,
+): { entries: Map<string, Uint8Array>; root: string | null } {
+  const roots = new Set<string>();
+  for (const name of entries.keys()) {
+    const slash = name.indexOf("/");
+    if (slash <= 0) return { entries, root: null }; // something already sits at the root
+    roots.add(name.slice(0, slash));
+  }
+  if (roots.size !== 1) return { entries, root: null };
+  const [root] = roots;
+  const prefix = `${root}/`;
+  const unwrapped = new Map<string, Uint8Array>();
+  for (const [name, bytes] of entries) {
+    const rel = name.slice(prefix.length);
+    if (rel.length === 0) continue;
+    const refusal = suppliedEntryNameRefusal(rel);
+    if (refusal) {
+      throw new Error(
+        `[supplied-archive] refusing the downloaded archive: with its generated wrapper folder ` +
+          `removed, ${refusal}.`,
+      );
+    }
+    unwrapped.set(rel, bytes);
+  }
+  // THE NAME IS REPORTED, NEVER ACTED ON HERE. What was stripped is said out
+  // loud so a caller that knows what the folder means can read it; nothing on
+  // this road trusts it, and a strip that produced nothing reports nothing.
+  return unwrapped.size > 0 ? { entries: unwrapped, root } : { entries, root: null };
+}
+
 /**
  * READ a supplied archive and say what it is. No writes, no network, no
  * execution — this is the preview both the screen and the install run, and the
@@ -84,6 +151,7 @@ export const SUPPLIED_ARCHIVE_PENDING_PATH = "supplied-archive";
  */
 export async function previewSuppliedArchive(
   archive: ArrayBuffer | Uint8Array,
+  options?: SuppliedArchiveReadOptions,
 ): Promise<SuppliedArchivePreview> {
   const buffer =
     archive instanceof Uint8Array
@@ -93,9 +161,12 @@ export async function previewSuppliedArchive(
         ) as ArrayBuffer)
       : archive;
   const entries = await readZipEntries(buffer);
-  const resolved = await resolveSuppliedArchive(entries);
+  const stripped =
+    options?.unwrapGeneratedRootFolder === true ? unwrapGeneratedRootFolder(entries) : null;
+  const resolved = await resolveSuppliedArchive(stripped ? stripped.entries : entries);
   return {
     ...resolved,
+    ...(stripped?.root ? { generatedRootFolder: stripped.root } : {}),
     provenance: {
       type: "local",
       path: SUPPLIED_ARCHIVE_PENDING_PATH,
@@ -174,7 +245,7 @@ export type SuppliedArchiveInstallInput = {
   resolveValidator?: SuppliedKindValidatorResolver;
   /** Injectable staging (production uses the store's own digest-named writer). */
   stageSnapshot?: (contentDigest: string, tarball: Uint8Array) => Promise<string>;
-};
+} & SuppliedArchiveReadOptions;
 
 /** Everything a supplied install needs, with nothing installed yet. */
 export type PreparedSuppliedSnapshot = {
@@ -199,7 +270,9 @@ export type PreparedSuppliedSnapshot = {
 export async function prepareSuppliedArchiveSnapshot(
   input: SuppliedArchiveInstallInput,
 ): Promise<PreparedSuppliedSnapshot> {
-  const supplied = await previewSuppliedArchive(input.archive);
+  const supplied = await previewSuppliedArchive(input.archive, {
+    ...(input.unwrapGeneratedRootFolder === true ? { unwrapGeneratedRootFolder: true } : {}),
+  });
 
   if (
     input.expectedContentDigest !== undefined &&

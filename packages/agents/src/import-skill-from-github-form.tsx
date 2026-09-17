@@ -6,20 +6,26 @@
 // It used to be a skill-only road. It is now the repository road for ANY of the
 // four live kinds, and three things about it are deliberately different:
 //
-//   THE PRECONDITION IS STATED, NOT LEAKED (criterion 9). The two failure states
-//   are genuinely different — no owning connector at all, versus an installed
-//   connector with no usable connection — and each is named, with a link to
-//   where it is actually fixed. Submit is disabled in both. The operator never
-//   meets a raw capability refusal.
+//   THERE IS NO PRECONDITION (the fix leg). THE MAINTAINER'S RULING, in their
+//   words: "Anyone can download a ZIP of origin/main of a repo or a ZIP of a
+//   release — no need to be logged in at GitHub. The user provides that link and
+//   Cinatra gets the ZIP." So the tab asks for a LINK and nothing else: no
+//   connector to install, no account to connect, nothing to state before the
+//   operator may type. A link the anonymous download cannot serve is refused on
+//   the TOAST, with the road's own reason — which is the only place a refusal
+//   belongs when there was never a precondition to state.
 //
-//   THE REF IS PINNED ONCE (criterion 7). Looking a repository up resolves the
-//   submitted ref to ONE immutable commit sha, and that sha is DISPLAYED. The
-//   install re-reads at exactly that commit and refuses if the bytes moved, so a
-//   branch that advances between preview and install cannot swap the contents.
+//   THE REF IS PINNED ONCE (criterion 7). Looking a repository up downloads the
+//   archive and reads the immutable commit sha that archive was generated from,
+//   and that sha is DISPLAYED beside the repository, the ref and the archive URL
+//   the bytes came from. The install re-reads at exactly that commit and refuses
+//   if the bytes moved, so a branch that advances between preview and install
+//   cannot swap the contents.
 //
-//   THE VISIBILITY CLAIM IS GONE (criterion 10). This road reaches whatever the
-//   configured connection can reach; it never promised public-only, and it no
-//   longer says so.
+//   WHAT THIS ROAD REACHES IS SAID PLAINLY (criterion 10). It downloads a PUBLIC
+//   archive anonymously, so what it can reach is exactly what anyone with the
+//   link can reach — and the field says so, instead of the old collapsed claim
+//   that promised nothing in particular.
 //
 // The scope question is the SAME panel the File tab and the store use. The old
 // collapsed "configure access & ownership" editor is gone — one question, asked
@@ -29,21 +35,17 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LinkIcon, Loader2 } from "lucide-react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Input } from "@/components/ui/input";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "@/lib/cinatra-toast";
 import type { ExtensionScopedInstallAction } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
 
 import {
   installSuppliedRepositoryAction,
   previewSuppliedRepositoryAction,
-  readGitHubUploadPreconditionAction,
-  type GitHubUploadPrecondition,
   type SuppliedPackagePreview,
 } from "./supplied-install-actions";
 import {
@@ -63,14 +65,10 @@ const KIND_LABEL: Record<string, string> = {
 
 export type ImportPackageFromGitHubFormProps = {
   installScope: UploadInstallScopeContext;
-  /** Resolved on the server for the first paint; re-read on mount so a
-   *  connector installed in another tab is picked up without a reload. */
-  precondition: GitHubUploadPrecondition;
 };
 
 export function ImportPackageFromGitHubForm({
   installScope,
-  precondition: initialPrecondition,
 }: ImportPackageFromGitHubFormProps) {
   const router = useRouter();
   // The kind's own listing, recorded by a completed install (see the note
@@ -83,8 +81,6 @@ export function ImportPackageFromGitHubForm({
   const [repoUrl, setRepoUrl] = useState("");
   const [ref, setRef] = useState("");
   const [preview, setPreview] = useState<SuppliedPackagePreview | null>(null);
-  const [precondition, setPrecondition] =
-    useState<GitHubUploadPrecondition>(initialPrecondition);
   const [isLooking, startLookup] = useTransition();
   // The upload-consent confirmation rides on the preview (the server builds it
   // from the same builder the File tab's own lookup uses). Always starts
@@ -93,21 +89,8 @@ export function ImportPackageFromGitHubForm({
   const consentPrompt: UploadConsentPromptValue | null =
     (preview?.consentPrompt as UploadConsentPromptValue | undefined) ?? null;
 
-  useEffect(() => {
-    let live = true;
-    void readGitHubUploadPreconditionAction().then((next) => {
-      if (live) setPrecondition(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const ready = precondition.state === "ready";
-
   const handleLookup = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!ready) return;
     setPreview(null);
     setConsentChecked(false);
     startLookup(async () => {
@@ -165,24 +148,6 @@ export function ImportPackageFromGitHubForm({
 
   return (
     <div className="flex flex-col gap-6">
-      {!ready && (
-        <Alert variant="destructive" data-testid="github-upload-precondition">
-          <AlertTitle>
-            {precondition.state === "no-connector"
-              ? "The GitHub connector is not available"
-              : "There is no usable GitHub connection"}
-          </AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-3">
-            <span>{"message" in precondition ? precondition.message : ""}</span>
-            {"fixHref" in precondition && (
-              <Button asChild size="sm" variant="outline">
-                <Link href={precondition.fixHref}>{precondition.fixLabel}</Link>
-              </Button>
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-
       <form onSubmit={handleLookup} className="flex flex-col gap-6">
         <FieldGroup>
           <Field>
@@ -200,7 +165,7 @@ export function ImportPackageFromGitHubForm({
                   }}
                   autoComplete="off"
                   spellCheck={false}
-                  disabled={!ready || isLooking}
+                  disabled={isLooking}
                 />
                 <InputGroupAddon>
                   <LinkIcon aria-hidden="true" />
@@ -209,7 +174,7 @@ export function ImportPackageFromGitHubForm({
               <Button
                 type="submit"
                 data-testid="github-upload-submit"
-                disabled={!ready || !repoUrl.trim() || isLooking}
+                disabled={!repoUrl.trim() || isLooking}
               >
                 {isLooking ? (
                   <>
@@ -222,8 +187,10 @@ export function ImportPackageFromGitHubForm({
               </Button>
             </div>
             <FieldDescription>
-              A github.com repository holding an agent, skill, connector or artifact package.
-              The package declares its own kind; this instance reads it from the repository.
+              A link to a public github.com repository holding an agent, skill, connector or
+              artifact package — the repository page, a branch, a release page, or the archive ZIP
+              link. The archive is downloaded without signing in to GitHub. The package declares
+              its own kind; this instance reads it from the archive.
             </FieldDescription>
           </Field>
 
@@ -241,10 +208,11 @@ export function ImportPackageFromGitHubForm({
               }}
               autoComplete="off"
               spellCheck={false}
-              disabled={!ready || isLooking}
+              disabled={isLooking}
             />
             <FieldDescription>
-              Whatever you name is resolved once to a single commit, shown below, and installed at
+              Overrides whatever the link names. Whatever you name is downloaded once, pinned to
+              the single commit its archive was generated from, shown below, and installed at
               exactly that commit.
             </FieldDescription>
           </Field>
@@ -272,6 +240,12 @@ export function ImportPackageFromGitHubForm({
               </div>
               <p className="font-mono text-[11px] text-muted-foreground" data-testid="upload-pinned-sha">
                 {preview.repo} pinned at {preview.resolvedSha}
+              </p>
+              <p
+                className="break-all font-mono text-[11px] text-muted-foreground"
+                data-testid="upload-resolved-source"
+              >
+                {preview.repo} · {preview.ref} · {preview.archiveUrl}
               </p>
               <UploadConsentBlock
                 prompt={consentPrompt}

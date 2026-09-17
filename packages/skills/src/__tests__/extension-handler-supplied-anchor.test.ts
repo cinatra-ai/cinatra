@@ -64,3 +64,88 @@ describe("the skill handler installs at the PLANNED anchor", () => {
     expect(verdaccioMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1" }));
   });
 });
+
+/**
+ * cinatra#3204 criterion 6, the REPOSITORY half — a package the operator
+ * supplied by a public repository LINK takes the same finalized-store road a
+ * package supplied as a FILE takes.
+ *
+ * Why it must: by the time this handler runs the bytes are already in the
+ * content-addressed store, because the dispatcher fires the real-integrity
+ * pipeline BEFORE the handler for this kind (criterion 19) and the pipeline has
+ * already recorded the repository, the proven ref and the pinned commit on the
+ * canonical row. The handler's job is to PROJECT that finalized payload into
+ * the skills catalog — the branch is about WHERE THE PAYLOAD IS, not which
+ * registry it came from.
+ *
+ * Why the legacy installer must not be entered: its first act parses its
+ * argument as a repository reference (a resolved package name never is one) and
+ * its second mints a connection-bearing client, so a supplied repository
+ * package handed to it is refused for a connection this road never needed —
+ * the operator provided a public link and the instance fetched the ZIP.
+ *
+ * The discriminator is therefore whether the ref is SUPPLIED (declared
+ * provenance carrying a content digest), never the provenance's type.
+ */
+const SUPPLIED_REPOSITORY_SHA = "58b073bc7a2a4ac9626b07e41ecee5e3218d87a2";
+
+const suppliedRepositoryRef = {
+  registryUrl: "supplied:package",
+  packageName: "@cinatra-ai/web-research-skill",
+  version: "0.1.0",
+  provenance: {
+    type: "github" as const,
+    repo: "cinatra-ai/web-research-skill",
+    ref: "main",
+    resolvedSha: SUPPLIED_REPOSITORY_SHA,
+    contentDigest: "a".repeat(64),
+  },
+};
+
+/**
+ * The pre-existing road this must leave alone: a ref that declares NO supplied
+ * provenance and whose package name genuinely IS `owner/repo` — the configured-
+ * repository sync. It keeps the legacy installer and its connection.
+ */
+const configuredRepositoryRef = {
+  registryUrl: "",
+  packageName: "cinatra-ai/web-research-skill",
+};
+
+describe("a SUPPLIED repository package is projected from the FINALIZED store payload", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("installs through the finalized-store arm at the planned anchor, and never enters the legacy GitHub installer", async () => {
+    const handler = createSkillExtensionHandler();
+    await handler.install(suppliedRepositoryRef as never, actor as never, {
+      rowOwnership: { ownerLevel: "workspace", ownerId: null, organizationId: null },
+    } as never);
+
+    expect(githubMock).not.toHaveBeenCalled();
+    // The kind's own observable: the package, its version and the anchor's
+    // organization scope — the payload the catalog is registered against.
+    expect(verdaccioMock).toHaveBeenCalledWith({
+      packageName: "@cinatra-ai/web-research-skill",
+      packageVersion: "0.1.0",
+      orgId: null,
+    });
+  });
+
+  it("updates the same way — a supplied repository ref never reaches the legacy installer", async () => {
+    const handler = createSkillExtensionHandler();
+    await handler.update(suppliedRepositoryRef as never, actor as never);
+
+    expect(githubMock).not.toHaveBeenCalled();
+    expect(verdaccioMock).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: "@cinatra-ai/web-research-skill" }),
+    );
+  });
+
+  it("leaves the legacy road exactly as it was for a ref that declares NO supplied provenance", async () => {
+    const handler = createSkillExtensionHandler();
+    await handler.install(configuredRepositoryRef as never, actor as never);
+
+    expect(githubMock).toHaveBeenCalledWith("cinatra-ai/web-research-skill");
+    expect(verdaccioMock).not.toHaveBeenCalled();
+  });
+});

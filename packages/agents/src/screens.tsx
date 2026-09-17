@@ -870,12 +870,6 @@ export async function AgentBuilderImportScreen() {
   });
   const installScope = { installTargets, ownerEntityNames, activeOrgId, availability };
 
-  // The repository road's precondition, resolved for the first paint. The tab
-  // re-reads it on mount, so a connector activated in another tab is picked up
-  // without a reload.
-  const { readGitHubUploadPreconditionAction } = await import("./supplied-install-actions");
-  const precondition = await readGitHubUploadPreconditionAction();
-
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -901,10 +895,7 @@ export async function AgentBuilderImportScreen() {
           </TabsContent>
           <TabsContent value="github">
             <div className="soft-panel rounded-card px-6 py-5">
-              <ImportPackageFromGitHubForm
-                installScope={installScope}
-                precondition={precondition}
-              />
+              <ImportPackageFromGitHubForm installScope={installScope} />
             </div>
           </TabsContent>
         </Tabs>

@@ -41,7 +41,6 @@ const actions = vi.hoisted(() => ({
   readSuppliedUploadConsentPromptAction: vi.fn(async () => null as unknown),
   installSuppliedRepositoryAction: vi.fn(),
   previewSuppliedRepositoryAction: vi.fn(),
-  readGitHubUploadPreconditionAction: vi.fn(async () => ({ state: "ready" as const })),
 }));
 vi.mock("../supplied-install-actions", () => actions);
 
@@ -174,10 +173,7 @@ describe("the GitHub tab asks the same question the same way", () => {
     } as never);
 
     render(
-      <ImportPackageFromGitHubForm
-        installScope={INSTALL_SCOPE}
-        precondition={{ state: "ready" }}
-      />,
+      <ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />,
     );
     fireEvent.change(screen.getByLabelText(/repository url/i), {
       target: { value: "https://github.com/acme/thing" },

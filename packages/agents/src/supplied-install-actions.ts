@@ -8,7 +8,10 @@
 // side of the wire:
 //
 //   - the archive is RE-READ from the bytes (the browser's parse is a preview,
-//     never evidence): the kind, the identity and the digest are resolved again;
+//     never evidence): the kind, the identity and the digest are resolved again —
+//     and since cinatra#3204's fix leg BOTH tabs re-read through the same reader,
+//     because the repository tab downloads the public archive the link names and
+//     hands those bytes to the file road's own intake;
 //   - the chosen scope is VALIDATED and AUTHORIZED server-side through the same
 //     `assertCanInstallAtTarget` the store road uses — a target the actor lacks
 //     authority for is refused even when the client sends it;
@@ -88,6 +91,8 @@ export type SuppliedPackagePreview = {
   resolvedSha?: string;
   repo?: string;
   ref?: string;
+  /** Repository road only: the public archive the bytes were downloaded from. */
+  archiveUrl?: string;
   /** Skill packages only — the upload-consent confirmation to show first. */
   consentPrompt?: SuppliedUploadConsentPrompt;
 };
@@ -113,16 +118,6 @@ export type SuppliedInstallResult =
 export type SuppliedPreviewResult =
   | { ok: true; preview: SuppliedPackagePreview }
   | { ok: false; error: string };
-
-/**
- * The GitHub tab's PRECONDITION, stated rather than surfaced as a raw capability
- * refusal (criterion 9). The two failure states are genuinely different and the
- * operator fixes them in different places.
- */
-export type GitHubUploadPrecondition =
-  | { state: "ready" }
-  | { state: "no-connector"; message: string; fixHref: string; fixLabel: string }
-  | { state: "no-connection"; message: string; fixHref: string; fixLabel: string };
 
 // ---------------------------------------------------------------------------
 // Per-kind observable (criterion 21)
@@ -767,105 +762,79 @@ export async function installSuppliedArchiveAction(input: {
 // THE REPOSITORY ROAD
 // ---------------------------------------------------------------------------
 
-/** The connector key the GitHub connection identity rows are written under —
- *  host vocabulary (a `NangoConnectorKey`), never a package literal. */
-const GITHUB_CONNECTOR_KEY = "github";
-
 /**
- * Does THIS organization hold a GitHub connection it may use?
+ * WHAT THE LINK SAYS TO FETCH (cinatra#3204 fix leg).
  *
- * The connector client's `getStatus()` answers for the instance: its contract
- * takes no scoping argument at all, so a second admin session in another
- * organization read the first organization's connection as its own and both
- * precondition states below became unreachable for it (measured on the real
- * screen). The connection rows themselves are org-stamped at write time, and
- * the identity store is the sanctioned org-scoped read of them — the same rows
- * the connection resolver picks the actual token from — so the precondition is
- * read there.
+ * THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+ * origin/main of a repo or a ZIP of a release — no need to be logged in at
+ * GitHub. The user provides that link and Cinatra gets the ZIP."
  *
- * FAIL-CLOSED on the null-org legacy rows the store returns alongside the
- * organization's own: those are owner-only by construction, so they count only
- * for the admin who owns them and never as this organization's connection.
+ * So there is no precondition on this boundary any more — no owning connector to
+ * install, no connection to establish, nothing to state before the operator may
+ * type. The archive endpoint is public, the download is anonymous, and the only
+ * thing that can be wrong is the LINK, which is refused here by name.
+ *
+ * The optional ref the screen carries in its own field OVERRIDES whatever the
+ * link named, so a repository page plus a typed release tag means the same
+ * thing as pasting that release's page.
  */
-async function organizationHasGitHubConnection(input: {
-  organizationId: string | null;
-  userId: string | null;
-}): Promise<boolean> {
-  const { listNangoConnectionsByConnector } = await import(
-    "@cinatra-ai/extensions/connection-identity-store"
-  );
-  const rows = await listNangoConnectionsByConnector(
-    input.organizationId,
-    GITHUB_CONNECTOR_KEY,
-  );
-  return rows.some((row) =>
-    row.organizationId === null
-      ? input.userId != null && row.ownerUserId === input.userId
-      : input.organizationId != null && row.organizationId === input.organizationId,
-  );
-}
-
-/**
- * The precondition probe (criteria 9, 10). Distinguishes "no owning connector"
- * from "an installed connector with no usable connection", and names where each
- * is fixed.
- */
-export async function readGitHubUploadPreconditionAction(): Promise<GitHubUploadPrecondition> {
-  const session = await requireAdminSession();
-  const { resolveGitHubConnectionClient } = await import("@/lib/connector-client-providers");
-  const client = resolveGitHubConnectionClient();
-  if (!client) {
-    return {
-      state: "no-connector",
-      message:
-        "The GitHub connector is not installed or not active on this instance, so this tab cannot reach a repository. Install and activate it from the marketplace, then come back.",
-      fixHref: "/configuration/marketplace",
-      fixLabel: "Open the marketplace",
-    };
-  }
-  const noConnection: GitHubUploadPrecondition = {
-    state: "no-connection",
-    message:
-      "The GitHub connector is installed, but this organization has no usable GitHub connection yet. Connect an account in the connector's settings, then come back.",
-    fixHref: "/configuration/connectors",
-    fixLabel: "Open connector settings",
-  };
-  try {
-    const status = await client.getStatus();
-    if (status.status !== "connected") return noConnection;
-    // Connected SOMEWHERE on this instance is not connected HERE: the tab
-    // installs on behalf of the organization the screen runs in.
-    const usableHere = await organizationHasGitHubConnection({
-      organizationId: session.session?.activeOrganizationId ?? null,
-      userId: session.user?.id ?? null,
-    });
-    return usableHere ? { state: "ready" } : noConnection;
-  } catch {
-    return {
-      state: "no-connection",
-      message:
-        "The GitHub connector is installed, but its connection could not be read. Reconnect the account in the connector's settings, then come back.",
-      fixHref: "/configuration/connectors",
-      fixLabel: "Open connector settings",
-    };
-  }
-}
-
-async function parseRepoUrl(repoUrl: string): Promise<{ owner: string; repo: string }> {
-  const { parseGitHubRepositoryReference } = await import("@cinatra-ai/skills");
-  const parsed = parseGitHubRepositoryReference(repoUrl);
-  if (!parsed) {
+async function resolveArchiveTarget(
+  repoUrl: string,
+  ref?: string,
+): Promise<{ owner: string; repo: string; ref: string | null; archiveUrl: string }> {
+  const { gitHubArchiveZipUrl, parseGitHubArchiveLink } = await import("@cinatra-ai/skills");
+  const link = parseGitHubArchiveLink(repoUrl);
+  if (!link) {
     throw new Error(
-      "That is not a github.com repository URL. Paste the full URL, for example https://github.com/owner/repo.",
+      "That is not a github.com repository link. Paste the repository page, a branch, a release page " +
+        "or the archive ZIP link — for example https://github.com/owner/repo.",
     );
   }
-  return parsed;
+  const override = ref?.trim();
+  // A ref typed by hand is a branch, a tag or a commit and the screen cannot
+  // tell which — the archive endpoint accepts all three under the bare ref, so
+  // that is what is asked for. `parseGitHubArchiveLink` re-checks it: a ref it
+  // will not splice into a path comes back as a refusal here, not as a 404
+  // three steps later.
+  const typedRef = override
+    ? override.split("/").map(encodeURIComponent).join("/")
+    : null;
+  const reparsed = typedRef
+    ? parseGitHubArchiveLink(`https://github.com/${link.owner}/${link.repo}/tree/${typedRef}`)
+    : link;
+  // A TYPED REF NAMES A REF, NEVER ANOTHER REPOSITORY. The re-parse runs through
+  // a URL, and a URL normalizes its own path: a typed "../../evil" would resolve
+  // to a different owner and repository and come back as a perfectly valid link
+  // for THAT repository. So the re-parse has to name the SAME repository, and to
+  // carry a ref at all, or the typed ref is refused here by name.
+  const resolved =
+    reparsed &&
+    reparsed.owner === link.owner &&
+    reparsed.repo === link.repo &&
+    (typedRef === null || reparsed.ref !== null)
+      ? reparsed
+      : null;
+  if (!resolved) {
+    throw new Error(
+      `"${override}" is not a branch, tag or commit this road can fetch an archive for. ` +
+        "Leave the field empty for the repository's default branch.",
+    );
+  }
+  return {
+    owner: resolved.owner,
+    repo: resolved.repo,
+    ref: resolved.ref,
+    archiveUrl: gitHubArchiveZipUrl(resolved),
+  };
 }
 
 /**
- * Resolve the ref to ONE immutable commit, read the package at it, and report
- * the kind and the pinned sha. The ref is resolved exactly once, here, and the
- * install re-reads at the sha this returns.
+ * DOWNLOAD the public archive the link names, read it with the FILE road's own
+ * reader, and report the kind, the identity, the digest, the archive it came
+ * from and the immutable commit that archive was generated from.
+ *
+ * The pin is still ONE commit (criterion 7) — read off the bytes that arrived
+ * rather than resolved through an API — and the install re-reads at exactly it.
  */
 export async function previewSuppliedRepositoryAction(input: {
   repoUrl: string;
@@ -873,22 +842,9 @@ export async function previewSuppliedRepositoryAction(input: {
 }): Promise<SuppliedPreviewResult> {
   await requireAdminSession();
   try {
-    const precondition = await readGitHubUploadPreconditionAction();
-    if (precondition.state !== "ready") {
-      return { ok: false, error: precondition.message };
-    }
-    const { owner, repo } = await parseRepoUrl(input.repoUrl);
-    const { getGitHubOctokit } = await import("@cinatra-ai/skills");
-    const { octokit } = await getGitHubOctokit();
-    const { previewGitHubSuppliedPackage } = await import(
-      "@cinatra-ai/skills/repository-package-intake"
-    );
-    const preview = await previewGitHubSuppliedPackage({
-      client: octokit as never,
-      owner,
-      repo,
-      ...(input.ref ? { ref: input.ref } : {}),
-    });
+    const target = await resolveArchiveTarget(input.repoUrl, input.ref);
+    const { previewSuppliedRepositoryArchive } = await import("@/lib/supplied-package-install");
+    const preview = await previewSuppliedRepositoryArchive(target);
     const consentPrompt = await buildSuppliedConsentPrompt({
       kind: preview.kind,
       packageName: preview.packageName,
@@ -904,6 +860,7 @@ export async function previewSuppliedRepositoryAction(input: {
         resolvedSha: preview.resolvedSha,
         repo: preview.repo,
         ref: preview.ref,
+        archiveUrl: preview.archiveUrl,
         ...(consentPrompt ? { consentPrompt } : {}),
       },
     };
@@ -928,21 +885,12 @@ export async function installSuppliedRepositoryAction(input: {
     return failure(err);
   }
   try {
-    const precondition = await readGitHubUploadPreconditionAction();
-    if (precondition.state !== "ready") {
-      return { ok: false, error: precondition.message };
-    }
-    const { owner, repo } = await parseRepoUrl(input.repoUrl);
-    const { getGitHubOctokit } = await import("@cinatra-ai/skills");
-    const { octokit } = await getGitHubOctokit();
-    const { prepareSuppliedRepositorySnapshot } = await import(
+    const target = await resolveArchiveTarget(input.repoUrl, input.ref);
+    const { prepareSuppliedRepositoryArchiveSnapshot } = await import(
       "@/lib/supplied-package-install"
     );
-    const prepared = await prepareSuppliedRepositorySnapshot({
-      client: octokit as never,
-      owner,
-      repo,
-      ref: input.ref,
+    const prepared = await prepareSuppliedRepositoryArchiveSnapshot({
+      ...target,
       pin: input.pin,
     });
     return await installAtScope(session, scope, {

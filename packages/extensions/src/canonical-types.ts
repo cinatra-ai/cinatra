@@ -909,6 +909,32 @@ export function isWorkspaceAnchoredRow(row: WorkspaceAnchorRowView): boolean {
 }
 
 /**
+ * Is this row/tuple the PLATFORM ANCHOR — the bundled/system tier row the boot
+ * seeder writes for a package whose bytes ship with the image
+ * (`owner_level='platform'`, `organization_id IS NULL`), and the same shape a
+ * fleet-level install lands at?
+ *
+ * The deliberate companion of {@link isWorkspaceAnchoredRow}, which excludes
+ * this tier because a platform row supersedes nothing. Supersession is not the
+ * only question a read seam asks, though: "is this package INSTALLED on this
+ * instance?" is answered `yes` by a live row of EITHER tier, and the
+ * marketplace card's four-state control is rendered from that answer
+ * (cinatra#3522 — six bundled packages carrying a live platform anchor drew a
+ * live "Install now" because no seam recognized this shape as installed).
+ *
+ * `ownerId` is accepted as `null` OR the `__platform__` sentinel for the same
+ * reason as the workspace anchor: the canonical store platformizes a null owner
+ * on write, so both spellings denote the same persisted row.
+ */
+export function isPlatformAnchoredRow(row: WorkspaceAnchorRowView): boolean {
+  return (
+    row.ownerLevel === "platform" &&
+    (row.organizationId ?? null) === null &&
+    (row.ownerId === null || row.ownerId === PLATFORM_OWNER_SENTINEL)
+  );
+}
+
+/**
  * The canonical IDENTITY a workspace-anchored row for `packageName` reads back
  * at — `(organization_id NULL, owner_level 'workspace', owner_id '__platform__',
  * package_name)`. The WORKSPACE-FALLBACK arm of the org-first resolution passes

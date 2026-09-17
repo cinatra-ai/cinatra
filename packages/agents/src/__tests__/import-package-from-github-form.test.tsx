@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
 /**
  * The Upload Extension screen's GITHUB tab (cinatra#3204 leg 3 — criteria 6, 7,
- * 9, 10, 11, 17, and the screen half of CELL2 / CELL3).
+ * 10, 11, 17 — and the fix leg that removed the connection precondition).
  *
- * The claims: the two preconditions are STATED and disable Submit; a resolved
- * repository displays the kind read from the manifest and the immutable commit
- * the ref was pinned to; the scope question is the store's own panel; and the
- * old public-only visibility claim and the second ownership editor are gone.
+ * THE MAINTAINER'S RULING, in their words: "Anyone can download a ZIP of
+ * origin/main of a repo or a ZIP of a release — no need to be logged in at
+ * GitHub. The user provides that link and Cinatra gets the ZIP."
+ *
+ * The claims: a public repository link resolves and offers the import with NO
+ * GitHub connection anywhere in sight; the resolved repository names the ref and
+ * the archive that will be fetched; a link the anonymous download cannot serve
+ * is refused on the toast with the road's own reason; the scope question is the
+ * store's own panel; and the old public-only visibility claim and the second
+ * ownership editor are gone.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +38,6 @@ vi.mock("next/link", () => ({
 const actions = vi.hoisted(() => ({
   previewSuppliedRepositoryAction: vi.fn(),
   installSuppliedRepositoryAction: vi.fn(),
-  readGitHubUploadPreconditionAction: vi.fn(async () => ({ state: "ready" as const })),
 }));
 vi.mock("../supplied-install-actions", () => actions);
 
@@ -56,58 +61,10 @@ const SHA = "b".repeat(40);
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  actions.readGitHubUploadPreconditionAction.mockResolvedValue({ state: "ready" as const });
 });
 
-describe("the GitHub tab states its precondition (criterion 9)", () => {
-  it("names the missing OWNING CONNECTOR and disables Submit", async () => {
-    actions.readGitHubUploadPreconditionAction.mockResolvedValue({
-      state: "no-connector",
-      message: "The GitHub connector is not installed or not active on this instance.",
-      fixHref: "/configuration/marketplace",
-      fixLabel: "Open the marketplace",
-    } as never);
-    render(
-      <ImportPackageFromGitHubForm
-        installScope={INSTALL_SCOPE}
-        precondition={{ state: "ready" }}
-      />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("github-upload-precondition")).toBeTruthy();
-    });
-    expect(screen.getByText(/not installed or not active/)).toBeTruthy();
-    expect(
-      (screen.getByTestId("github-upload-submit") as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-
-  it("names the missing USABLE CONNECTION separately and disables Submit", async () => {
-    actions.readGitHubUploadPreconditionAction.mockResolvedValue({
-      state: "no-connection",
-      message: "The GitHub connector is installed, but this instance has no usable GitHub connection yet.",
-      fixHref: "/configuration/connectors",
-      fixLabel: "Open connector settings",
-    } as never);
-    render(
-      <ImportPackageFromGitHubForm
-        installScope={INSTALL_SCOPE}
-        precondition={{ state: "ready" }}
-      />,
-    );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("github-upload-precondition").textContent,
-      ).toMatch(/no usable GitHub connection/);
-    });
-    expect(
-      (screen.getByTestId("github-upload-submit") as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-});
-
-describe("the GitHub tab resolves any kind and pins the commit (criteria 6, 7, 10, 11)", () => {
-  it("shows the resolved kind, the pinned sha and the store's own scope panel", async () => {
+describe("the GitHub tab asks for a LINK, never for a connection", () => {
+  it("offers the import for a public repository link with no GitHub connection", async () => {
     actions.previewSuppliedRepositoryAction.mockResolvedValue({
       ok: true,
       preview: {
@@ -118,35 +75,137 @@ describe("the GitHub tab resolves any kind and pins the commit (criteria 6, 7, 1
         resolvedSha: SHA,
         repo: "acme/thing",
         ref: "main",
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/main",
       },
     });
-    render(
-      <ImportPackageFromGitHubForm
-        installScope={INSTALL_SCOPE}
-        precondition={{ state: "ready" }}
-      />,
-    );
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+
+    // Nothing gates the form: no precondition alert, and Submit is live as soon
+    // as a link is typed.
+    expect(screen.queryByTestId("github-upload-precondition")).toBeNull();
     fireEvent.change(screen.getByLabelText("Repository URL"), {
       target: { value: "https://github.com/acme/thing" },
     });
+    expect((screen.getByTestId("github-upload-submit") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByTestId("github-upload-submit"));
 
     await waitFor(() => {
       expect(screen.getByTestId("upload-resolved-kind").textContent).toBe("Connector");
     });
-    expect(screen.getByTestId("upload-pinned-sha").textContent).toContain(SHA);
     expect(screen.getByTestId("extension-install-panel-body")).toBeTruthy();
     expect(screen.getByTestId("extension-install-panel-submit")).toBeTruthy();
   });
 
-  it("no longer promises public-only repositories, and asks for ownership only once", () => {
-    render(
-      <ImportPackageFromGitHubForm
-        installScope={INSTALL_SCOPE}
-        precondition={{ state: "ready" }}
-      />,
+  it("shows the repository, the ref and the archive it will fetch", async () => {
+    actions.previewSuppliedRepositoryAction.mockResolvedValue({
+      ok: true,
+      preview: {
+        kind: "skill",
+        packageName: "@acme/thing-skill",
+        version: "1.0.0",
+        contentDigest: "a".repeat(64),
+        resolvedSha: SHA,
+        repo: "acme/thing",
+        ref: "v1.2.3",
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3",
+      },
+    });
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/acme/thing/releases/tag/v1.2.3" },
+    });
+    fireEvent.click(screen.getByTestId("github-upload-submit"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-resolved-source")).toBeTruthy();
+    });
+    const source = screen.getByTestId("upload-resolved-source").textContent ?? "";
+    expect(source).toContain("acme/thing");
+    expect(source).toContain("v1.2.3");
+    expect(source).toContain("https://codeload.github.com/acme/thing/zip/refs/tags/v1.2.3");
+    expect(screen.getByTestId("upload-pinned-sha").textContent).toContain(SHA);
+  });
+
+  it("refuses a link the anonymous download cannot serve, naming the reason on the toast", async () => {
+    actions.previewSuppliedRepositoryAction.mockResolvedValue({
+      ok: false,
+      error:
+        "GitHub served no archive for acme/private-thing (HTTP 404). This instance downloads the archive anonymously, so a private repository cannot be read.",
+    });
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/acme/private-thing" },
+    });
+    fireEvent.click(screen.getByTestId("github-upload-submit"));
+
+    await waitFor(() => {
+      expect(toastState.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 404"));
+    });
+    expect(toastState.error).toHaveBeenCalledWith(
+      expect.stringContaining("downloads the archive anonymously"),
     );
+    expect(screen.queryByTestId("extension-install-panel-body")).toBeNull();
+  });
+
+  it("no longer promises public-only repositories, and asks for ownership only once", () => {
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
     expect(screen.queryByText(/Public github\.com repositories only/)).toBeNull();
     expect(screen.queryByText(/Configure access & ownership/)).toBeNull();
+  });
+});
+
+/**
+ * THE PIN (cinatra#3204): what pressing Install now on the resolved panel
+ * sends. The submission carries the LINK the person typed, the branch name the
+ * preview proved and the commit it pinned — never the resolved package name,
+ * which is not a repository reference and is refused as one.
+ */
+describe("the resolved panel installs what the person typed, not the name it resolved", () => {
+  it("sends the link, the proven branch name and the pinned commit", async () => {
+    actions.previewSuppliedRepositoryAction.mockResolvedValue({
+      ok: true,
+      preview: {
+        kind: "skill",
+        packageName: "@cinatra-ai/web-research-skill",
+        version: "0.1.0",
+        contentDigest: "a".repeat(64),
+        resolvedSha: SHA,
+        repo: "cinatra-ai/web-research-skill",
+        ref: "main",
+        archiveUrl: "https://codeload.github.com/cinatra-ai/web-research-skill/zip/main",
+      },
+    });
+    actions.installSuppliedRepositoryAction.mockResolvedValue({
+      ok: true,
+      kind: "skill",
+      packageName: "@cinatra-ai/web-research-skill",
+      version: "0.1.0",
+      observable: { label: "Skills", href: "/configuration/extensions" },
+    });
+
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/cinatra-ai/web-research-skill" },
+    });
+    fireEvent.click(screen.getByTestId("github-upload-submit"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("extension-install-panel-submit")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("extension-install-panel-submit"));
+
+    await waitFor(() => {
+      expect(actions.installSuppliedRepositoryAction).toHaveBeenCalled();
+    });
+    const sent = actions.installSuppliedRepositoryAction.mock.calls[0]?.[0] as {
+      repoUrl: string;
+      ref: string;
+      pin: { resolvedSha: string; contentDigest: string };
+    };
+    expect(sent.repoUrl).toBe("https://github.com/cinatra-ai/web-research-skill");
+    expect(sent.ref).toBe("main");
+    expect(sent.pin.resolvedSha).toBe(SHA);
+    // The resolved package name is never sent as the thing to install from.
+    expect(JSON.stringify(sent)).not.toContain("@cinatra-ai/web-research-skill");
   });
 });

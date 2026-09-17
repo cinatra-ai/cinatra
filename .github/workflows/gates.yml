@@ -19,7 +19,72 @@ concurrency:
   group: gates-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# cinatra#3355 — the committed worker cap for every vitest invocation in this
+# workflow (a workflow-level `env:` is in scope for the steps of every job in
+# the file). The value is the INTERIM worker count cinatra#3355 records, now
+# given a committed home in the tree; that issue's criterion-3 comparison of
+# runner and worker configurations may replace it. It makes no claim about what
+# the runner services on the box carry today.
+# Enforced by scripts/audit/vitest-worker-cap.mjs.
+env:
+  VITEST_MAX_WORKERS: "3"
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the jobs below read?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group, schedule, dispatch) there is
+  # no changed-file set to read, so the output is forced true and the jobs below
+  # run for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (gates-pnpm)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pnpm_suites: ${{ github.event_name != 'pull_request' || steps.filter.outputs.pnpm_suites == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            pnpm_suites:
+              # Derived from the gates-pnpm steps ONLY (the other three jobs in this
+              # file read the whole tree and stay unconditional): the dashboards and
+              # sdk-dashboard default suites, the toolbar-tokens parser tests, and the
+              # vendor-byline suites in packages/extensions, src/lib and
+              # src/components — plus the workspace install inputs they resolve
+              # through.
+              - '.github/workflows/**'
+              # packages/** as a whole, not three of them: the suites import
+              # real code across the workspace (packages/extensions'
+              # marketplace-card-model.test.ts imports @cinatra-ai/agents'
+              # verdaccio/client and runtime-install-gate, and the dashboards
+              # vitest config aliases llm and org-write-kernel).
+              - 'packages/**'
+              - 'src/lib/**'
+              - 'src/components/**'
+              - 'scripts/audit/**'
+              - 'vitest.config.ts'
+              - 'tsconfig.json'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              # the install hook rewrites workspace dependency resolution
+              - '.pnpmfile.cjs'
+
   gates:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 15
@@ -213,7 +278,14 @@ jobs:
   # jobs of toolbar-tokens-gate / vendor-byline-gate. Full `--frozen-lockfile`
   # install (a superset of the two sources' --ignore-scripts variant). Commands
   # are verbatim from the retired workflows.
+  # The only path-guarded job in this file: it installs the workspace and runs
+  # five vitest suites, and every one of them reads a bounded set of packages
+  # (see the `pnpm_suites` filter above). Its siblings stay unconditional —
+  # `gates` reads `git ls-files` and docs/, the two design-pin jobs read the
+  # pull request's own touched-path set.
   gates-pnpm:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.pnpm_suites == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
