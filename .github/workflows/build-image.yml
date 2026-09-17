@@ -86,6 +86,16 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
 
+# cinatra#3355 — the committed worker cap for every vitest invocation in this
+# workflow (a workflow-level `env:` is in scope for the steps of every job in
+# the file). The value is the INTERIM worker count cinatra#3355 records, now
+# given a committed home in the tree; that issue's criterion-3 comparison of
+# runner and worker configurations may replace it. It makes no claim about what
+# the runner services on the box carry today.
+# Enforced by scripts/audit/vitest-worker-cap.mjs.
+env:
+  VITEST_MAX_WORKERS: "3"
+
 jobs:
   # ---------------------------------------------------------------------------
   # detect — compute whether this PR needs heavy validation (`skip`).
@@ -899,6 +909,15 @@ jobs:
       # cannot go vacuously green if the service block above ever stops
       # providing one.
       - name: Async notification-delete seam — real-DB tier (cinatra#2882)
+        # cinatra#3355 - `vitest/integration/2882.config.ts` declares
+        # `fileParallelism: false` and the tier includes TWO files sharing one
+        # schema, and vitest 4 lets `VITEST_MAX_WORKERS` overwrite that
+        # declaration. The narrowing override keeps this one step serial; the
+        # workflow-level cap is a MAXIMUM and every other governed step in this
+        # job names a single test file, which cannot race itself.
+        # Enforced by scripts/audit/vitest-worker-cap.mjs.
+        env:
+          VITEST_MAX_WORKERS: "1"
         run: pnpm test:async-notification-seam
 
   # packages/agents INTEGRATION tier (cinatra#2226). Replaces the dead step that
@@ -1988,6 +2007,17 @@ jobs:
       - name: Extension import-ban gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/extension-import-ban.test.mjs
 
+      # One committed worker count for every vitest invocation CI can schedule
+      # (cinatra#3355). The gate derives its governed set by the RESOLVED runner,
+      # holds each governed workflow to exactly one workflow-level
+      # VITEST_MAX_WORKERS at the expected value, and holds
+      # scripts/audit/vitest-worker-cap.md to the full derived inventory.
+      - name: Vitest worker-cap gate
+        run: node scripts/audit/vitest-worker-cap.mjs
+
+      - name: Vitest worker-cap gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/vitest-worker-cap.test.mjs
+
       # DENY-by-default node:fs/node:fs/promises in extension source (cinatra#979
       # checker home, landed with #981's host-owned ctx.logger.capture port). A
       # connector reaching for node:fs directly to write its own logs bypasses the
@@ -2191,6 +2221,23 @@ jobs:
       # cloned-back extension tree (this job clones it above).
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
+
+      # Self-rendering extensions border gate (cinatra#3471, epic #2926 —
+      # decision 407 of 2026-09-13: connectors render the setup page themselves,
+      # artifacts render the artifact view themselves, and the host shares its
+      # primitives with extension bundles at RUN TIME). SHRINK-ONLY ratchet over
+      # the design-primitive BYTE COPIES a kind:connector / kind:artifact package
+      # still carries under src/components/ui/: a NEW copy fails immediately, a
+      # removed one must ratchet the committed baseline down (no silent headroom),
+      # and ANY direct reach into the product's @/components/ui/*, @/lib/utils or
+      # src/components/ui fails. The baseline is the only record of those copies
+      # now that the vendoring manifest has retired both kinds (decision 407 A).
+      # Requires the cloned-back extension tree (this job clones it above).
+      - name: Self-rendering extensions border gate (shrink-only ratchet)
+        run: node scripts/extensions/self-rendering-extensions-border-gate.mjs
+
+      - name: Self-rendering extensions border gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/self-rendering-extensions-border-gate.test.mjs
 
       # Build-config consistency check. config/build-config.manifest.json
       # is the single source of truth for the tsconfig.json @cinatra-ai/* path
@@ -3363,6 +3410,21 @@ jobs:
       # Docker cooperated it would have added a whole extra container to a job
       # whose failure below is a memory-headroom failure.
       CINATRA_SKIP_DEV_PREFLIGHT: "1"
+      # cinatra#3355 - a NARROWING override of the workflow-level cap, at the
+      # scope that owns the reason. This job is `hosted-pinned` in the gate's
+      # inventory: `runs-on: ubuntu-latest` can never reach the shared
+      # self-hosted box the cap exists for - but a workflow-level `env:` is in
+      # scope for the steps of EVERY job in the file and reaches these steps
+      # anyway, and it OVERRIDES what a vitest config declares: vitest 4
+      # resolves `fileParallelism: false` down to one worker and then lets
+      # `VITEST_MAX_WORKERS` overwrite that resolution. The real-DB tiers below
+      # each own ONE shared schema they create and drop, so a second worker
+      # races them against a single database. `1` restores the serial execution
+      # those configs already ask for. The Playwright flow in this job
+      # inherits the variable like every other step, but nothing reads it there:
+      # playwright takes its worker count from its own config.
+      # Enforced by scripts/audit/vitest-worker-cap.mjs.
+      VITEST_MAX_WORKERS: "1"
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
