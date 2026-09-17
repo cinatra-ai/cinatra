@@ -77,6 +77,11 @@
   --kicker-tracking: 0.18em;
   --kicker-tracking-wide: 0.2em;
   --page-label-tracking: 0.3em;
+  /* The access picker's closed-trigger prefix — the ratified drawing's own
+     lane for that node (app-permissions.html §III `.pk-trigger .pfx`:
+     `letter-spacing: 0.08em`), named here so the picker carries a token,
+     never a bracket literal. */
+  --picker-prefix-tracking: 0.08em;
   /* Badge / chip type. --badge-tracking pairs with the 2xs chip size
      through the @theme mapping. */
   --badge-text-xs: 10px;
