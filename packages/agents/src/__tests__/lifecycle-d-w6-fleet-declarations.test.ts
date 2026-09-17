@@ -11,10 +11,12 @@
  * the host's read of the pinned result, so a pin bump that LOSES a declaration
  * reddens here instead of passing quietly.
  *
- * Every case names the acceptance sentence it pins. ONE part of the wave is
- * NOT here as an assertion of presence but as a pinned ABSENCE carrying its
- * reason — the same shape the previous slice used — because landing it under
- * the now-blocking gate would refuse a package at its own publish seam.
+ * Every case names the acceptance sentence it pins. Several parts of the wave
+ * are NOT here as assertions of presence but as pinned ABSENCES carrying their
+ * reason — the same shape the previous slice used — the outreach parent's typed
+ * produces and the transcript and feed-lister declarations among them, because
+ * landing them under the now-blocking gate would refuse a package at its own
+ * publish seam.
  *
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
