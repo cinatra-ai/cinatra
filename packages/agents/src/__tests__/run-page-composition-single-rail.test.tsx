@@ -411,7 +411,12 @@ function railEntries(column: HTMLElement): string[] {
         "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
-    .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
+    // ONE NODE PER ENTRY. A panel entry draws a wrapper that stands for the
+    // entry (`data-rail-kind`) with its own ROW inside it, and the row is where
+    // the rail's state marks sit (run-step-rail-extra-entry) -- so the union
+    // above matches the entry twice. The node that stands for the entry is the
+    // one kept; anything nested inside it is the same entry read again.
+    .filter((el) => el.parentElement?.closest("[data-rail-kind]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0);
 }

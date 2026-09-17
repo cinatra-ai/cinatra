@@ -383,7 +383,12 @@ function railEntryLabels(column: HTMLElement): string[] {
         "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
-    .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
+    // ONE NODE PER ENTRY. A panel entry draws a wrapper that stands for the
+    // entry (`data-rail-kind`) with its own ROW inside it, and the row is where
+    // the rail's state marks sit (run-step-rail-extra-entry) -- so the union
+    // above matches the entry twice. The node that stands for the entry is the
+    // one kept; anything nested inside it is the same entry read again.
+    .filter((el) => el.parentElement?.closest("[data-rail-kind]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0)
     .map((text) => text.replace(/^\d+/, ""));
@@ -482,13 +487,18 @@ describe("the parked review opens in the run detail, under the same rail (cinatr
     // the selected anchor) -- so one reading of the rail answers for every row
     // of it. Exactly one row reads current: with the review on the detail, no
     // spine row does.
+    // THE READING IS KEYED ON THE ENTRY, the way the collapsing predicate above
+    // is: an entry marks its state on the ROW it draws inside its wrapper, so a
+    // spine row is a marked row that stands inside no entry at all.
     expect(control.getAttribute("aria-current")).toBe("step");
     expect(control.getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(
-      columnAfter.querySelector(
+    const current = Array.from(
+      columnAfter.querySelectorAll<HTMLElement>(
         '[data-run-surface-rail-step][data-run-surface-rail-selected="true"]',
       ),
-    ).toBeNull();
+    );
+    expect(current.filter((el) => el.closest("[data-rail-kind]") == null)).toEqual([]);
+    expect(current).toEqual([control]);
   });
 
   it("opens that same screen from the keyboard — Enter and Space on the control", async () => {

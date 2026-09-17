@@ -54,13 +54,15 @@ const gateEntry = (
   },
 });
 
-/** The entry, read as a rail reading reads it: ONE node per entry, the wrapper
- *  that stands for the row -- never the box and the control inside it as two. */
+/** The entry, read as a rail reading reads it: ONE node per entry -- the ROW
+ *  the entry draws, the node that carries the shared row box, never the box and
+ *  the control inside it as two. The entry's KIND is read from the node that
+ *  carries it, the entry wrapper around that row. */
 function row(container: HTMLElement): HTMLElement {
   const marked = container.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]");
   expect(marked.length).toBe(1);
   const node = marked[0]!;
-  expect(node.getAttribute("data-rail-kind")).toBe("gate");
+  expect(node.closest("[data-rail-kind]")?.getAttribute("data-rail-kind")).toBe("gate");
   return node;
 }
 
@@ -84,7 +86,7 @@ describe("§I — a resolved gate keeps its place on the rail, and says so the w
     expect(entryRow.getAttribute("data-run-surface-rail-step")).toBe("");
     expect(entryRow.getAttribute("data-run-surface-rail-reached")).toBe("true");
     expect(entryRow.getAttribute("data-run-surface-rail-settled")).toBe("true");
-    const wrapper = entryRow;
+    const wrapper = entryRow.closest<HTMLElement>("[data-rail-kind]");
 
     // NOTHING DRAWN CHANGES: the entry keeps its place, its label, its settled
     // word and the control it already had.

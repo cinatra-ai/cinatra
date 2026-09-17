@@ -422,13 +422,6 @@ export function RailExtraEntry({
       className="flex w-full min-w-0 items-center gap-1"
       data-rail-kind={entry.kind}
       data-rail-status={entry.status}
-      // THE ENTRY IS ONE ROW OF THE RAIL, and it is the wrapper that stands for
-      // it: the row's own marks live here beside the other rail anchors, so a
-      // reading of the rail finds ONE node per entry and never the box and the
-      // control inside it as two.
-      data-run-surface-rail-step=""
-      data-run-surface-rail-reached={railReached ? "true" : "false"}
-      data-run-surface-rail-settled={railSettled ? "true" : "false"}
       // The row that opens nothing says so here on BOTH rails, so one reading
       // of the rail answers for both mounts (cinatra#3002).
       data-rail-openable={entry.openable === false ? "false" : undefined}
@@ -460,6 +453,14 @@ export function RailExtraEntry({
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-gate-open={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           // THE STEP THE SCREEN BELONGS TO IS MARKED, and marked the way the
           // frame's own rows mark theirs, so one reading of the rail answers
           // for every row of it.
@@ -497,6 +498,14 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-gate-link={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
         >
           {indicatorNode}
           {titleNode}
@@ -511,6 +520,14 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-verification-link={entry.verification.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
         >
           {indicatorNode}
           {titleNode}
@@ -531,6 +548,14 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_INERT_ROW_CLASS
           )}
           data-rail-inert=""
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
         >
           {indicatorNode}
           {titleNode}
@@ -558,6 +583,14 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           tabIndex={-1}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
         >
           {indicatorNode}
           {titleNode}
