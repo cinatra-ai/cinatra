@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { ScopeSurfaceSkillsTab } from "@/components/scope/scope-surface-skills-tab";
+import { ScopeSurfaceSkillsTab } from "@/components/scope-surfaces/scope-surface-skills-tab";
 import { ScopeSurfacePage } from "@/components/scope-surface-page";
 import { requireAuthSession } from "@/lib/auth-session";
 
@@ -17,8 +17,8 @@ export const metadata: Metadata = { title: "Skills" };
 // slice that fills this tab.
 // The tab's CONTENTS (cinatra#2810, per-scope surfaces S4): the ownership
 // subset this scope owns, read from each row's DURABLE ownership tuple and
-// rendered through the landed list component. `tabRead` tells the shell the
-// read HAPPENED, so an empty tab reports the scope owns nothing rather than
+// rendered through the landed list component. The body carries the tab’s own
+// empty reading, so an empty tab reports the scope owns nothing rather than
 // claiming the tab is unfinished.
 export default async function PersonalSkillsPage() {
   await requireAuthSession();
@@ -28,8 +28,7 @@ export default async function PersonalSkillsPage() {
       scope={scope}
       tab="skills"
       title="Personal"
-      tabRead
-      tabBody={<ScopeSurfaceSkillsTab scope={scope} />}
+      body={<ScopeSurfaceSkillsTab scope={scope} />}
     />
   );
 }

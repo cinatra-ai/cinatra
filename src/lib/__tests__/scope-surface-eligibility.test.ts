@@ -1,361 +1,406 @@
 /**
- * Per-scope eligibility fixtures (cinatra#2808, per-scope surfaces S2).
+ * THE PER-SCOPE ELIGIBILITY LOADER (cinatra#2808, per-scope surfaces S2).
  *
- * The acceptance item this file proves, verbatim:
+ * The acceptance names the fixture set exactly: "Per-scope list fixtures (five
+ * scopes; multi-org workspace union; admin-only visibility both ways; hidden
+ * bindings absent; exact-project installs present; viewed-org != active-org
+ * correct)." Each is written below.
  *
- *   "Per-scope list fixtures (five scopes; multi-org workspace union;
- *    admin-only visibility both ways; hidden bindings absent; exact-project
- *    installs present; viewed-org ≠ active-org correct)."
- *
- * and, for the builder half:
- *
- *   "Eligibility loader (net-new): two arms off one policy snapshot … This
- *    slice owns the exported `WorkspaceVantage` builder the epic names."
- *
- * Every case drives the PURE loader: the policy snapshot is handed in as a
- * value, so a fixture can pin that both arms saw the SAME one.
+ * The VANTAGE arm is the platform's REAL one (`policyFieldAdmitsScopeVantage`,
+ * a pure module) so the fixtures measure the platform's own semantics rather
+ * than a restatement of them; the ACTOR arm is a fixture modelling the one axis
+ * these cases turn on — admin standing — because the real evaluator needs a
+ * permissions store this tier's pure core deliberately has none of.
  */
-import { describe, expect, it } from "vitest";
-import type {
-  AgentAuthPolicy,
-  AgentAuthPolicyVisibility,
-} from "@cinatra-ai/agents/auth-policy-types";
+import { describe, expect, it, vi } from "vitest";
+import { policyFieldAdmitsScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import {
-  buildWorkspaceVantage,
-  listScopeEligiblePackages,
-  type ScopePackageInstall,
-  type ScopeProjectBinding,
-  type WorkspaceVantage,
-} from "../scope-surface-eligibility";
+  installReachesScope,
+  resolveScopeSurfaceEligibility,
+  scopeSurfaceCandidateVantages,
+  type ScopeSurfaceAnchor,
+  type ScopeSurfaceInstall,
+} from "@/lib/scope-surface-eligibility";
+import { buildWorkspaceVantage } from "@/lib/scope-surface-vantage";
+import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 
 const ORG_A = "org-a";
 const ORG_B = "org-b";
-const TEAM_A = "team-a";
-const PROJECT_A = "project-a";
-const ACTOR = "user-1";
+const TEAM = "team-1";
+const PROJECT = "proj-1";
 
-function policy(...tokens: AgentAuthPolicyVisibility[]): AgentAuthPolicy {
-  const selection = tokens as [AgentAuthPolicyVisibility, ...AgentAuthPolicyVisibility[]];
+function policy(tokens: string[]): AgentAuthPolicy {
   return {
-    runListVisibility: selection,
-    runDataVisibility: selection,
-    runExecuteVisibility: selection,
+    runListVisibility: tokens,
+    runDataVisibility: tokens,
+    runExecuteVisibility: tokens,
     allowRunSharing: false,
-  };
+  } as unknown as AgentAuthPolicy;
 }
 
-function install(
-  over: Partial<ScopePackageInstall> & Pick<ScopePackageInstall, "packageName">,
-): ScopePackageInstall {
-  const scoped = {
-    ownerLevel: "organization" as const,
-    ownerId: ORG_A as string | null,
-    organizationId: ORG_A as string | null,
+function install(over: Partial<ScopeSurfaceInstall> & { installId: string }): ScopeSurfaceInstall {
+  return {
+    packageName: `@acme/${over.installId}`,
+    displayName: over.installId,
+    description: null,
+    organizationId: ORG_A,
+    ownerLevel: "organization",
+    ownerId: ORG_A,
+    status: "active",
+    version: "1.0.0",
+    bindings: [],
     ...over,
   };
+}
+
+/** The arms: the real vantage arm, and an actor arm over admin standing. */
+function arms(policies: Map<string, AgentAuthPolicy>, actorIsAdmin: boolean) {
+  const policyFor = vi.fn((i: ScopeSurfaceInstall) => policies.get(i.installId) ?? policy(["workspace"]));
   return {
-    installId: `i-${scoped.packageName}-${scoped.ownerId ?? scoped.organizationId ?? "x"}`,
-    displayName: scoped.packageName,
-    description: null,
-    version: "1.0.0",
-    status: "active",
-    isAssistant: false,
-    ...scoped,
+    policyFor,
+    vantageAdmits: (p: AgentAuthPolicy, v: Parameters<typeof policyFieldAdmitsScopeVantage>[1]) =>
+      policyFieldAdmitsScopeVantage(p.runDataVisibility, v),
+    // The one axis these fixtures turn on: an `admin` selection admits an
+    // administrator and nobody else; every other selection admits a member.
+    actorAdmits: (p: AgentAuthPolicy) =>
+      (p.runDataVisibility as unknown as string[]).includes("admin") ? actorIsAdmin : true,
   };
 }
 
-/** Both arms off ONE snapshot: the map IS the snapshot. */
-function snapshot(entries: Array<[string, AgentAuthPolicy]>) {
-  const map = new Map(entries);
-  return (row: ScopePackageInstall) => map.get(row.installId) ?? policy("org");
+const workspaceAnchor = (orgIds: string[]): ScopeSurfaceAnchor => ({
+  userId: "user-1",
+  viewedOrgId: null,
+  workspace: buildWorkspaceVantage({
+    userId: "user-1",
+    memberships: orgIds.map((orgId) => ({ orgId })),
+  }),
+});
+
+const orgAnchor = (viewedOrgId: string | null): ScopeSurfaceAnchor => ({
+  userId: "user-1",
+  viewedOrgId,
+  workspace: null,
+});
+
+async function run(
+  scope: ScopeSurfaceRef,
+  anchor: ScopeSurfaceAnchor,
+  installs: ScopeSurfaceInstall[],
+  policies = new Map<string, AgentAuthPolicy>(),
+  actorIsAdmin = false,
+) {
+  return resolveScopeSurfaceEligibility({ scope, anchor, installs, arms: arms(policies, actorIsAdmin) });
 }
 
-const ALLOW_ALL = () => true;
+describe("per-scope eligibility — the five scopes", () => {
+  const orgRow = install({ installId: "org-row", organizationId: ORG_A, ownerId: ORG_A });
+  const teamRow = install({
+    installId: "team-row",
+    organizationId: ORG_A,
+    ownerLevel: "team",
+    ownerId: TEAM,
+  });
+  const projectRow = install({
+    installId: "project-row",
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: null,
+    bindings: [{ kind: "project", id: PROJECT }],
+  });
+  const otherOrgRow = install({ installId: "other-org", organizationId: ORG_B, ownerId: ORG_B });
+  const all = [orgRow, teamRow, projectRow, otherOrgRow];
 
-const vantageAB: WorkspaceVantage = {
-  userId: ACTOR,
-  organizations: [
-    { orgId: ORG_A, teamIds: [TEAM_A], projectIds: [PROJECT_A] },
-    { orgId: ORG_B, teamIds: [], projectIds: [] },
-  ],
-};
-
-describe("listScopeEligiblePackages — the five scope rules", () => {
-  it("personal lists the actor's invocable set and nothing the actor arm refuses", () => {
-    const mine = install({ packageName: "@v/mine", ownerLevel: "user", ownerId: ACTOR });
-    const theirs = install({ packageName: "@v/theirs", ownerLevel: "user", ownerId: "user-2" });
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "personal", orgId: ORG_A },
-      actorUserId: ACTOR,
-      installs: [mine, theirs],
-      policyFor: snapshot([]),
-      actorMayUse: (row) => row.ownerId === ACTOR,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/mine"]);
+  it("PERSONAL: the actor's invocable set — this organization's rows plus the org-NULL rows", async () => {
+    const rows = await run({ kind: "personal" }, orgAnchor(ORG_A), all);
+    expect(rows.map((r) => r.packageName).sort()).toEqual([
+      orgRow.packageName,
+      projectRow.packageName,
+      teamRow.packageName,
+    ].sort());
   });
 
-  it("organization lists exact-org installs and never another organization's", () => {
-    const here = install({ packageName: "@v/here", organizationId: ORG_A, ownerId: ORG_A });
-    const elsewhere = install({
-      packageName: "@v/elsewhere",
-      organizationId: ORG_B,
-      ownerId: ORG_B,
-    });
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "organization", orgId: ORG_A },
-      actorUserId: ACTOR,
-      installs: [here, elsewhere],
-      policyFor: snapshot([]),
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/here"]);
+  it("ORGANIZATION: exact-org installs only — another organization's row never appears", async () => {
+    const rows = await run({ kind: "organization", id: ORG_A }, orgAnchor(ORG_A), all);
+    const names = rows.map((r) => r.packageName);
+    expect(names).toContain(orgRow.packageName);
+    expect(names).toContain(teamRow.packageName); // anchored in org A
+    expect(names).not.toContain(otherOrgRow.packageName);
+    expect(names).not.toContain(projectRow.packageName); // org-NULL is the workspace tier's
   });
 
-  it("team lists exact-team plus exact-org, never another team's install", () => {
-    const mineTeam = install({
-      packageName: "@v/team-own",
-      ownerLevel: "team",
-      ownerId: TEAM_A,
-      organizationId: ORG_A,
-    });
-    const otherTeam = install({
-      packageName: "@v/team-other",
-      ownerLevel: "team",
-      ownerId: "team-z",
-      organizationId: ORG_A,
-    });
-    const orgWide = install({ packageName: "@v/org-wide" });
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "team", orgId: ORG_A, teamId: TEAM_A },
-      actorUserId: ACTOR,
-      installs: [mineTeam, otherTeam, orgWide],
-      policyFor: snapshot([
-        [`i-@v/team-own-${TEAM_A}`, policy(`team:${TEAM_A}`)],
-        ["i-@v/team-other-team-z", policy("team:team-z")],
-      ]),
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/org-wide", "@v/team-own"]);
+  it("TEAM: exact-team + exact-org", async () => {
+    const rows = await run({ kind: "team", id: TEAM }, orgAnchor(ORG_A), all);
+    const names = rows.map((r) => r.packageName);
+    expect(names).toContain(teamRow.packageName); // exact-team
+    expect(names).toContain(orgRow.packageName); // exact-org
+    expect(names).not.toContain(otherOrgRow.packageName);
   });
 
-  it("project lists exact-project installs and non-hidden bindings; a hidden binding never surfaces", () => {
-    const exact = install({
-      packageName: "@v/project-own",
-      organizationId: ORG_A,
-      ownerId: ORG_A,
-    });
-    const boundVisible = install({
-      packageName: "@v/bound",
-      organizationId: ORG_A,
-      ownerId: ORG_A,
-    });
-    const boundHidden = install({
-      packageName: "@v/hidden",
-      organizationId: ORG_A,
-      ownerId: ORG_A,
-    });
-    const bindings: ScopeProjectBinding[] = [
-      { packageName: "@v/project-own", projectId: PROJECT_A, visibility: "project-private" },
-      { packageName: "@v/bound", projectId: PROJECT_A, visibility: "visible" },
-      { packageName: "@v/hidden", projectId: PROJECT_A, visibility: "hidden" },
-    ];
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "project", orgId: ORG_A, projectId: PROJECT_A },
-      actorUserId: ACTOR,
-      installs: [exact, boundVisible, boundHidden],
-      bindings,
-      // `project:<P>` so only the project's own vantage admits them — an org
-      // token would let the exact-org arm carry all three in and hide the
-      // binding rule behind it.
-      policyFor: snapshot([
-        [`i-@v/project-own-${ORG_A}`, policy(`project:${PROJECT_A}`)],
-        [`i-@v/bound-${ORG_A}`, policy(`project:${PROJECT_A}`)],
-        [`i-@v/hidden-${ORG_A}`, policy(`project:${PROJECT_A}`)],
-      ]),
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/bound", "@v/project-own"]);
-    expect(rows.map((r) => r.packageName)).not.toContain("@v/hidden");
+  it("PROJECT: EXACT-PROJECT INSTALLS PRESENT, plus exact-org", async () => {
+    const rows = await run({ kind: "project", id: PROJECT }, orgAnchor(ORG_A), all);
+    const names = rows.map((r) => r.packageName);
+    expect(names).toContain(projectRow.packageName);
+    expect(names).toContain(orgRow.packageName);
+    expect(names).not.toContain(otherOrgRow.packageName);
   });
 
-  it("workspace unions every member organization and keeps its execution organizations", () => {
-    const inA = install({ packageName: "@v/only-a", organizationId: ORG_A, ownerId: ORG_A });
-    const inB = install({ packageName: "@v/only-b", organizationId: ORG_B, ownerId: ORG_B });
-    const bothA = install({
-      packageName: "@v/both",
-      installId: "i-both-a",
-      organizationId: ORG_A,
-      ownerId: ORG_A,
-    });
-    const bothB = install({
-      packageName: "@v/both",
-      installId: "i-both-b",
-      organizationId: ORG_B,
-      ownerId: ORG_B,
-    });
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "workspace" },
-      actorUserId: ACTOR,
-      installs: [inA, inB, bothA, bothB],
-      vantage: vantageAB,
-      policyFor: snapshot([]),
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/both", "@v/only-a", "@v/only-b"]);
-    // Package-level display dedupe, and the launch-organization candidates the
-    // epic's contract keeps: "#2808 owns candidate production".
-    const both = rows.find((r) => r.packageName === "@v/both")!;
-    expect([...both.executionOrganizationIds].sort()).toEqual([ORG_A, ORG_B]);
-    expect(rows.find((r) => r.packageName === "@v/only-a")!.executionOrganizationIds).toEqual([
-      ORG_A,
-    ]);
+  it("WORKSPACE: the multi-org UNION, with org-NULL rows admitted once", async () => {
+    const rows = await run({ kind: "workspace" }, workspaceAnchor([ORG_A, ORG_B]), all);
+    const names = rows.map((r) => r.packageName);
+    expect(names).toContain(orgRow.packageName);
+    expect(names).toContain(otherOrgRow.packageName);
+    expect(names.filter((n) => n === projectRow.packageName)).toHaveLength(1);
   });
 
-  it("workspace admits an organization-NULL row once, with no concrete execution organization", () => {
-    const tenantWide = install({
-      packageName: "@v/platform",
+  it("WORKSPACE: a row is absent once its organization leaves the vantage", async () => {
+    const rows = await run({ kind: "workspace" }, workspaceAnchor([ORG_A]), all);
+    expect(rows.map((r) => r.packageName)).not.toContain(otherOrgRow.packageName);
+  });
+});
+
+describe("hidden bindings", () => {
+  it("HIDDEN BINDINGS ABSENT: a hidden project binding never surfaces the row", async () => {
+    const hidden = install({
+      installId: "hidden-row",
+      organizationId: null,
       ownerLevel: "workspace",
       ownerId: null,
-      organizationId: null,
+      bindings: [{ kind: "project", id: PROJECT, hidden: true }],
     });
-    const rows = listScopeEligiblePackages({
+    const rows = await run({ kind: "project", id: PROJECT }, orgAnchor(ORG_A), [hidden]);
+    expect(rows).toEqual([]);
+    expect(installReachesScope({ kind: "project", id: PROJECT }, orgAnchor(ORG_A), hidden)).toBe(
+      false,
+    );
+  });
+
+  it("a hidden binding is never even a CONTRIBUTING reason beside a visible one", async () => {
+    const both = install({
+      installId: "both-row",
+      organizationId: null,
+      ownerLevel: "workspace",
+      ownerId: null,
+      bindings: [
+        { kind: "project", id: "proj-other", hidden: true },
+        { kind: "project", id: PROJECT },
+      ],
+    });
+    expect(installReachesScope({ kind: "project", id: PROJECT }, orgAnchor(ORG_A), both)).toBe(true);
+    expect(
+      installReachesScope({ kind: "project", id: "proj-other" }, orgAnchor(ORG_B), both),
+    ).toBe(false);
+  });
+});
+
+describe("admin-only visibility, BOTH ways", () => {
+  const adminRow = install({ installId: "admin-row", organizationId: ORG_A, ownerId: ORG_A });
+  const policies = new Map([[adminRow.installId, policy(["admin"])]]);
+
+  it("a MEMBER never sees an admin-only package on their personal scope", async () => {
+    const rows = await run({ kind: "personal" }, orgAnchor(ORG_A), [adminRow], policies, false);
+    expect(rows).toEqual([]);
+  });
+
+  it("an ADMINISTRATOR does see it on their personal scope", async () => {
+    const rows = await run({ kind: "personal" }, orgAnchor(ORG_A), [adminRow], policies, true);
+    expect(rows.map((r) => r.packageName)).toEqual([adminRow.packageName]);
+  });
+
+  it("no ORGANIZATION scope surfaces it, not even an administrator's — a scope holds no admin standing", async () => {
+    const rows = await run(
+      { kind: "organization", id: ORG_A },
+      orgAnchor(ORG_A),
+      [adminRow],
+      policies,
+      true,
+    );
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("the viewed organization", () => {
+  it("VIEWED-ORG != ACTIVE-ORG: an organization scope reads its OWN tenant", async () => {
+    const rowB = install({ installId: "b-row", organizationId: ORG_B, ownerId: ORG_B });
+    // The session points at org A; the reader is on org B's page.
+    const rows = await run({ kind: "organization", id: ORG_B }, orgAnchor(ORG_B), [rowB]);
+    expect(rows.map((r) => r.packageName)).toEqual([rowB.packageName]);
+    expect(scopeSurfaceCandidateVantages({ kind: "organization", id: ORG_B }, orgAnchor(ORG_A))).toEqual([
+      { orgId: ORG_B, vantage: { kind: "organization", orgId: ORG_B, scopeId: ORG_B } },
+    ]);
+  });
+});
+
+describe("one policy snapshot, two arms", () => {
+  it("reads the stored policy EXACTLY ONCE per install and hands that value to both arms", async () => {
+    const row = install({ installId: "snap-row" });
+    const seen: AgentAuthPolicy[] = [];
+    const one = policy(["workspace"]);
+    let reads = 0;
+    await resolveScopeSurfaceEligibility({
       scope: { kind: "workspace" },
-      actorUserId: ACTOR,
-      installs: [tenantWide],
-      vantage: vantageAB,
-      policyFor: snapshot([["i-@v/platform-x", policy("workspace")]]),
-      actorMayUse: ALLOW_ALL,
+      anchor: workspaceAnchor([ORG_A, ORG_B]),
+      installs: [row],
+      arms: {
+        policyFor: () => {
+          reads += 1;
+          return one;
+        },
+        vantageAdmits: (p, v) => {
+          seen.push(p);
+          return policyFieldAdmitsScopeVantage(p.runDataVisibility, v);
+        },
+        actorAdmits: (p) => {
+          seen.push(p);
+          return true;
+        },
+      },
+    });
+    // ONE read, even though the workspace scope evaluated two vantages.
+    expect(reads).toBe(1);
+    expect(seen.length).toBeGreaterThan(1);
+    for (const p of seen) expect(p).toBe(one);
+  });
+});
+
+describe("workspace rows keep their execution organizations", () => {
+  it("retains every eligible CONCRETE execution organization after the package-level dedupe", async () => {
+    const pkg = "@acme/shared";
+    const inA = install({ installId: "in-a", packageName: pkg, organizationId: ORG_A, ownerId: ORG_A });
+    const inB = install({ installId: "in-b", packageName: pkg, organizationId: ORG_B, ownerId: ORG_B });
+    const rows = await run({ kind: "workspace" }, workspaceAnchor([ORG_A, ORG_B]), [inA, inB]);
+    // ONE card for the package …
+    expect(rows).toHaveLength(1);
+    // … and both organizations it may actually execute in.
+    expect(rows[0]!.executionOrgIds).toEqual([ORG_A, ORG_B]);
+  });
+
+  it("every other scope produces exactly its own organization", async () => {
+    const rows = await run({ kind: "organization", id: ORG_A }, orgAnchor(ORG_A), [
+      install({ installId: "solo" }),
+    ]);
+    expect(rows[0]!.executionOrgIds).toEqual([ORG_A]);
+  });
+});
+
+describe("live statuses", () => {
+  it("lists active and locked rows and nothing else", async () => {
+    const locked = install({ installId: "locked-row", status: "locked" });
+    const rows = await run({ kind: "organization", id: ORG_A }, orgAnchor(ORG_A), [locked]);
+    expect(rows.map((r) => r.status)).toEqual(["locked"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CONVERGENCE ROUND'S FIXTURES (cinatra#2808)
+// ---------------------------------------------------------------------------
+
+describe("the per-install tenant fence", () => {
+  it("never lets one organization's install collect ANOTHER organization's execution organization", async () => {
+    // Both arms say yes to everything — the fence, and only the fence, is what
+    // keeps org A's install out of org B. (This is the platform-administrator
+    // shape: the real evaluator's cross-org guard is bypassed wholesale for
+    // one, so the guard cannot be what this rule rests on.)
+    const rows = await resolveScopeSurfaceEligibility({
+      scope: { kind: "workspace" },
+      anchor: workspaceAnchor([ORG_A, ORG_B]),
+      installs: [install({ installId: "org-a-row", organizationId: ORG_A, ownerId: ORG_A })],
+      arms: {
+        policyFor: () => policy(["workspace"]),
+        vantageAdmits: () => true,
+        actorAdmits: () => true,
+      },
     });
     expect(rows).toHaveLength(1);
-    // "an org-NULL-only package requires selection from WorkspaceVantage"
-    expect(rows[0]!.executionOrganizationIds).toEqual([]);
+    expect(rows[0]!.executionOrgIds).toEqual([ORG_A]);
+  });
+
+  it("keeps an org-NULL row reaching every member organization", async () => {
+    const rows = await resolveScopeSurfaceEligibility({
+      scope: { kind: "workspace" },
+      anchor: workspaceAnchor([ORG_A, ORG_B]),
+      installs: [
+        install({
+          installId: "platform-row",
+          organizationId: null,
+          ownerLevel: "workspace",
+          ownerId: null,
+        }),
+      ],
+      arms: {
+        policyFor: () => policy(["workspace"]),
+        vantageAdmits: () => true,
+        actorAdmits: () => true,
+      },
+    });
+    expect(rows[0]!.executionOrgIds).toEqual([ORG_A, ORG_B].sort());
   });
 });
 
-describe("listScopeEligiblePackages — the two arms and the viewed scope", () => {
-  it("an admin-only package is refused both ways: for a member AND for an admin actor", () => {
-    const adminOnly = install({ packageName: "@v/admin-only" });
-    const forMember = listScopeEligiblePackages({
-      scope: { kind: "organization", orgId: ORG_A },
-      actorUserId: ACTOR,
-      installs: [adminOnly],
-      policyFor: snapshot([[`i-@v/admin-only-${ORG_A}`, policy("admin")]]),
-      actorMayUse: () => false,
-    });
-    const forAdmin = listScopeEligiblePackages({
-      scope: { kind: "organization", orgId: ORG_A },
-      actorUserId: ACTOR,
-      installs: [adminOnly],
-      policyFor: snapshot([[`i-@v/admin-only-${ORG_A}`, policy("admin")]]),
-      // The ACTOR arm admits the admin; the VANTAGE arm still refuses, because
-      // a scope holds no admin standing.
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(forMember).toEqual([]);
-    expect(forAdmin).toEqual([]);
+describe("the workspace vantage union carries the teams and projects too", () => {
+  const vantage = (): ScopeSurfaceAnchor => ({
+    userId: "user-1",
+    viewedOrgId: null,
+    workspace: buildWorkspaceVantage({
+      userId: "user-1",
+      memberships: [{ orgId: ORG_A }],
+      teamIdsByOrg: { [ORG_A]: [TEAM] },
+      projectIdsByOrg: { [ORG_A]: [PROJECT] },
+    }),
   });
 
-  it("reads the VIEWED organization, never the active one", () => {
-    const inB = install({ packageName: "@v/only-b", organizationId: ORG_B, ownerId: ORG_B });
-    // The actor's active organization is ORG_A; the page they are looking at is
-    // ORG_B's. The loader is parameterized by the viewed org and takes no
-    // active-org input at all, so the row shows.
-    const rows = listScopeEligiblePackages({
-      scope: { kind: "organization", orgId: ORG_B },
-      actorUserId: ACTOR,
-      installs: [inB],
-      policyFor: snapshot([[`i-@v/only-b-${ORG_B}`, policy(`org:${ORG_B}`)]]),
-      actorMayUse: ALLOW_ALL,
-    });
-    expect(rows.map((r) => r.packageName)).toEqual(["@v/only-b"]);
+  it("reaches a row a generic member of the actor's OWN team can reach", async () => {
+    const teamOnly = install({ installId: "team-only", organizationId: ORG_A, ownerId: ORG_A });
+    const rows = await run(
+      { kind: "workspace" },
+      vantage(),
+      [teamOnly],
+      new Map([[teamOnly.installId, policy([`team:${TEAM}`])]]),
+    );
+    expect(rows.map((r) => r.packageName)).toEqual([teamOnly.packageName]);
+    // Still exactly its own organization — the widening adds no tenant.
+    expect(rows[0]!.executionOrgIds).toEqual([ORG_A]);
   });
 
-  it("both arms read the same snapshot value", () => {
-    const row = install({ packageName: "@v/one" });
-    const seen: AgentAuthPolicy[] = [];
-    let reads = 0;
-    listScopeEligiblePackages({
-      scope: { kind: "organization", orgId: ORG_A },
-      actorUserId: ACTOR,
+  it("reaches a row a generic member of the actor's OWN project can reach", async () => {
+    const projectOnly = install({
+      installId: "project-only",
+      organizationId: ORG_A,
+      ownerId: ORG_A,
+    });
+    const rows = await run(
+      { kind: "workspace" },
+      vantage(),
+      [projectOnly],
+      new Map([[projectOnly.installId, policy([`project:${PROJECT}`])]]),
+    );
+    expect(rows.map((r) => r.packageName)).toEqual([projectOnly.packageName]);
+  });
+
+  it("still refuses a row scoped to a team the actor is NOT in", async () => {
+    const foreign = install({ installId: "foreign-team", organizationId: ORG_A, ownerId: ORG_A });
+    const rows = await run(
+      { kind: "workspace" },
+      vantage(),
+      [foreign],
+      new Map([[foreign.installId, policy(["team:team-999"])]]),
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("takes the policy snapshot ONCE per install however many vantages an organization carries", async () => {
+    const row = install({ installId: "counted", organizationId: ORG_A, ownerId: ORG_A });
+    const policyFor = vi.fn(() => policy(["workspace"]));
+    const actorAdmits = vi.fn(() => true);
+    await resolveScopeSurfaceEligibility({
+      scope: { kind: "workspace" },
+      anchor: vantage(),
       installs: [row],
-      policyFor: () => {
-        reads += 1;
-        return policy("org");
-      },
-      actorMayUse: (_row, p) => {
-        seen.push(p);
-        return true;
-      },
+      arms: { policyFor, vantageAdmits: () => true, actorAdmits },
     });
-    expect(reads).toBe(1);
-    expect(seen).toHaveLength(1);
-  });
-
-  it("an archived install never surfaces on any scope tab", () => {
-    const archived = install({ packageName: "@v/archived", status: "archived" });
-    expect(
-      listScopeEligiblePackages({
-        scope: { kind: "organization", orgId: ORG_A },
-        actorUserId: ACTOR,
-        installs: [archived],
-        policyFor: snapshot([]),
-        actorMayUse: ALLOW_ALL,
-      }),
-    ).toEqual([]);
-  });
-});
-
-describe("buildWorkspaceVantage — the epic's conformance anchor", () => {
-  const deps = {
-    readMemberOrganizations: async () => [
-      { orgId: ORG_A, archived: false },
-      { orgId: ORG_B, archived: false },
-      { orgId: "org-archived", archived: true },
-    ],
-    readVisibleTeams: async (_userId: string, orgId: string) =>
-      orgId === ORG_A ? [TEAM_A] : [],
-    readVisibleProjects: async (_userId: string, orgId: string) =>
-      orgId === ORG_A ? [PROJECT_A] : [],
-  };
-
-  it("is the actor's member organizations, with the actor-visible teams and projects in each", async () => {
-    const vantage = await buildWorkspaceVantage(deps, { userId: ACTOR });
-    expect(vantage.userId).toBe(ACTOR);
-    expect(vantage.organizations.map((o) => o.orgId)).toEqual([ORG_A, ORG_B]);
-    expect(vantage.organizations[0]!.teamIds).toEqual([TEAM_A]);
-    expect(vantage.organizations[0]!.projectIds).toEqual([PROJECT_A]);
-    expect(vantage.organizations[1]!.teamIds).toEqual([]);
-  });
-
-  it("drops an archived organization", async () => {
-    const vantage = await buildWorkspaceVantage(deps, { userId: ACTOR });
-    expect(vantage.organizations.map((o) => o.orgId)).not.toContain("org-archived");
-  });
-
-  it("drops an organization whose membership was revoked, on the next read", async () => {
-    let orgs = [{ orgId: ORG_A, archived: false }, { orgId: ORG_B, archived: false }];
-    const revocable = { ...deps, readMemberOrganizations: async () => orgs };
-    expect(
-      (await buildWorkspaceVantage(revocable, { userId: ACTOR })).organizations.map((o) => o.orgId),
-    ).toEqual([ORG_A, ORG_B]);
-    orgs = [{ orgId: ORG_A, archived: false }];
-    expect(
-      (await buildWorkspaceVantage(revocable, { userId: ACTOR })).organizations.map((o) => o.orgId),
-    ).toEqual([ORG_A]);
-  });
-
-  it("never adds, removes or selects a member organization from the active one", async () => {
-    const onA = await buildWorkspaceVantage(deps, {
-      userId: ACTOR,
-      activeOrganizationId: ORG_A,
-    });
-    const onB = await buildWorkspaceVantage(deps, {
-      userId: ACTOR,
-      activeOrganizationId: ORG_B,
-    });
-    const none = await buildWorkspaceVantage(deps, { userId: ACTOR, activeOrganizationId: null });
-    expect(onA).toEqual(onB);
-    expect(onA).toEqual(none);
+    expect(policyFor).toHaveBeenCalledTimes(1);
+    // ...and the organization is judged ONCE, not once per team/project vantage.
+    expect(actorAdmits).toHaveBeenCalledTimes(1);
   });
 });

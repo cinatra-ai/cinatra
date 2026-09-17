@@ -1,157 +1,184 @@
 /**
- * The per-scope ROW BUILDERS (cinatra#2808, per-scope surfaces S2).
+ * THE SCOPE-TAB CARD ROWS (cinatra#2808, per-scope surfaces S2).
  *
- * Acceptance items proved here, verbatim:
- *
- *   "Agents tab: reuse AgentAllCard/AgentRunClient with a scoped runHref (S3)
- *    and EXTEND the card + row model by name: per-entry Settings (opens the
- *    assignment page — the assignment epic), version, status. Non-assistant
- *    agent packages, active|locked."
- *
- *   "Assistants tab: reuse the directory resolver parameterized by the viewed
- *    scope (inject the predicate — never a value import of scope-filter) and
- *    EXTEND the rows around the preserved Chat button(s) with Settings
- *    (Skills-only page) and the installed-card fields. Assistant packages only."
+ * The acceptance: "every row's Run/Chat control carries its row-specific launch
+ * href … Every Settings control carries the exact scope- and package-specific
+ * href produced by #2809's contract". The hrefs are therefore asserted against
+ * #2809's OWN builders, never against a literal retyped here — a literal would
+ * pass even if the two slices had drifted apart.
  */
 import { describe, expect, it } from "vitest";
 
 import {
-  buildScopeAgentRows,
-  buildScopeAssistantRows,
-  scopeSurfaceScopeMatch,
-} from "../scope-surface-rows";
-import type { ScopeEligibilityRow } from "../scope-surface-eligibility";
+  buildScopeSurfaceAgentRows,
+  buildScopeSurfaceAssistantRows,
+  formatScopeSurfaceVersion,
+} from "@/lib/scope-surface-rows";
+import type { ScopeSurfaceEligibilityRow } from "@/lib/scope-surface-eligibility";
+import {
+  scopeSurfaceAgentLaunchHref,
+  scopeSurfaceAgentSettingsHref,
+  scopeSurfaceAssistantLaunchHref,
+  scopeSurfaceAssistantSettingsHref,
+  type ScopeSurfaceRef,
+} from "@/lib/scope-surfaces";
 
-const TEAM = { kind: "team", id: "team-7" } as const;
-const ORG = { kind: "organization", id: "org-1" } as const;
+const eligible = (over: Partial<ScopeSurfaceEligibilityRow> = {}): ScopeSurfaceEligibilityRow => ({
+  packageName: "@acme/research",
+  displayName: "Research Assistant",
+  description: "Gathers sources.",
+  version: "0.4.2",
+  status: "active",
+  installId: "install-1",
+  executionOrgIds: ["org-a"],
+  ...over,
+});
 
-function eligible(over: Partial<ScopeEligibilityRow> & { packageName: string }): ScopeEligibilityRow {
-  return {
-    displayName: over.packageName,
-    description: null,
-    version: "1.0.0",
-    status: "active",
-    isAssistant: false,
-    executionOrganizationIds: ["org-1"],
-    ...over,
-  };
-}
+const SCOPES: ScopeSurfaceRef[] = [
+  { kind: "workspace" },
+  { kind: "personal" },
+  { kind: "organization", id: "org-a" },
+  { kind: "team", id: "team-1" },
+  { kind: "project", id: "proj-1" },
+];
 
-describe("buildScopeAgentRows", () => {
-  const rows = [
-    eligible({ packageName: "@acme/orbit-agent", displayName: "Orbit", version: "1.2.0" }),
-    eligible({ packageName: "@acme/ledger-agent", status: "locked", version: "3.0.1" }),
-    eligible({ packageName: "@acme/atlas-assistant", isAssistant: true }),
-  ];
+describe("the Agents tab's rows", () => {
+  it.each(SCOPES)("carries #2809's scoped Run and Settings hrefs on %o", (scope) => {
+    const [row] = buildScopeSurfaceAgentRows(scope, [eligible()]);
+    expect(row!.runHref).toBe(scopeSurfaceAgentLaunchHref(scope, "@acme/research"));
+    expect(row!.settingsHref).toBe(scopeSurfaceAgentSettingsHref(scope, "@acme/research"));
+  });
 
-  it("lists NON-assistant packages only", () => {
-    expect(buildScopeAgentRows(TEAM, rows).map((r) => r.key)).toEqual([
-      "@acme/orbit-agent",
-      "@acme/ledger-agent",
+  it("gives each row its OWN launch and settings href — never one shared address", () => {
+    const rows = buildScopeSurfaceAgentRows({ kind: "team", id: "team-1" }, [
+      eligible({ packageName: "@acme/research" }),
+      eligible({ packageName: "@acme/transcript", displayName: "Media Transcript Agent" }),
     ]);
+    expect(rows[0]!.runHref).not.toBe(rows[1]!.runHref);
+    expect(rows[0]!.settingsHref).not.toBe(rows[1]!.settingsHref);
+    expect(rows[1]!.runHref).toContain("transcript");
   });
 
-  it("gives every row its scoped Run href and the S3 Settings href", () => {
-    const [orbit] = buildScopeAgentRows(TEAM, rows);
-    expect(orbit!.runHref).toBe("/teams/team-7/agents/acme/orbit-agent/new");
-    expect(orbit!.settingsHref).toBe("/teams/team-7/agents/acme/orbit-agent/settings");
-    expect(buildScopeAgentRows(ORG, rows)[0]!.runHref).toBe(
-      "/organizations/org-1/agents/acme/orbit-agent/new",
-    );
+  it("carries the version and the status each row actually has", () => {
+    const rows = buildScopeSurfaceAgentRows({ kind: "workspace" }, [
+      eligible({ packageName: "@acme/research", version: "0.4.2", status: "active" }),
+      eligible({ packageName: "@acme/transcript", version: "1.9.0", status: "locked" }),
+    ]);
+    expect(rows[0]!.version).toBe("v0.4.2");
+    expect(rows[0]!.status).toBe("active");
+    expect(rows[1]!.version).toBe("v1.9.0");
+    expect(rows[1]!.status).toBe("locked");
   });
 
-  it("carries each row's own version and status, and no /configuration detail href", () => {
-    const [orbit, ledger] = buildScopeAgentRows(TEAM, rows);
-    expect([orbit!.version, orbit!.status]).toEqual(["1.2.0", "active"]);
-    expect([ledger!.version, ledger!.status]).toEqual(["3.0.1", "locked"]);
-    expect(orbit!.detailHref).toBeNull();
-    expect(orbit!.packageName).toBe("@acme/orbit-agent");
+  it("mints NO /configuration href — the scope tabs are member-facing", () => {
+    const rows = buildScopeSurfaceAgentRows({ kind: "organization", id: "org-a" }, [eligible()]);
+    expect(rows[0]!.detailHref).toBeNull();
+    expect(JSON.stringify(rows)).not.toContain("/configuration");
   });
 });
 
-describe("buildScopeAssistantRows", () => {
+describe("the Assistants tab's rows", () => {
   const directory = [
     {
-      packageName: "@acme/atlas-assistant",
+      packageName: "@acme/research",
       vendor: "acme",
-      slug: "atlas-assistant",
-      displayName: "Atlas Assistant",
-      localChatHref: "/chat/acme/atlas-assistant",
-      remoteInstances: [
-        {
-          instanceId: "site-1",
-          name: "Main site",
-          localChatHref: "/chat/acme/atlas-assistant/site-1",
-          remoteHref: "https://example.invalid/wp-admin",
-        },
-      ],
-    },
-    {
-      packageName: "@acme/local-assistant",
-      vendor: "acme",
-      slug: "local-assistant",
-      displayName: "Local Assistant",
-      localChatHref: "/chat/acme/local-assistant",
+      slug: "research",
+      displayName: "Research Assistant",
+      remoteCapable: false,
       remoteInstances: [],
     },
   ];
-  const eligibility = [
-    eligible({ packageName: "@acme/atlas-assistant", isAssistant: true, version: "2.4.0" }),
-    eligible({
-      packageName: "@acme/local-assistant",
-      isAssistant: true,
-      version: "0.9.0",
-      status: "locked",
-    }),
-    eligible({ packageName: "@acme/orbit-agent" }),
-  ];
 
-  it("re-addresses every Chat control at the viewed scope and keeps them all", () => {
-    const [atlas, local] = buildScopeAssistantRows(TEAM, directory, eligibility);
-    expect(local!.localChatHref).toBe("/teams/team-7/assistants/acme/local-assistant");
-    expect(atlas!.remoteInstances[0]!.localChatHref).toBe(
-      "/teams/team-7/assistants/acme/atlas-assistant/site-1",
+  it.each(SCOPES)("carries #2809's scoped Chat and Settings hrefs on %o", (scope) => {
+    const [row] = buildScopeSurfaceAssistantRows(scope, directory, [eligible()]);
+    expect(row!.chatHref).toBe(
+      scopeSurfaceAssistantLaunchHref(scope, { vendor: "acme", slug: "research" }),
     );
-    // The jump-out is the site's own URL — never re-based on a scope.
-    expect(atlas!.remoteInstances[0]!.remoteHref).toBe("https://example.invalid/wp-admin");
+    expect(row!.settingsHref).toBe(
+      scopeSurfaceAssistantSettingsHref(scope, { vendor: "acme", slug: "research" }),
+    );
   });
 
-  it("adds the Skills-only Settings href and the installed-card fields", () => {
-    const [atlas, local] = buildScopeAssistantRows(TEAM, directory, eligibility);
-    expect(atlas!.settingsHref).toBe("/teams/team-7/assistants/acme/atlas-assistant/settings");
-    expect([atlas!.version, atlas!.status]).toEqual(["2.4.0", "active"]);
-    expect([local!.version, local!.status]).toEqual(["0.9.0", "locked"]);
+  it("PRESERVES the Chat control(s): a remote-capable row keeps one pair per connected site", () => {
+    const scope: ScopeSurfaceRef = { kind: "team", id: "team-1" };
+    const [row] = buildScopeSurfaceAssistantRows(
+      scope,
+      [
+        {
+          ...directory[0]!,
+          remoteCapable: true,
+          remoteInstances: [
+            { instanceId: "site-1", name: "Marketing site", remoteHref: "https://site.example/wp" },
+          ],
+        },
+      ],
+      [eligible()],
+    );
+    expect(row!.remoteInstances).toHaveLength(1);
+    // The in-app half is re-scoped …
+    expect(row!.remoteInstances[0]!.localChatHref).toBe(
+      scopeSurfaceAssistantLaunchHref(scope, {
+        vendor: "acme",
+        slug: "research",
+        instance: "site-1",
+      }),
+    );
+    // … and the jump-out addresses the site itself, which no scope owns.
+    expect(row!.remoteInstances[0]!.remoteHref).toBe("https://site.example/wp");
   });
 
-  it("drops a directory row the scope's eligibility does not admit", () => {
-    const [only] = buildScopeAssistantRows(TEAM, directory, [eligibility[0]!]);
-    expect(only!.packageName).toBe("@acme/atlas-assistant");
-    expect(buildScopeAssistantRows(TEAM, directory, [eligibility[0]!])).toHaveLength(1);
+  it("carries the installed-card fields from the eligible install", () => {
+    const [row] = buildScopeSurfaceAssistantRows({ kind: "workspace" }, directory, [
+      eligible({ version: "2.1.0", status: "locked", description: "Cited answers." }),
+    ]);
+    expect(row!.version).toBe("v2.1.0");
+    expect(row!.status).toBe("locked");
+    expect(row!.description).toBe("Cited answers.");
+  });
+
+  it("drops a directory row this scope has no eligible install for", () => {
+    const rows = buildScopeSurfaceAssistantRows({ kind: "project", id: "proj-1" }, directory, []);
+    expect(rows).toEqual([]);
+  });
+
+  /** The BUILT-IN platform assistant is never an `installed_extension` row — the
+   *  registry reader unions its descriptor in unconditionally — so the
+   *  eligibility filter gates the INSTALLED assistant packages only, and the
+   *  built-in row is folded in with no install behind it. */
+  const builtin = {
+    packageName: "@cinatra-ai/cinatra-assistant",
+    vendor: "cinatra-ai",
+    slug: "cinatra-assistant",
+    displayName: "Cinatra",
+    isBuiltin: true,
+    remoteCapable: false,
+    remoteInstances: [],
+  };
+
+  it.each(SCOPES)("folds the BUILT-IN assistant in with NO eligible install on %o", (scope) => {
+    const assistant = { vendor: "cinatra-ai", slug: "cinatra-assistant" };
+    const [row] = buildScopeSurfaceAssistantRows(scope, [builtin], []);
+    expect(row!.packageName).toBe("@cinatra-ai/cinatra-assistant");
+    expect(row!.displayName).toBe("Cinatra");
+    expect(row!.chatHref).toBe(scopeSurfaceAssistantLaunchHref(scope, assistant));
+    expect(row!.settingsHref).toBe(scopeSurfaceAssistantSettingsHref(scope, assistant));
+  });
+
+  it("gives the built-in row the live installed-card fields it has no install for", () => {
+    const [row] = buildScopeSurfaceAssistantRows({ kind: "workspace" }, [builtin], []);
+    expect(row!.version).toBeNull();
+    expect(row!.description).toBeNull();
+    expect(row!.status).toBe("active");
   });
 });
 
-describe("scopeSurfaceScopeMatch — the INJECTED directory predicate", () => {
-  it("admits an entry of the viewed scope and the tenant-wide entry", () => {
-    const match = scopeSurfaceScopeMatch(TEAM);
-    expect(match([{ locus: "team", locusId: "team-7" }])).toBe(true);
-    expect(match([{ locus: "workspace" }])).toBe(true);
-    expect(match([{ locus: "team", locusId: "team-9" }])).toBe(false);
-    expect(match([])).toBe(false);
+describe("the version formatting", () => {
+  it("prefixes a bare version and leaves an already-prefixed one alone", () => {
+    expect(formatScopeSurfaceVersion("0.4.2")).toBe("v0.4.2");
+    expect(formatScopeSurfaceVersion("v0.4.2")).toBe("v0.4.2");
   });
-
-  it("never admits an admin-only grant on a member-facing tab", () => {
-    expect(scopeSurfaceScopeMatch(ORG)([{ locus: "workspace", adminOnly: true }])).toBe(false);
-  });
-
-  it("reads the VIEWED organization, not any other", () => {
-    const match = scopeSurfaceScopeMatch(ORG);
-    expect(match([{ locus: "organization", locusId: "org-1" }])).toBe(true);
-    expect(match([{ locus: "organization", locusId: "org-2" }])).toBe(false);
-  });
-
-  it("admits everything the actor already sees on their personal scope", () => {
-    const match = scopeSurfaceScopeMatch({ kind: "personal" });
-    expect(match([{ locus: "team", locusId: "team-9" }])).toBe(true);
-    expect(match([{ locus: "workspace", adminOnly: true }])).toBe(false);
+  it("renders nothing at all for a missing version", () => {
+    expect(formatScopeSurfaceVersion(null)).toBeNull();
+    expect(formatScopeSurfaceVersion("  ")).toBeNull();
   });
 });

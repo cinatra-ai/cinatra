@@ -32,7 +32,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkspaceVantage,
   type WorkspaceVantage,
-} from "../scope-surface-eligibility";
+} from "../scope-surface-vantage";
 import {
   resolveSkillOwnershipTuple,
   selectScopeOwnedSkills,
@@ -150,14 +150,12 @@ const ALL_ROWS: readonly Row[] = [
 ];
 
 async function vantage(): Promise<WorkspaceVantage> {
-  return buildWorkspaceVantage(
-    {
-      readMemberOrganizations: async () => [{ orgId: ORG_A }, { orgId: ORG_B }],
-      readVisibleTeams: async (_userId, orgId) => (orgId === ORG_A ? [TEAM_A] : [TEAM_B]),
-      readVisibleProjects: async (_userId, orgId) => (orgId === ORG_A ? [PROJECT_A] : []),
-    },
-    { userId: ACTOR },
-  );
+  return buildWorkspaceVantage({
+    userId: ACTOR,
+    memberships: [{ orgId: ORG_A }, { orgId: ORG_B }],
+    teamIdsByOrg: { [ORG_A]: [TEAM_A], [ORG_B]: [TEAM_B] },
+    projectIdsByOrg: { [ORG_A]: [PROJECT_A], [ORG_B]: [] },
+  });
 }
 
 function idsFor(scope: SkillOwnershipLocus): string[] {
@@ -295,14 +293,7 @@ describe("fail closed", () => {
   });
 
   it("keeps the actor's own skills and the workspace tier when the vantage carries no organization", async () => {
-    const empty = await buildWorkspaceVantage(
-      {
-        readMemberOrganizations: async () => [],
-        readVisibleTeams: async () => [],
-        readVisibleProjects: async () => [],
-      },
-      { userId: ACTOR },
-    );
+    const empty = buildWorkspaceVantage({ userId: ACTOR, memberships: [] });
     expect(idsFor({ kind: "workspace", vantage: empty })).toEqual([
       PERSONAL_ROW.id,
       SHARED_PERSONAL_ROW.id,

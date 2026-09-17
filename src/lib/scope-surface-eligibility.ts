@@ -1,370 +1,391 @@
 /**
- * THE PER-SCOPE ELIGIBILITY LOADER (cinatra#2808, per-scope surfaces S2).
+ * THE PER-SCOPE ELIGIBILITY LOADER'S PURE CORE (cinatra#2808, per-scope
+ * surfaces S2).
  *
- * "Eligibility loader (net-new): two arms off one policy snapshot — the actor
- *  can see/invoke the package AND a generic member of the represented scope
- *  could."
+ * "What may this reader reach from THIS scope?" is answered here, and nowhere
+ * else, for all five scopes. The module is PURE — no I/O, no `server-only` —
+ * exactly as `installed-catalog-eligibility.ts` is pure beside its server read:
+ * the read fetches, this decides, so every rule below is directly fixture-
+ * driven.
  *
- * The Assistants and Agents tabs of a scope page answer ONE question about
- * every installed package: is it reachable HERE, from the vantage the reader is
- * looking at? That is deliberately not the same question `/agents` and
- * `/assistants` ask — those are the actor's own global set. A scope page shows
- * the SCOPE's set, narrowed to what the actor may also reach, so both arms have
- * to hold:
- *
- *   ACTOR   — the platform's own access evaluation for this principal. Handed
- *             in as `actorMayUse`, already given the policy value below, so
- *             this module never takes a second read of its own.
- *   VANTAGE — `policyFieldAdmitsScopeVantage` over the SAME field that op
- *             reads, which answers "could a generic member positioned at
- *             exactly this scope reach it".
- *
- * ONE POLICY SNAPSHOT. `policyFor` is read exactly ONCE per install and the one
- * value is handed to both arms, exactly as `installed-catalog-read.ts` does it —
- * so a concurrent policy edit can never combine an old actor-allow with a new
+ * ── TWO ARMS OFF ONE POLICY SNAPSHOT ───────────────────────────────────────
+ * The precedent is `installed-catalog-read.ts` gate 6 and it is followed to the
+ * letter: the stored access policy is read ONCE per install
+ * (`arms.policyFor`) and BOTH arms are evaluated against that same value, so a
+ * concurrent policy edit can never combine an old actor-allow with a new
  * vantage-allow.
  *
- * PURE. No I/O, no `server-only`, no store imports: the reads are the caller's
- * (they differ per surface), and the RULES are here, where a fixture can drive
- * every one of them. The only import is the platform's own pure vantage
- * projection, so this module adds no route-graph weight beyond it.
+ *   ACTOR   — may this principal reach the package (the platform's own
+ *             evaluator, injected).
+ *   VANTAGE — could a GENERIC MEMBER positioned at exactly this scope reach it
+ *             (`policyFieldAdmitsScopeVantage`, injected).
  *
- * ── THE FIVE SCOPE RULES ───────────────────────────────────────────────────
- *   personal      the actor's invocable set (a personal scope has exactly one
- *                 member — the actor — so the vantage arm asks the same
- *                 question the actor arm already answered).
- *   organization  exact-org installs.
- *   team          exact-team + exact-org (never another team's install).
- *   project       exact-project installs + non-hidden project bindings +
- *                 exact-org. A HIDDEN binding never surfaces.
- *   workspace     the epic's normative `WorkspaceVantage` (#2806): the union
- *                 over every member organization, deduped at package level,
- *                 each row keeping its eligible concrete execution
- *                 organizations (the launch-organization contract; this slice
- *                 owns candidate production).
+ * Both arms are INJECTED rather than imported. This module is reached from ten
+ * scope-tab routes; the extensions access modules reach the permissions store
+ * and its Postgres connection, and the route-graph ratchet measures what each
+ * route's graph carries. Injection keeps the decision testable without a DB and
+ * keeps the heavy graph on the server reader that already pays for it.
  *
- * An organization-NULL workspace/platform row is above every organization and
- * is admitted ONCE, with no concrete execution organization — the workspace
- * launch then requires an explicit selection from the vantage.
+ * ── THE SCOPE REACH RULE, AS THE ISSUE WORDS IT ────────────────────────────
+ *   personal      — the actor's invocable set.
+ *   organization  — exact-org installs.
+ *   team          — exact-team + exact-org.
+ *   project       — exact-project installs + non-hidden project bindings +
+ *                   exact-org. HIDDEN BINDINGS NEVER SURFACE: a hidden binding
+ *                   is not merely ranked lower, it is never a reason a row is
+ *                   admitted, and it can never be the only reason either.
+ *   workspace     — the epic's `WorkspaceVantage`, applied here: the union over
+ *                   every member organization, org-NULL rows admitted once.
+ *
+ * ── WORKSPACE ROWS KEEP THEIR EXECUTION ORGANIZATIONS ──────────────────────
+ * The epic's launch-organization contract makes candidate production this
+ * slice's: a workspace row retains its eligible CONCRETE execution
+ * organizations AFTER the package-level display dedupe, so the selection step
+ * (#2809) has real organizations to choose between rather than a deduped row
+ * that lost them. Every other scope produces exactly its own organization.
  */
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
-import type { ExtensionOwnerLevel } from "@cinatra-ai/extensions/canonical-types";
-import {
-  policyFieldAdmitsScopeVantage,
-  type AccessScopeVantage,
-} from "@cinatra-ai/extensions/access-scope-vantage";
+import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
 
-// ---------------------------------------------------------------------------
-// THE WORKSPACE VANTAGE — the epic's conformance anchor, owned by this slice.
-// ---------------------------------------------------------------------------
+import type { ScopeSurfaceRef } from "./scope-surfaces";
+import type { WorkspaceVantage } from "./scope-surface-vantage";
 
-/** One member organization of the workspace vantage, with what the actor may
- *  see inside it — NOT every team/project in the tenant. */
-export type WorkspaceOrganizationVantage = {
-  readonly orgId: string;
-  readonly teamIds: readonly string[];
-  readonly projectIds: readonly string[];
-};
+/** The canonical install statuses a scope tab lists — active or locked. */
+export const SCOPE_SURFACE_LIVE_STATUSES = ["active", "locked"] as const;
+export type ScopeSurfaceStatus = (typeof SCOPE_SURFACE_LIVE_STATUSES)[number];
 
 /**
- * "At read time, the workspace vantage consists of the actor's personal scope
- *  plus every non-archived organization for which the actor has a current
- *  `public.member` row."
+ * ONE scope binding an install carries.
  *
- * S4 (#2810) and S5 (#2811) consume THIS value; they keep their own domain
- * readers. `activeOrganizationId` is not part of it, by contract.
+ * A binding is how a package reaches a scope that is not its row anchor — the
+ * project tier has no owner level of its own, so a project's packages are
+ * expressed as bindings. `hidden` marks a binding that must never surface a row
+ * on the bound scope's tab.
  */
-export type WorkspaceVantage = {
-  readonly userId: string;
-  readonly organizations: readonly WorkspaceOrganizationVantage[];
+export type ScopeSurfaceBinding = {
+  readonly kind: "organization" | "team" | "project";
+  readonly id: string;
+  readonly hidden?: boolean;
 };
 
-/** The reads the builder needs, injected so the conformance fixtures can drive
- *  membership revocation, archival and an active-org switch without a session. */
-export type WorkspaceVantageDeps = {
-  /** Every organization the actor holds a current member row for. */
-  readMemberOrganizations(
-    userId: string,
-  ): Promise<readonly { readonly orgId: string; readonly archived?: boolean }[]>;
-  /** The teams of that organization this actor may see. */
-  readVisibleTeams(userId: string, orgId: string): Promise<readonly string[]>;
-  /** The projects of that organization this actor may see. */
-  readVisibleProjects(userId: string, orgId: string): Promise<readonly string[]>;
-};
-
-/**
- * Build the workspace vantage for an actor.
- *
- * `activeOrganizationId` is ACCEPTED and deliberately IGNORED: the contract is
- * that it "never adds, removes, or selects a member organization", and a caller
- * that has one in hand should not have to decide whether to pass it. A fixture
- * pins that two different values — and none at all — produce the identical
- * vantage.
- */
-export async function buildWorkspaceVantage(
-  deps: WorkspaceVantageDeps,
-  args: { userId: string; activeOrganizationId?: string | null },
-): Promise<WorkspaceVantage> {
-  void args.activeOrganizationId; // see the docstring: never consulted.
-  const memberships = await deps.readMemberOrganizations(args.userId);
-  const organizations: WorkspaceOrganizationVantage[] = [];
-  for (const membership of memberships) {
-    // Archival removes the organization on the next read, exactly like a
-    // revoked membership — both are simply absent from what is read here.
-    if (membership.archived) continue;
-    const [teamIds, projectIds] = await Promise.all([
-      deps.readVisibleTeams(args.userId, membership.orgId),
-      deps.readVisibleProjects(args.userId, membership.orgId),
-    ]);
-    organizations.push({
-      orgId: membership.orgId,
-      teamIds: [...teamIds],
-      projectIds: [...projectIds],
-    });
-  }
-  return { userId: args.userId, organizations };
-}
-
-// ---------------------------------------------------------------------------
-// THE ELIGIBILITY READ.
-// ---------------------------------------------------------------------------
-
-/** The scope a tab is being read FOR — the VIEWED one, never the active one. */
-export type ScopeEligibilityScope =
-  | { readonly kind: "personal"; readonly orgId: string }
-  | { readonly kind: "organization"; readonly orgId: string }
-  | { readonly kind: "team"; readonly orgId: string; readonly teamId: string }
-  | { readonly kind: "project"; readonly orgId: string; readonly projectId: string }
-  | { readonly kind: "workspace" };
-
-/** One canonical install row, projected to what the rules and the cards need. */
-export type ScopePackageInstall = {
+/** One live install row, projected to what the scope tabs decide and render. */
+export type ScopeSurfaceInstall = {
   readonly installId: string;
   readonly packageName: string;
   readonly displayName: string;
-  readonly description?: string | null;
-  /** Already-resolved version text; the card renders it as it arrives. */
-  readonly version: string;
-  readonly status: "active" | "locked" | "archived";
-  readonly ownerLevel: ExtensionOwnerLevel;
-  readonly ownerId: string | null;
+  readonly description: string | null;
+  /** The row's own anchor — `null` for a workspace/platform (org-NULL) row. */
   readonly organizationId: string | null;
-  /** An assistant package belongs to the Assistants tab, everything else to
-   *  the Agents tab ("Non-assistant agent packages" / "Assistant packages
-   *  only"). */
-  readonly isAssistant: boolean;
+  readonly ownerLevel: "user" | "team" | "organization" | "workspace" | "platform";
+  readonly ownerId: string | null;
+  readonly status: ScopeSurfaceStatus;
+  readonly version: string | null;
+  readonly bindings?: readonly ScopeSurfaceBinding[];
 };
 
-/**
- * A project's binding of a package (`project_agent_template_bindings`), whose
- * `visibility` column carries exactly these three words.
- *
- *   project-private  the project's OWN install — an exact-project install.
- *   visible          a non-hidden binding of an ambient package.
- *   hidden           never surfaces, on any tab.
- */
-export type ScopeProjectBinding = {
-  readonly packageName: string;
-  readonly projectId: string;
-  readonly visibility: "visible" | "hidden" | "project-private";
+/** The actor axes a scope's eligibility read resolves against. */
+export type ScopeSurfaceAnchor = {
+  readonly userId: string;
+  /**
+   * The VIEWED organization — the organization the scope being read belongs to.
+   * Deliberately named "viewed" and not "active": a team or project page may be
+   * read while the session points at another organization, and the workspace
+   * arm ignores the session's organization entirely.
+   */
+  readonly viewedOrgId: string | null;
+  readonly teamIds?: readonly string[];
+  readonly projectIds?: readonly string[];
+  /** The workspace tier's vantage; required by the workspace arm only. */
+  readonly workspace?: WorkspaceVantage | null;
 };
 
-/** One eligible package, as the tabs render it. */
-export type ScopeEligibilityRow = {
+/** One candidate vantage: the scope projection plus the concrete organization
+ *  the decision is taken under. */
+export type ScopeSurfaceCandidateVantage = {
+  readonly orgId: string;
+  readonly vantage: AccessScopeVantage;
+};
+
+/** The injected decision arms — see the module docstring. */
+export type ScopeSurfaceArms<TPolicy> = {
+  /** Read the install's stored policy ONCE. Called at most once per install. */
+  policyFor(install: ScopeSurfaceInstall): TPolicy | Promise<TPolicy>;
+  /** The ACTOR arm, over the already-resolved policy value. */
+  actorAdmits(
+    policy: TPolicy,
+    install: ScopeSurfaceInstall,
+    orgId: string,
+  ): boolean | Promise<boolean>;
+  /** The VANTAGE arm, over that SAME policy value. */
+  vantageAdmits(policy: TPolicy, vantage: AccessScopeVantage): boolean | Promise<boolean>;
+};
+
+/** One eligible row — what a scope tab renders, plus its execution organizations. */
+export type ScopeSurfaceEligibilityRow = {
   readonly packageName: string;
   readonly displayName: string;
   readonly description: string | null;
-  readonly version: string;
-  /** `active|locked` — an archived row is never eligible. */
-  readonly status: "active" | "locked";
-  readonly isAssistant: boolean;
+  readonly version: string | null;
+  readonly status: ScopeSurfaceStatus;
+  /** The install whose policy governed the admission that produced this row. */
+  readonly installId: string;
   /**
-   * The eligible CONCRETE execution organizations kept after package-level
-   * display dedupe (the epic's launch-organization contract). One entry →
-   * the launch selects it directly; several → the launch requires an explicit
-   * selection; EMPTY → an organization-NULL-only package, whose launch selects
-   * from the `WorkspaceVantage`. Non-workspace scopes carry their own single
-   * organization.
+   * The eligible CONCRETE execution organizations, retained after the
+   * package-level display dedupe (the epic's launch-organization contract).
+   * Exactly one element for every scope but the workspace.
    */
-  readonly executionOrganizationIds: readonly string[];
+  readonly executionOrgIds: readonly string[];
 };
 
-export type ListScopeEligiblePackagesInput = {
-  readonly scope: ScopeEligibilityScope;
-  readonly actorUserId: string;
-  readonly installs: readonly ScopePackageInstall[];
-  /** THE ONE SNAPSHOT: read once per install, handed to both arms. */
-  readonly policyFor: (install: ScopePackageInstall) => AgentAuthPolicy;
-  /** The ACTOR arm, over the value this module just read. */
-  readonly actorMayUse: (install: ScopePackageInstall, policy: AgentAuthPolicy) => boolean;
-  /** The viewed project's bindings (project scope only). */
-  readonly bindings?: readonly ScopeProjectBinding[];
-  /** Required for the workspace scope; ignored elsewhere. */
-  readonly vantage?: WorkspaceVantage;
-};
+// ---------------------------------------------------------------------------
+// THE SCOPE REACH RULE
+// ---------------------------------------------------------------------------
 
-const LIVE_STATUSES = new Set(["active", "locked"]);
-
-/** Above every organization: a workspace/platform row with no organization. */
-function isTenantWide(install: ScopePackageInstall): boolean {
-  return (
-    (install.ownerLevel === "workspace" || install.ownerLevel === "platform") &&
-    install.organizationId === null
-  );
+/** The non-hidden bindings of an install for one scope kind. A hidden binding
+ *  is dropped HERE, so no rule below can ever read one. */
+function visibleBindings(
+  install: ScopeSurfaceInstall,
+  kind: ScopeSurfaceBinding["kind"],
+): readonly ScopeSurfaceBinding[] {
+  return (install.bindings ?? []).filter((b) => b.kind === kind && b.hidden !== true);
 }
 
-/** The organization's OWN install — not a user's and not a team's. */
-function isExactOrg(install: ScopePackageInstall, orgId: string): boolean {
-  return (
-    install.ownerLevel === "organization" &&
-    (install.ownerId === orgId || install.organizationId === orgId)
-  );
+/** An install anchored EXACTLY at this organization (its own row anchor). */
+function isExactOrgInstall(install: ScopeSurfaceInstall, orgId: string): boolean {
+  return install.organizationId === orgId;
 }
 
-function isExactTeam(install: ScopePackageInstall, orgId: string, teamId: string): boolean {
-  return (
-    install.ownerLevel === "team" &&
-    install.ownerId === teamId &&
-    (install.organizationId === null || install.organizationId === orgId)
-  );
+/** An install anchored EXACTLY at this team. */
+function isExactTeamInstall(install: ScopeSurfaceInstall, teamId: string): boolean {
+  return install.ownerLevel === "team" && install.ownerId === teamId;
 }
 
-/** The STRUCTURAL arm: does this scope REACH the row at all, before any policy
- *  is consulted? */
-function scopeReaches(
-  install: ScopePackageInstall,
-  scope: Exclude<ScopeEligibilityScope, { kind: "workspace" }>,
-  bindings: readonly ScopeProjectBinding[],
-): boolean {
-  if (isTenantWide(install)) return true;
-  switch (scope.kind) {
-    case "personal":
-      // The actor's invocable set: the actor arm is the whole rule here.
-      return true;
-    case "organization":
-      return isExactOrg(install, scope.orgId);
-    case "team":
-      return isExactTeam(install, scope.orgId, scope.teamId) || isExactOrg(install, scope.orgId);
-    case "project": {
-      const here = bindings.filter(
-        (b) => b.packageName === install.packageName && b.projectId === scope.projectId,
-      );
-      // HIDDEN NEVER SURFACES — and it is a VETO, not merely an absent grant.
-      // A hidden binding is the project's own curation decision about an
-      // ambient package, so it has to outrank the exact-org arm that would
-      // otherwise carry that same package straight back in; a binding that only
-      // failed to grant would make "hidden" mean nothing for every org-wide
-      // package, which is exactly the set a project curates.
-      if (here.some((b) => b.visibility === "hidden")) return false;
-      // The project's OWN install (`project-private`) and a non-hidden binding
-      // (`visible`) both reach; so does the organization's own install.
-      return here.length > 0 || isExactOrg(install, scope.orgId);
-    }
-  }
-}
-
-/** The vantage this scope presents to the policy projection. */
-function vantageFor(
-  scope: Exclude<ScopeEligibilityScope, { kind: "workspace" }>,
-): AccessScopeVantage {
-  switch (scope.kind) {
-    case "personal":
-      return { kind: "personal", orgId: scope.orgId };
-    case "organization":
-      return { kind: "organization", orgId: scope.orgId, scopeId: scope.orgId };
-    case "team":
-      return { kind: "team", orgId: scope.orgId, scopeId: scope.teamId };
-    case "project":
-      return { kind: "project", orgId: scope.orgId, scopeId: scope.projectId };
-  }
-}
-
-function project(
-  install: ScopePackageInstall,
-  executionOrganizationIds: readonly string[],
-): ScopeEligibilityRow {
-  return {
-    packageName: install.packageName,
-    displayName: install.displayName,
-    description: install.description ?? null,
-    version: install.version,
-    status: install.status === "locked" ? "locked" : "active",
-    isAssistant: install.isAssistant,
-    executionOrganizationIds,
-  };
-}
-
-function byPackageName(a: ScopeEligibilityRow, b: ScopeEligibilityRow): number {
-  return a.packageName.localeCompare(b.packageName);
+/** A row with no owning organization — the workspace/platform anchor. The
+ *  workspace tier admits it ONCE rather than once per member organization. */
+export function isOrgNullInstall(install: ScopeSurfaceInstall): boolean {
+  return install.organizationId === null;
 }
 
 /**
- * The eligible packages of ONE non-workspace scope. Both arms, off one
- * snapshot, in the order that spends nothing on a row the scope cannot reach.
- */
-function listForConcreteScope(
-  input: ListScopeEligiblePackagesInput,
-  scope: Exclude<ScopeEligibilityScope, { kind: "workspace" }>,
-): ScopeEligibilityRow[] {
-  const bindings = input.bindings ?? [];
-  const vantage = vantageFor(scope);
-  const rows: ScopeEligibilityRow[] = [];
-  for (const install of input.installs) {
-    if (!LIVE_STATUSES.has(install.status)) continue;
-    if (!scopeReaches(install, scope, bindings)) continue;
-    // THE ONE SNAPSHOT — read once, given to both arms below.
-    const policy = input.policyFor(install);
-    // VANTAGE ARM first: pure, so a row the scope could not reach anyway costs
-    // the caller's actor evaluation nothing.
-    if (!policyFieldAdmitsScopeVantage(policy.runDataVisibility, vantage)) continue;
-    if (!input.actorMayUse(install, policy)) continue;
-    rows.push(
-      project(
-        install,
-        install.organizationId ? [install.organizationId] : [],
-      ),
-    );
-  }
-  return rows;
-}
-
-/**
- * The eligible packages of the VIEWED scope, sorted by package name.
+ * Does this install reach `scope` at all, BEFORE either policy arm runs?
  *
- * The workspace arm runs the organization rule once per member organization of
- * the `WorkspaceVantage`, then dedupes at PACKAGE level and keeps each row's
- * eligible concrete execution organizations.
+ * Purely structural: ownership and bindings, never a policy or a role. It can
+ * only ever NARROW what the arms would admit.
  */
-export function listScopeEligiblePackages(
-  input: ListScopeEligiblePackagesInput,
-): readonly ScopeEligibilityRow[] {
-  if (input.scope.kind !== "workspace") {
-    // A concrete scope launches in its OWN organization — there is nothing to
-    // select, so every row carries exactly that one candidate.
-    const orgId = input.scope.orgId;
-    return listForConcreteScope(input, input.scope)
-      .map((row) => ({ ...row, executionOrganizationIds: [orgId] }))
-      .sort(byPackageName);
-  }
+export function installReachesScope(
+  scope: ScopeSurfaceRef,
+  anchor: ScopeSurfaceAnchor,
+  install: ScopeSurfaceInstall,
+): boolean {
+  if (!SCOPE_SURFACE_LIVE_STATUSES.includes(install.status)) return false;
 
-  const vantage = input.vantage;
-  // Fail closed: a workspace read with no vantage sees nothing rather than
-  // everything.
-  if (!vantage) return [];
-
-  const deduped = new Map<string, { row: ScopeEligibilityRow; orgIds: Set<string> }>();
-  for (const org of vantage.organizations) {
-    const rows = listForConcreteScope(input, { kind: "organization", orgId: org.orgId });
-    for (const row of rows) {
-      const existing = deduped.get(row.packageName);
-      const orgIds = existing ? existing.orgIds : new Set<string>();
-      // An organization-NULL row carries no concrete execution organization —
-      // it is admitted ONCE and its launch selects from the vantage.
-      for (const orgId of row.executionOrganizationIds) orgIds.add(orgId);
-      if (!existing) deduped.set(row.packageName, { row, orgIds });
+  switch (scope.kind) {
+    case "personal": {
+      // The actor's invocable set: everything addressable to the organization
+      // they are reading under, plus the org-NULL rows that reach app-wide. The
+      // ACTOR arm is what makes it "invocable"; this is only the address fence.
+      if (!anchor.viewedOrgId) return isOrgNullInstall(install);
+      return isOrgNullInstall(install) || isExactOrgInstall(install, anchor.viewedOrgId);
+    }
+    case "organization":
+      // Exact-org installs. An org-NULL row is NOT an organization's install;
+      // it belongs to the workspace tier and surfaces there.
+      return isExactOrgInstall(install, scope.id);
+    case "team": {
+      // Exact-team + exact-org.
+      if (isExactTeamInstall(install, scope.id)) return true;
+      return !!anchor.viewedOrgId && isExactOrgInstall(install, anchor.viewedOrgId);
+    }
+    case "project": {
+      // Exact-project installs + non-hidden project bindings + exact-org. A
+      // HIDDEN binding was already dropped by `visibleBindings`, so it can be
+      // neither the only reason nor a contributing one.
+      if (visibleBindings(install, "project").some((b) => b.id === scope.id)) return true;
+      return !!anchor.viewedOrgId && isExactOrgInstall(install, anchor.viewedOrgId);
+    }
+    case "workspace": {
+      const vantage = anchor.workspace;
+      if (!vantage) return false;
+      if (isOrgNullInstall(install)) return true;
+      return vantage.organizations.some((o) => isExactOrgInstall(install, o.orgId));
     }
   }
-  return [...deduped.values()]
-    .map(({ row, orgIds }) => ({ ...row, executionOrganizationIds: [...orgIds] }))
-    .sort(byPackageName);
+}
+
+// ---------------------------------------------------------------------------
+// THE CANDIDATE VANTAGES
+// ---------------------------------------------------------------------------
+
+/**
+ * The vantages a scope's decision is taken under, each paired with the CONCRETE
+ * organization it is taken in.
+ *
+ * Every scope but the workspace yields exactly one. The workspace yields one
+ * per member organization: org-fenced sources are read SEPARATELY under each
+ * member organization, which is also what lets a row retain the concrete
+ * organizations it is eligible in.
+ */
+export function scopeSurfaceCandidateVantages(
+  scope: ScopeSurfaceRef,
+  anchor: ScopeSurfaceAnchor,
+): readonly ScopeSurfaceCandidateVantage[] {
+  switch (scope.kind) {
+    case "personal":
+      return anchor.viewedOrgId
+        ? [{ orgId: anchor.viewedOrgId, vantage: { kind: "personal", orgId: anchor.viewedOrgId } }]
+        : [];
+    case "organization":
+      return [
+        { orgId: scope.id, vantage: { kind: "organization", orgId: scope.id, scopeId: scope.id } },
+      ];
+    case "team":
+      return anchor.viewedOrgId
+        ? [
+            {
+              orgId: anchor.viewedOrgId,
+              vantage: { kind: "team", orgId: anchor.viewedOrgId, scopeId: scope.id },
+            },
+          ]
+        : [];
+    case "project":
+      return anchor.viewedOrgId
+        ? [
+            {
+              orgId: anchor.viewedOrgId,
+              vantage: { kind: "project", orgId: anchor.viewedOrgId, scopeId: scope.id },
+            },
+          ]
+        : [];
+    case "workspace": {
+      // THE VANTAGE UNION, as the epic words it: within each member
+      // organization the vantage carries exactly the actor-visible teams and
+      // projects, so a package a generic member of team T (or project P) can
+      // reach is reachable FROM the workspace tier too. Reading only the
+      // organization vantage would drop every `team:`/`project:`-scoped row the
+      // actor genuinely reaches. Every candidate stays anchored to its own
+      // concrete organization, so the admitted execution organizations are
+      // unchanged by the widening.
+      const out: ScopeSurfaceCandidateVantage[] = [];
+      for (const o of anchor.workspace?.organizations ?? []) {
+        out.push({
+          orgId: o.orgId,
+          vantage: { kind: "organization", orgId: o.orgId, scopeId: o.orgId },
+        });
+        for (const teamId of o.teamIds)
+          out.push({ orgId: o.orgId, vantage: { kind: "team", orgId: o.orgId, scopeId: teamId } });
+        for (const projectId of o.projectIds)
+          out.push({
+            orgId: o.orgId,
+            vantage: { kind: "project", orgId: o.orgId, scopeId: projectId },
+          });
+      }
+      return out;
+    }
+  }
+}
+
+/**
+ * Is this candidate vantage a legitimate one to judge THIS install under?
+ *
+ * THE PER-INSTALL TENANT FENCE. An org-anchored row belongs to exactly one
+ * organization, so it is only ever judged under that organization's candidate.
+ * Without the fence a workspace reader with several member organizations would
+ * hand org A's install to org B's candidate, where the evaluator's own cross-org
+ * guard is the only thing standing in the way — and that guard is bypassed
+ * wholesale for a platform administrator, who would then collect B as an
+ * execution organization for a package that exists only in A. An org-NULL
+ * (workspace/platform) row has no tenant to fence against and is judged under
+ * every candidate, which is exactly how it reaches app-wide.
+ */
+export function candidateJudgesInstall(
+  install: ScopeSurfaceInstall,
+  candidate: ScopeSurfaceCandidateVantage,
+): boolean {
+  return install.organizationId === null || install.organizationId === candidate.orgId;
+}
+
+// ---------------------------------------------------------------------------
+// THE LOADER
+// ---------------------------------------------------------------------------
+
+export type ResolveScopeSurfaceEligibilityInput<TPolicy> = {
+  readonly scope: ScopeSurfaceRef;
+  readonly anchor: ScopeSurfaceAnchor;
+  readonly installs: readonly ScopeSurfaceInstall[];
+  readonly arms: ScopeSurfaceArms<TPolicy>;
+};
+
+/**
+ * The eligible rows for a scope.
+ *
+ * Order of work, and why: the structural reach fence runs FIRST so no policy
+ * read is spent on a row the scope could not address anyway; the snapshot is
+ * then taken ONCE per surviving install and both arms read that one value; the
+ * admitted organizations are collected per package; and the display dedupe runs
+ * LAST so the organizations survive it.
+ */
+export async function resolveScopeSurfaceEligibility<TPolicy>(
+  input: ResolveScopeSurfaceEligibilityInput<TPolicy>,
+): Promise<readonly ScopeSurfaceEligibilityRow[]> {
+  const { scope, anchor, installs, arms } = input;
+  const candidates = scopeSurfaceCandidateVantages(scope, anchor);
+  if (candidates.length === 0) return [];
+
+  // packageName → the row plus the union of its eligible execution orgs.
+  const byPackage = new Map<
+    string,
+    { row: Omit<ScopeSurfaceEligibilityRow, "executionOrgIds">; orgIds: Set<string> }
+  >();
+
+  for (const install of installs) {
+    if (!installReachesScope(scope, anchor, install)) continue;
+
+    // ── THE ONE SNAPSHOT ────────────────────────────────────────────────────
+    // Read once, here, and handed to both arms for every candidate vantage.
+    const policy = await arms.policyFor(install);
+
+    const admittedOrgIds: string[] = [];
+    for (const candidate of candidates) {
+      // THE PER-INSTALL TENANT FENCE — before either arm.
+      if (!candidateJudgesInstall(install, candidate)) continue;
+      // One organization is admitted once, however many of its vantages reach
+      // the package (the workspace tier carries one per team and project).
+      if (admittedOrgIds.includes(candidate.orgId)) continue;
+      // VANTAGE ARM first: it is the pure one, so it costs nothing and spares
+      // the actor arm's per-candidate store reads for a scope that could not
+      // reach the package anyway (the ordering `installed-catalog-read` uses).
+      if (!(await arms.vantageAdmits(policy, candidate.vantage))) continue;
+      if (!(await arms.actorAdmits(policy, install, candidate.orgId))) continue;
+      admittedOrgIds.push(candidate.orgId);
+    }
+    if (admittedOrgIds.length === 0) continue;
+
+    const existing = byPackage.get(install.packageName);
+    if (existing) {
+      // PACKAGE-LEVEL DISPLAY DEDUPE — one card per package. The organizations
+      // are unioned rather than dropped: the launch step needs every concrete
+      // organization the package is eligible in, not just the first row's.
+      for (const orgId of admittedOrgIds) existing.orgIds.add(orgId);
+      continue;
+    }
+    byPackage.set(install.packageName, {
+      row: {
+        packageName: install.packageName,
+        displayName: install.displayName,
+        description: install.description,
+        version: install.version,
+        status: install.status,
+        installId: install.installId,
+      },
+      orgIds: new Set(admittedOrgIds),
+    });
+  }
+
+  const rows: ScopeSurfaceEligibilityRow[] = [];
+  for (const { row, orgIds } of byPackage.values()) {
+    rows.push({ ...row, executionOrgIds: [...orgIds].sort() });
+  }
+  return rows.sort(
+    (a, b) =>
+      a.displayName.localeCompare(b.displayName) || a.packageName.localeCompare(b.packageName),
+  );
 }

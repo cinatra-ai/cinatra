@@ -1,5 +1,6 @@
 "use client";
 
+import { createContext, useContext } from "react";
 import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
@@ -8,6 +9,12 @@ import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reu
 import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
+// THE SELECTION VOCABULARY, AS A TYPE ONLY (cinatra#3478, the click leg).
+// `run-surface-rail-step` carries no directive and this import is erased at
+// compile time, so reading the run detail's selection here adds no module to
+// any route graph -- the rule this file's head states for every declaration it
+// holds.
+import type { RunStepSelection } from "./run-surface-rail-step";
 
 // ---------------------------------------------------------------------------
 // THE RUN PAGE'S RAIL VOCABULARY, IN ONE PLACE (cinatra#3188, forward + fix
@@ -231,6 +238,58 @@ export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default opacity-60";
 
 
 // ---------------------------------------------------------------------------
+// WHICH STEP THE RUN DETAIL IS SHOWING (cinatra#3478, the click leg).
+//
+// THE DEFECT THIS CLOSES. The rail's gate row was a plain link into the
+// review's OWN page, and it was that link for the gate the run is PARKED on as
+// much as for a settled one: a real pointer press on the step the reader is
+// standing at took the browser off the run page altogether. The ratified
+// drawing gives the opposite reading twice --
+//
+//   "Selecting a step opens it on the right ... a gate step opens the gate's
+//    own surface in place -- a pending review renders the review gate right
+//    here in the run detail, under the same rail, never as a standalone
+//    document";
+//
+//   "A review is a step, and it opens where every step opens ... selecting it
+//    opens the review in place, in the run detail."
+//
+// -- so the parked row selects the step's screen instead of navigating to one.
+//
+// WHY THE DECLARATION LIVES HERE AND NOT IN THE FRAME. The frame
+// (`run-surface-rail`) already imports this module for the rail's own
+// vocabulary and for the frame flag beneath this file's foot; a row reaching
+// back INTO the frame for the context would close that edge into a cycle and
+// pull the frame into the module graph of four route-budgeted routes, which
+// the route-graph ratchet refuses -- the same lesson cinatra#3188 wrote at the
+// head of this file. The frame PROVIDES the selection (nothing else may) and
+// the rows READ it, exactly as they already read whether the frame draws the
+// rail at all.
+// ---------------------------------------------------------------------------
+
+/** The run detail's selection, and the one road that changes it. */
+export type RunStepSelectionHandle = {
+  selected: RunStepSelection;
+  select: (next: RunStepSelection) => void;
+};
+
+const RunStepSelectionContext = createContext<RunStepSelectionHandle | null>(null);
+
+/** The frame states the selection; nothing else may provide this. */
+export const RunStepSelectionProvider = RunStepSelectionContext.Provider;
+
+/**
+ * The run detail's selection, for a row drawn anywhere inside the frame.
+ *
+ * `null` outside a frame -- the default -- which is how a rail mounted without
+ * one (a host that composes no run detail) reads exactly as it always has.
+ */
+export function useRunStepSelection(): RunStepSelectionHandle | null {
+  return useContext(RunStepSelectionContext);
+}
+
+
+// ---------------------------------------------------------------------------
 // The NON-STEP rail rows — gates ("Review"), verifications ("Audit")
 // and lifecycle policy decisions — as ONE implementation (cinatra#2739).
 //
@@ -273,6 +332,20 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   const isPending = entry.status === "pending";
+
+  // THE GATE THE RUN IS PARKED ON OPENS IN PLACE (cinatra#3478, the click leg).
+  // The run detail is where a gate's own surface is drawn, so the row that
+  // stands for it SELECTS that step rather than navigating to a page of its
+  // own. Where there is no frame around this rail there is no run detail to
+  // open into, and the row keeps the deep link it has always carried -- which
+  // is also the review's own page, reached from its own navigation, unchanged.
+  const selection = useRunStepSelection();
+  const gateOpensInTheRunDetail = isGate && isPending && selection !== null;
+  // AND WHILE ITS SCREEN IS THE ONE DRAWN, THE ROW READS CURRENT. The run
+  // detail is where the parked gate's own surface stands, so a detail-selected
+  // frame IS this row's screen being shown -- the reader is standing on this
+  // step, and the rail says so in the vocabulary its spine rows already use.
+  const gateIsTheOpenScreen = gateOpensInTheRunDetail && selection?.selected === "detail";
 
   const titleNode = (
     <StepperTitle
@@ -355,7 +428,45 @@ export function RailExtraEntry({
       }
       title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
     >
-      {isGate && entry.gate ? (
+      {isGate && entry.gate && gateOpensInTheRunDetail ? (
+        // THE PARKED GATE'S OWN CONTROL. A press selects the step the run is
+        // standing on, and the review is drawn as that step's screen in the run
+        // detail beside this rail -- "the same detail, under the same rail".
+        // The location never leaves the run page, and the rail is untouched by
+        // the press: the row was already the entry the run is paused on.
+        //
+        // IT IS THE ROW THE OTHER STEPS DRAW. `StepperTrigger` is what every
+        // spine row of this rail presses through, so the gate row takes the
+        // same control, the same box (the shared row class) and the same
+        // reading -- only its handlers are its own. `tabIndex={0}` keeps the
+        // row reachable from the keyboard, and the key handler below keeps it
+        // openable from there, as the link it replaces was.
+        <StepperTrigger
+          className={RUN_PAGE_RAIL_ROW_CLASS}
+          tabIndex={0}
+          data-rail-gate-open={entry.gate.reviewTaskId}
+          // THE STEP THE SCREEN BELONGS TO IS MARKED, and marked the way the
+          // frame's own rows mark theirs, so one reading of the rail answers
+          // for every row of it.
+          aria-current={gateIsTheOpenScreen ? "step" : undefined}
+          data-run-surface-rail-selected={gateIsTheOpenScreen ? "true" : "false"}
+          onClick={() => selection?.select("detail")}
+          // AND THE KEY OPENS WHAT THE POINTER OPENS. The control's own
+          // keyboard road answers Enter and Space by moving the stepper's
+          // active step and stopping the browser's activation there, so the
+          // press handler above would never run for a reader on the keyboard
+          // and this row would open nothing -- where the link it replaces
+          // opened on Enter. The row states its own answer for those two keys.
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selection?.select("detail");
+          }}
+        >
+          {indicatorNode}
+          {titleNode}
+        </StepperTrigger>
+      ) : isGate && entry.gate ? (
         // A gate row links into the run-embedded review surface. A resolved
         // gate still links — the review page replays the completed submission
         // read-only. Rendered as a plain Link (not a StepperTrigger button) to
@@ -565,4 +676,60 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   }
 
   return 1;
+}
+
+// ---------------------------------------------------------------------------
+// IS THIS SUBTREE DRAWN INSIDE THE RUN SURFACE'S OWN RAIL FRAME? (cinatra#3478)
+//
+// THE DEFECT THIS CLOSES. `screenHostsStepRail` (cinatra#2739) suppressed the
+// page-level `RunStepRailPanel` on the branch where `OrchestratorStepperPanel`
+// raises a column of its own, and that answer was correct for the ONE rail it
+// knew about. It was never asked about the SECOND one: the run surface's own
+// frame (`RunSurfaceRail`) draws a rail column whenever the screen hands it any
+// rail step — a schedule, an input form, the gate the run is stopped at, the
+// run's own record — and nothing suppressed that column. So a run on the
+// stepper branch that also carried any such row drew TWO live rail columns side
+// by side: the frame's at the left, the panel's beside it, then the detail. It
+// was measured on three run pages on 2026-09-13 — a rail at x≈464, a second at
+// x≈583 — and the ratified drawing gives ONE: "a two-column frame: a step rail
+// down the left names the run's ordered steps, and the run detail on the right".
+//
+// WHY A CONTEXT AND NOT A SECOND PREDICATE. The frame's column is drawn from a
+// list the screen composes LAST — after the run detail (and the panel inside it)
+// is already built — so a prop would have to restate, ahead of time, exactly
+// when that list ends up non-empty. A second derivation of the same fact is how
+// this page came to draw two rails in the first place: `screenHostsStepRail`
+// answered for one column and nothing answered for the other. The composition
+// itself is the fact, and it is read where it is true: inside the frame.
+//
+// The frame provides it; the run panel asks it and stands its own column down,
+// exactly as the page-level rail already stands down for the panel. What the
+// panel's column carried alone -- the deep links that travel as `railExtras` --
+// is drawn by the page-level rail inside the frame's column, which the screen
+// mounts there for this branch (`screenDrawsPageRail`).
+// ---------------------------------------------------------------------------
+//
+// WHY THIS MODULE HOLDS IT. Both sides of the question -- the frame in
+// run-surface-rail.tsx that answers it, and the run panel in
+// orchestrator-stepper-panel.tsx that asks it -- already import the rail
+// vocabulary from here, so the declaration reaches them over edges that
+// already exist. Held in a module of its own it added one module to four
+// route-budgeted route graphs, which the route-graph ratchet refuses (the
+// same lesson cinatra#3188 wrote at the head of this file): the rule lives
+// where the rows already meet.
+// ---------------------------------------------------------------------------
+
+const RunSurfaceRailFrameContext = createContext<boolean>(false);
+
+/** The frame states it draws the rail; nothing else may provide this. */
+export const RunSurfaceRailFrameProvider = RunSurfaceRailFrameContext.Provider;
+
+/**
+ * Does the run surface's own frame draw the step rail around this subtree?
+ *
+ * `false` outside a frame — the default — so every host that is not composed by
+ * `RunSurfaceRail` reads exactly as it always has.
+ */
+export function useRunSurfaceRailFrame(): boolean {
+  return useContext(RunSurfaceRailFrameContext);
 }

@@ -40,19 +40,16 @@ import {
  * The route resolves that name through its own gated read and hands it in; where
  * a reader may not be told it, the header falls back to the scope's kind noun.
  *
- * The tabs' CONTENTS still arrive with the slices that own them: the Assistants
- * and Agents lists with #2808, Artifacts and Skills with #2810, and the
- * workspace dashboards with #2811.
+ * The tabs' CONTENTS arrive with the slices that own them: the Assistants and
+ * Agents lists with #2808 (which passes them in through `body`), Artifacts and
+ * Skills with #2810, and the workspace dashboards with #2811. A tab whose slice
+ * has not landed passes no body and keeps the honest placeholder below.
  */
 
 /**
  * The shell states its OWN condition. It reads nothing about the scope, so it
  * can never say the scope holds nothing — a viewer with assistants, agents,
  * artifacts or skills in this scope would be told a falsehood.
- *
- * A route that HAS read the scope says so (`tabRead`, cinatra#2808), and an
- * absent body then means what it says: the read happened and found nothing.
- * Only a tab whose rows were never read still shows this placeholder.
  */
 const PLACEHOLDER_TITLE = "This tab is not ready yet";
 
@@ -120,25 +117,10 @@ export function ScopeSurfacePage({
   tab,
   title,
   description,
-  tabRead = false,
-  tabBody,
+  body,
 }: {
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
-  /**
-   * A tab whose rows the ROUTE has read (cinatra#2808). `tabRead` says the read
-   * happened; `tabBody` is what it produced, absent when it produced nothing.
-   * Both omitted = no read on this route, and the tab keeps the honest S1
-   * placeholder rather than claiming the scope is empty.
-   *
-   * The body arrives as a NODE rather than as rows on purpose: the two lists
-   * are client components over the agents/extensions graph, and this shell is
-   * rendered by all twenty scope-tab routes — importing them here would put
-   * that graph in front of every one of them, including the twelve tabs that do
-   * not list packages at all.
-   */
-  tabRead?: boolean;
-  tabBody?: ReactNode;
   /**
    * The entity's own name, resolved by the route through its gated read.
    * Omitted where the reader may not be told it — the header then falls back to
@@ -146,6 +128,12 @@ export function ScopeSurfacePage({
    */
   title?: string;
   description?: string;
+  /**
+   * The tab's own body (cinatra#2808). Passed by a route whose slice has filled
+   * this tab; omitted everywhere else, where the shell keeps stating its OWN
+   * condition rather than claiming the scope holds nothing.
+   */
+  body?: ReactNode;
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
@@ -165,10 +153,10 @@ export function ScopeSurfacePage({
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
         {tab === "dashboards" ? (
           <DashboardsTabBody scope={scope} title={title} />
-        ) : tabBody ? (
-          tabBody
+        ) : body != null ? (
+          body
         ) : (
-          <ScopeSurfaceTabEmpty tab={tab} read={tabRead} />
+          <ScopeSurfaceTabEmpty tab={tab} />
         )}
       </PageContent>
     </Main>
@@ -210,7 +198,7 @@ function DashboardsTabBody({
 /**
  * One of the four scoped tabs holding nothing to list.
  *
- * EXPORTED (cinatra#2810) because a tab that hands the shell a `tabBody` can
+ * EXPORTED (cinatra#2810) because a tab that hands the shell a `body` can
  * never reach the fallback below: an element is truthy even when it renders
  * nothing, so the body is the only place that knows its read came back empty.
  * A body with no rows renders THIS, so every one of the four tabs draws the one

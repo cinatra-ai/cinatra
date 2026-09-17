@@ -66,7 +66,7 @@
  * `listInstalledSkills` / `readSkillsCatalog`, and `WorkspaceVantage` crosses
  * as a TYPE only.
  */
-import type { WorkspaceVantage } from "@/lib/scope-surface-eligibility";
+import type { WorkspaceVantage } from "@/lib/scope-surface-vantage";
 
 /**
  * The scope a Skills tab is being read FOR — the VIEWED one, never the active

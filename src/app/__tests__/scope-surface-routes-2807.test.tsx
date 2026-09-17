@@ -58,13 +58,36 @@ vi.mock("@/lib/scope-surface-entity-name", () => names);
 // own read is proven in its own suite. They render nothing, so the shell falls
 // to its empty state — which is exactly where the two tabs' honest EMPTY
 // reading is asserted below.
-vi.mock("@/components/scope/scope-surface-artifacts-tab", () => ({
+vi.mock("@/components/scope-surfaces/scope-surface-artifacts-tab", () => ({
   ScopeSurfaceArtifactsTab: () =>
     createElement("div", { "data-testid": "scope-artifacts-body" }),
 }));
-vi.mock("@/components/scope/scope-surface-skills-tab", () => ({
+vi.mock("@/components/scope-surfaces/scope-surface-skills-tab", () => ({
   ScopeSurfaceSkillsTab: () =>
     createElement("div", { "data-testid": "scope-skills-body" }),
+}));
+
+// The per-scope eligibility read the Agents/Assistants tabs perform for their
+// contents (cinatra#2808). This suite is about the SHELL: the strip, the active
+// tab, the scope hrefs and the honest empty state a scope with nothing to list
+// shows, so the read answers with no rows and every shell renders exactly the
+// placeholder S1 specified. What the read itself decides is proven in its own
+// suite, against fixtures, never against a live store.
+const eligibility = vi.hoisted(() => ({
+  readScopeSurfaceAgentRows: vi.fn(async () => []),
+  readScopeSurfaceAssistantRows: vi.fn(async () => []),
+}));
+vi.mock("@/lib/scope-surface-eligibility.server", () => eligibility);
+
+// The generated extension manifest is a SERVER registry whose entries import the
+// connector packages themselves; the tab bodies reach it through the shared
+// marketplace detail modal. A jsdom render of these shells needs none of it, and
+// the repository's other jsdom suites stand it in exactly this way.
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {},
+  GENERATED_CONNECTOR_ENTRY_MODULES: {},
+  GENERATED_CONNECTOR_MCP_MODULES: {},
+  GENERATED_WIDGET_STREAM_AGENTS: {},
 }));
 
 const FIVE_TABS = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"] as const;

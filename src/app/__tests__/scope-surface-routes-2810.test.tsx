@@ -73,10 +73,10 @@ vi.mock("@/lib/scope-surface-entity-name", () => ({
  * suites. A stand-in that rendered nothing would let a body that redirects pass
  * unnoticed, so each one renders a marker the assertions look for.
  */
-vi.mock("@/components/scope/scope-surface-artifacts-tab", () => ({
+vi.mock("@/components/scope-surfaces/scope-surface-artifacts-tab", () => ({
   ScopeSurfaceArtifactsTab: () => createElement("div", { "data-testid": "artifacts-body" }),
 }));
-vi.mock("@/components/scope/scope-surface-skills-tab", () => ({
+vi.mock("@/components/scope-surfaces/scope-surface-skills-tab", () => ({
   ScopeSurfaceSkillsTab: () => createElement("div", { "data-testid": "skills-body" }),
 }));
 

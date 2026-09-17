@@ -78,6 +78,13 @@ const UI_ALLOWLIST = new Set<string>([
   // active-only reader is the correct one here, and an archived organization
   // must never enter a vantage.
   "src/lib/scope-surface-workspace-vantage.ts",
+  // The per-scope Agents/Assistants tabs (cinatra#2808) — the workspace
+  // vantage this read builds is a UI pick surface: every organization it
+  // carries becomes a row the reader can launch from, so an archived
+  // organization must never be one. The authz decision itself is taken by
+  // evaluateExtensionAccess under each concrete organization, never by this
+  // membership read.
+  "src/lib/scope-surface-eligibility.server.ts",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {

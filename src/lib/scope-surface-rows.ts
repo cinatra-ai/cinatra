@@ -1,150 +1,188 @@
 /**
- * The per-scope tab ROW BUILDERS (cinatra#2808, per-scope surfaces S2).
+ * THE SCOPE-TAB CARD ROWS (cinatra#2808, per-scope surfaces S2).
  *
- * The eligibility loader answers WHICH packages a scope reaches; this module
- * turns that answer into the two tabs' row models — and it is the ONE place the
- * scope's addresses are attached, always from #2809's own contract
- * (`scope-surfaces.ts`), never composed here.
+ * The eligibility loader decides WHAT a scope lists; this module decides what
+ * each row's controls POINT AT. Both halves are pure, and the addresses are not
+ * minted here: every href comes from #2809's href contract in `scope-surfaces`,
+ * composed with the scope the reader is on, so a launch made from a team lands
+ * inside that team and the two slices cannot disagree about an address.
  *
- * PURE, and deliberately free of a VALUE import of `@/lib/scope-filter`: the
- * assistants directory resolver sits in the reachable graph of /chat and the
- * a2a / llm-bridge / mcp API routes, all route-graph-ratcheted, so its scope
- * predicate is INJECTED (`AssistantsDirectoryOptions.scopeMatch`) and only the
- * erased type crosses the boundary. `scopeSurfaceScopeMatch` mints exactly that
- * predicate for a viewed scope, and it imports `NormalizedResourceScope` as a
- * TYPE only, for the same reason the resolver does.
+ * NO `/configuration` HREF IS MINTED HERE. The scope tabs are member-facing, and
+ * the marketplace detail route is admin-only; a member's "More details" opens
+ * the ratified §II modal in place instead of carrying a link that would bounce.
+ * That is why `detailHref` is `null` on every row this module builds.
  */
-import type { AgentRunRowModel } from "@cinatra-ai/agents/agent-run-client";
-import type { ScopeAssistantRow } from "@/components/scope/scope-assistants-tab";
-import type { NormalizedResourceScope } from "@/lib/scope-filter";
-import type { ScopeEligibilityRow } from "@/lib/scope-surface-eligibility";
+import type { ScopeSurfaceEligibilityRow, ScopeSurfaceStatus } from "./scope-surface-eligibility";
 import {
   scopeSurfaceAgentLaunchHref,
   scopeSurfaceAgentSettingsHref,
   scopeSurfaceAssistantLaunchHref,
   scopeSurfaceAssistantSettingsHref,
   type ScopeSurfaceRef,
-} from "@/lib/scope-surfaces";
+} from "./scope-surfaces";
 
-/**
- * The Agents tab's rows: "Non-assistant agent packages, `active|locked`."
- *
- * The row model is `AgentRunRowModel` — the SAME one `AgentRunClient` renders on
- * /agents — extended by name with the scope's Settings href, the version and
- * the status. `detailHref` is deliberately NULL: this surface is member-facing,
- * and no member-facing surface renders a link into `/configuration` (epic
- * #2699), so "More details" opens the ratified modal from its own button.
- */
-export function buildScopeAgentRows(
-  scope: ScopeSurfaceRef,
-  rows: readonly ScopeEligibilityRow[],
-): AgentRunRowModel[] {
-  return rows
-    .filter((row) => !row.isAssistant)
-    .map((row) => ({
-      key: row.packageName,
-      name: row.displayName,
-      description: row.description ?? "",
-      // Every package listed here is a Cinatra-hosted install of this tenant —
-      // an external A2A agent has no install row to be eligible through.
-      host: "local" as const,
-      // The picker's free-text filter reads name and description only; a scope
-      // row advertises no skill list of its own.
-      skills: [],
-      packageName: row.packageName,
-      detailHref: null,
-      runHref: scopeSurfaceAgentLaunchHref(scope, row.packageName),
-      settingsHref: scopeSurfaceAgentSettingsHref(scope, row.packageName),
-      version: row.version,
-      status: row.status,
-    }));
+/** One remote connected site's two chat controls, scoped to the read scope. */
+export type ScopeAssistantRemoteInstance = {
+  readonly instanceId: string;
+  readonly name: string;
+  /** "Chat locally" — the site-scoped conversation INSIDE this scope. */
+  readonly localChatHref: string;
+  /** "Remote chat" — the jump-out to the connected site (never re-scoped). */
+  readonly remoteHref: string;
+};
+
+/** One card on a scope's Agents tab. */
+export type ScopeAgentCardRow = {
+  readonly key: string;
+  readonly name: string;
+  readonly description: string;
+  readonly host: "local";
+  readonly packageName: string;
+  /** Admin-only full-page detail is never minted for a scope tab — see above. */
+  readonly detailHref: null;
+  /** The Run control's scoped target (#2809). */
+  readonly runHref: string;
+  /** The Settings control's scoped, package-specific target (#2809). */
+  readonly settingsHref: string;
+  readonly version: string | null;
+  readonly status: ScopeSurfaceStatus;
+};
+
+/** One row on a scope's Assistants tab. */
+export type ScopeAssistantCardRow = {
+  readonly key: string;
+  readonly packageName: string;
+  readonly vendor: string;
+  readonly slug: string;
+  readonly displayName: string;
+  readonly description: string | null;
+  /** The single "Chat" control, scoped (#2809). */
+  readonly chatHref: string;
+  /** The Settings control's scoped, package-specific target (#2809). */
+  readonly settingsHref: string;
+  readonly remoteCapable: boolean;
+  readonly remoteInstances: readonly ScopeAssistantRemoteInstance[];
+  /** The installed-card fields the rows are extended with. */
+  readonly version: string | null;
+  readonly status: ScopeSurfaceStatus;
+};
+
+/** The status the built-in platform assistant is read at: it carries no install
+ *  row to take one from, and it is never archived or locked out of a scope. */
+const BUILTIN_ASSISTANT_STATUS: ScopeSurfaceStatus = "active";
+
+/** The version as the installed card renders it: the stored version with a
+ *  leading `v`, or nothing at all when the install carries none. */
+export function formatScopeSurfaceVersion(version: string | null | undefined): string | null {
+  if (typeof version !== "string") return null;
+  const trimmed = version.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
 }
 
-/** The directory resolver's row, as much of it as this builder reads. */
+/**
+ * The Agents tab's rows. Every control is addressed at `scope`: Run at the
+ * scoped launcher, Settings at the scoped assignment page.
+ */
+export function buildScopeSurfaceAgentRows(
+  scope: ScopeSurfaceRef,
+  rows: readonly ScopeSurfaceEligibilityRow[],
+): readonly ScopeAgentCardRow[] {
+  return rows.map((row) => ({
+    key: row.packageName,
+    name: row.displayName,
+    description: row.description ?? "",
+    host: "local" as const,
+    packageName: row.packageName,
+    detailHref: null,
+    runHref: scopeSurfaceAgentLaunchHref(scope, row.packageName),
+    settingsHref: scopeSurfaceAgentSettingsHref(scope, row.packageName),
+    version: formatScopeSurfaceVersion(row.version),
+    status: row.status,
+  }));
+}
+
+/** One directory row as the /assistants resolver returns it — the fields this
+ *  builder re-scopes. Structurally a subset of `AssistantDirectoryRow`. */
 export type ScopeAssistantDirectoryRow = {
-  packageName: string;
-  vendor: string;
-  slug: string;
-  displayName: string;
-  description?: string | null;
-  localChatHref: string;
-  remoteInstances: readonly {
-    instanceId: string;
-    name: string;
-    localChatHref: string;
-    remoteHref: string;
+  readonly packageName: string;
+  readonly vendor: string;
+  readonly slug: string;
+  readonly displayName: string;
+  /**
+   * The built-in platform assistant, as the registry reader marks it. It has NO
+   * `installed_extension` row by construction — the reader unions its descriptor
+   * in unconditionally — so the eligibility join below must not read its absence
+   * from the install map as "this scope does not reach it".
+   */
+  readonly isBuiltin?: boolean;
+  /** The assistant's own description as the directory carries it. The BUILT-IN
+   *  row has no install to take one from, so this is what its middle panel draws. */
+  readonly description?: string | null;
+  readonly remoteCapable: boolean;
+  readonly remoteInstances: readonly {
+    readonly instanceId: string;
+    readonly name: string;
+    readonly remoteHref: string;
   }[];
 };
 
 /**
- * The Assistants tab's rows: the directory resolver's own rows — its Chat
- * affordances preserved exactly — re-addressed at the viewed scope and extended
- * with the Settings href and the installed-card fields.
+ * The Assistants tab's rows: the directory resolver's own rows, with every Chat
+ * control re-addressed at `scope` and the installed-card fields joined on by
+ * package name.
  *
- * A directory row the scope's eligibility does not admit is dropped: the
- * resolver answers what the ACTOR may reach, and a scope tab shows the
- * intersection with what the SCOPE reaches.
+ * An INSTALLED assistant package's directory row with NO eligible install is
+ * dropped: the tab lists what this scope reaches, and the eligibility loader is
+ * what decides that. The BUILT-IN platform assistant is the one row that join
+ * never gates — it is never an `installed_extension` row, so an installation
+ * carrying no assistant package still reaches it — and it is folded in with the
+ * installed-card fields it genuinely has: no version, no install description,
+ * and the live status every scope reads it at. The Chat
+ * control(s) are PRESERVED — a remote-capable assistant keeps one pair per
+ * connected site, and only the in-app half is re-scoped (the jump-out addresses
+ * the site itself, which no scope owns).
  */
-export function buildScopeAssistantRows(
+export function buildScopeSurfaceAssistantRows(
   scope: ScopeSurfaceRef,
   directoryRows: readonly ScopeAssistantDirectoryRow[],
-  eligibility: readonly ScopeEligibilityRow[],
-): ScopeAssistantRow[] {
-  const byPackage = new Map(
-    eligibility.filter((row) => row.isAssistant).map((row) => [row.packageName, row]),
-  );
-  const rows: ScopeAssistantRow[] = [];
+  eligible: readonly ScopeSurfaceEligibilityRow[],
+): readonly ScopeAssistantCardRow[] {
+  const byPackage = new Map(eligible.map((row) => [row.packageName, row]));
+  const out: ScopeAssistantCardRow[] = [];
   for (const row of directoryRows) {
-    const eligible = byPackage.get(row.packageName);
-    if (!eligible) continue;
+    const install = byPackage.get(row.packageName);
+    // The eligibility filter gates the INSTALLED assistant packages only. The
+    // built-in platform assistant has no install to be eligible, and dropping it
+    // here would empty the tab of every installation that has installed no
+    // assistant package at all.
+    if (!install && !row.isBuiltin) continue;
     const assistant = { vendor: row.vendor, slug: row.slug };
-    rows.push({
+    out.push({
+      key: row.packageName,
       packageName: row.packageName,
       vendor: row.vendor,
       slug: row.slug,
       displayName: row.displayName,
-      description: row.description ?? eligible.description,
-      version: eligible.version,
-      status: eligible.status,
-      localChatHref: scopeSurfaceAssistantLaunchHref(scope, assistant),
+      // The install's description where there is an install; otherwise the
+      // descriptor's own, which is what the built-in row has (design
+      // app-extensions §III / §IV draw the description in the middle panel).
+      description: install ? install.description : (row.description ?? null),
+      chatHref: scopeSurfaceAssistantLaunchHref(scope, assistant),
       settingsHref: scopeSurfaceAssistantSettingsHref(scope, assistant),
+      remoteCapable: row.remoteCapable,
       remoteInstances: row.remoteInstances.map((instance) => ({
         instanceId: instance.instanceId,
         name: instance.name,
-        // The site-scoped chat moves INSIDE the scope; the jump-out is the
-        // connected site's own URL and is never re-based.
         localChatHref: scopeSurfaceAssistantLaunchHref(scope, {
           ...assistant,
           instance: instance.instanceId,
         }),
         remoteHref: instance.remoteHref,
       })),
+      version: install ? formatScopeSurfaceVersion(install.version) : null,
+      status: install ? install.status : BUILTIN_ASSISTANT_STATUS,
     });
   }
-  return rows;
-}
-
-/**
- * THE INJECTED PREDICATE. Does a directory row's scope footprint reach the
- * VIEWED scope?
- *
- * An `adminOnly` grant never matches: a scope tab is member-facing, and the
- * eligibility loader's vantage arm refuses the `admin` tier for the same
- * reason — a scope holds no admin standing.
- */
-export function scopeSurfaceScopeMatch(
-  scope: ScopeSurfaceRef,
-): (entries: readonly NormalizedResourceScope[]) => boolean {
-  return (entries) =>
-    entries.some((entry) => {
-      if (entry.adminOnly) return false;
-      // A workspace-locus grant is tenant-wide: every scope of the tenant
-      // reaches it.
-      if (entry.locus === "workspace") return true;
-      // A personal scope has exactly one member — the actor — and the resolver
-      // has already narrowed to what that actor may reach, so nothing further
-      // is withheld there.
-      if (scope.kind === "personal" || scope.kind === "workspace") return true;
-      return entry.locus === scope.kind && entry.locusId === scope.id;
-    });
+  return out;
 }

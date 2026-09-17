@@ -56,6 +56,7 @@ import type { Actor } from "@cinatra-ai/extension-types";
 import {
   EXTENSION_OWNER_LEVELS,
   isWorkspaceAnchoredRow,
+  isPlatformAnchoredRow,
   organizationRowAnchor,
   policyWidensToWorkspaceAnchor,
   WORKSPACE_ANCHOR_ROW_OWNERSHIP,
@@ -366,6 +367,41 @@ export function findLiveWorkspaceRow(
   rows: readonly InstalledExtension[],
 ): InstalledExtension | null {
   return rows.find((r) => isLiveRow(r) && isWorkspaceAnchoredRow(r)) ?? null;
+}
+
+/**
+ * The LIVE row that IS this package's install state for a per-instance READ —
+ * cinatra#3522.
+ *
+ * The supersession question above is narrow on purpose, and every read seam that
+ * only ever asked it inherited that narrowness: a package whose ONLY live row is
+ * the bundled/fleet PLATFORM anchor read back as "no row", which the marketplace
+ * card renders as "not installed" — a live "Install now" for six packages the
+ * image already ships and the loader already activates.
+ *
+ * "Is it installed?" is a different question from "what supersedes what", so it
+ * is answered here, once, in the order the tiers rank:
+ *
+ *  - a LIVE WORKSPACE anchor is the effective row (it supersedes every
+ *    organization row), and it is flagged as such so the caller can state the
+ *    reach it was installed at on the pill;
+ *  - otherwise a LIVE PLATFORM anchor — the bundled/system tier — is the
+ *    package's install state. It carries NO reach label: it was not installed at
+ *    a workspace target, so the ordinary four-state control applies to it
+ *    (the disabled Installed pill, or Update now against a newer catalog
+ *    version).
+ *
+ * An organization-anchored row is deliberately NOT answered here: this seam
+ * serves the org-blind, app-wide read model, and an organization row's
+ * addressability is the supersession machinery's own question.
+ */
+export function findLiveInstalledAnchorRow(
+  rows: readonly InstalledExtension[],
+): { row: InstalledExtension; isWorkspaceAnchor: boolean } | null {
+  const workspace = findLiveWorkspaceRow(rows);
+  if (workspace) return { row: workspace, isWorkspaceAnchor: true };
+  const platform = rows.find((r) => isLiveRow(r) && isPlatformAnchoredRow(r)) ?? null;
+  return platform ? { row: platform, isWorkspaceAnchor: false } : null;
 }
 
 /**

@@ -36,7 +36,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkspaceVantage,
   type WorkspaceVantage,
-} from "../scope-surface-eligibility";
+} from "../scope-surface-vantage";
 import {
   resolveArtifactDisplayedLocus,
   selectScopeOwnedArtifacts,
@@ -201,16 +201,12 @@ const ALL_ROWS: readonly Row[] = [
  * is unauthorized here.
  */
 async function vantage(): Promise<WorkspaceVantage> {
-  return buildWorkspaceVantage(
-    {
-      readMemberOrganizations: async () => [{ orgId: ORG_A }, { orgId: ORG_B }],
-      readVisibleTeams: async (_userId, orgId) =>
-        orgId === ORG_A ? [TEAM_A] : [TEAM_B],
-      readVisibleProjects: async (_userId, orgId) =>
-        orgId === ORG_A ? [PROJECT_A, PROJECT_B] : [],
-    },
-    { userId: ACTOR },
-  );
+  return buildWorkspaceVantage({
+    userId: ACTOR,
+    memberships: [{ orgId: ORG_A }, { orgId: ORG_B }],
+    teamIdsByOrg: { [ORG_A]: [TEAM_A], [ORG_B]: [TEAM_B] },
+    projectIdsByOrg: { [ORG_A]: [PROJECT_A, PROJECT_B], [ORG_B]: [] },
+  });
 }
 
 function idsFor(scope: ArtifactOwnershipLocus): string[] {
@@ -361,14 +357,7 @@ describe("fail closed", () => {
   });
 
   it("lists nothing for a workspace read whose vantage carries no organization", async () => {
-    const empty = await buildWorkspaceVantage(
-      {
-        readMemberOrganizations: async () => [],
-        readVisibleTeams: async () => [],
-        readVisibleProjects: async () => [],
-      },
-      { userId: ACTOR },
-    );
+    const empty = buildWorkspaceVantage({ userId: ACTOR, memberships: [] });
     // The actor's own personal rows and the workspace tier still belong to the
     // workspace; every organization-bound locus is gone with the membership.
     expect(idsFor({ kind: "workspace", vantage: empty })).toEqual([

@@ -16,7 +16,7 @@
  * the landed catalog rows, and that an empty read is reported as an empty READ
  * rather than as an unfinished tab.
  *
- * That last one is the reason this file exists. A `tabBody` is a React element
+ * That last one is the reason this file exists. A `body` is a React element
  * and therefore truthy even when it renders nothing, so the shell can never
  * fall back to its own empty state for a tab that passes a body — the body has
  * to render it. A body that returned `null` instead would draw a BLANK tab
@@ -69,7 +69,7 @@ const vantageRead = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/scope-surface-workspace-vantage", () => vantageRead);
 
-import { ScopeSurfaceSkillsTab } from "@/components/scope/scope-surface-skills-tab";
+import { ScopeSurfaceSkillsTab } from "@/components/scope-surfaces/scope-surface-skills-tab";
 
 function skill(id: string, name: string, ownership: Record<string, unknown>) {
   return {

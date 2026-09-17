@@ -87,7 +87,7 @@ vi.mock("@/lib/better-auth-db", () => ({
 
 import { LibraryMode } from "@/components/artifacts/library-mode";
 import { SkillsCatalogRows } from "@cinatra-ai/skills/catalog-rows";
-import { buildWorkspaceVantage } from "@/lib/scope-surface-eligibility";
+import { buildWorkspaceVantage } from "@/lib/scope-surface-vantage";
 import {
   selectScopeOwnedSkills,
   type SkillOwnershipLocus,
@@ -179,14 +179,12 @@ const ALL_ARTIFACTS = [
 ];
 
 async function vantage() {
-  return buildWorkspaceVantage(
-    {
-      readMemberOrganizations: async () => [{ orgId: ORG_A }],
-      readVisibleTeams: async () => [TEAM_A],
-      readVisibleProjects: async () => [PROJECT_A],
-    },
-    { userId: ACTOR },
-  );
+  return buildWorkspaceVantage({
+    userId: ACTOR,
+    memberships: [{ orgId: ORG_A }],
+    teamIdsByOrg: { [ORG_A]: [TEAM_A] },
+    projectIdsByOrg: { [ORG_A]: [PROJECT_A] },
+  });
 }
 
 /** The rows the library list rendered, by their titles. */

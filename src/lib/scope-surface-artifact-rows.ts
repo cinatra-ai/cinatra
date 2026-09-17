@@ -65,7 +65,7 @@
  * the boundary as TYPES only, so this module adds no route-graph weight.
  */
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
-import type { WorkspaceVantage } from "@/lib/scope-surface-eligibility";
+import type { WorkspaceVantage } from "@/lib/scope-surface-vantage";
 
 /**
  * The scope an Artifacts tab is being read FOR — the VIEWED one, never the

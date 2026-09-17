@@ -41,15 +41,13 @@ export type AgentDetailModalProps = {
    * /configuration/marketplace/<scope>/<name> — the linkTrigger's no-JS
    * fallback href (JS opens the modal in place instead of navigating).
    *
-   * NULL on a per-scope tab card (cinatra#2808): that surface is member-facing,
-   * and "no member-facing surface renders a link into `/configuration` for a
-   * non-admin" (epic #2699). There is nothing to fall back TO either — the
-   * in-app full-page detail route is retired (cinatra#2736: this modal "is the
-   * app's ONLY extension-detail surface") — so the opener is the modal's own
-   * default "More details" BUTTON rather than an anchor. The modal itself is
-   * unchanged and identical in both cases.
+   * `null` is the MEMBER arm (cinatra#2808): the full-page detail lives under
+   * the admin-only `/configuration` segment, so a scope tab mints none for a
+   * reader who could not follow it. The modal then opens from its own trigger —
+   * the ratified detail modal, reached in place, with no link that bounces and
+   * no new `/configuration` producer for the CI inventory to disposition.
    */
-  detailHref?: string | null;
+  detailHref: string | null;
   /**
    * Controlled open state (cinatra#1121). The /agents All-Agents card lifts the
    * modal's open state so the SAME modal is opened by both the "More details"
@@ -91,8 +89,6 @@ export function AgentDetailModal({
     badge: null,
     freshnessAt: null,
     rating: null,
-    // Unread by the modal (it renders no link to a detail page); carried only
-    // to satisfy the card wire shape.
     detailHref: detailHref ?? "",
     installCount: null,
     manifestLogoUrl: null,
@@ -106,7 +102,10 @@ export function AgentDetailModal({
     <MarketplaceDetailModal
       card={card}
       loadDetail={loadDetail}
-      {...(detailHref ? { linkTrigger: { variant: "link" as const, href: detailHref } } : {})}
+      // The admin arm keeps the §VI anchor whose href is the full-page detail
+      // (a no-JS fallback). The member arm passes none, so the modal falls back
+      // to its own link-styled DialogTrigger — same words, same modal, no href.
+      linkTrigger={detailHref ? { variant: "link", href: detailHref } : undefined}
       open={open}
       onOpenChange={onOpenChange}
     />
