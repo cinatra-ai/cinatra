@@ -20,8 +20,8 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "manifestSha256": "c7cd9ef550e35ed57299bcd5c0a3c9819f7fc91e1f1f66632d9389428f05ddff",
-      "specContentHash": "sha256:ee7de0e23e82e89543b00431472fb7978567277006076f692cd7e865880e179a"
+      "manifestSha256": "26c6513806b420da9d08326961b31549d23278a8c8dfbf00f5defd2cf02ef62d",
+      "specContentHash": "sha256:9595936d84048d6e914604e952142c291542c702a00b4424c237b7bbafa547b0"
     },
     {
       "id": "app-connectors",
