@@ -35,6 +35,15 @@ const registry = vi.hoisted(() => ({
 }));
 vi.mock("@cinatra-ai/extensions", () => registry);
 
+// The host's notification WRITER, spied rather than replaced: the refusal
+// claim below is that nothing is written when a reference is refused, and the
+// notification the host port emits (src/lib/extension-host-context.ts) goes
+// through exactly this function.
+const notifications = vi.hoisted(() => ({
+  createNotificationForRecipient: vi.fn(async () => undefined),
+}));
+vi.mock("@cinatra-ai/notifications/server", () => notifications);
+
 const intake = vi.hoisted(() => ({
   fetchGitHubSuppliedPackageAtPin: vi.fn(),
 }));
@@ -1282,5 +1291,76 @@ describe("a BARE link proves the branch name it records (cinatra#3204)", () => {
     ).rejects.toThrow(/could not resolve the branch, tag or release name to record/);
     // Nothing a candidate could be identical to, so nothing is asked.
     expect(host.headRequests()).toEqual([]);
+  });
+});
+
+/**
+ * cinatra#3204 criterion 23, the BEFORE-finalization half — a refusal leaves
+ * nothing written.
+ *
+ * A supplied repository candidate whose declared provenance does not carry a
+ * well-formed `owner/repo` reference AND a 40-character pinned commit is
+ * refused HERE, at the one dispatch entry every supplied road passes through,
+ * which already declares itself the road's own precondition point. Because the
+ * dispatcher is never called there is no canonical row, no install-op journal
+ * row, and nothing for the host's notification port to emit about.
+ *
+ * The shape check is a SHAPE check only: it cannot tell a repository that
+ * exists from one that does not, which is the download's job and stays there.
+ */
+describe("a malformed supplied repository reference is refused BEFORE anything is written (criterion 23)", () => {
+  beforeEach(() => {
+    registry.extensionRegistry.install.mockClear();
+    notifications.createNotificationForRecipient.mockClear();
+  });
+
+  const repositoryCandidate = (over: Record<string, unknown>) => ({
+    kind: "skill" as const,
+    packageName: "@cinatra-ai/web-research-skill",
+    version: "0.1.0",
+    validatorRan: true,
+    provenance: {
+      type: "github" as const,
+      repo: "cinatra-ai/web-research-skill",
+      ref: "main",
+      resolvedSha: SHA,
+      contentDigest: DIGEST,
+      ...over,
+    },
+  });
+
+  const actor = { actorType: "human" as const, source: "ui" as const, userId: "u1", orgId: "org-1" };
+  const rowOwnership = { ownerLevel: "workspace" as const, ownerId: null, organizationId: null };
+
+  it("refuses a reference that is a PACKAGE NAME rather than owner/repo, and dispatches nothing", async () => {
+    await expect(
+      installSuppliedCandidate({
+        candidate: repositoryCandidate({ repo: "@cinatra-ai/web-research-skill" }) as never,
+        actor,
+        rowOwnership,
+      }),
+    ).rejects.toThrow(
+      '[supplied-install] @cinatra-ai/web-research-skill: this install carries no repository ' +
+        'reference to install from - a package supplied from a repository needs an "owner/repo" ' +
+        "reference and the 40-character commit its bytes were read at. Nothing was written.",
+    );
+
+    // No dispatcher call means no canonical row and no install-op journal row...
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+    // ...and nothing was announced to the person either.
+    expect(notifications.createNotificationForRecipient).not.toHaveBeenCalled();
+  });
+
+  it("refuses a provenance carrying no 40-character pinned commit, and dispatches nothing", async () => {
+    await expect(
+      installSuppliedCandidate({
+        candidate: repositoryCandidate({ resolvedSha: "main" }) as never,
+        actor,
+        rowOwnership,
+      }),
+    ).rejects.toThrow(/40-character commit its bytes were read at. Nothing was written\./);
+
+    expect(registry.extensionRegistry.install).not.toHaveBeenCalled();
+    expect(notifications.createNotificationForRecipient).not.toHaveBeenCalled();
   });
 });

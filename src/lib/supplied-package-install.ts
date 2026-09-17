@@ -890,6 +890,36 @@ export function candidateFromPreparedArchive(
 }
 
 /**
+ * THE REFERENCE IS CHECKED BEFORE ANYTHING IS WRITTEN (cinatra#3204 criterion
+ * 23). A package supplied FROM A REPOSITORY is installed from an `owner/repo`
+ * reference at a pinned commit; a candidate whose declared provenance carries
+ * neither is not installable, and the refusal belongs HERE, at the road's own
+ * precondition point, rather than three steps later inside a handler — by then
+ * the dispatcher has created the canonical row and the pipeline has finalized
+ * it, so the failure is compensated by ARCHIVING a row that should never have
+ * been written at all.
+ *
+ * The shapes are the ones this module already declares for the parts it splices
+ * into an archive request, and the commit is the same 40-character id the
+ * preview pins — no new parser, and no second host.
+ *
+ * It is a SHAPE check only: it cannot tell a repository that exists from one
+ * that does not, which is the download's job and stays there.
+ */
+function refuseMalformedSuppliedRepositoryReference(candidate: SuppliedInstallCandidate): void {
+  if (candidate.provenance.type !== "github") return;
+  const parts = candidate.provenance.repo.split("/");
+  const wellFormedReference =
+    parts.length === 2 && isSafeOwnerAndRepo(parts[0] as string, parts[1] as string);
+  if (wellFormedReference && COMMIT_ID_PATTERN.test(candidate.provenance.resolvedSha)) return;
+  throw new Error(
+    `[supplied-install] ${candidate.packageName}: this install carries no repository reference ` +
+      `to install from - a package supplied from a repository needs an "owner/repo" reference ` +
+      `and the 40-character commit its bytes were read at. Nothing was written.`,
+  );
+}
+
+/**
  * Hand a prepared supplied package to the SAME dispatcher a store install uses.
  *
  * `registryUrl` carries the non-registry marker rather than a URL: a supplied
@@ -902,6 +932,12 @@ export async function installSuppliedCandidate(input: {
   actor: { actorType: "human" | "model" | "system" | "a2a"; source: "ui"; userId?: string; orgId?: string | null };
   rowOwnership: InstallRowOwnership;
 }): Promise<void> {
+  const { candidate } = input;
+  // THE PRECONDITION, BEFORE THE DISPATCHER IS REACHED: a refused reference
+  // creates no canonical row, no install-op journal row and nothing to notify
+  // anyone about.
+  refuseMalformedSuppliedRepositoryReference(candidate);
+
   // The handler set, registered BEFORE the dispatch and in THIS worker.
   //
   // `extensionRegistry` is per-process state, and a Server Action worker only
@@ -916,7 +952,6 @@ export async function installSuppliedCandidate(input: {
   // supplied roads, and no future entry point can forget it.
   await import("@cinatra-ai/extensions/handler-bootstrap");
   const { extensionRegistry } = await import("@cinatra-ai/extensions");
-  const { candidate } = input;
   await extensionRegistry.install(
     candidate.kind,
     {

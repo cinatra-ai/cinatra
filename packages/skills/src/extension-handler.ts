@@ -6,13 +6,19 @@ import type {
   ExtensionDiscoveryScope,
   ActiveExtensionManifest,
 } from "@cinatra-ai/extension-types";
-import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
+import {
+  visibleManifestPackageNames,
+  isSuppliedPackageProvenance,
+} from "@cinatra-ai/extension-types";
 import { installSkillPackageFromGitHub } from "./github";
 import { installSkillPackageFromVerdaccio } from "./verdaccio";
 import { uninstallSkillPackage } from "./skills-store";
 // Explicit catalog rebuild at skill-extension lifecycle points (cinatra#1364).
 import { rebuildSkillsCatalog } from "./skill-packages";
-import { resolveSkillPackageSource } from "./skill-package-source";
+import {
+  resolveSkillPackageSource,
+  type SkillPackageSourceKind,
+} from "./skill-package-source";
 import { listInstalledSkills, type SkillManifest } from "./skills-registry";
 import { matchAgentsToSkills } from "@/lib/agents-store";
 
@@ -147,6 +153,34 @@ async function resolveSkillInstallAnchorOrgId(
   return resolveNativeInstallOwnership(actor.orgId ?? null, planned as never).anchorOrgId;
 }
 
+/**
+ * WHICH ROAD A GITHUB-SOURCED REF TAKES (cinatra#3204).
+ *
+ * The legacy GitHub installer is the CONFIGURED-REPOSITORY sync: its argument
+ * is a repository reference (`owner/repo`), and its second act mints a
+ * connection-bearing client. A package the operator SUPPLIED by a public
+ * repository link is neither of those things — its `packageName` is the
+ * RESOLVED package name, which is not a repository reference, and the person
+ * provided a public link precisely so that nothing had to be signed in to.
+ *
+ * A supplied package also needs nothing from that installer, because by the
+ * time this handler runs its bytes are already in the content-addressed store:
+ * the dispatcher fires the store pipeline BEFORE the handler for this kind, and
+ * the pipeline has already recorded the honest provenance — the repository, the
+ * proven ref and the pinned commit — on the canonical row. Projecting that
+ * FINALIZED payload into the skills catalog is exactly what the arm below does
+ * for a package supplied as a FILE, and for exactly the reason stated there:
+ * the branch is about WHERE THE PAYLOAD IS, never which registry it came from.
+ *
+ * So the discriminator is whether the ref is SUPPLIED — a declared provenance
+ * carrying a content digest, the grammar `isSuppliedPackageProvenance` owns —
+ * and never the provenance's type. A ref that declares no supplied provenance
+ * keeps the legacy road exactly as it was.
+ */
+function takesLegacyGitHubRoad(ref: PackageRef, sourceKind: SkillPackageSourceKind): boolean {
+  return sourceKind === "github" && !isSuppliedPackageProvenance(ref.provenance);
+}
+
 export function createSkillExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "skill",
@@ -157,7 +191,7 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
       options?: { destination?: "private" | "public"; rowOwnership?: InstallRowOwnershipInput },
     ): Promise<void> {
       const source = resolveSkillPackageSource(ref);
-      if (source.kind === "github") {
+      if (takesLegacyGitHubRoad(ref, source.kind)) {
         await installSkillPackageFromGitHub(ref.packageName);
       } else {
         // cinatra#793: the verdaccio installer consumes the FINALIZED unified-
@@ -195,7 +229,7 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
     async update(ref: PackageRef, actor: Actor): Promise<void> {
       // upsert semantics — same as install per source kind.
       const source = resolveSkillPackageSource(ref);
-      if (source.kind === "github") {
+      if (takesLegacyGitHubRoad(ref, source.kind)) {
         await installSkillPackageFromGitHub(ref.packageName);
       } else {
         await installSkillPackageFromVerdaccio({

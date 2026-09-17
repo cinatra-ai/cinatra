@@ -153,3 +153,59 @@ describe("the GitHub tab asks for a LINK, never for a connection", () => {
     expect(screen.queryByText(/Configure access & ownership/)).toBeNull();
   });
 });
+
+/**
+ * THE PIN (cinatra#3204): what pressing Install now on the resolved panel
+ * sends. The submission carries the LINK the person typed, the branch name the
+ * preview proved and the commit it pinned — never the resolved package name,
+ * which is not a repository reference and is refused as one.
+ */
+describe("the resolved panel installs what the person typed, not the name it resolved", () => {
+  it("sends the link, the proven branch name and the pinned commit", async () => {
+    actions.previewSuppliedRepositoryAction.mockResolvedValue({
+      ok: true,
+      preview: {
+        kind: "skill",
+        packageName: "@cinatra-ai/web-research-skill",
+        version: "0.1.0",
+        contentDigest: "a".repeat(64),
+        resolvedSha: SHA,
+        repo: "cinatra-ai/web-research-skill",
+        ref: "main",
+        archiveUrl: "https://codeload.github.com/cinatra-ai/web-research-skill/zip/main",
+      },
+    });
+    actions.installSuppliedRepositoryAction.mockResolvedValue({
+      ok: true,
+      kind: "skill",
+      packageName: "@cinatra-ai/web-research-skill",
+      version: "0.1.0",
+      observable: { label: "Skills", href: "/configuration/extensions" },
+    });
+
+    render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/cinatra-ai/web-research-skill" },
+    });
+    fireEvent.click(screen.getByTestId("github-upload-submit"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("extension-install-panel-submit")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("extension-install-panel-submit"));
+
+    await waitFor(() => {
+      expect(actions.installSuppliedRepositoryAction).toHaveBeenCalled();
+    });
+    const sent = actions.installSuppliedRepositoryAction.mock.calls[0]?.[0] as {
+      repoUrl: string;
+      ref: string;
+      pin: { resolvedSha: string; contentDigest: string };
+    };
+    expect(sent.repoUrl).toBe("https://github.com/cinatra-ai/web-research-skill");
+    expect(sent.ref).toBe("main");
+    expect(sent.pin.resolvedSha).toBe(SHA);
+    // The resolved package name is never sent as the thing to install from.
+    expect(JSON.stringify(sent)).not.toContain("@cinatra-ai/web-research-skill");
+  });
+});
