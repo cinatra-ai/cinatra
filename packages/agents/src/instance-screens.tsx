@@ -614,6 +614,49 @@ export function runInDispatchHandoff(params: {
 }
 
 /**
+ * IS THE RUN INSIDE ITS EXECUTION WITH NOTHING PRODUCED YET? (cinatra#3246.)
+ *
+ * The issue, in the product's own words: right after a person answers the run's
+ * skills question and the run starts working, the list of steps beside it
+ * "briefly drops down to showing only the Skills entry -- the schedule, review
+ * and other steps that were listed a moment ago disappear until the run has
+ * actually produced something."
+ *
+ * `running` is answered from the status above, deliberately and unchanged: the
+ * table that decides "has this run run?" is the one cinatra#3184 left, and the
+ * step the run detail opens on and the tab the strip lights are still computed
+ * from it. But the RAIL asks a narrower question -- may the rows the run has
+ * not reached yet still ride? -- and for that question the first render at
+ * `running` with no step result, no message and no streamed text behind it is
+ * the dispatch handoff one status later: the run is in its execution and its
+ * own rows do not exist yet, so stopping the still-to-come rows there takes
+ * away entries the reader was shown a moment earlier and puts nothing in their
+ * place. The ratified drawing's own loading example -- the run progress card as
+ * a placeholder, captioned "Before -- the output has not been generated" --
+ * draws a rail whose last entry is an upcoming Review row beside that spinner.
+ *
+ * THE RUN'S OWN HISTORY STILL STOPS THEM: the moment any of the three counts is
+ * non-zero this reads false, the rail's argument is the plain record answer
+ * again, and the later rows are the run's real ones.
+ *
+ * Exported so the regression test can pin it without a DB, a session or a
+ * Next.js render.
+ */
+export function runInExecutionWithoutRecord(params: {
+  runStatus: string | null | undefined;
+  stepResultCount: number;
+  runMessageCount: number;
+  streamedTextLength: number;
+}): boolean {
+  return (
+    runHasExecutionRecord(params) &&
+    params.stepResultCount === 0 &&
+    params.runMessageCount === 0 &&
+    params.streamedTextLength === 0
+  );
+}
+
+/**
  * DO THE RUN'S STILL-TO-COME ROWS RIDE ON THE RAIL? (cinatra#3068 fix leg 3)
  *
  * The ratified drawing: "A resolved gate stays on the rail as read-only history
@@ -1586,6 +1629,15 @@ export async function SetupScreen({
   const runBetweenSetupQuestions = runInDispatchHandoff({
     runStatus: run?.status ?? null,
     hasExecutionRecord: runHasExecution,
+  });
+  // AND THE SAME MOMENT ONE STATUS LATER -- the run picked up, working, and
+  // with none of its own rows written yet (cinatra#3246). Read here, beside the
+  // other two, because it is a question about the same one fact.
+  const runInsideExecutionWithNothingYet = runInExecutionWithoutRecord({
+    runStatus: run?.status ?? null,
+    stepResultCount: run?.stepResults?.length ?? 0,
+    runMessageCount: completedRunMessages.length,
+    streamedTextLength: (run?.streamedText ?? "").length,
   });
 
   // THE GATE, DERIVED BEFORE THE PAGE IS SERVED (cinatra#2729 defect 2).
@@ -2617,7 +2669,14 @@ export async function SetupScreen({
                   inputStepIsOpen,
                   inputStepsInRail,
                   gateStepInRail: hasRecommendationStep,
-                  hasExecution: runHasExecution,
+                  // AND THE LOADING MOMENT KEEPS THEM (cinatra#3246): a run
+                  // inside its execution that has produced nothing has no rows
+                  // of its own to put in their place, so the rows the reader
+                  // was shown ride on until its history actually starts. The
+                  // other two readings of `runHasExecution` -- the step the
+                  // detail opens on, the tab the strip lights -- take the plain
+                  // value and are unchanged.
+                  hasExecution: runHasExecution && !runInsideExecutionWithNothingYet,
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
               });
