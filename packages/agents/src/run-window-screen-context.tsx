@@ -112,9 +112,12 @@ export type RunWindowScreenStore = {
    * hand-rolled subscription silently keeps drawing nothing.
    */
   version(): number;
-  /** Replace the record. Notifies only when something drawn has changed. */
+  /**
+   * Record what this screen publishes, and re-decide which record the page
+   * draws. Notifies only when something drawn has changed.
+   */
   publish(token: ScreenToken, registration: RunWindowScreenRegistration): void;
-  /** Withdraw — but only if this token still owns the record. */
+  /** Withdraw this screen's own record; the page falls back to the others'. */
   retract(token: ScreenToken): void;
   subscribe(listener: () => void): () => void;
 };
@@ -140,6 +143,11 @@ function drawnSignature(r: RunWindowScreenRegistration): string {
 }
 
 export function createRunWindowScreenStore(): RunWindowScreenStore {
+  // EVERY LIVE REGISTRATION, in publish order (most recently published last).
+  // The page draws exactly ONE of them; the rest are kept so that withdrawing
+  // the drawn one falls back to what the others published rather than blanking
+  // the page.
+  const records = new Map<ScreenToken, RunWindowScreenRegistration>();
   let current: RunWindowScreenRegistration | null = null;
   let owner: ScreenToken | null = null;
   let signature: string | null = null;
@@ -149,25 +157,64 @@ export function createRunWindowScreenStore(): RunWindowScreenStore {
     version += 1;
     for (const listener of [...listeners]) listener();
   };
+  // WHICH REGISTRATION THE PAGE DRAWS — the reader is asked by the screen that
+  // has something for them (cinatra#3487, the counted defect of proof round 6).
+  //
+  // Last-writer-wins was the whole rule here, and React's own effect order made
+  // it the wrong one: a child's passive effect runs BEFORE its parent's, so a
+  // screen that mounts another screen inside itself publishes LAST. At a marked
+  // review gate that outer screen is the run panel, which publishes
+  // "nothing to manipulate" for precisely the reading in which it mounts the
+  // review card as its own child — and the card, the screen the reader is
+  // actually being asked by, had already published the server's yes. The page
+  // drew one record, the panel's, and the live page showed no window at all
+  // while a reopened page — where the card is the only registrant — showed one.
+  //
+  // SO THE RULE IS PRECEDENCE, NOT ARRIVAL ORDER: a registration that lends
+  // NOTHING never displaces one that lends SOMETHING for the same run, and a
+  // screen may always replace its own. Nothing else about the hand-over moves:
+  // the record is still one, the window is still the page's, and a screen with
+  // nothing to manipulate still draws no window when it is the only one there.
+  const select = () => {
+    const entries = [...records.entries()];
+    let chosen: [ScreenToken, RunWindowScreenRegistration] | null =
+      entries.length > 0 ? entries[entries.length - 1] : null;
+    if (chosen !== null && !chosen[1].canManipulate) {
+      for (let i = entries.length - 2; i >= 0; i -= 1) {
+        const entry = entries[i];
+        if (entry[1].canManipulate && entry[1].runId === chosen[1].runId) {
+          chosen = entry;
+          break;
+        }
+      }
+    }
+    const nextOwner = chosen === null ? null : chosen[0];
+    const nextRecord = chosen === null ? null : chosen[1];
+    const next = nextRecord === null ? null : drawnSignature(nextRecord);
+    const changed = nextOwner !== owner || next !== signature;
+    // ALWAYS taken, even when nothing drawn changed: the record carries the
+    // action the chrome calls, and that is the screen's CURRENT one.
+    current = nextRecord;
+    owner = nextOwner;
+    if (changed) {
+      signature = next;
+      notify();
+    }
+  };
   return {
     read: () => current,
     version: () => version,
     publish(token, registration) {
-      const next = drawnSignature(registration);
-      const changedOwner = owner !== token;
-      current = registration;
-      owner = token;
-      if (changedOwner || next !== signature) {
-        signature = next;
-        notify();
-      }
+      // Re-inserted so this screen's record is the most recent one: a screen
+      // may always replace its own, which is what keeps a screen that has just
+      // lost what it lends from being held to its own older record.
+      records.delete(token);
+      records.set(token, registration);
+      select();
     },
     retract(token) {
-      if (owner !== token) return;
-      current = null;
-      owner = null;
-      signature = null;
-      notify();
+      if (!records.delete(token)) return;
+      select();
     },
     subscribe(listener) {
       listeners.add(listener);
@@ -217,7 +264,8 @@ export function useRunWindowScreen(
     else store.retract(token);
   });
   // And withdrawn when the screen goes. Only this token's own record is cleared,
-  // so a screen leaving after its successor arrived cannot blank the successor.
+  // so a screen leaving after its successor arrived cannot blank the successor,
+  // and the page falls back to whatever the screens still there published.
   useEffect(() => {
     if (!store) return;
     return () => store.retract(token);
