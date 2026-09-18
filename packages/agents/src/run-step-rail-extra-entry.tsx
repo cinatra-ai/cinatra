@@ -86,6 +86,23 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * row's own 2px either side, 52.3px, with its circle's centre at that box's
  * centre.
  *
+ * AND THE ROW STARTS AT THE COLUMN'S LEFT EDGE (cinatra#3514). The drawing
+ * draws the rail as ONE column -- "The step the run is paused on is
+ * highlighted; steps already passed sit above it, steps still to come below" --
+ * and nothing in it indents a row. This declaration used to state no horizontal
+ * alignment at all, so every row drawn through `StepperTrigger` kept the shared
+ * `Button` base's own `justify-center` (`src/components/ui/button.tsx`), and on
+ * a row whose wrapper spans the rail column (the `flex w-full min-w-0` row
+ * wrapper below) that CENTRED the circle and the label inside the column: half
+ * the row's leftover width became a left indent, so the shorter the label the
+ * further right the row sat. Measured on a development boot 2026-09-15 on the
+ * Email Outreach Agent's run page, in both palettes at a 2880px frame: the gate
+ * entries "Account scope", "Review drafts" and "Test & send" stood about 12, 18
+ * and 25px right of the plain steps beside them, and the same shift on the List
+ * Curator's run page. `justify-start` is the sentence the run-surface rail's own
+ * row class next door already states (`RUN_SURFACE_RAIL_ROW_CLASS`), so one
+ * rail reads at one edge instead of two.
+ *
  * TWO EARLIER READINGS ARE WITHDRAWN HERE. Leg 8 pinned the circle to the
  * label's FIRST line (`items-start` plus a 2px nudge on the label); leg 9 then
  * took the mark out of the flow to keep its gaps even under that reading. The
@@ -95,7 +112,7 @@ export const RUN_PAGE_RAIL_INDICATOR_CLASS =
  * 25px below. The drawing's own sentence needs neither device.
  */
 export const RUN_PAGE_RAIL_ROW_CLASS =
-  "h-auto w-full min-w-0 items-center gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
+  "h-auto w-full min-w-0 items-center justify-start gap-2 border-0 px-0 py-0.5 text-left whitespace-normal";
 
 /**
  * THE LABEL FITS THE RAIL COLUMN (cinatra#3226, the fourth proof round's
