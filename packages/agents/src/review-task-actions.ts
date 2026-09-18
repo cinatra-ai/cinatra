@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -646,15 +647,88 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
-      // execution.ts that, once the last required field is in, this run owes the
-      // trigger step before it may dispatch — so it hands off to
-      // `pending_trigger` instead of running before the user has chosen when.
-      { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
-    );
+    // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
+    // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
+    // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic
+    // `setup-${runId}` minted once per RUN, so every confirmed field of one run
+    // asked the queue for the SAME id. The queue refuses to create a second job
+    // when the id key already exists (it hands the pre-existing id back and
+    // stores nothing) and it keeps its completed jobs, so the FIRST
+    // confirmation of a run landed and every later one was dropped: no next
+    // field was asked, no hand-over was made, and the run sat at `queued`.
+    //
+    // The id is now minted PER CONFIRMATION out of nothing the run can repeat,
+    // so two confirmations of one run never collide. It is still an id rather
+    // than none at all because the queue connection resends an unanswered
+    // command after a reconnect (`maxRetriesPerRequest: null` plus IORedis's
+    // default `autoResendUnfulfilledCommands`): with a per-call id the resent
+    // add is the duplicate the queue is meant to swallow, while with NO id the
+    // replay would mint a SECOND resume job for the same confirmation and park
+    // the same gate twice. An id derived from the field name would not do
+    // either, since a run really can park on the same field twice (the clear
+    // road above removes an answered key again).
+    //
+    // The org-scoped CAS in `resumeRunFromSetupApproval` one statement above
+    // moves the run pending_approval -> queued and throws when it updates no
+    // row, so the ordinary double-submit of one parked gate is refused before
+    // this line. It checks the run, its org and that status only — it is not by
+    // itself proof that no duplicate submission can ever arrive, and that
+    // admission gap is older than this change. Nothing reads this job id.
+    const resumeJobId = `resume-${randomUUID()}`;
+    try {
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+        // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
+        // execution.ts that, once the last required field is in, this run owes the
+        // trigger step before it may dispatch — so it hands off to
+        // `pending_trigger` instead of running before the user has chosen when.
+        { runId, resumedFromSetup: true },
+        { jobId: resumeJobId },
+      );
+    } catch (err) {
+      // cinatra#3585 — A SETUP THAT CANNOT BE HANDED BACK TO THE RUNNER SAYS SO
+      // ON THE RUN. The CAS above has already moved this run to `queued`; if the
+      // runner is never handed it back, the run would sit there with nothing
+      // said — the same silent shape this issue reports. Land it FAILED with a
+      // message a person can act on instead, naming the field just answered.
+      // Mirrors the tree's own rule for this class one file over (execution.ts
+      // lands the run failed with the message rather than letting a throw
+      // escape, "leaving the run parked at queued forever").
+      const enqueueError = err instanceof Error ? err.message : String(err);
+      const answeredField = fieldName ?? "(grouped)";
+      try {
+        await transitionRunStatus(
+          runId,
+          "queued",
+          "failed",
+          {
+            error:
+              `Setup could not be handed back to the runner after the field ` +
+              `"${answeredField}" was answered: ${enqueueError}`,
+          },
+          sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+        );
+      } catch (transitionErr) {
+        // stale_from_status: a concurrent stop — or a resume job the queue DID
+        // accept before the acknowledgement failed — already moved the run off
+        // `queued`. That writer wins, exactly as the sibling arms swallow it.
+        // Any OTHER compensation failure is reported here and not re-thrown:
+        // the enqueue failure below is the real cause, and replacing it with a
+        // secondary failure would hide it from the caller.
+        const stale =
+          transitionErr instanceof RunTransitionError &&
+          transitionErr.code === "stale_from_status";
+        if (!stale) {
+          console.error(
+            `[approveReviewTaskInternal] setup-path could not land run=${runId} failed ` +
+              `after the resume enqueue failed: ` +
+              `${transitionErr instanceof Error ? transitionErr.message : String(transitionErr)}`,
+          );
+        }
+      }
+      // …and the ENQUEUE failure — the real cause — travels on to the caller.
+      throw err;
+    }
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
     );

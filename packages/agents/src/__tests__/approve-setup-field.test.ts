@@ -199,7 +199,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s1" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -382,7 +388,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s2" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -475,7 +487,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-opt1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-opt1" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -580,7 +598,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-def1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-def1" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -741,7 +765,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-clear1", resumedFromSetup: true },
-      { jobId: "resume-setup-run-clear1" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -835,7 +865,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-3532c", resumedFromSetup: true },
-      { jobId: "resume-setup-run-3532c" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -875,7 +911,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: "resume-setup-run-s6" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -923,7 +965,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: "resume-setup-run-554a" },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
