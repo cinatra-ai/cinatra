@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
+import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 
 import { ReviewPinnedCapture } from "./review-pinned-capture";
@@ -38,15 +39,25 @@ import {
  * does speak on a surface is the floor, and only because a reader must be told a
  * render failed".
  *
- * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
- * used to pass a generic "no type renderer resolved" card — a sentence, a table
- * of technical fields, and Preview / Download links — as the floor node beneath
- * every degrade. A download link is never the body of a review, and inside a
- * third-party application those links were dead ends demanding a login that
- * never exists there. What remains is the sanitized diagnostic the mount draws
- * for a genuine no-renderer state and for each defensive state (a deleted or
- * unreadable target, a display mid-upgrade, a runtime failure), which keep their
- * own honest readings.
+ * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5), AND WHAT
+ * REPLACES IT IS THE DRAWING'S OWN NODE. The panel used to pass a generic "no
+ * type renderer resolved" card — a sentence, a table of technical fields, and
+ * Preview / Download links — as the floor node beneath every degrade. A download
+ * link is never the body of a review, and inside a third-party application those
+ * links were dead ends demanding a login that never exists there. That face is
+ * not coming back. But passing NOTHING left the panel drawing its `Floor` chip
+ * and its mono `structured data` label over an empty region, which §V forbids in
+ * as many words: "A type-level floor ... still has an authorized representation,
+ * so its diagnostic sits above the generic read-only structured-data view of
+ * that representation."
+ *
+ * SO THE FALLBACK IS THE HOST'S ONE GENERIC VIEW, and it is the SAME component
+ * the artifact page hands the same shared mount — one node, both surfaces, no
+ * second copy. It is passed only where there IS something to show: a target with
+ * no pinned props is §V's OTHER shape — "An artifact-level floor ... has nothing
+ * to show, so it renders the diagnostic alone (no representation content,
+ * because there is no authorized representation to render)" — and that arm
+ * passes null, deliberately.
  */
 export function ReviewTargetPanel({
   prepared,
@@ -122,7 +133,11 @@ export function ReviewTargetPanel({
           body draws: without it the slot takes its width from its content and
           the overflow moves back out to the document. */}
       <div className="min-w-0 overflow-x-auto p-4" data-review-representation-slot="">
-        <ReviewTargetMount mount={mount} props={props} fallback={null} />
+        <ReviewTargetMount
+          mount={mount}
+          props={props}
+          fallback={props ? <ArtifactStructuredDataView props={props} /> : null}
+        />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
     </div>

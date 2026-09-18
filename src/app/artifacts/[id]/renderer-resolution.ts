@@ -10,6 +10,7 @@ import {
 import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
 import { PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS } from "@/lib/artifacts/artifact-read";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
+import { artifactKindLabelPackageId } from "@/lib/artifacts/artifact-kind-label";
 import {
   reconcileSystemRepresentationProviders,
   isSystemArtifactRendererPackage,
@@ -494,14 +495,30 @@ export async function resolveArtifactDisplayMount(
         packageName: dispatch.packageName,
         reason: "requires-rebuild",
       };
-    case "fallback":
+    case "fallback": {
+      // THE TERMINAL FLOOR NAMES THE PACKAGE ITS TYPE NAMES.
+      //
+      // `specs/app-artifact-review.html` §V words the floor's diagnostic as
+      // three segments — "a sanitized, telemetry-safe one-line diagnostic
+      // (package · slot · reason, never a raw error or manifest value)" — and
+      // the composer downstream drops the first only when the VALUE it is
+      // handed is null. This arm answered null unconditionally, so the sentence
+      // lost its package on BOTH surfaces that read this resolver.
+      //
+      // The package is not a guess here: the row's own type id arrives as
+      // `baseType`, and the host already owns the ONE normalization that reduces
+      // any id form — a package id, an object-type id, a versioned id — to the
+      // package a declaration is keyed by. An id that yields nothing keeps the
+      // null, which is the honest answer rather than an empty segment.
+      const packageName = artifactKindLabelPackageId(input.baseType) || null;
       return {
         kind: "floor",
         slot: ARTIFACT_DISPLAY_SLOT,
         dispatch: dispatch.kind,
-        packageName: null,
+        packageName,
         reason: "no-display",
       };
+    }
   }
 }
 

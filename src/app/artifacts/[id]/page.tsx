@@ -62,7 +62,7 @@ import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-sur
 import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
 
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
-import { NoDisplayNotice } from "./no-display-notice";
+import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
 import {
   DashboardPointerDetail,
   DashboardPointerLoading,
@@ -259,13 +259,16 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     edit,
   });
 
-  // THE NEVER-BLANK FLOOR, and it draws no artifact. It used to be the core
-  // metadata card — the file's name, its media type, its size and its download —
-  // which is the artifact's own content, and content is the display's. A file no
-  // installed display can read belongs to a base of its own, and that base's
-  // display is the download card; here core says only that nothing installed
-  // draws this row.
-  const genericFloor = <NoDisplayNotice />;
+  // THE NEVER-BLANK FLOOR, and the drawing says what stands in it. §III's third
+  // dispatch case: "anything whose type ships no renderer and has no MIME handler
+  // falls back to a read-only structured-data (JSON) view plus metadata. There is
+  // always a renderer; the fallback is never a blank." It is still not a core
+  // RENDERING of the artifact — it names no pack, mounts nothing and draws no
+  // download, because a file no installed display can read belongs to a base of
+  // its own and that base's display is the download card. What it draws is the
+  // representation this page has already read and already authorized, which is
+  // what keeps the floor from being an apology with nothing beneath it.
+  const genericFloor = <ArtifactStructuredDataView props={rendererProps} />;
 
   // THE DISPLAY, resolved through the ONE primitive the lifecycle review also
   // resolves through, at the props version the snapshot above was built at.

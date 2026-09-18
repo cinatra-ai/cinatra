@@ -395,7 +395,21 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(panel).not.toMatch(/genericFloor/);
     expect(panel).not.toMatch(/urls\.preview|urls\.download/);
     expect(panel).not.toMatch(/>\s*Download\s*</);
-    expect(TARGET_PANEL).toMatch(/fallback=\{null\}/);
+    // WHAT STANDS IN ITS PLACE IS THE DRAWING'S OWN NODE, not nothing.
+    // `specs/app-artifact-review.html` §V: "A type-level floor — the type's
+    // renderer is installed but absent from this build (needs a rebuild), or the
+    // type resolves to no renderer — still has an authorized representation, so
+    // its diagnostic sits above the generic read-only structured-data view of
+    // that representation." So the panel hands the mount the host's ONE generic
+    // view when the prepared target carries pinned props, and null when it
+    // carries none — §V's artifact-level floor, which "renders the diagnostic
+    // alone (no representation content, because there is no authorized
+    // representation to render)". The three negative readings above are
+    // untouched: the OLD fallback FACE is still gone.
+    expect(TARGET_PANEL).toMatch(/ArtifactStructuredDataView/);
+    expect(TARGET_PANEL).toMatch(
+      /fallback=\{props \? <ArtifactStructuredDataView props=\{props\} \/> : null\}/,
+    );
   });
 });
 

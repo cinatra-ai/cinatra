@@ -158,11 +158,22 @@ describe.each([
       const answers = await bothRoads(row as unknown as Row);
       const mount = answers[index] as { kind: string; packageName?: string | null; generatedKey?: string };
       if (expected === null) {
-        // NO CORE ARTIFACT BODY: the answer is a floor naming no package, so the
-        // surface has nothing to draw but its own diagnostic over the host's
-        // never-blank node.
+        // NO CORE ARTIFACT BODY: the answer is a floor, so the surface has
+        // nothing to draw but its own diagnostic over the host's never-blank
+        // node. THE FLOOR NAMES THE PACKAGE ITS TYPE NAMES, which is what moved:
+        // `specs/app-artifact-review.html` §V words that diagnostic as three
+        // segments — "a sanitized, telemetry-safe one-line diagnostic (package
+        // · slot · reason, never a raw error or manifest value)" — and the
+        // package IS known at the terminal arm, from the row's own type id. The
+        // values below are the literals each row's type reduces to; a row whose
+        // base type names no package would keep null.
+        const FLOOR_PACKAGE: Record<string, string | null> = {
+          "@acme/x:row": "@acme/x",
+          "@cinatra-ai/dashboard-artifact:dashboard": "@cinatra-ai/dashboard-artifact",
+          "@cinatra-ai/drupal:node": "@cinatra-ai/drupal",
+        };
         expect(mount.kind).toBe("floor");
-        expect(mount.packageName ?? null).toBeNull();
+        expect(mount.packageName ?? null).toBe(FLOOR_PACKAGE[row[1] as string] ?? null);
         return;
       }
       // EXTENSION PROVENANCE: the package that answered, and the module key it
