@@ -23,6 +23,7 @@ import { useRunWindowConversation } from "./use-run-window-conversation";
 // with a kind, a host and a state a capture can read.
 import {
   AgentHitlScreenCard,
+  AgentHitlScreenSetupContinue,
   HITL_FIELDS_REGION_CLASS,
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
@@ -888,6 +889,94 @@ export function AgenticRunPanel({
       }
     },
     [],
+  );
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
+  //
+  // This surface's setup-loop branch submits ON CHANGE, because the renderer's
+  // own button was the send. A renderer that declares no submit control
+  // (`FieldRendererEntry.drawsOwnSubmit` absent — the pack-bound `cta` kind is
+  // the reported one) therefore offered the reader nothing to press: every
+  // keystroke or selection went straight to the server and the field could not
+  // be passed deliberately at all.
+  //
+  // So the send MOVES rather than firing itself: where the product owns it, the
+  // same `onChange` STAGES what it would have submitted — byte for byte, the
+  // same `wrapPrimitiveSetupPayload` output under the same field name — and the
+  // card's own Continue (`AgentHitlScreenSetupContinue`, the control the
+  // fallback field's card draws) submits it through the one submit core.
+  //
+  // KEYED BY THE GATE, for the reason the card's staging is: sequential setup
+  // gates share one xRenderer and arrive with no frame between them, so an
+  // answer staged for the previous field must never be submitted for the next
+  // question. A ref rather than state: the flush below runs synchronously and a
+  // state write would not be readable in the same turn.
+  // ---------------------------------------------------------------------------
+  // WHAT THE FIELD SHOWS WHILE ITS ANSWER IS STAGED (convergence finding 1).
+  // A field renderer is CONTROLLED by the `value` prop — CtaRenderer's textarea
+  // reads it and keeps no state of its own — so a staging path that changed
+  // nothing here would clear the box after every keystroke and leave the
+  // Continue passing the last character. Held as state, not a ref, because it
+  // is drawn; keyed by the gate, so a draft never seeds the next question.
+  const [setupDraft, setSetupDraft] = useState<{ key: string; value: unknown } | null>(
+    null,
+  );
+  const setupAnswerRef = useRef<
+    { key: string; payload: unknown; payloadFieldName: string | undefined } | null
+  >(null);
+  const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
+  const setupPressRef = useRef(false);
+  const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
+    setupFlushRef.current = { key, fn };
+  }, []);
+  const submitStagedSetupAnswer = useCallback(
+    async (key: string, reviewTaskId: string, xRenderer: string) => {
+      // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
+      // the flush is asynchronous and `isApproving` is React state, so two
+      // presses in one tick would both reach the submit core.
+      if (setupPressRef.current) return;
+      setupPressRef.current = true;
+      try {
+        // ASK THE FIELD FOR ITS VALUE the way its own button would — but ONLY
+        // where it has handed nothing over yet (convergence finding 3). A
+        // registration cannot be withdrawn when its renderer unmounts, so a
+        // gate whose renderer was replaced under it (the extension wrapper's
+        // loading floor, replaced by the loaded component on the same gate key)
+        // still carries the floor's flush; flushing it over an answer the
+        // reader has already given would overwrite that answer with the
+        // departed renderer's empty one. What is staged is the reader's own
+        // input and always wins.
+        const alreadyStaged = setupAnswerRef.current;
+        if (alreadyStaged === null || alreadyStaged.key !== key) {
+          const flush = setupFlushRef.current;
+          if (flush !== null && flush.key === key) await flush.fn();
+        }
+        // NOT CLEARED BEFORE THE SEND (convergence finding 2): the submit core
+        // swallows a failed submission into a toast, so an answer dropped here
+        // would leave the reader pressing a Continue that does nothing until
+        // they retype. The staged answer belongs to this gate alone — the key
+        // check below is what keeps it off the next one — so it is simply kept.
+        const staged = setupAnswerRef.current;
+        // Nothing staged for THIS gate: a required box the renderer refused to
+        // hand over says so itself, inside the field. Nothing is sent, and the
+        // screen is left exactly as it was.
+        if (staged === null || staged.key !== key) return;
+        await performGateSubmit({
+          reviewTaskId,
+          xRenderer,
+          payload: staged.payload,
+          payloadFieldName: staged.payloadFieldName,
+          trackApproving: true,
+          suppressGate: false,
+          clearAttachmentsOnSuccess: false,
+          errorMode: "toast",
+        });
+      } finally {
+        setupPressRef.current = false;
+      }
+    },
+    [performGateSubmit],
   );
 
   // Stable submit — empty deps, reads refs. The payload discrimination
@@ -2153,6 +2242,27 @@ export function AgenticRunPanel({
                 const isGroupedSetup = isGroupedSetupRenderer(
                   effectiveHitlContext.xRenderer,
                 );
+                // cinatra#3532 — WHOSE CONTROL THE SEND IS ON THIS SETUP GATE.
+                // The card states the rule in `cardOwnsTheSetupSend`; read on
+                // this surface's own host it says: the run page is a PRIMARY
+                // host, so the renderer keeps whatever control it has — unless
+                // its registry entry declares none, and then the product draws
+                // its Continue and tells the renderer, through the shared props
+                // contract, to draw none. A mid-run gate (its own Continue
+                // below) and a grouped-setup form (one submit for the whole
+                // form) are untouched, and so is every renderer that declares
+                // its own control — the schema-field fallback the wizard's
+                // first field is drawn with keeps the Continue it draws itself.
+                const productOwnsSetupSend =
+                  !isMidRunHitl &&
+                  !isGroupedSetup &&
+                  hitlRendererEntry.entry.drawsOwnSubmit !== true;
+                // The gate a staged answer belongs to, and to no other.
+                const setupGateKey = [
+                  effectiveHitlContext.reviewTaskId,
+                  effectiveHitlContext.xRenderer,
+                  effectiveHitlContext.fieldName ?? "",
+                ].join("::");
                 // THE CHAT CARD CARRIES ITS OWN CONTINUE.
                 //
                 // The chat setup gate used to pass `hideSubmit`: the form was
@@ -2200,11 +2310,20 @@ export function AgenticRunPanel({
                       // the renderer sees it, and a renderer that re-derived its
                       // own slot from the envelope would still mis-seed on a
                       // sub-key name collision.
-                      value={setupFieldRendererValue(
-                        { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
-                        effectiveHitlContext.fieldName,
-                        hitlRendererEntry.fieldSchema,
-                      )}
+                      value={
+                        // The staged draft is this field's own reading while it
+                        // waits for the Continue (convergence finding 1); every
+                        // other case is the expression this surface always used.
+                        productOwnsSetupSend &&
+                        setupDraft !== null &&
+                        setupDraft.key === setupGateKey
+                          ? setupDraft.value
+                          : setupFieldRendererValue(
+                              { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
+                              effectiveHitlContext.fieldName,
+                              hitlRendererEntry.fieldSchema,
+                            )
+                      }
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to performGateSubmit
                         // for grouped-setup immediate-submit, then setState for the visual update.
@@ -2245,6 +2364,20 @@ export function AgenticRunPanel({
                                 ?.type === "object",
                           },
                         );
+                        if (productOwnsSetupSend) {
+                          // cinatra#3532 — STAGE, do not send. The Continue
+                          // below is this field's send, and it submits exactly
+                          // this payload through the same core.
+                          setupAnswerRef.current = {
+                            key: setupGateKey,
+                            payload,
+                            payloadFieldName,
+                          };
+                          // …and the field goes on showing what the reader put
+                          // in it (convergence finding 1).
+                          setSetupDraft({ key: setupGateKey, value: next });
+                          return;
+                        }
                         await performGateSubmit({
                           reviewTaskId: effectiveHitlContext.reviewTaskId,
                           xRenderer: effectiveHitlContext.xRenderer,
@@ -2260,9 +2393,39 @@ export function AgenticRunPanel({
                       mode="edit"
                       onApply={handleApply}
                       aiSuggestions={aiSuggestions}
+                      // cinatra#3532 — where the product owns the send, the
+                      // renderer's own submit is not drawn inside the field
+                      // (the shared props contract says a renderer that draws
+                      // its own Continue must skip it), and the card's Continue
+                      // asks the field for its value through the same flush the
+                      // renderer's own button would have used.
+                      hideSubmit={productOwnsSetupSend}
+                      registerFlush={
+                        productOwnsSetupSend
+                          ? (fn: () => Promise<void>) =>
+                              registerSetupFlush(setupGateKey, fn)
+                          : undefined
+                      }
                     />
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers. */}
                     {isMidRunHitl && !isGroupedSetup && approvalActionsRow}
+                    {/* cinatra#3532 — the product's Continue for a setup field
+                        whose renderer declares no submit control of its own:
+                        the same control the fallback field's card draws, and it
+                        passes the value the renderer holds. */}
+                    {productOwnsSetupSend ? (
+                      <AgentHitlScreenSetupContinue
+                        submitting={isApproving}
+                        blocked={false}
+                        onContinue={() =>
+                          submitStagedSetupAnswer(
+                            setupGateKey,
+                            effectiveHitlContext.reviewTaskId,
+                            effectiveHitlContext.xRenderer,
+                          )
+                        }
+                      />
+                    ) : null}
                   </>
                 );
               })()}
