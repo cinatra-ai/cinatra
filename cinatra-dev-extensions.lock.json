@@ -220,12 +220,12 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "1c94e75db3fac91814750fbd3bdd4a96b547ce7c"
+      "resolvedSha": "52f113587eb2ff0abd938d1270aecc8c14d78049"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
       "repo": "cinatra-ai/email-recipient-selection-agent",
-      "resolvedSha": "7de5973fbcc33e99c44787d9188d33721db180e1"
+      "resolvedSha": "e297074f5eb85779519845e49aead86ca34d8a4c"
     },
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",

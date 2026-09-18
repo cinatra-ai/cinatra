@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import {
   gateAnswerIncompleteReason,
   resumeAnswerIncompleteReason,
+  liftRendererApprovalNote,
   LIST_ANSWER_NAMES_NO_LIST,
 } from "../hitl-gate-submit";
 
@@ -366,5 +367,201 @@ describe("both ends are wired where they keep the run parked", () => {
     );
     expect(seam).toContain("throw new Error(");
     expect(seam).not.toContain("GateNotPendingError");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE ONE PREDICATE NOW READS "AT LEAST ONE" (cinatra#3562, acceptance 3).
+//
+// "the one shared predicate both submit seams ask refuses an answer that names
+// NO identifier — an absent answer, an empty `listIds` array, and an answer
+// that explicitly empties the field — and accepts one that names at least one,
+// at the client end keyed on the renderer family and at the server end on the
+// answer contract, with the refusal sentence no longer offering to build one"
+//
+// The rule is the SAME rule and it lives in the same one place: only what
+// counts as "names a list" widened, from one identifier to at least one.
+// ---------------------------------------------------------------------------
+describe("the predicate reads at least one identifier (cinatra#3562)", () => {
+  it("accepts an answer that names one entry of several", () => {
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, {
+        approved: true,
+        listIds: ["lst_1"],
+        listNames: ["Marketing directors"],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts an answer that names several entries", () => {
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, {
+        listIds: ["lst_1", "lst_2"],
+        listNames: ["Marketing directors", "Q2 targets"],
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses an answer whose every named identifier is empty", () => {
+    expect(gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, { listIds: [] })).toBe(
+      LIST_ANSWER_NAMES_NO_LIST,
+    );
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, { listIds: ["", "   "] }),
+    ).toBe(LIST_ANSWER_NAMES_NO_LIST);
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, {
+        listIds: [],
+        listNames: [],
+        listId: "",
+        listName: "",
+      }),
+    ).toBe(LIST_ANSWER_NAMES_NO_LIST);
+  });
+
+  it("refuses an answer that EMPTIES the entries the step was holding", () => {
+    expect(
+      gateAnswerIncompleteReason(
+        OUTREACH_LIST_PICKER,
+        { listIds: [] },
+        { listIds: ["lst_1"] },
+      ),
+    ).toBe(LIST_ANSWER_NAMES_NO_LIST);
+    // A submission that says nothing about the entries still falls back to the
+    // ones the step holds, as it always did.
+    expect(
+      gateAnswerIncompleteReason(
+        OUTREACH_LIST_PICKER,
+        { note: "unchanged" },
+        { listIds: ["lst_1"] },
+      ),
+    ).toBeNull();
+  });
+
+  it("is the same reading at the resume seam, on the answer's own contract", () => {
+    expect(
+      resumeAnswerIncompleteReason({
+        userResponse: JSON.stringify({ type: "list", listIds: ["lst_1"] }),
+      }),
+    ).toBeNull();
+    expect(
+      resumeAnswerIncompleteReason({
+        userResponse: JSON.stringify({ type: "list", listIds: [] }),
+      }),
+    ).toBe(LIST_ANSWER_NAMES_NO_LIST);
+    const gate = { xRenderer: OUTREACH_LIST_PICKER, currentValues: { listIds: ["lst_old"] } };
+    expect(
+      resumeAnswerIncompleteReason(
+        { userResponse: JSON.stringify({ type: "list", listIds: [] }) },
+        gate,
+      ),
+    ).toBe(LIST_ANSWER_NAMES_NO_LIST);
+    expect(resumeAnswerIncompleteReason(undefined, gate)).toBeNull();
+  });
+
+  it("keeps resolving the one-identifier answer that came before it", () => {
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, { listId: "lst_1" }),
+    ).toBeNull();
+    // And the shape this renderer emits, which carries both: the entry set and
+    // its first entry in the one-identifier fields the pinned pack reads.
+    expect(
+      gateAnswerIncompleteReason(OUTREACH_LIST_PICKER, {
+        listIds: ["lst_1", "lst_2"],
+        listNames: ["Marketing directors", "Q2 targets"],
+        listId: "lst_1",
+        listName: "Marketing directors",
+      }),
+    ).toBeNull();
+    expect(
+      resumeAnswerIncompleteReason({
+        userResponse: JSON.stringify({ type: "list", listId: "lst_1" }),
+      }),
+    ).toBeNull();
+  });
+
+  it("says the one thing left to do, and offers no road to build one", () => {
+    // The road out of this step is gone (acceptance 5), so the sentence that
+    // used to end "— or build one first" no longer offers it.
+    expect(LIST_ANSWER_NAMES_NO_LIST).not.toMatch(/build/i);
+    expect(LIST_ANSWER_NAMES_NO_LIST).toMatch(/before continuing/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE WHOLE SET SURVIVES THE HAND-OFF (convergence round, cinatra#3562).
+//
+// The note `liftRendererApprovalNote` mints for this renderer family IS the
+// answer a resume dispatches — `resumeAnswerIncompleteReason` above reads
+// exactly it — so a gate that takes SEVERAL picks is only a multi-select as far
+// as that note carries them. A lift that named the first entry alone would
+// leave the reader ticking rows the run never receives, which is the half of
+// acceptance 2 that lives on this side of the submit.
+// ---------------------------------------------------------------------------
+describe("the note the resume dispatches carries every ticked entry", () => {
+  const NOW = "2026-01-01T00:00:00.000Z";
+
+  it("lifts the entry SET, with its first entry in the one-identifier fields", () => {
+    const lift = liftRendererApprovalNote(
+      OUTREACH_LIST_PICKER,
+      {
+        scope: "list",
+        listIds: ["lst_1", "lst_2"],
+        listNames: ["Marketing directors", "Q2 targets"],
+        listId: "lst_1",
+        listName: "Marketing directors",
+      },
+      NOW,
+    );
+    const note = JSON.parse(lift!.approvalNote);
+    expect(note.listIds).toEqual(["lst_1", "lst_2"]);
+    expect(note.listNames).toEqual(["Marketing directors", "Q2 targets"]);
+    // The one-identifier fields the pinned pack's legacy branch reads stay
+    // beside the set as its first entry.
+    expect(note.listId).toBe("lst_1");
+    expect(note.listName).toBe("Marketing directors");
+    expect(note.type).toBe("list");
+    // And the answer that note IS passes the server end of the refusal.
+    expect(resumeAnswerIncompleteReason({ approvalNote: lift!.approvalNote })).toBeNull();
+  });
+
+  it("pairs each name with its own identifier and keeps a repeat once", () => {
+    const note = JSON.parse(
+      liftRendererApprovalNote(
+        OUTREACH_LIST_PICKER,
+        {
+          listIds: ["lst_1", "", "lst_1", "lst_3"],
+          listNames: ["Marketing directors", "dropped", "Marketing directors", "Q3"],
+          listId: "lst_1",
+        },
+        NOW,
+      )!.approvalNote,
+    );
+    expect(note.listIds).toEqual(["lst_1", "lst_3"]);
+    expect(note.listNames).toEqual(["Marketing directors", "Q3"]);
+  });
+
+  it("leaves a one-identifier buffer lifting exactly as it always did", () => {
+    const note = JSON.parse(
+      liftRendererApprovalNote(
+        OUTREACH_LIST_PICKER,
+        { listId: "lst_9", listName: "Only one", memberCount: 5 },
+        NOW,
+      )!.approvalNote,
+    );
+    expect(note).toEqual({
+      type: "list",
+      listId: "lst_9",
+      listName: "Only one",
+      memberCount: 5,
+      snapshotAt: NOW,
+    });
+  });
+
+  it("refuses a lifted answer that names nothing, at the server end", () => {
+    const lift = liftRendererApprovalNote(OUTREACH_LIST_PICKER, { listIds: [] }, NOW);
+    expect(resumeAnswerIncompleteReason({ approvalNote: lift!.approvalNote })).toBe(
+      LIST_ANSWER_NAMES_NO_LIST,
+    );
   });
 });

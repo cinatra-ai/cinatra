@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -14,12 +12,6 @@ import {
 } from "@/components/ui/card";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
-import {
-  agentPathScopeBase,
-  buildAgentWorkspacePath,
-  newRunHrefWithCompletionReturn,
-  readCompletionProduced,
-} from "@/lib/agent-url";
 import type {
   FieldRendererProps,
 } from "./field-renderer-registry";
@@ -35,48 +27,78 @@ import type {
 // Value shape
 // ---------------------------------------------------------------------------
 
+// THE STEP TAKES SEVERAL ENTRIES (cinatra#3562). The ruling this gate is drawn
+// from reads "The user must select at least one view/list and can select
+// multiple ones", so the answer is an ORDERED SET of entries rather than one
+// identifier. `listId`/`listName` stay beside it as the FIRST ticked entry:
+// every reader that already resolves one identifier — the pinned pack's legacy
+// branch included — keeps resolving, and nothing downstream has to migrate in
+// this slice.
 type ListPickerValue = {
   scope: "list";
+  /** Every ticked entry, in the order the reader ticked them. */
+  listIds: string[];
+  listNames: string[];
+  /** The first ticked entry, for a reader that resolves a single identifier. */
   listId: string;
   listName: string;
-  memberCount: number;
 };
 
+function listPickerValue(listIds: string[], listNames: string[]): ListPickerValue {
+  return {
+    scope: "list",
+    listIds,
+    listNames,
+    listId: listIds[0] ?? "",
+    listName: listNames[0] ?? "",
+  };
+}
+
+/** The entries an incoming answer NAMES, paired as they were written.
+ *
+ *  A NAME BELONGS TO THE IDENTIFIER IT STANDS BESIDE (convergence round,
+ *  cinatra#3562). `listIds` and `listNames` are one list of PAIRS written as two
+ *  arrays, so a name is read at the index of its own identifier: filtering the
+ *  names on their own would hand an entry whose name this step could not
+ *  resolve — for which "" is written — the NEXT entry's name. And a repeated
+ *  identifier is ONE ticked entry however the answer was authored, so it is kept
+ *  once: keeping it twice would carry a phantom entry into the next answer the
+ *  reader makes. */
+function namedEntries(rawIds: unknown, rawNames: unknown): {
+  ids: string[];
+  names: string[];
+} {
+  const ids: string[] = [];
+  const names: string[] = [];
+  if (!Array.isArray(rawIds)) return { ids, names };
+  const nameAt = Array.isArray(rawNames) ? rawNames : [];
+  for (let i = 0; i < rawIds.length; i += 1) {
+    const id = rawIds[i];
+    if (typeof id !== "string" || id.trim() === "") continue;
+    if (ids.includes(id)) continue;
+    ids.push(id);
+    names.push(typeof nameAt[i] === "string" ? (nameAt[i] as string) : "");
+  }
+  return { ids, names };
+}
+
+// BOTH SHAPES READ BACK (cinatra#3562). A step re-opened on an answer it
+// already holds shows those rows ticked, and the answer it holds may have been
+// written by this renderer (`listIds`) or by the one-identifier shape that came
+// before it (`listId`) — an answer stored before this change is still the
+// reader's own, so it is read as the one-entry set it is.
 function toListPickerValue(value: unknown): ListPickerValue {
   // Defensive value normalization for the HITL renderer payload.
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const v = value as Record<string, unknown>;
-    return {
-      scope: "list",
-      listId: typeof v.listId === "string" ? v.listId : "",
-      listName: typeof v.listName === "string" ? v.listName : "",
-      memberCount: typeof v.memberCount === "number" ? v.memberCount : 0,
-    };
+    const entries = namedEntries(v.listIds, v.listNames);
+    if (entries.ids.length > 0) return listPickerValue(entries.ids, entries.names);
+    const legacyId = typeof v.listId === "string" && v.listId.trim() !== "" ? v.listId : "";
+    if (legacyId === "") return listPickerValue([], []);
+    const legacyName = typeof v.listName === "string" ? v.listName : "";
+    return listPickerValue([legacyId], legacyName === "" ? [] : [legacyName]);
   }
-  return { scope: "list", listId: "", listName: "", memberCount: 0 };
-}
-
-// ---------------------------------------------------------------------------
-// THE DECLARED DESTINATION OF THE MAKE-ONE ROAD
-// ---------------------------------------------------------------------------
-
-/** The binding param a gate-that-lists declares its make-one road with: the
- *  scoped package name of the agent that builds a list. */
-export const LIST_BUILDER_PACKAGE_PARAM = "listBuilderPackage";
-
-const SCOPED_PACKAGE_RE = /^@[\w-]+\/[\w-]+$/;
-
-/** The package a binding declares its make-one road leads to, or `null` when
- *  the binding declares none (or declares something that is not a scoped
- *  package name). Runtime data can never break the host, so a malformed
- *  declaration degrades to no road rather than to a broken address. */
-export function declaredListBuilderPackage(
-  bindingParams: Readonly<Record<string, unknown>> | undefined,
-): string | null {
-  const declared = bindingParams?.[LIST_BUILDER_PACKAGE_PARAM];
-  if (typeof declared !== "string") return null;
-  const trimmed = declared.trim();
-  return SCOPED_PACKAGE_RE.test(trimmed) ? trimmed : null;
+  return listPickerValue([], []);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,14 +141,18 @@ export function ListPickerRenderer({
   label,
   description,
   context,
-  bindingParams,
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const current = toListPickerValue(value);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    current.listId ? current.listId : null,
-  );
+  const held = toListPickerValue(value);
+  // WHOSE READING THE ROWS SHOW. `null` is "the reader has ticked nothing yet",
+  // so the rows show the answer the step arrived holding, whenever it arrived —
+  // a step re-hydrated with its stored answer while the rows were still loading
+  // shows it the moment they land. Any array is the reader's own set and is the
+  // whole truth, the EMPTY one included: an answer the reader ticked back off
+  // must draw as empty rather than fall back to what was stored.
+  const [pickedIds, setPickedIds] = useState<string[] | null>(null);
+  const chosenIds = pickedIds ?? held.listIds;
 
   // Stable ref to onChange so the effect below doesn't re-fire on every
   // parent re-render.
@@ -166,151 +192,33 @@ export function ListPickerRenderer({
     };
   }, [runId]);
 
-  function handleSelect(list: AvailableListSummary) {
-    setSelectedId(list.id);
-    onChangeRef.current({
-      scope: "list",
-      listId: list.id,
-      listName: list.name,
-      memberCount: list.memberCount,
-    });
+  /** The name the loaded rows give an entry. Every entry an answer made here
+   *  carries is one of those rows — see `handleToggle`. */
+  function nameOf(id: string): string {
+    return lists.find((l) => l.id === id)?.name ?? "";
   }
 
-  // THE LIST A FINISHED RUN MADE FOR THIS STEP IS OFFERED (cinatra#3358).
-  //
-  // The road this step offers carries the parked run's identity forward; the
-  // return carries back, on the parked run's own address, the id of what the
-  // finished run produced (`@/lib/agent-url`). When that id names one of the
-  // rows this step just loaded, the step opens with it CHOSEN — the reader who
-  // has just made a list is not asked to find it again — and the gate is
-  // answerable at once.
-  //
-  // IT NEVER OVERRIDES A READER. A step re-opened on an answer it already holds
-  // keeps that answer: the offer seeds only a step that holds none.
-  const offered = useMemo(
-    () =>
-      readCompletionProduced(
-        typeof window === "undefined" ? "" : window.location.search,
-      ),
-    [],
-  );
-  // The offered row, DERIVED rather than stored: a reader's own pick always
-  // wins, and the offer needs no state of its own to be shown as chosen.
-  const offeredRow = useMemo(
-    () => (offered ? (lists.find((l) => l.id === offered) ?? null) : null),
-    [offered, lists],
-  );
-  // THE ANSWER THE STEP ALREADY HOLDS, whenever it arrived. `selectedId` reads
-  // the step's answer as it stood AT MOUNT and afterwards only what this reader
-  // pressed, so an answer arriving through a later render — a step re-hydrated
-  // while the rows were still loading — was invisible to the offer below and
-  // could be overwritten by it. The held answer is therefore read from the
-  // CURRENT value on every render, and the offer defers to it.
-  const heldAnswer = selectedId ?? (current.listId ? current.listId : null);
-  const shownAsChosen = heldAnswer ?? offeredRow?.id ?? null;
-  // The gate's answer is the one thing the step must actually emit, and it is
-  // emitted ONCE: the offer answers the question the step is parked on, so the
-  // Continue is available without a second press on a row the reader already
-  // made.
-  const offerEmitted = useRef(false);
-  useEffect(() => {
-    if (!offeredRow || heldAnswer || offerEmitted.current) return;
-    offerEmitted.current = true;
-    onChangeRef.current({
-      scope: "list",
-      listId: offeredRow.id,
-      listName: offeredRow.name,
-      memberCount: offeredRow.memberCount,
-    });
-  }, [offeredRow, heldAnswer]);
-
-  // THE MAKE-ONE ROAD, drawn where the gate-that-lists draws it: UNDER the rows
-  // (Agent run & review §I.1 — "Under the rows sits Generate new ideas ... and
-  // the primary Continue, right-aligned over a hairline floor"). The primary
-  // Continue itself is the gate's own control floor, one level up; this is the
-  // secondary road beside it.
-  //
-  // THE RETURN IS ADDRESSED, NOT DESCRIBED (cinatra#3358). The href used to
-  // carry `onComplete=list-picker` alone, which named the step that offered
-  // the road but not the run parked at it — so nothing downstream could work
-  // out where to go back to, and the completion contract was read nowhere. The
-  // link now carries this run's own identity beside the name, and the generic
-  // new-run launcher carries the pair onto the run it creates (the contract's
-  // query keys and their readers live in the agent-path grammar,
-  // `@/lib/agent-url`). A step with no run identity in hand still offers the
-  // bare road: the link opens, it just has no return.
-  //
-  // Separate-run UX (not nested HITL): the runtime does not yet support
-  // surfacing child gates in a parent run, so deep-linking keeps the child
-  // run's review gates visible and actionable.
-  //
-  // "Create new list" stays retired. CRM lists are scoped to the provider, so
-  // operators make one through the provider's own screens or through the run
-  // this road starts.
-  //
-  // AND IT IS ADDRESSED AT THE SCOPE THIS RUN BELONGS TO (cinatra#2809,
-  // per-scope surfaces S3). The href used to be the hand-written scopeless path
-  // `/agents/cinatra-ai/list-curator-agent/new`, and that address has no
-  // launcher: measured on a development boot with both packages installed, it
-  // answered 200 with the crumb "Agents / New" over an empty body and created
-  // no run, because the bare vendor/package pair carries only `[instanceId]`
-  // and reads `new` as one. The SAME address under a scope base answered 307 to
-  // a fresh run with the completion contract carried through. The road is
-  // therefore minted from the scope THIS run is parked in — read off the run's
-  // own address, so an organization's run offers that organization's launcher —
-  // through the one path helper, never a hand-written route.
-  //
-  // AND THE PACKAGE IT LEADS TO IS DECLARED, NEVER NAMED HERE (the
-  // core/extension border). This tree is the host: it may carry the road's
-  // GRAMMAR — the scope, the launch segment, the completion contract — but the
-  // identity of the agent that builds a list belongs to the binding that raised
-  // this gate, which declares it through the pinned per-binding params contract
-  // (`bindingParams`, register-default-renderers.ts). Behaviour therefore
-  // follows a declaration and this file names no pack. A binding that declares
-  // none offers NO road: an absent road is the honest reading, where a road to
-  // a package the host guessed is the dead end this issue is about.
-  //
-  // AND THE ADDRESS IS READ OFF THE ROUTE, not off the window (convergence
-  // round). This is a client component, which Next still renders on the SERVER
-  // for the first paint: there `window` does not exist, so a window reading
-  // minted the workspace base server-side and the run's real base on hydration —
-  // two different hrefs for the same link, a hydration mismatch React is free to
-  // resolve by KEEPING the server's, which would launch in the wrong scope. The
-  // route's own pathname is the same string on both sides. The window reading
-  // stays only as the fallback for a render with no route context in hand.
-  const routePathname = usePathname();
-  const listBuilderPackage = declaredListBuilderPackage(bindingParams);
-  const newRunPath = useMemo(
-    () =>
-      listBuilderPackage === null
-        ? null
-        : buildAgentWorkspacePath(listBuilderPackage, {
-            scopeBase: agentPathScopeBase(
-              routePathname ??
-                (typeof window === "undefined" ? "" : window.location.pathname),
-            ),
-          }),
-    [listBuilderPackage, routePathname],
-  );
-  const makeOneRoad =
-    newRunPath === null ? null : (
-      <div className="flex justify-start">
-        <Button asChild type="button" variant="default" disabled={disabled}>
-          <Link
-            href={newRunHrefWithCompletionReturn(
-              newRunPath,
-              "list-picker",
-              runId,
-            )}
-            target="_blank"
-            rel="noreferrer"
-            data-testid="build-list-with-ai-cta"
-          >
-            Build a list with AI
-          </Link>
-        </Button>
-      </div>
-    );
+  // A PRESS TOGGLES, IT DOES NOT REPLACE (cinatra#3562). The single-answer
+  // press moved the one identifier, so a second row could never be added; a
+  // gate that takes several entries adds the pressed row when it is not among
+  // the chosen and drops it when it is.
+  function handleToggle(list: AvailableListSummary) {
+    // ONLY WHAT THIS STEP SHOWED REACHES THE ANSWER THE READER MAKES
+    // (convergence round, cinatra#3562). A held entry the live read no longer
+    // returns — a view deleted where the views live since the step was answered
+    // — is drawn in no row, so the reader can neither see it ticked nor tick it
+    // back off; carrying it into an answer they are making NOW would send the
+    // run a scope they were never shown. The rows are loaded by the time any of
+    // them can be pressed, so the set the reader sees is the set the answer
+    // carries, and every entry in it has a row to take its name from.
+    const shown = new Set(lists.map((l) => l.id));
+    const kept = chosenIds.filter((id) => shown.has(id));
+    const nextIds = kept.includes(list.id)
+      ? kept.filter((id) => id !== list.id)
+      : [...kept, list.id];
+    setPickedIds(nextIds);
+    onChangeRef.current(listPickerValue(nextIds, nextIds.map(nameOf)));
+  }
 
   // THE QUESTION THE GATE ACTUALLY OPENS ON. The step's own question wherever
   // the gate's data carries one — the binding's resolved label — and the kind's
@@ -354,44 +262,56 @@ export function ListPickerRenderer({
       ) : null}
 
       {loading ? null : lists.length === 0 ? (
-        // THE ZERO-CONTENT READING IS THE STATE LINE, THE SENTENCE AND THE
-        // MAKE-ONE ROAD — AND NOTHING FRAMES IT (Agent run & review §I.1,
-        // drawn as "The same step with nothing left to pick": the question
-        // over the "Nothing to pick" pill, then a `role="status"` sentence
-        // stating what the reading means, then the road beneath it). It was
-        // drawn here as the generic Empty component, which put a dashed
-        // rectangle and a glyph in a dashed circle on a page the section draws
-        // with neither. The sentence is still a sentence and the road is still
-        // offered — "never just empty text" (Components § Empty state) — they
-        // are simply the page's own readings rather than a panel dropped onto
-        // it. The action stays OUTSIDE the sentence: the reading states the
-        // fact, the road answers it.
+        // THE ZERO-CONTENT READING IS THE STATE LINE AND THE SENTENCE, AND
+        // NOTHING FRAMES IT OR FOLLOWS IT (cinatra#3562). The ruling reads "If
+        // no views/lists are available in Twenty CRM, a message asks the user to
+        // create one in Twenty CRM", so the reading says what the reader can do
+        // about it where the views and lists actually live, and says the step
+        // will list what they make when they come back. It offers NO road: the
+        // step that used to send the reader to another agent no longer does, and
+        // the run cannot be continued from here either — that is the one shared
+        // answer-refusal doing its work (./hitl-gate-submit), not a second rule.
+        //
+        // IT ASSERTS NO CAUSE THE READING DOES NOT CARRY. An empty set comes
+        // back both from a workspace that holds no contact view and from a read
+        // that could not be made at all (list-picker-actions.ts degrades a
+        // missing capability and a throwing provider to an empty array), so the
+        // sentence states what to do rather than why there is nothing.
         <p
           role="status"
           className="text-sm leading-relaxed text-foreground"
           data-testid="list-picker-empty-reading"
         >
-          No lists yet. Build one and it will be offered here.
+          No views or lists yet. Create one in Twenty CRM and this step will list
+          it when you come back.
         </p>
       ) : (
         <div className="flex flex-col gap-2">
           {lists.map((list) => {
-            const isSelected = shownAsChosen === list.id;
+            const isSelected = chosenIds.includes(list.id);
             return (
+              // A ROW THAT CAN BE TICKED BESIDE OTHERS IS A CHECKBOX, NOT A
+              // TOGGLE BUTTON (cinatra#3562). `data-selected` keeps its meaning
+              // exactly — this row is among the chosen — and the ARIA moves from
+              // `aria-pressed` on `role="button"` to `aria-checked` on
+              // `role="checkbox"`, which is what the design system draws a
+              // multi-select with (Components § Checkbox / Radio / Switch:
+              // "multi-select (checkbox)"). The box itself is the drawn
+              // primitive, presentational here because the ROW is the control.
               <Card
                 key={list.id}
-                role="button"
+                role="checkbox"
                 tabIndex={disabled ? -1 : 0}
-                aria-pressed={isSelected}
+                aria-checked={isSelected}
                 data-selected={isSelected ? "true" : "false"}
                 onClick={() => {
-                  if (!disabled) handleSelect(list);
+                  if (!disabled) handleToggle(list);
                 }}
                 onKeyDown={(e) => {
                   if (disabled) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    handleSelect(list);
+                    handleToggle(list);
                   }
                 }}
                 className={[
@@ -406,15 +326,23 @@ export function ListPickerRenderer({
               >
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Checkbox
+                      checked={isSelected}
+                      disabled={disabled}
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      className="pointer-events-none"
+                    />
                     <span className="flex-1 truncate">{list.name}</span>
                     <Badge variant="secondary">{list.memberType}</Badge>
                   </CardTitle>
                 </CardHeader>
+                {/* NO MEMBER COUNT (cinatra#3562). The reader contract returns
+                    `memberCount` as null by construction — a Twenty view is
+                    filter-defined, not materialized (list-picker-actions.ts) —
+                    so a row that printed one printed a number the read never
+                    made. The row names the entry and says when it moved. */}
                 <CardContent className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span>
-                    {list.memberCount} contact{list.memberCount === 1 ? "" : "s"}
-                  </span>
-                  <span aria-hidden="true">·</span>
                   <span>Updated {formatLastUpdated(list.lastUpdated)}</span>
                 </CardContent>
               </Card>
@@ -422,8 +350,6 @@ export function ListPickerRenderer({
           })}
         </div>
       )}
-
-      {makeOneRoad}
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>

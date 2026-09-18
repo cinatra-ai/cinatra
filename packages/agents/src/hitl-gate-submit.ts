@@ -419,17 +419,43 @@ export function liftRendererApprovalNote(
   if (xRenderer.endsWith(":list-picker")) {
     // Snapshot the selected list at approval time so downstream stages can
     // reference it; the server re-resolves via crm_list_get.
-    const { listId, listName, memberCount } = buffered as {
+    //
+    // EVERY TICKED ENTRY REACHES THE RUN (convergence round, cinatra#3562).
+    // This note IS the answer a resume dispatches — the server end of the
+    // refusal below reads exactly it — so a gate that takes SEVERAL picks has
+    // to lift the whole set, or every entry after the first is lost between the
+    // reader's tick and the run, and the multi-select answers nothing.
+    // `listId`/`listName` stay beside the set as its FIRST entry, which is what
+    // a reader that resolves one identifier keeps reading, and a buffer that
+    // carries only that one identifier lifts exactly as it always did. The two
+    // arrays are one list of PAIRS written as two, so a name is taken at the
+    // index of its own identifier and never shifted onto another's.
+    const { listId, listName, memberCount, listIds, listNames } = buffered as {
       listId?: string;
       listName?: string;
       memberCount?: number;
+      listIds?: unknown;
+      listNames?: unknown;
     };
+    const namedIds: string[] = [];
+    const namedNames: string[] = [];
+    if (Array.isArray(listIds)) {
+      const nameAt = Array.isArray(listNames) ? listNames : [];
+      for (let i = 0; i < listIds.length; i += 1) {
+        const id = listIds[i];
+        if (typeof id !== "string" || id.trim() === "") continue;
+        if (namedIds.includes(id)) continue;
+        namedIds.push(id);
+        namedNames.push(typeof nameAt[i] === "string" ? (nameAt[i] as string) : "");
+      }
+    }
     return {
       approvalNote: JSON.stringify({
         type: "list" as const,
         listId: listId ?? "",
         listName: listName ?? "",
         memberCount: memberCount ?? 0,
+        ...(namedIds.length > 0 ? { listIds: namedIds, listNames: namedNames } : {}),
         snapshotAt: now,
       }),
     };
@@ -630,46 +656,43 @@ export function applyAttachmentEnvelopeUserResponseOnly(
 // step keeps its place in the rail and the run stays where it is.
 // ---------------------------------------------------------------------------
 
-/** What the reader is told when a list-picking step is continued with no list. */
-export const LIST_ANSWER_NAMES_NO_LIST =
-  "Choose a list before continuing — or build one first.";
+/** What the reader is told when a list-picking step is continued with no list.
+ *
+ *  AND IT OFFERS NO ROAD (cinatra#3562). The sentence used to end "— or build
+ *  one first", which named the road out of this step; that road is gone with
+ *  the ruling, so the refusal says the one thing there is left to do. */
+export const LIST_ANSWER_NAMES_NO_LIST = "Choose a list before continuing.";
 
 /**
- * Does an answer that is supposed to NAME a list name none? An absent answer
- * names no list just as surely as one carrying an empty id, so both are the
- * same verdict here.
+ * Every identifier an answer NAMES, in order. Both shapes are read
+ * (cinatra#3562): the entry SET a gate that takes several picks answers with,
+ * and the single identifier that came before it — an answer stored or built
+ * either way is still the reader's, and one non-empty identifier is what
+ * "names a list" means at both ends.
  */
-function namesNoList(answer: unknown): boolean {
-  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return true;
-  const listId = (answer as { listId?: unknown }).listId;
-  return typeof listId !== "string" || listId.trim().length === 0;
+function namedListIds(answer: unknown): string[] {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return [];
+  const a = answer as { listIds?: unknown; listId?: unknown };
+  const named: string[] = [];
+  if (Array.isArray(a.listIds)) {
+    for (const raw of a.listIds) {
+      if (typeof raw === "string" && raw.trim().length > 0) named.push(raw.trim());
+    }
+  }
+  if (named.length === 0 && typeof a.listId === "string" && a.listId.trim().length > 0) {
+    named.push(a.listId.trim());
+  }
+  return named;
 }
 
 /**
- * The same read against a finished run's own completion record — the per-step
- * result list a completed run persists. The declared output values of a run's
- * end are surfaced on each entry's `output_data`, so both shapes are asked:
- * the entry itself, and the values it declared. The FIRST id found wins, and a
- * completion carrying none answers the empty string.
+ * Does an answer that is supposed to NAME a list name none? An absent answer
+ * names no list just as surely as one carrying an empty id or an empty set of
+ * them, so all of those are the same verdict here — and ONE named identifier
+ * is enough, which is the ruling's "at least one".
  */
-export function producedIdFromRunCompletion(
-  onCompleteName: string,
-  stepResults: unknown,
-): string {
-  if (!Array.isArray(stepResults)) {
-    return producedIdForOfferingStep(onCompleteName, stepResults);
-  }
-  for (const entry of stepResults) {
-    const direct = producedIdForOfferingStep(onCompleteName, entry);
-    if (direct) return direct;
-    const declared =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as Record<string, unknown>).output_data
-        : null;
-    const lifted = producedIdForOfferingStep(onCompleteName, declared);
-    if (lifted) return lifted;
-  }
-  return "";
+function namesNoList(answer: unknown): boolean {
+  return namedListIds(answer).length === 0;
 }
 
 /**
@@ -684,47 +707,6 @@ export function producedIdFromRunCompletion(
  * click). A step that already holds a list is not a step that names none, so it
  * is not refused.
  */
-// ---------------------------------------------------------------------------
-// WHAT A FINISHED RUN PRODUCED FOR THE STEP THAT SENT IT (cinatra#3358).
-//
-// The step that offered the road is named in the completion contract the link
-// carried (`@/lib/agent-url`). When the run that road started COMPLETES, the
-// screen that draws it holds two things: that name, and the finished run's own
-// completion. This rule is the one place that reads the second through the
-// first, so the parked step can be handed what was made for it.
-//
-// GENERIC BY THE SAME CONSTRUCTION as the refusal above: it keys on the STEP
-// FAMILY the contract names — never on a package — and one entry per family says
-// which id in a completion belongs to it. A family with no entry reads nothing,
-// which is every step that offers no road.
-//
-// THE PACKAGE'S OWN HALF IS NOT THIS. A completion that names no list has
-// nothing here to read, and this rule invents none: a run that finished without
-// raising its own gate hands back an empty string and the parked step opens on
-// the honest "no list yet" reading.
-// ---------------------------------------------------------------------------
-
-/** Which id in a completion belongs to which offering step family. */
-const PRODUCED_ID_KEY_BY_STEP_FAMILY: Record<string, string> = {
-  "list-picker": "listId",
-};
-
-/**
- * The id a finished run produced FOR the step that offered the road, read off
- * that run's completion. Empty when the family is unknown to this rule, when the
- * completion is not an object, or when it names nothing.
- */
-export function producedIdForOfferingStep(
-  onCompleteName: string,
-  completion: unknown,
-): string {
-  const key = PRODUCED_ID_KEY_BY_STEP_FAMILY[onCompleteName?.trim() ?? ""];
-  if (!key) return "";
-  if (!completion || typeof completion !== "object" || Array.isArray(completion)) return "";
-  const value = (completion as Record<string, unknown>)[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
 /**
  * AN ANSWER THAT CLEARS THE FIELD ITSELF (cinatra#3358).
  *
@@ -738,7 +720,8 @@ export function producedIdForOfferingStep(
  */
 function clearsTheList(answer: unknown): boolean {
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) return false;
-  return "listId" in (answer as Record<string, unknown>) && namesNoList(answer);
+  const named = answer as Record<string, unknown>;
+  return ("listIds" in named || "listId" in named) && namesNoList(answer);
 }
 
 export function gateAnswerIncompleteReason(

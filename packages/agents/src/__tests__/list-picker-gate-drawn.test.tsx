@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /**
- * THE GATE THAT LISTS, DRAWN (cinatra#3358 — the second fix leg).
+ * THE GATE THAT LISTS, DRAWN (cinatra#3358 — the second fix leg; cinatra#3562 —
+ * the account scope's own ruling).
  *
  * The account-scope step is the ratified "gate that lists" (Agent run & review
  * §I.1) and it was graded against that drawing on a real run. This suite pins
@@ -9,31 +10,19 @@
  *
  *   "the account-scope gate opens on its question heading over its state line;
  *    the Continue control is disabled while nothing is picked and nothing
- *    pickable; the make-one road sits under the rows with the primary Continue
- *    right-aligned over the hairline control floor; the zero-content reading is
- *    the state line, the sentence and the primary action — never just empty
- *    text — with no dashed rectangle and no dashed circle icon"
+ *    pickable; the zero-content reading is the state line and the sentence —
+ *    never just empty text — with no dashed rectangle and no dashed circle icon"
  *
- *   "no undrawn full-width cross-run banner — the return to the waiting run is
- *    placed where section I places the run's actions; no search field on the
- *    gate-that-lists unless the drawing gives one; no info icon on rail entries;
- *    the refusal toast sits on the drawn opaque popover ground"
+ *   "no search field on the gate-that-lists unless the drawing gives one; no
+ *    info icon on rail entries; the refusal toast sits on the drawn opaque
+ *    popover ground"
  *
- *   "when a child run completes with a listId, the parked run's account-scope
- *    step offers that list"
+ * AND THE ACCOUNT SCOPE'S OWN RULING (cinatra#3562), which this leg builds:
  *
- * THE SECOND PROOF ROUND (2026-09-15) graded this page on a REAL parked run and
- * found two readings that §I.1 does not draw. The section's zero-content
- * reading ("The same step with nothing left to pick") is drawn as the question
- * over the "Nothing to pick" pill, then a `role="status"` sentence, then the
- * make-one road — words on the page itself, with NO panel around them: no
- * dashed rectangle and no dashed circle icon. And the question is drawn in
- * EVERY reading, the zero-content one included, so a heading rendered from a
- * label the step does not carry — the account-scope step carries none — left
- * the gate opening on an empty h3. The generic Empty pattern (Components §
- * Empty state, "a single primary action button — never just empty text") keeps
- * its own dashed circle where it is drawn; what it never does is displace the
- * page a section draws itself.
+ *   "The account scope lists all respective views/lists available inside a
+ *    connected Twenty CRM. The user must select at least one view/list and can
+ *    select multiple ones. If no views/lists are available in Twenty CRM, a
+ *    message asks the user to create one in Twenty CRM."
  *
  * The Continue control and the rail live one level up, on the run's stepper
  * panel; they are pinned in
@@ -44,7 +33,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(),
@@ -53,8 +42,6 @@ vi.mock("../list-picker-actions", () => ({
 import { ListPickerRenderer } from "../list-picker-renderer";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
-import { COMPLETION_PRODUCED_PARAM } from "@/lib/agent-url";
-import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 
 function makeProps(
   overrides: Partial<FieldRendererProps> = {},
@@ -70,11 +57,6 @@ function makeProps(
     label: "Which list should this run send to?",
     description: undefined,
     context: { connectedApps: [], runId: "run-parked" },
-    // THE MAKE-ONE ROAD'S DESTINATION IS DECLARED BY THE BINDING, never named
-    // by the host tree (the core/extension border). The binding that raises
-    // this gate on the boot these rows were measured on declares the list
-    // builder below, so the drawing tests below see the road the reader sees.
-    bindingParams: { listBuilderPackage: "@cinatra-ai/list-curator-agent" },
     ...overrides,
   };
 }
@@ -88,24 +70,37 @@ function questionAsked(): string {
     .trim();
 }
 
+/** Is this row among the chosen? Read off `data-selected`, the anchor the row
+ *  has always carried and whose meaning is unchanged — this row is among the
+ *  chosen. The row's ARIA moved with the ruling (a row that can be ticked
+ *  beside others is `role="checkbox"` with `aria-checked`, not a pressed
+ *  toggle button), and the reading below is the same written intent read off
+ *  the anchor that did not move. */
+function chosen(name: string): string | null {
+  return (
+    screen.getByText(name).closest("[data-selected]")?.getAttribute("data-selected") ??
+    null
+  );
+}
+
 const ROWS = [
   {
     id: "lst_1",
     name: "Marketing directors",
-    memberCount: 5,
+    memberCount: null,
     lastUpdated: null,
     memberType: "contact" as const,
   },
   {
     id: "lst_2",
     name: "Q2 targets",
-    memberCount: 11,
+    memberCount: null,
     lastUpdated: null,
     memberType: "contact" as const,
   },
 ];
 
-/** Put the parked run's own address on the page, the way the return lands it. */
+/** Put the parked run's own address on the page. */
 function addressCarrying(search: string) {
   window.history.replaceState({}, "", `/agents/v/p/run-parked${search}`);
 }
@@ -200,37 +195,117 @@ describe('"the account-scope gate opens on its question heading over its state l
 });
 
 describe('"no search field on the gate-that-lists unless the drawing gives one"', () => {
-  it("draws no search field — §I.1 gives the gate rows, a make-one road and a Continue, and nothing else", async () => {
+  it("draws no search field — §I.1 gives the gate rows and a Continue, and nothing else", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
     const { container } = render(<ListPickerRenderer {...makeProps()} />);
 
     await waitFor(() => screen.getByText("Marketing directors"));
 
     expect(container.querySelector('input[type="search"]')).toBeNull();
-    expect(container.querySelectorAll("input").length).toBe(0);
     expect(screen.queryByPlaceholderText(/search/i)).toBeNull();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 });
 
-describe('"the make-one road sits under the rows"', () => {
-  it("places the make-one road after the last row, not above the list", async () => {
+// ---------------------------------------------------------------------------
+// ITEM 1 — "the step lists, by name, every entry `fetchAvailableLists` returns
+// for the run ... with no client-side search filter narrowing the set and no
+// row printing a member count the contract returns as null".
+// ---------------------------------------------------------------------------
+describe('"the step lists, by name, every entry the read returns for the run"', () => {
+  const FIVE = [
+    "All contacts",
+    "Marketing directors",
+    "Q2 targets",
+    "Newsletter opt-ins",
+    "Lapsed customers",
+  ].map((name, i) => ({
+    id: `view_${i}`,
+    name,
+    memberCount: null,
+    lastUpdated: null,
+    memberType: "contact" as const,
+  }));
+
+  it("draws one row per returned entry, each named, and narrows the set by nothing", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(FIVE);
+    render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => screen.getByText("All contacts"));
+    for (const row of FIVE) expect(screen.getByText(row.name)).toBeTruthy();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(FIVE.length);
+    // The read is the whole set: the renderer is handed the run's identity and
+    // asks for it once, unfiltered.
+    expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1);
+    expect(actions.fetchAvailableLists).toHaveBeenCalledWith("run-parked");
+  });
+
+  it("prints no member count beside a name — the contract returns none", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(FIVE);
+    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => screen.getByText("All contacts"));
+    expect(container.textContent).not.toMatch(/\d+\s*contact/i);
+    expect(container.textContent).not.toMatch(/null/i);
+    // The count's WORDING, not only its number: the contract returns null and
+    // the removed markup drew that as " contact(s)" — no digit, no "null" — so
+    // the phrase is what pins the removal (convergence round, cinatra#3562).
+    expect(container.textContent).not.toMatch(/contact\(s\)/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ITEM 2 — "the choice is a multi-select: one or several entries ticked, and
+// the run receives every ticked entry"; and the step opens with NOTHING chosen
+// for the reader (§I.1: "Nothing is selected for them").
+// ---------------------------------------------------------------------------
+describe('"one or several entries ticked, and the run receives every ticked entry"', () => {
+  it("opens with no row chosen", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
     render(<ListPickerRenderer {...makeProps()} />);
 
-    const lastRow = await screen.findByText("Q2 targets");
-    const road = screen.getByTestId("build-list-with-ai-cta");
-    expect(
-      lastRow.compareDocumentPosition(road) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(chosen("Marketing directors")).toBe("false");
+    expect(chosen("Q2 targets")).toBe("false");
+    expect(screen.queryAllByRole("checkbox", { checked: true })).toHaveLength(0);
+  });
+
+  it("draws a held answer of several entries with each of them ticked", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
+    const onChange = vi.fn();
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          onChange,
+          value: {
+            scope: "list",
+            listIds: ["lst_1", "lst_2"],
+            listNames: ["Marketing directors", "Q2 targets"],
+            listId: "lst_1",
+            listName: "Marketing directors",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    // A step re-opened on an answer it already holds shows it, and emits
+    // nothing of its own: the answer is the reader's, not this render's.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(chosen("Marketing directors")).toBe("true");
+    expect(chosen("Q2 targets")).toBe("true");
   });
 });
 
-describe('"the zero-content reading is the state line, the sentence and the primary action — and no frame"', () => {
+describe('"the zero-content reading is the state line and the sentence — and no frame"', () => {
   it("draws no dashed rectangle and no dashed circle icon", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     const { container } = render(<ListPickerRenderer {...makeProps()} />);
 
-    await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
+    );
 
     // The panel §I.1 never draws. The generic Empty pattern is a component of
     // its own with its own drawing; this gate's zero-content reading is drawn
@@ -240,10 +315,7 @@ describe('"the zero-content reading is the state line, the sentence and the prim
       "the zero-content reading sits in an undrawn panel",
     ).toBeNull();
     // THE READING ITSELF and every box between it and the gate's root: none of
-    // them may draw a dashed border. Scoped to the reading, because that is
-    // what the grade found framed — a dashed rule drawn somewhere else on the
-    // gate would be another reading's defect, and the make-one road stays free
-    // to carry its own glyph.
+    // them may draw a dashed border.
     const sentence = screen.getByTestId("list-picker-empty-reading");
     const framing: Element[] = [];
     for (
@@ -263,13 +335,24 @@ describe('"the zero-content reading is the state line, the sentence and the prim
     expect(sentence.querySelectorAll("svg").length).toBe(0);
   });
 
-  it("states the fact in a sentence under the state line, with the road after it", async () => {
+  // ITEM 4 — "with a connected Twenty CRM holding no view or list, the step
+  // shows a message asking the person to create one in Twenty CRM, offers no
+  // road to another agent and does not let the run continue, and lists the new
+  // one when the person returns".
+  it("asks the reader to create one where the views and lists live, and says the step will list it", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
 
-    // The section's own zero-content sentence, announced the way it is drawn.
     const sentence = await screen.findByRole("status");
-    expect(sentence.textContent).toMatch(/no lists yet/i);
+    expect(sentence).toBe(screen.getByTestId("list-picker-empty-reading"));
+    expect(sentence.textContent).toMatch(/create one in Twenty CRM/i);
+    expect(
+      sentence.textContent,
+      "the reading does not say the step will list what the reader makes",
+    ).toMatch(/list it when you come back/i);
+    // It states the reading rather than asserting a cause the read cannot
+    // carry, and it never says the run ends here — the reader is expected back.
+    expect(sentence.textContent).not.toMatch(/ends here/i);
 
     const stateLine = screen.getByTestId("list-picker-state-line");
     expect(stateLine.textContent).toBe("Nothing to pick");
@@ -277,164 +360,37 @@ describe('"the zero-content reading is the state line, the sentence and the prim
       stateLine.compareDocumentPosition(sentence) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-
-    // "never just empty text": the make-one road is the reading's action, and
-    // it sits AFTER the sentence, not inside it.
-    const road = screen.getByTestId("build-list-with-ai-cta");
-    expect(sentence.contains(road)).toBe(false);
-    expect(
-      sentence.compareDocumentPosition(road) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    // And it is still offered: an empty reading with no road would leave the
-    // reader nowhere to go.
-    expect(road.getAttribute("href")).toContain("onCompleteRunId=run-parked");
   });
-});
 
-describe('"when a child run completes with a listId, the parked run\'s account-scope step offers that list"', () => {
-  it("offers the produced list when the return lands it on the parked run's address", async () => {
-    addressCarrying(`?onComplete=list-picker&${COMPLETION_PRODUCED_PARAM}=lst_2`);
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
-    const onChange = vi.fn();
-    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+  it("offers no road beneath it — no link, no button and no other agent", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container } = render(<ListPickerRenderer {...makeProps()} />);
 
+    const sentence = await screen.findByRole("status");
+    // Nothing to press and nowhere to go: the step no longer sends the reader
+    // to another agent to make a list, which is what the ruling retires.
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(sentence.textContent).not.toMatch(/\bagent\b/i);
+    expect(container.textContent).not.toMatch(/\/agents\//);
+  });
+
+  it("lists the new entry when the reader comes back having made one", async () => {
+    // The same step, re-opened after the reader made a view in the CRM: the
+    // read is the live one, so the entry is simply there to tick.
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const first = render(<ListPickerRenderer {...makeProps()} />);
     await waitFor(() =>
-      expect(onChange).toHaveBeenCalledWith({
-        scope: "list",
-        listId: "lst_2",
-        listName: "Q2 targets",
-        memberCount: 11,
-      }),
+      expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
     );
-    const offeredRow = screen.getByText("Q2 targets").closest("[aria-pressed]");
-    expect(offeredRow!.getAttribute("aria-pressed")).toBe("true");
-  });
+    first.unmount();
 
-  it("offers nothing when the completion named no list — the step opens on its honest empty reading", async () => {
-    addressCarrying("?onComplete=list-picker");
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const onChange = vi.fn();
-    render(<ListPickerRenderer {...makeProps({ onChange })} />);
-
-    await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it("never overrides an answer the step already holds", async () => {
-    addressCarrying(`?onComplete=list-picker&${COMPLETION_PRODUCED_PARAM}=lst_2`);
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
-    const onChange = vi.fn();
-    render(
-      <ListPickerRenderer
-        {...makeProps({
-          onChange,
-          value: {
-            scope: "list",
-            listId: "lst_1",
-            listName: "Marketing directors",
-            memberCount: 5,
-          },
-        })}
-      />,
-    );
-
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([ROWS[0]]);
+    render(<ListPickerRenderer {...makeProps()} />);
     await waitFor(() => screen.getByText("Marketing directors"));
-    expect(onChange).not.toHaveBeenCalled();
-    const held = screen.getByText("Marketing directors").closest("[aria-pressed]");
-    expect(held!.getAttribute("aria-pressed")).toBe("true");
-  });
-});
-
-describe("the offer defers to an answer that arrives AFTER mount (convergence round, cinatra#3448)", () => {
-  it("never overwrites an answer handed down while the rows were still loading", async () => {
-    // THE HOLE THE ROUND FOUND. The guard read the answer as it stood AT MOUNT
-    // and, after that, only what this reader had pressed. A step re-hydrated
-    // with its stored answer while the rows were still in flight was therefore
-    // invisible to the offer, and the offer overwrote it the moment the rows
-    // landed — the one case where an offer can destroy a reader's own work.
-    addressCarrying(`?onComplete=list-picker&${COMPLETION_PRODUCED_PARAM}=lst_2`);
-    let releaseRows: (rows: typeof ROWS) => void = () => {};
-    vi.mocked(actions.fetchAvailableLists).mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseRows = resolve;
-      }) as ReturnType<typeof actions.fetchAvailableLists>,
-    );
-    const onChange = vi.fn();
-    const { rerender } = render(
-      <ListPickerRenderer {...makeProps({ onChange })} />,
-    );
-
-    // The answer arrives through a render, with the rows still in flight.
-    rerender(
-      <ListPickerRenderer
-        {...makeProps({
-          onChange,
-          value: {
-            scope: "list",
-            listId: "lst_1",
-            listName: "Marketing directors",
-            memberCount: 5,
-          },
-        })}
-      />,
-    );
-
-    await act(async () => {
-      releaseRows(ROWS);
-    });
-    await waitFor(() => screen.getByText("Marketing directors"));
-
-    expect(
-      onChange,
-      "the offer overwrote an answer the step already held",
-    ).not.toHaveBeenCalled();
-    const held = screen.getByText("Marketing directors").closest("[aria-pressed]");
-    expect(held!.getAttribute("aria-pressed")).toBe("true");
-    const offered = screen.getByText("Q2 targets").closest("[aria-pressed]");
-    expect(offered!.getAttribute("aria-pressed")).toBe("false");
-  });
-});
-
-
-// ---------------------------------------------------------------------------
-// THE ROAD THE PINNED TREE ACTUALLY RAISES. Every test above hands the gate a
-// hand-written `bindingParams` fixture, so they prove the RENDERER and say
-// nothing about what the host's pinned extension universe declares. The road
-// a reader reaches is minted from the binding the generated table carries, so
-// the gate is rendered here from THAT declaration — the one the pinned
-// packages produce — and not from a fixture.
-// ---------------------------------------------------------------------------
-describe('"the make-one road\'s destination is declared by the binding" — on the PINNED bindings', () => {
-  const listPickerBindings = GENERATED_FIELD_RENDERER_BINDINGS.filter(
-    (b) => b.kind === "list-picker",
-  );
-
-  it("carries the list builder on the one generated list-picker binding, once", () => {
-    // The two packages that raise this gate CO-DECLARE the same binding id;
-    // the manifest generator records it once and refuses a disagreement, so a
-    // single row is the whole reading.
-    expect(listPickerBindings.map((b) => b.id)).toEqual([
-      "@cinatra-ai/email-outreach-agent:list-picker",
-    ]);
-    const declared = listPickerBindings[0]?.params?.listBuilderPackage;
-    expect(
-      declared,
-      "the pinned list-picker binding declares no list builder",
-    ).toBe("@cinatra-ai/list-curator-agent");
-  });
-
-  it("reaches the declared builder from the gate's zero-content reading", async () => {
-    const params = listPickerBindings[0]?.params;
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps({ bindingParams: params })} />);
-
-    await waitFor(() => expect(screen.getByText(/no lists yet/i)).toBeTruthy());
-
-    const road = screen.getByTestId("build-list-with-ai-cta");
-    expect(road.getAttribute("href")).toContain(
-      "cinatra-ai/list-curator-agent/new",
-    );
-    expect(road.getAttribute("href")).toContain("onCompleteRunId=run-parked");
+    expect(screen.queryByTestId("list-picker-empty-reading")).toBeNull();
+    expect(chosen("Marketing directors")).toBe("false");
   });
 });

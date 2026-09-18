@@ -202,6 +202,44 @@ describe('"the Continue control is disabled while nothing is picked and nothing 
     expect(continueButton()!.disabled).toBe(false);
   });
 
+  // ITEM 3 (cinatra#3562) — "Continue stays unavailable until at least one
+  // entry is ticked". The control reads the SAME one predicate the press reads,
+  // so a step holding an entry SET is answerable and one holding an empty set
+  // is not.
+  it("makes it available the moment the step holds at least one ticked entry", async () => {
+    interruptContext = {
+      schema: { type: "object" },
+      xRenderer: LIST_PICKER,
+      // THE ENTRY SET ALONE, with no single-identifier field beside it: this is
+      // the answer a gate that takes several picks holds, and the widened
+      // predicate has to read it as naming something.
+      values: {
+        listIds: ["lst_1", "lst_2"],
+        listNames: ["Marketing directors", "Q2 targets"],
+      },
+      reviewTaskId: "task-3562",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    expect(continueButton()!.disabled).toBe(false);
+  });
+
+  it("offers the control unavailable while the ticked set is empty", async () => {
+    interruptContext = {
+      schema: { type: "object" },
+      xRenderer: LIST_PICKER,
+      values: { listIds: [], listNames: [] },
+      reviewTaskId: "task-3562",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    expect(continueButton()!.disabled).toBe(true);
+  });
+
   it("leaves every other gate family's control exactly as it was", async () => {
     interruptContext = {
       schema: { type: "object" },

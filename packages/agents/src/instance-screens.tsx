@@ -1,11 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import {
-  buildAgentInstancePath,
-  readCompletionProducedParam,
-  readCompletionReturn,
-  withCompletionProduced,
-  withCompletionReturn,
-} from "@/lib/agent-url";
+import { buildAgentInstancePath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -27,7 +21,7 @@ import {
   readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
-import { readAgentTemplateBySlug, readAgentTemplateById, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
+import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
@@ -89,8 +83,6 @@ import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
-import { Button } from "@/components/ui/button";
-import { producedIdFromRunCompletion } from "./hitl-gate-submit";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 // cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
@@ -1359,7 +1351,6 @@ export function newRunLaunchOutcome(
 export async function SetupScreen({
   agentId,
   instanceId,
-  searchParams,
   scopeBase,
   launchScope,
   scopeTitle,
@@ -1387,11 +1378,6 @@ export async function SetupScreen({
     // validates the union. A launcher on the bare global route mints nothing,
     // and its run is unanchored — the honest record of a launch made from no
     // vantage.
-    // THE COMPLETION CONTRACT THIS LAUNCH WAS OPENED UNDER (cinatra#3358): the
-    // offering step's name plus the id of the run parked at it, read off this
-    // launcher's own query. Generic — the launcher never learns which step or
-    // which package is at either end of it.
-    const completionReturn = readCompletionReturn(searchParams ?? null);
     const result = await createAndTriggerRunWithContext(
       actorUserId,
       actorOrgId,
@@ -1414,16 +1400,11 @@ export async function SetupScreen({
     if (outcome.kind === "created") {
       // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
       // launched from a vantage belongs to it, so the fresh run's address is
-      // this launcher's own scope base plus the one agent-path grammar — and it
-      // CARRIES THE COMPLETION CONTRACT (cinatra#3358), which is what lets the
-      // run that was just created find its way back to the parked one.
+      // this launcher's own scope base plus the one agent-path grammar.
       redirect(
-        withCompletionReturn(
-          buildAgentInstancePath(agentId, encodeURIComponent(outcome.runId), {
-            scopeBase: scopeBase ?? null,
-          }),
-          completionReturn,
-        ),
+        buildAgentInstancePath(agentId, encodeURIComponent(outcome.runId), {
+          scopeBase: scopeBase ?? null,
+        }),
       );
     }
     return (
@@ -1519,73 +1500,7 @@ export async function SetupScreen({
         anchor: parseLaunchScopeAnchor(run.launchScopeAnchor),
       }),
     );
-    // A CANONICAL-HOME REDIRECT KEEPS THE COMPLETION CONTRACT (cinatra#3358). An
-    // anchored run opened at its bare address is sent to its vantage's address,
-    // and a redirect that dropped the two query keys would land the reader on a
-    // page that can no longer offer the way back — the road would answer and
-    // still lose its return. Null contract, unchanged path.
-    // ALL THREE KEYS, not two. The contract's two keys carry the way back; the
-    // third carries what the finished run PRODUCED for the parked step. An
-    // anchored parked run is addressed at its bare route and sent here to its
-    // vantage's address, so a redirect that carried only the first two would
-    // land the reader on the parked step with the offer silently gone — the
-    // road would answer and still make the reader find the thing again.
-    if (home)
-      redirect(
-        withCompletionProduced(
-          withCompletionReturn(home, readCompletionReturn(searchParams ?? null)),
-          readCompletionProducedParam(searchParams ?? null),
-        ),
-      );
-  }
-
-  // WHERE THIS RUN RETURNS TO (cinatra#3358). A run started from another run's
-  // step carries that step's completion contract in its own address, so the
-  // reader who finished the work here has one press back to the run that is
-  // still parked waiting for it. The parked run is resolved through the SAME
-  // access door this screen already cleared for its own run, so the affordance
-  // can never reveal a run the reader may not see; a contract naming a run that
-  // is gone, or one the reader may not read, simply draws nothing. Generic — the
-  // parked run's own template names its address, and nothing here is keyed to a
-  // package.
-  const completionReturn = readCompletionReturn(searchParams ?? null);
-  let completionReturnHref: string | null = null;
-  if (run && completionReturn && completionReturn.returnRunId !== run.id) {
-    try {
-      const parkedRun = await readAgentRunById(
-        completionReturn.returnRunId,
-        setupActor,
-        setupRoles,
-      );
-      const parkedTemplate = parkedRun?.templateId
-        ? await readAgentTemplateById(parkedRun.templateId)
-        : null;
-      const parkedPackageName = parkedTemplate?.packageName ?? null;
-      if (parkedRun && parkedPackageName) {
-        // AND IT CARRIES WHAT THIS RUN MADE (cinatra#3358). The return used to
-        // be an address and nothing else, so a reader who had just produced the
-        // missing thing arrived at the parked step and was asked to find it
-        // again. The id of what this run produced FOR that step rides the
-        // address, read off this run's own completion through the step-family
-        // rule both ends of the submit already share (./hitl-gate-submit). A
-        // run that completed without producing anything carries nothing extra,
-        // and the parked step opens on its honest empty reading.
-        completionReturnHref = withCompletionProduced(
-          buildAgentInstancePath(
-            parkedPackageName.startsWith("@")
-              ? parkedPackageName.slice(1)
-              : parkedPackageName,
-            encodeURIComponent(parkedRun.id),
-            { scopeBase: null },
-          ),
-          producedIdFromRunCompletion(completionReturn.onComplete, run.stepResults),
-        );
-      }
-    } catch (err) {
-      // An access refusal on the PARKED run is not this screen's failure — it
-      // just means there is no return to offer here.
-      if (!(err instanceof AuthzError)) throw err;
-    }
+    if (home) redirect(home);
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -2298,24 +2213,6 @@ export async function SetupScreen({
         extensionHref={extensionHeaderLink?.extensionHref}
         actions={
           <>
-            {/* THE WAY BACK IS AN ACTION OF THE RUN, NOT A BANNER ACROSS IT
-                (cinatra#3358). It was drawn as a full-width panel above the run
-                detail — chrome the drawing does not give this surface, and a
-                second thing competing with the step rail for the reader's first
-                look. The run surface is a two-column frame whose actions belong
-                to the page header (Agent run & review §I), so the return sits
-                there with the run's other action, and the frame beneath is the
-                rail and the detail, exactly as drawn. */}
-            {completionReturnHref ? (
-              <Button asChild variant="outline" size="sm">
-                <Link
-                  href={completionReturnHref}
-                  data-testid="completion-return-link"
-                >
-                  Back to the waiting run
-                </Link>
-              </Button>
-            ) : null}
             {run && run.status === "pending_input" && !recommendationHeld ? (
               <RunAgentButton
                 runId={run.id}

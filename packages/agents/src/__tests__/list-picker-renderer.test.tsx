@@ -5,11 +5,13 @@
  * Locks the renderer contract:
  *   - Mount renders the step's question heading (no "Create new list" CTA, and
  *     no search field — the drawing gives the gate neither).
- *   - Lists from fetchAvailableLists() render as clickable cards with name +
- *     member count + memberType badge.
- *   - Clicking a card calls onChange with the canonical
- *     { scope: "list", listId, listName, memberCount } shape.
- *   - The zero-content reading is the drawn Empty pattern.
+ *   - Lists from fetchAvailableLists() render as tickable rows with name +
+ *     memberType badge, and no member count (the reader contract returns none).
+ *   - A press emits the canonical
+ *     { scope: "list", listIds, listNames, listId, listName } shape, and a
+ *     second press ADDS rather than replaces (cinatra#3562).
+ *   - The zero-content reading asks the reader to create a view or list in
+ *     Twenty CRM, and offers no road out of the step.
  *   - mixed-memberType lists render with the SAME affordances as
  *     contact-typed lists and produce the same onChange payload shape
  *     so the picker accepts both `contact` and `mixed` rows.
@@ -33,28 +35,15 @@ vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(),
 }));
 
-// THE ROUTE'S OWN PATHNAME, which the renderer reads instead of the window so
-// the server's first paint and the client's hydration mint the SAME href. It
-// answers null by default here — no route context, exactly as a bare render has
-// none — which is when the renderer falls back to the window reading every test
-// below sets through `history.replaceState`.
-const routeHarness = vi.hoisted(() => ({ pathname: null as string | null }));
-vi.mock("next/navigation", () => ({
-  usePathname: () => routeHarness.pathname,
-}));
-
-import {
-  ListPickerRenderer,
-  declaredListBuilderPackage,
-  LIST_BUILDER_PACKAGE_PARAM,
-} from "../list-picker-renderer";
+import { ListPickerRenderer } from "../list-picker-renderer";
+import * as listPickerRendererModule from "../list-picker-renderer";
+import * as agentUrl from "@/lib/agent-url";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import {
   isRunSurfaceStepSelectable,
   type RunSurfaceRailStep,
 } from "../run-surface-rail-step";
-import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 
 // Minimal-required props every FieldRendererProps consumer expects. The
 // picker reads `value`, `onChange`, `disabled`, `required`, `error`, `label`,
@@ -73,25 +62,24 @@ function makeProps(
     label: "Pick a list",
     description: undefined,
     context: { connectedApps: [], runId: "run-1" },
-    // WHAT THE BINDING DECLARES ITS MAKE-ONE ROAD LEADS TO. The host tree
-    // names no pack (the core/extension border); the binding that raised this
-    // gate declares the agent that builds a list, and these tests declare the
-    // one measured on the development boot.
-    bindingParams: { listBuilderPackage: "@cinatra-ai/list-curator-agent" },
     ...overrides,
   };
 }
 
-// WHERE THE STEP IS PARKED, which is what the offered road is addressed from
-// (cinatra#2809). Every test that does not say otherwise runs from a run parked
-// under the workspace scope, and the address is put back after each test so no
-// file downstream inherits this one's location.
+/** Is this row among the chosen? Read off the anchor the row has always
+ *  carried — `data-selected`, whose meaning is unchanged. */
+function chosen(name: string): string | null {
+  return (
+    screen.getByText(name).closest("[data-selected]")?.getAttribute("data-selected") ??
+    null
+  );
+}
+
 const PARKED_AT = "/workspace/agents/cinatra-ai/outreach-agent/run-1";
 let originalHref = "";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  routeHarness.pathname = null;
   originalHref = window.location.href;
   window.history.replaceState(null, "", PARKED_AT);
 });
@@ -111,104 +99,17 @@ describe("ListPickerRenderer", () => {
     );
 
     // The "Create new list" affordance was retired with the lists_* MCP
-    // family; list creation flows through the list-curator-agent CTA below.
+    // family; the ruling of cinatra#3562 retires every other road out of this
+    // step too, so no link at all is drawn here.
     expect(
       screen.queryByRole("link", { name: /create new list/i }),
     ).toBeNull();
     // AND THE SEARCH FIELD IS GONE (cinatra#3358). The gate that lists is drawn
-    // in Agent run & review §I.1 as rows, a make-one road and a Continue — it is
-    // given no search field, so the step no longer draws one. Pinned in
+    // in Agent run & review §I.1 as rows and a Continue — it is given no search
+    // field, so the step no longer draws one. Pinned in
     // list-picker-gate-drawn.test.tsx.
     expect(screen.queryByPlaceholderText(/search lists/i)).toBeNull();
     expect(screen.getByTestId("list-picker-question")).toBeTruthy();
-  });
-
-  // cinatra#3358 — THE OFFERED ROAD CARRIES ITS RETURN. The CTA used to name
-  // the offering step (`onComplete=list-picker`) and nothing else, so the run
-  // it starts had no way to know which run was parked at this step. It now
-  // carries THIS run's identity beside the name, which is what the generic
-  // new-run launcher forwards onto the run it creates.
-  it("renders 'Build a list with AI' CTA deep-linking to list-curator-agent with this run as the return", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    const cta = screen.getByTestId("build-list-with-ai-cta");
-    expect(cta).toBeTruthy();
-    expect(cta.getAttribute("href")).toBe(
-      "/workspace/agents/cinatra-ai/list-curator-agent/new" +
-        "?onComplete=list-picker&onCompleteRunId=run-1",
-    );
-    expect(cta.textContent?.toLowerCase()).toContain("build a list with ai");
-  });
-
-  it("offers the bare road when the step has no run identity in hand", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(
-      <ListPickerRenderer {...makeProps({ context: { connectedApps: [] } })} />,
-    );
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    const cta = screen.getByTestId("build-list-with-ai-cta");
-    expect(cta.getAttribute("href")).toBe(
-      "/workspace/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
-    );
-  });
-
-  // cinatra#2809 + cinatra#3358 — THE ROAD IS ADDRESSED AT THE SCOPE THE PARKED
-  // RUN BELONGS TO. Measured on a development boot with both packages
-  // installed: the bare `/agents/{vendor}/{package}/new` answered 200 with the
-  // crumb "Agents / New" and created no run, while the same address under a
-  // scope base answered 307 to a fresh run carrying the completion contract
-  // through. So the offered road is built from the parked run's OWN address,
-  // and a run parked in an organization offers that organization's launcher —
-  // never another scope's, and never the bare road that answers nothing.
-  it("addresses the road at the scope the parked run belongs to", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/organizations/org-7/agents/cinatra-ai/outreach-agent/run-1",
-    );
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    expect(
-      screen.getByTestId("build-list-with-ai-cta").getAttribute("href"),
-    ).toBe(
-      "/organizations/org-7/agents/cinatra-ai/list-curator-agent/new" +
-        "?onComplete=list-picker&onCompleteRunId=run-1",
-    );
-  });
-
-  it("offers the workspace launcher for a run parked on the scopeless tree", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/agents/cinatra-ai/outreach-agent/run-1",
-    );
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    expect(
-      screen.getByTestId("build-list-with-ai-cta").getAttribute("href"),
-    ).toBe(
-      "/workspace/agents/cinatra-ai/list-curator-agent/new" +
-        "?onComplete=list-picker&onCompleteRunId=run-1",
-    );
   });
 
   it("renders all returned lists with both contact and mixed member types", async () => {
@@ -216,21 +117,21 @@ describe("ListPickerRenderer", () => {
       {
         id: "l1",
         name: "Beta Prospects",
-        memberCount: 42,
+        memberCount: null,
         lastUpdated: null,
         memberType: "contact",
       },
       {
         id: "l2",
         name: "Q2 Targets",
-        memberCount: 7,
+        memberCount: null,
         lastUpdated: null,
         memberType: "mixed",
       },
       {
         id: "l3",
         name: "Hot Leads",
-        memberCount: 18,
+        memberCount: null,
         lastUpdated: null,
         memberType: "contact",
       },
@@ -247,13 +148,13 @@ describe("ListPickerRenderer", () => {
   // a field the ratified drawing does not give this gate; the rows are the whole
   // page (Agent run & review §I.1). Nothing replaces it here.
 
-  it("invokes onChange with the canonical value shape when a card is clicked", async () => {
+  it("invokes onChange with the canonical value shape when a row is ticked", async () => {
     const onChange = vi.fn();
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([
       {
         id: "l1",
         name: "Beta Prospects",
-        memberCount: 42,
+        memberCount: null,
         lastUpdated: null,
         memberType: "contact",
       },
@@ -265,18 +166,19 @@ describe("ListPickerRenderer", () => {
 
     expect(onChange).toHaveBeenCalledWith({
       scope: "list",
+      listIds: ["l1"],
+      listNames: ["Beta Prospects"],
       listId: "l1",
       listName: "Beta Prospects",
-      memberCount: 42,
     });
   });
 
-  it("renders empty state when no lists exist", async () => {
+  it("renders the empty reading when the CRM holds no view or list", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
 
     await waitFor(() =>
-      expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
+      expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
     );
   });
 
@@ -286,7 +188,7 @@ describe("ListPickerRenderer", () => {
       {
         id: "lm",
         name: "Mixed Sample",
-        memberCount: 5,
+        memberCount: null,
         lastUpdated: null,
         memberType: "mixed",
       },
@@ -303,10 +205,238 @@ describe("ListPickerRenderer", () => {
     fireEvent.click(screen.getByText("Mixed Sample"));
     expect(onChange).toHaveBeenCalledWith({
       scope: "list",
+      listIds: ["lm"],
+      listNames: ["Mixed Sample"],
       listId: "lm",
       listName: "Mixed Sample",
-      memberCount: 5,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE STEP TAKES SEVERAL ENTRIES (cinatra#3562, acceptance 2).
+//
+// "ticking a second row ADDS it rather than replacing the first, the emitted
+// value is `{scope:'list', listIds:[...], listNames:[...]}` in ticked order
+// with `listId`/`listName` kept as the first entry for the pinned pack's legacy
+// branch, a step re-opened on an answer it already holds shows every held entry
+// ticked"
+// ---------------------------------------------------------------------------
+
+const TWO_ROWS = [
+  {
+    id: "l1",
+    name: "Marketing directors",
+    memberCount: null,
+    lastUpdated: null,
+    memberType: "contact" as const,
+  },
+  {
+    id: "l2",
+    name: "Q2 targets",
+    memberCount: null,
+    lastUpdated: null,
+    memberType: "contact" as const,
+  },
+];
+
+describe("the gate takes several entries (cinatra#3562)", () => {
+  it("ADDS a second ticked row instead of moving the answer to it", async () => {
+    const onChange = vi.fn();
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    fireEvent.click(screen.getByText("Marketing directors"));
+    fireEvent.click(screen.getByText("Q2 targets"));
+
+    // In TICKED ORDER, with the first entry repeated in the one-identifier
+    // fields the pinned pack's legacy branch reads.
+    expect(onChange).toHaveBeenLastCalledWith({
+      scope: "list",
+      listIds: ["l1", "l2"],
+      listNames: ["Marketing directors", "Q2 targets"],
+      listId: "l1",
+      listName: "Marketing directors",
+    });
+    expect(chosen("Marketing directors")).toBe("true");
+    expect(chosen("Q2 targets")).toBe("true");
+  });
+
+  it("draws every ticked row as a checkbox that is checked, never a pressed button", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    fireEvent.click(screen.getByText("Q2 targets"));
+
+    expect(
+      screen.getAllByRole("checkbox", { checked: true }).length,
+      "a ticked row is not readable as a checked checkbox",
+    ).toBe(1);
+    expect(screen.getAllByRole("checkbox", { checked: false })).toHaveLength(1);
+  });
+
+  it("unticks a row that is ticked, and the emptied answer names nothing", async () => {
+    const onChange = vi.fn();
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    fireEvent.click(screen.getByText("Marketing directors"));
+    fireEvent.click(screen.getByText("Marketing directors"));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      scope: "list",
+      listIds: [],
+      listNames: [],
+      listId: "",
+      listName: "",
+    });
+    expect(chosen("Marketing directors")).toBe("false");
+  });
+
+  it("shows EVERY entry of a held answer ticked when the step is re-opened", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          value: {
+            scope: "list",
+            listIds: ["l1", "l2"],
+            listNames: ["Marketing directors", "Q2 targets"],
+            listId: "l1",
+            listName: "Marketing directors",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(chosen("Marketing directors")).toBe("true");
+    expect(chosen("Q2 targets")).toBe("true");
+  });
+
+  it("reads a one-identifier answer back as the one-entry set it is", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    const onChange = vi.fn();
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          onChange,
+          value: { scope: "list", listId: "l2", listName: "Q2 targets" },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Q2 targets"));
+    expect(chosen("Q2 targets")).toBe("true");
+    expect(chosen("Marketing directors")).toBe("false");
+    // And it ADDS to that held entry rather than replacing it.
+    fireEvent.click(screen.getByText("Marketing directors"));
+    expect(onChange).toHaveBeenLastCalledWith({
+      scope: "list",
+      listIds: ["l2", "l1"],
+      listNames: ["Q2 targets", "Marketing directors"],
+      listId: "l2",
+      listName: "Q2 targets",
+    });
+  });
+
+  it("carries no entry the live read no longer returns into the answer the reader makes", async () => {
+    // A view deleted where the views live, since the step was answered, comes
+    // back in the HELD answer and in no row: it is drawn nowhere, so the reader
+    // can neither see it ticked nor tick it off. An answer they make now must
+    // not carry a scope they were never shown (convergence round, cinatra#3562).
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    const onChange = vi.fn();
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          onChange,
+          value: {
+            scope: "list",
+            listIds: ["gone", "l1"],
+            listNames: ["Deleted where the views live", "Marketing directors"],
+            listId: "gone",
+            listName: "Deleted where the views live",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(screen.queryByText("Deleted where the views live")).toBeNull();
+    expect(chosen("Marketing directors")).toBe("true");
+    fireEvent.click(screen.getByText("Q2 targets"));
+    expect(onChange).toHaveBeenLastCalledWith({
+      scope: "list",
+      listIds: ["l1", "l2"],
+      listNames: ["Marketing directors", "Q2 targets"],
+      listId: "l1",
+      listName: "Marketing directors",
+    });
+  });
+
+  it("reads an identifier a held answer repeats as the ONE ticked entry it is", async () => {
+    // A repeated identifier is one ticked entry however the answer was authored;
+    // keeping it twice would carry a phantom entry into the next answer
+    // (convergence round, cinatra#3562).
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    const onChange = vi.fn();
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          onChange,
+          value: {
+            scope: "list",
+            listIds: ["l1", "l1"],
+            listNames: ["Marketing directors", "Marketing directors"],
+            listId: "l1",
+            listName: "Marketing directors",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(chosen("Marketing directors")).toBe("true");
+    fireEvent.click(screen.getByText("Q2 targets"));
+    expect(onChange).toHaveBeenLastCalledWith({
+      scope: "list",
+      listIds: ["l1", "l2"],
+      listNames: ["Marketing directors", "Q2 targets"],
+      listId: "l1",
+      listName: "Marketing directors",
+    });
+  });
+
+  it("prints no member count on a row — the reader contract returns none", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([
+      {
+        id: "l1",
+        name: "Marketing directors",
+        // What the live read actually hands the renderer: a Twenty view is
+        // filter-defined, not materialized, so the contract's count is null.
+        memberCount: null,
+        lastUpdated: null,
+        memberType: "contact" as const,
+      },
+    ]);
+    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    const row = screen.getByText("Marketing directors").closest("[data-selected]")!;
+    expect(row.textContent).not.toMatch(/\d+\s*contact/i);
+    expect(row.textContent).not.toMatch(/null/i);
+    // AND THE COUNT'S OWN WORDING IS GONE, not merely its number (convergence
+    // round, cinatra#3562). The removed markup printed the contract's `null`
+    // count beside the word — React draws that as " contact(s)", which carries
+    // no digit and no "null", so a row that had it back would pass the two
+    // readings above. The phrase is what pins the removal.
+    expect(row.textContent).not.toMatch(/contact\(s\)/i);
+    expect(container.textContent).not.toMatch(/\bmembers?\b/i);
   });
 });
 
@@ -367,17 +497,17 @@ describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
 //
 // THE MECHANISM, pinned rather than described. The answer this gate wants is a
 // LIST, and the only thing in this renderer that emits one is a list's own row:
-// `handleSelect` is reachable from nowhere else. So on an account with no lists
-// there is no row to press, the step emits NO value, and the question the run is
-// parked on stays unanswered — which is what keeps the run standing here. The
-// step becomes answerable the moment a list exists, and not before.
+// `handleToggle` is reachable from nowhere else. So on a CRM with no contact
+// view there is no row to tick, the step emits NO value, and the question the
+// run is parked on stays unanswered — which is what keeps the run standing
+// here. The step becomes answerable the moment an entry exists, and not before.
 //
 // AND NO LATER STEP IS STARTED while it stands there: a step the run has not
 // reached is closed even when the page has a run detail to fall back on, read
 // through the rail's own predicate rather than asserted about the DOM.
 // ---------------------------------------------------------------------------
 describe("the run parks at the account-scope step until a list exists (cinatra#3358)", () => {
-  it("emits no answer while the account has no list, so the gate stays unanswered", async () => {
+  it("emits no answer while the CRM holds no view or list, so the gate stays unanswered", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     const onChange = vi.fn();
     render(<ListPickerRenderer {...makeProps({ onChange })} />);
@@ -388,10 +518,9 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
 
     // The step says so in its own words, and offers nothing to answer with.
     await waitFor(() =>
-      expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
+      expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
     );
-    expect(screen.queryAllByRole("button", { pressed: false })).toHaveLength(0);
-    expect(screen.queryAllByRole("button", { pressed: true })).toHaveLength(0);
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     // Nothing was emitted: the run has no value to walk past this step with.
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -401,7 +530,7 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
       {
         id: "list-9",
         name: "Marketing directors",
-        memberCount: 5,
+        memberCount: null,
         memberType: "contact",
         lastUpdated: null,
       },
@@ -413,15 +542,16 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
       expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
     );
 
-    expect(screen.queryByText(/no lists yet/i)).toBeNull();
+    expect(screen.queryByTestId("list-picker-empty-reading")).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText("Marketing directors"));
     expect(onChange).toHaveBeenCalledWith({
       scope: "list",
+      listIds: ["list-9"],
+      listNames: ["Marketing directors"],
       listId: "list-9",
       listName: "Marketing directors",
-      memberCount: 5,
     });
   });
 
@@ -446,143 +576,56 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
 });
 
 // ---------------------------------------------------------------------------
-// THE ROAD FOLLOWS A DECLARATION, NEVER AN IDENTITY (the core/extension
-// border). Host/core product code may carry the road's grammar — the scope,
-// the launch segment, the completion contract — but never the identity of a
-// pack. The binding that raised this gate declares which agent builds a list,
-// through the pinned per-binding params contract, and the step mints the road
-// from that declaration.
+// THE ROAD OUT OF THE STEP IS GONE, AND SO IS EVERYTHING THAT SERVED ONLY IT
+// (cinatra#3562, acceptance 5).
+//
+// The criterion: the road's own test id, its binding param and its two return
+// query keys are named nowhere under this tree's product code after this leg,
+// while `agentPathScopeBase`, `buildAgentWorkspacePath`, `newRunLaunchOutcome`
+// and `NEW_RUN_REFUSAL_FALLBACK` all remain — they serve other pages.
+//
+// Read off the two modules' OWN export surfaces, and off the gate's drawing,
+// so the removal is pinned by what the tree offers rather than by a grep this
+// suite would have to spell the removed names into.
 // ---------------------------------------------------------------------------
-describe("the make-one road's destination is declared by the binding", () => {
-  it("mints the road for whatever package the binding declares", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(
-      <ListPickerRenderer
-        {...makeProps({
-          bindingParams: { listBuilderPackage: "@another-vendor/list-builder" },
-        })}
-      />,
-    );
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    expect(
-      screen.getByTestId("build-list-with-ai-cta").getAttribute("href"),
-    ).toBe(
-      "/workspace/agents/another-vendor/list-builder/new" +
-        "?onComplete=list-picker&onCompleteRunId=run-1",
-    );
-  });
-
-  it("takes the scope off the ROUTE, which is the same string on both sides", async () => {
-    // A client component is rendered on the server for the first paint, where no
-    // window exists: a window reading minted the workspace base there and the
-    // run's real base on hydration — two hrefs for one link. The route's own
-    // pathname is what both sides hold, so it is what the road is cut from, and
-    // it WINS over whatever the window happens to say.
-    routeHarness.pathname = "/organizations/org-7/agents/cinatra-ai/outreach-agent/run-1";
-    window.history.replaceState(null, "", "/workspace/agents/cinatra-ai/outreach-agent/run-1");
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    expect(
-      screen.getByTestId("build-list-with-ai-cta").getAttribute("href"),
-    ).toBe(
-      "/organizations/org-7/agents/cinatra-ai/list-curator-agent/new" +
-        "?onComplete=list-picker&onCompleteRunId=run-1",
-    );
-  });
-
-  it("offers NO road when the binding declares no list builder", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps({ bindingParams: undefined })} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    // An absent road is the honest reading: a road the host addressed at a
-    // package it guessed is exactly the dead end this step used to offer.
-    expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
-  });
-
-  it("offers no road for a declaration that is not a scoped package name", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(
-      <ListPickerRenderer
-        {...makeProps({ bindingParams: { listBuilderPackage: "   " } })}
-      />,
-    );
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
-  });
-});
-
-describe("declaredListBuilderPackage — runtime data never breaks the host", () => {
-  it("reads a scoped package name out of the binding's params", () => {
-    expect(
-      declaredListBuilderPackage({
-        [LIST_BUILDER_PACKAGE_PARAM]: "@cinatra-ai/list-curator-agent",
-      }),
-    ).toBe("@cinatra-ai/list-curator-agent");
-  });
-
-  it("degrades to no road on an absent or malformed declaration", () => {
-    expect(declaredListBuilderPackage(undefined)).toBeNull();
-    expect(declaredListBuilderPackage({})).toBeNull();
-    expect(declaredListBuilderPackage({ [LIST_BUILDER_PACKAGE_PARAM]: 7 })).toBeNull();
-    expect(
-      declaredListBuilderPackage({ [LIST_BUILDER_PACKAGE_PARAM]: "not-a-package" }),
-    ).toBeNull();
-    expect(
-      declaredListBuilderPackage({ [LIST_BUILDER_PACKAGE_PARAM]: "@vendor/pkg/extra" }),
-    ).toBeNull();
-  });
-});
-
-
-// ---------------------------------------------------------------------------
-// WHAT THE PINNED TREE DECLARES. `declaredListBuilderPackage` is proved above
-// against fixtures; this block reads the generated binding table the host
-// actually ships and pins that the declaration is THERE — the pin advance is
-// what puts it there, and without it the road above never reaches a reader.
-// ---------------------------------------------------------------------------
-describe("the pinned list-picker binding declares the list builder", () => {
-  it("reads the list builder out of the generated binding's own params", () => {
-    const binding = GENERATED_FIELD_RENDERER_BINDINGS.find(
-      (b) => b.id === "@cinatra-ai/email-outreach-agent:list-picker",
-    );
-    expect(binding, "the host declares no list-picker binding").toBeTruthy();
-    expect(
-      declaredListBuilderPackage(binding!.params),
-      "the pinned binding declares no list builder",
-    ).toBe("@cinatra-ai/list-curator-agent");
-    expect(binding!.params?.[LIST_BUILDER_PACKAGE_PARAM]).toBe(
-      "@cinatra-ai/list-curator-agent",
-    );
-  });
-
-  // The filter is deliberately KIND-AGNOSTIC: the reading this pins is "the
-  // param appears once in the whole generated table", so the sweep is the
-  // whole table and the kind of the one row that carries it is asserted here
-  // rather than assumed by a narrower filter.
-  it("declares it on exactly one generated binding, anywhere in the table", () => {
-    const declaring = GENERATED_FIELD_RENDERER_BINDINGS.filter(
-      (b) => b.params?.[LIST_BUILDER_PACKAGE_PARAM] !== undefined,
-    );
-    expect(declaring.map((b) => b.id)).toEqual([
-      "@cinatra-ai/email-outreach-agent:list-picker",
+describe("the road out of the step is removed (cinatra#3562)", () => {
+  it("leaves the renderer module offering only the gate's own two exports", () => {
+    expect(Object.keys(listPickerRendererModule).sort()).toEqual([
+      "LIST_PICKER_QUESTION",
+      "ListPickerRenderer",
     ]);
-    expect(declaring[0]?.kind).toBe("list-picker");
+  });
+
+  it("leaves the agent-path grammar with the scope-reading rules and nothing of the road", () => {
+    expect(Object.keys(agentUrl).sort()).toEqual(
+      [
+        "AGENT_LAUNCH_SEGMENT",
+        "AGENT_SETTINGS_SEGMENT",
+        "RESERVED_AGENT_INSTANCE_SEGMENTS",
+        "WORKSPACE_SCOPE_BASE",
+        "agentPathScopeBase",
+        "buildAgentInstancePath",
+        "buildAgentPackageBasePath",
+        "buildAgentSettingsPath",
+        "buildAgentWorkspacePath",
+        "isReservedAgentInstanceSegment",
+      ].sort(),
+    );
+  });
+
+  it("draws no link and no button anywhere on the gate, in either reading", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container, unmount } = render(<ListPickerRenderer {...makeProps()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
+    );
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+    unmount();
+
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
+    const withRows = render(<ListPickerRenderer {...makeProps()} />);
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(withRows.container.querySelectorAll("a")).toHaveLength(0);
   });
 });
