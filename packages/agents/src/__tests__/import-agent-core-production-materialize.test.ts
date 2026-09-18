@@ -35,13 +35,13 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const PKG = "@cinatra-ai/blog-drafter-agent";
-const MOUNT_LABEL = "cinatra-ai/blog-drafter-agent";
+const PKG = "@acme-agents/blog-drafter-agent";
+const MOUNT_LABEL = "acme-agents/blog-drafter-agent";
 
 /** Mutable compile identity — `vi.hoisted` so the hoisted `vi.mock` factory
  *  below can read it without a temporal-dead-zone crash. */
 const COMPILED = vi.hoisted(() => ({
-  packageName: "@cinatra-ai/blog-drafter-agent",
+  packageName: "@acme-agents/blog-drafter-agent",
   packageVersion: "0.3.1",
 }));
 
@@ -197,7 +197,7 @@ beforeEach(async () => {
   // A production-style extension data root: a real directory holding the
   // `.agent-mount` tree the runtime reads.
   dataRoot = await mkdtemp(join(tmpdir(), "cinatra-3493-"));
-  agentDir = join(dataRoot, ".agent-mount", "cinatra-ai", "blog-drafter-agent");
+  agentDir = join(dataRoot, ".agent-mount", "acme-agents", "blog-drafter-agent");
   await mkdir(join(dataRoot, ".agent-mount"), { recursive: true });
 
   stubEnv("NODE_ENV", "production");
@@ -310,7 +310,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
     reload.mockResolvedValue({
       ok: true,
       report: {
-        added: ["cinatra-ai/some-other-agent"],
+        added: ["acme-agents/some-other-agent"],
         changed: [],
         removed: [],
         failed: [],
@@ -319,7 +319,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
       },
     });
 
-    await expect(suppliedInstall()).rejects.toThrow(/did not report cinatra-ai\/blog-drafter-agent/);
+    await expect(suppliedInstall()).rejects.toThrow(/did not report acme-agents\/blog-drafter-agent/);
     // and the mount is rolled back — nothing is left behind claiming a mount.
     await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -406,7 +406,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
   it("leaves the startup seeding road untouched — no materialize, no reload", async () => {
     await expect(startupSeed()).resolves.toMatchObject({ upserted: false });
 
-    await expect(stat(join(dataRoot, ".agent-mount", "cinatra-ai"))).rejects.toMatchObject({
+    await expect(stat(join(dataRoot, ".agent-mount", "acme-agents"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     expect(reload).not.toHaveBeenCalled();
