@@ -34,7 +34,10 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   transitionExtensionLifecycle: store.transitionExtensionLifecycle,
 }));
 
-import { CONFORMANCE_SEED_CAPABILITY_ENV } from "@/lib/test-support/conformance-seed-fence";
+import {
+  CONFORMANCE_SEED_CAPABILITY_ENV,
+  CONFORMANCE_SEED_REFUSAL_HEADER,
+} from "@/lib/test-support/conformance-seed-fence";
 import { SEEDED_INSTALLED_EXTENSIONS } from "../../seed-data";
 import { DELETE, POST } from "../route";
 
@@ -212,5 +215,63 @@ describe("the namespace/runId validation is unchanged", () => {
     const { req } = seedRequest(PRESENTED, { runId: "" });
     expect((await DELETE(req)).status).toBe(400);
     expectNoStoreContact();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE REFUSAL DIAGNOSTIC ON THE WIRE (cinatra#3416). The status and the body
+// are exactly what they were — a bare 404 with nothing in it. On a harness
+// server the response additionally carries a header naming the fence, so a
+// design run that is answered by a server belonging to ANOTHER run reads
+// "capability-not-presented" instead of an unattributable 404.
+// ---------------------------------------------------------------------------
+describe("the refusal names its fence to a harness caller (cinatra#3416)", () => {
+  let bypass: string | undefined;
+
+  beforeEach(() => {
+    bypass = process.env.CINATRA_E2E_SETUP_BYPASS;
+    process.env[CONFORMANCE_SEED_CAPABILITY_ENV] = CAPABILITY;
+  });
+
+  afterEach(() => {
+    if (bypass === undefined) delete process.env.CINATRA_E2E_SETUP_BYPASS;
+    else process.env.CINATRA_E2E_SETUP_BYPASS = bypass;
+  });
+
+  it("carries the fence name on a wrong capability — status and body unchanged", async () => {
+    process.env.CINATRA_E2E_SETUP_BYPASS = "true";
+    const { req } = seedRequest({ authorization: "Bearer not-the-minted-capability-abcdefghij" });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get(CONFORMANCE_SEED_REFUSAL_HEADER)).toBe("capability-not-presented");
+    expectNoStoreContact();
+  });
+
+  it("DELETE carries it too", async () => {
+    process.env.CINATRA_E2E_SETUP_BYPASS = "true";
+    const { req } = seedRequest({});
+    const res = await DELETE(req);
+    expect(res.status).toBe(404);
+    expect(res.headers.get(CONFORMANCE_SEED_REFUSAL_HEADER)).toBe("capability-not-presented");
+    expectNoStoreContact();
+  });
+
+  it("says NOTHING to a caller on a server that is not a harness server", async () => {
+    delete process.env.CINATRA_E2E_SETUP_BYPASS;
+    const { req } = seedRequest({ authorization: "Bearer not-the-minted-capability-abcdefghij" });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get(CONFORMANCE_SEED_REFUSAL_HEADER)).toBeNull();
+    expectNoStoreContact();
+  });
+
+  it("says nothing to a caller the fence ADMITTED", async () => {
+    process.env.CINATRA_E2E_SETUP_BYPASS = "true";
+    const { req } = seedRequest(PRESENTED);
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(res.headers.get(CONFORMANCE_SEED_REFUSAL_HEADER)).toBeNull();
   });
 });
