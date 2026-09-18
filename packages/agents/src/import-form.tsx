@@ -1,178 +1,148 @@
 "use client";
 
-import { useState, useTransition } from "react";
+// ---------------------------------------------------------------------------
+// The Upload Extension screen's FILE tab (cinatra#3204 leg 3).
+//
+// WHAT CHANGED, and why each half of it is here:
+//
+//   ANY KIND. The archive is read by `resolveSuppliedArchive` — leg 1's
+//   kind-aware, hardened reader — instead of the agent-only resolver. All four
+//   live kinds are accepted; an archive declaring no kind, an unknown kind or
+//   the retired `workflow` kind is refused BY NAME, and the refusal reaches the
+//   operator through the app's toast surface with nothing written anywhere.
+//
+//   THE SCOPE. Once a package has been read, the store's OWN install panel is
+//   mounted (`ExtensionInstallScopePanel` through `UploadInstallScopePanel`) —
+//   the same picker, the same `Workspace: All` preselection, the same Cancel /
+//   Install now row. The old checkbox multi-select of the agent RUN-VISIBILITY
+//   policy is gone: it asked a different question in the same place, and one
+//   screen asking "who can access this" twice with two meanings is the thing
+//   criterion 17 exists to stop.
+//
+//   THE SERVER DECIDES. What the browser reads here is a PREVIEW. The bytes are
+//   sent as they are; the server re-reads them, re-resolves the kind, runs that
+//   kind's own validator, and refuses a digest that does not match what was
+//   previewed. Nothing the browser claims is trusted.
+// ---------------------------------------------------------------------------
+
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileIcon, Trash2Icon, CloudUploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import {
   Dropzone,
   DropZoneArea,
   DropzoneFileList,
   DropzoneFileListItem,
-  DropzoneFileMessage,
   DropzoneMessage,
   DropzoneRemoveFile,
   DropzoneTrigger,
   InfiniteProgress,
   useDropzone,
 } from "@/components/ui/dropzone";
-import { importAgentTemplate } from "./import-export-actions";
-import { LicenseWarningDialog } from "@cinatra-ai/extensions/components/license-warning-dialog";
-// The upload form's first-class scope picker: the checkbox multi-select
-// mode of the unified access picker. It configures which scopes can access
-// the uploaded extension; the publish destination is no longer user-facing —
-// an uploaded extension always lands in the local registry by default
-// (owner ruling on cinatra#2644).
-import { AccessCombobox } from "@/components/access-combobox";
-import {
-  normalizeVisibilitySelection,
-  type AgentAuthPolicyVisibility,
-} from "./auth-policy-types";
-
-// The permissions draft SHAPE is shared with the GitHub install form; the
-// advanced ownership PANEL itself was removed from this form (cinatra#2643
-// review round — ownership is managed post-upload on the extension's own
-// permissions surface).
-import type { PermissionsFormDraftValue } from "@/components/permissions-form-draft";
-import type { AvailableScopes } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
+import type { ExtensionScopedInstallAction } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
 
-// Archive reading lives in upload-archive.ts (cinatra#2643): it accepts the
-// standardized published-package layout (package.json cinatra.entrypoint →
-// cinatra/oas.json, optionally under one top-level <slug>/ folder) plus the
-// legacy flat agent.json shape, inflates deflate-compressed entries, and
-// repacks the resolved files into the flat stored-method ZIP the server
-// importer consumes.
 import {
-  readZipEntries,
-  resolveAgentArchive,
-  buildCanonicalAgentZip,
-  bytesToBase64,
-} from "./upload-archive";
+  installSuppliedArchiveAction,
+  readSuppliedUploadConsentPromptAction,
+} from "./supplied-install-actions";
+import {
+  UploadConsentBlock,
+  UploadInstallScopePanel,
+  consentPayload,
+  type UploadConsentPromptValue,
+  type UploadInstallScopeContext,
+} from "./upload-install-scope-panel";
+import { readZipEntries, resolveSuppliedArchive, bytesToBase64 } from "./upload-archive";
 
-type AgentPreview = {
-  name: string;
-  description: string | null;
-  sourceNl: string;
-  zipBase64: string;
+type SuppliedPreview = {
+  kind: string;
+  packageName: string;
+  version: string;
+  contentDigest: string;
   fileName: string;
+  zipBase64: string;
 };
 
-async function parseZipFile(file: File): Promise<AgentPreview> {
+const KIND_LABEL: Record<string, string> = {
+  agent: "Agent",
+  skill: "Skill",
+  connector: "Connector",
+  artifact: "Artifact",
+};
+
+/**
+ * Read the archive in the browser so the operator sees WHAT they supplied before
+ * they choose a scope. Every refusal here is the shared reader's own wording —
+ * the same sentences the server produces, because it is the same function.
+ */
+async function readSuppliedArchiveFile(file: File): Promise<SuppliedPreview> {
   const buf = await file.arrayBuffer();
   const entries = await readZipEntries(buf);
-  const resolved = resolveAgentArchive(entries);
-
-  if (resolved.manifestJson) {
-    let m: { version?: number };
-    try {
-      m = JSON.parse(resolved.manifestJson) as { version?: number };
-    } catch {
-      throw new Error("Invalid archive: manifest.json is not valid JSON.");
-    }
-    if (m.version !== 1) throw new Error(`Unsupported manifest version: ${m.version}`);
-  }
-
-  let agent: {
-    component_type?: string;
-    agentspec_version?: string;
-    name?: string;
-    description?: string | null;
-    status?: string;
-    sourceNl?: string;
-    metadata?: { cinatra?: { type?: string } };
-  };
-  try {
-    agent = JSON.parse(resolved.agentJson) as typeof agent;
-  } catch {
-    throw new Error("Invalid archive: the agent definition is not valid JSON.");
-  }
-  // Accept compact OAS Flow documents only.
-  if (agent.agentspec_version !== "26.1.0" || agent.component_type !== "Flow") {
-    throw new Error(`Unsupported agent format (expected OAS v26.1.0 Flow).`);
-  }
-
-  // Repack into the flat stored-method shape importAgentTemplateCore
-  // consumes (root agent.json + manifest/package/license sidecars) — the
-  // server contract is unchanged; the acceptance widening is client-side.
-  const canonical = buildCanonicalAgentZip(resolved);
-
+  const resolved = await resolveSuppliedArchive(entries);
   return {
-    name: agent.name ?? "Unnamed Agent",
-    description: agent.description ?? null,
-    sourceNl: agent.sourceNl ?? "",
-    zipBase64: bytesToBase64(canonical),
+    kind: resolved.kind,
+    packageName: resolved.packageName,
+    version: resolved.version,
+    contentDigest: resolved.contentDigest,
     fileName: file.name,
+    zipBase64: bytesToBase64(new Uint8Array(buf)),
   };
 }
 
-type ImportAgentFormProps = {
-  /** Scopes for the first-class access picker and PermissionsFormDraft. */
-  availableScopes?: AvailableScopes;
+export type ImportAgentFormProps = {
+  /** Server-computed install-panel context — the store's own picker rows. */
+  installScope: UploadInstallScopeContext;
 };
 
-export function ImportAgentForm({
-  availableScopes,
-}: ImportAgentFormProps) {
+export function ImportAgentForm({ installScope }: ImportAgentFormProps) {
   const router = useRouter();
-  const [nameOverride, setNameOverride] = useState("");
-  const [isPending, startTransition] = useTransition();
+  // The kind's own listing, recorded by a completed install (see the note
+  // on `installAction` below).
+  const [installedDestination, setInstalledDestination] = useState<string | null>(null);
+  useEffect(() => {
+    if (!installedDestination) return;
+    router.push(installedDestination);
+  }, [installedDestination, router]);
+  const [preview, setPreview] = useState<SuppliedPreview | null>(null);
+  // The upload-consent confirmation (cinatra#2092), asked for a SKILL package
+  // only, fetched once the kind is known and re-fetched for every new package.
+  // Always starts UNTICKED: consent is an explicit act.
+  const [consentPrompt, setConsentPrompt] = useState<UploadConsentPromptValue | null>(null);
+  const [consentChecked, setConsentChecked] = useState(false);
 
-  // Upload-time permissions state: the ACCESS half only (the checkbox
-  // multi-select scope picker). The advanced OWNERSHIP panel was removed
-  // (cinatra#2643 review round), so coOwners stays empty here; ownership is
-  // managed post-upload on the extension's own permissions surface. The
-  // captured policy rides importAgentTemplate's `permissions` option on
-  // every submit.
-  const [permissionsDraft, setPermissionsDraft] = useState<PermissionsFormDraftValue>({
-    policy: {
-      runListVisibility: ["owner"],
-      runDataVisibility: ["owner"],
-      runExecuteVisibility: ["owner"],
-      allowRunSharing: true,
-    },
-    coOwners: [],
-  });
+  useEffect(() => {
+    let live = true;
+    setConsentChecked(false);
+    setConsentPrompt(null);
+    if (!preview) return;
+    void readSuppliedUploadConsentPromptAction({
+      kind: preview.kind,
+      packageName: preview.packageName,
+      provenanceType: "local",
+    }).then((prompt) => {
+      if (live) setConsentPrompt(prompt);
+    });
+    return () => {
+      live = false;
+    };
+  }, [preview]);
 
-  // Scope selection → locksteps the three visibility fields through the
-  // canonicalizing normalizer, mirroring PermissionsFormDraft's own
-  // projection so both mounts of the picker agree on shape.
-  const setAccessScopes = (next: string[]) => {
-    const selection = normalizeVisibilitySelection(next as AgentAuthPolicyVisibility[]);
-    setPermissionsDraft((prev) => ({
-      ...prev,
-      policy: {
-        runListVisibility: selection,
-        runDataVisibility: selection,
-        runExecuteVisibility: selection,
-        allowRunSharing: prev.policy.allowRunSharing,
-      },
-    }));
-  };
-
-  // License dialog state.
-  // When the server action throws LicenseAcknowledgementRequiredError, open this dialog.
-  const [licenseDialog, setLicenseDialog] = useState<{
-    open: boolean;
-    spdxId: string;
-    pendingZipBase64: string;
-  } | null>(null);
-
-  // License reject error state.
-  // When the server action throws LicenseDetectionRejectedError, show an inline Alert.
-  const [licenseRejectError, setLicenseRejectError] = useState<string | null>(null);
-
-  const dropzone = useDropzone<AgentPreview>({
+  const dropzone = useDropzone<SuppliedPreview>({
     onDropFile: async (file) => {
       try {
-        const preview = await parseZipFile(file);
-        return { status: "success", result: preview };
+        const read = await readSuppliedArchiveFile(file);
+        setPreview(read);
+        return { status: "success", result: read };
       } catch (err) {
-        return { status: "error", error: err instanceof Error ? err.message : "Failed to read file." };
+        const message =
+          err instanceof Error ? err.message : "That file could not be read as an extension package.";
+        setPreview(null);
+        // Design spec Extensions §I.1: errors are a toast, never inline.
+        toast.error(message);
+        return { status: "error", error: message };
       }
     },
     validation: {
@@ -182,115 +152,71 @@ export function ImportAgentForm({
     shiftOnMaxFiles: true,
   });
 
-  const fileStatus = dropzone.fileStatuses[0];
-  const preview = fileStatus?.status === "success" ? fileStatus.result : null;
   const hasFile = dropzone.fileStatuses.length > 0;
 
-  // Cancel: clear the selected file and the name override, returning the
-  // form to the "Select an extension package" picker state.
+  /** Cancel: clear the selection and return to the "choose a package" state. */
   const handleCancel = () => {
-    setNameOverride("");
+    setPreview(null);
     for (const file of dropzone.fileStatuses) {
       void dropzone.onRemoveFile(file.id);
     }
   };
 
-  async function runImport(zipBase64: string, licenseAcknowledged = false) {
-    setLicenseRejectError(null);
-    try {
-      // The scope picker is first-class now, so the captured policy always
-      // rides the submit (its default is the owner-only floor — the same
-      // effective access the permissions-less submit produced before).
-      const permissions = {
-        policy: permissionsDraft.policy,
-        coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
-      };
-      const result = await importAgentTemplate(zipBase64, nameOverride.trim() || undefined, {
-        // The publish destination is not user-facing: an uploaded extension
-        // always lands in the local registry by default (owner ruling on
-        // cinatra#2644). "private" routes through resolvePublishDestination,
-        // which resolves the instance's own destination — on a dev instance,
-        // the local Verdaccio via the dev fallback.
-        destination: "private",
-        licenseAcknowledged,
-        permissions,
-        // The success landing is /configuration/extensions (owner ruling on
-        // cinatra#2644) — suppress the server-side redirect and navigate
-        // client-side after the warnings have been surfaced.
-        redirect: false,
-        // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE —
-        // the template is published and its compiled version bound atomically,
-        // so the agent appears on /agents immediately in the scope chosen
-        // above. No draft limbo, no approval step.
-        publishAndBind: true,
-      });
-      // Surface non-fatal install-time permissions warnings.
-      for (const warning of result.warnings) {
-        toast.warning(warning, { duration: 8000 });
-      }
-      router.push("/configuration/extensions");
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      const message = err instanceof Error ? err.message : "Import failed.";
-
-      // Copyleft tier — show LicenseWarningDialog for explicit acknowledgement.
-      if (code === "LICENSE_ACKNOWLEDGEMENT_REQUIRED" || message.includes("Copyleft license")) {
-        // Extract spdxId from the error message: "Copyleft license {spdxId} requires..."
-        const spdxMatch = message.match(/Copyleft license ([^\s]+) requires/);
-        const spdxId = spdxMatch?.[1] ?? "unknown";
-        setLicenseDialog({ open: true, spdxId, pendingZipBase64: zipBase64 });
-        return;
-      }
-
-      // Reject tier — inline destructive Alert with locked copy (UI-SPEC Surface 3).
-      if (code === "LICENSE_DETECTION_REJECTED" || message.includes("License could not be determined")) {
-        setLicenseRejectError(
-          "License could not be determined. " +
-          "The package's license is missing, ambiguous, or uses multiple conflicting identifiers. " +
-          "Clarify the license upstream or use a different package.",
-        );
-        return;
-      }
-
-      // Other errors — re-throw for default error boundary handling.
-      throw err;
-    }
-  }
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  /**
+   * The panel calls this with the chosen target; the supplied package rides the
+   * closure. Success navigates to where the kind can actually be SEEN; a refusal
+   * is toasted in the server's own words and the panel keeps its selection.
+   */
+  // WHERE A COMPLETED INSTALL TAKES THE OPERATOR, and why it is recorded in
+  // state rather than pushed from inside the action.
+  //
+  // The store's install panel invokes this action from a React form action
+  // (`<form action={handleSubmit}>`), so the whole call runs inside the
+  // transition that owns the panel's pending state. A router navigation issued
+  // from inside that transition never happens: the transition commits the
+  // panel's own re-render and the pending navigation is dropped with it —
+  // measured on the running app, where the install returned `ok:true` with
+  // `/agents` and the page was still on the upload screen three seconds later.
+  // `redirect()` from inside the action is dropped for the same reason.
+  //
+  // So the action RECORDS the destination and the effect at the top of this
+  // component performs the navigation once the transition has committed —
+  // outside it, where the router acts.
+  const installAction: ExtensionScopedInstallAction = async ({ accessTarget }) => {
     if (!preview) return;
-    startTransition(async () => {
-      await runImport(preview.zipBase64, false);
+    const consent = consentPayload(consentPrompt, consentChecked);
+    const result = await installSuppliedArchiveAction({
+      zipBase64: preview.zipBase64,
+      expectedContentDigest: preview.contentDigest,
+      accessTarget,
+      ...(consent ? { anthropicUploadConsent: consent } : {}),
     });
-  };
-
-  const handleAcknowledge = () => {
-    if (!licenseDialog) return;
-    const zipBase64 = licenseDialog.pendingZipBase64;
-    setLicenseDialog(null);
-    startTransition(async () => {
-      // Re-submit with licenseAcknowledged: true — server re-validates.
-      await runImport(zipBase64, true);
-    });
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    for (const warning of result.warnings ?? []) toast.warning(warning);
+    toast.success(
+      `Installed ${result.packageName} ${result.version} — ${result.observable.label.toLowerCase()}`,
+    );
+    setInstalledDestination(result.observable.href);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <Dropzone {...dropzone}>
         <div className="flex justify-end">
           <DropzoneMessage />
         </div>
-        {/* The picker hides once a file is selected; Cancel (or removing the
-            file) brings it back. After a successful upload the form navigates
-            to /configuration/extensions, so a fresh mount shows it again. */}
         {!hasFile && (
           <DropZoneArea className="border-none bg-transparent p-0 shadow-none ring-0 focus-visible:ring-0">
             <DropzoneTrigger className="flex flex-col items-center gap-4 p-8 text-center text-sm w-full">
               <CloudUploadIcon className="h-8 w-8 text-muted-foreground" />
               <div>
                 <p className="font-medium text-foreground">Select an extension package</p>
-                <p className="text-xs text-muted-foreground mt-1">Click here or drag and drop</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Click here or drag and drop — an agent, skill, connector or artifact package
+                </p>
               </div>
             </DropzoneTrigger>
           </DropZoneArea>
@@ -298,7 +224,11 @@ export function ImportAgentForm({
 
         <DropzoneFileList className="flex flex-col gap-3 mt-2">
           {dropzone.fileStatuses.map((file) => (
-            <DropzoneFileListItem key={file.id} file={file} className="soft-panel flex flex-col gap-3 rounded-card p-4">
+            <DropzoneFileListItem
+              key={file.id}
+              file={file}
+              className="soft-panel flex flex-col gap-3 rounded-card p-4"
+            >
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2 min-w-0">
                   <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -315,95 +245,55 @@ export function ImportAgentForm({
                 </div>
               </div>
               <InfiniteProgress status={file.status} />
-              {file.status === "success" && file.result && (
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm font-semibold text-foreground">{file.result.name}</p>
-                  {file.result.description && (
-                    <p className="text-xs text-muted-foreground line-clamp-2">{file.result.description}</p>
-                  )}
-                  {file.result.sourceNl && (
-                    <p className="text-xs text-muted-foreground line-clamp-2 border-l-2 border-line pl-3 mt-1">
-                      {file.result.sourceNl}
-                    </p>
-                  )}
-                </div>
-              )}
-              <DropzoneFileMessage className="text-xs text-destructive" />
+              {/* NO inline message here, by the design spec's own rule
+                  (Extensions §I.1: "Errors are a toast, never inline"). The
+                  drop handler has already sent the refusal to the toast
+                  surface; a card that repeats it draws the same sentence twice
+                  and puts one of the two copies exactly where the drawing says
+                  an error never goes. The card carries the file and its
+                  progress — what it IS, not why it failed. */}
             </DropzoneFileListItem>
           ))}
         </DropzoneFileList>
       </Dropzone>
 
       {preview && (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="name-override" className="text-sm text-foreground">
-            Name override <span className="text-muted-foreground font-normal">(optional)</span>
-          </Label>
-          <Input
-            id="name-override"
-            placeholder={preview.name}
-            value={nameOverride}
-            onChange={(e) => setNameOverride(e.target.value)}
-          />
-        </div>
-      )}
-
-      {/* Access scope picker, last step before submit: the checkbox
-          multi-select mode of the unified access picker. Configures which
-          scopes can access the uploaded extension. */}
-      <Separator className="my-1" />
-      {availableScopes && (
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-semibold text-foreground">Access</Label>
-          <AccessCombobox
-            selectionMode="multiple"
-            value={permissionsDraft.policy.runListVisibility}
-            onChange={setAccessScopes}
-            scopes={availableScopes}
-            disabled={isPending}
-          />
-          <p className="text-xs text-muted-foreground">
-            Choose which scopes can access the uploaded extension.
-          </p>
-        </div>
-      )}
-
-      {/* License reject inline error. */}
-      {licenseRejectError && (
-        <Alert variant="destructive">
-          <AlertTitle>License could not be determined</AlertTitle>
-          <AlertDescription>{licenseRejectError}</AlertDescription>
-        </Alert>
-      )}
-
-      <div className="flex items-center gap-2">
-        <Button type="submit" className="flex-1" disabled={!preview || isPending}>
-          {isPending ? "Uploading..." : "Upload (.zip)"}
-        </Button>
-        {hasFile && (
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleCancel}
-            disabled={isPending}
-          >
-            Cancel
-          </Button>
-        )}
-      </div>
-
-      {/* Copyleft license acknowledgement dialog. */}
-      {licenseDialog && (
-        <LicenseWarningDialog
-          open={licenseDialog.open}
-          onOpenChange={(open) => {
-            if (!open) setLicenseDialog(null);
-          }}
-          spdxId={licenseDialog.spdxId}
-          onAcknowledge={handleAcknowledge}
-          onCancel={() => setLicenseDialog(null)}
+        <UploadInstallScopePanel
+          scope={installScope}
+          installAction={installAction}
+          packageName={preview.packageName}
+          packageVersion={preview.version}
+          displayName={preview.packageName}
+          onCancel={handleCancel}
+          header={
+            <div className="flex flex-col gap-1" data-testid="upload-resolved-package">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" data-testid="upload-resolved-kind">
+                  {KIND_LABEL[preview.kind] ?? preview.kind}
+                </Badge>
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {preview.packageName}
+                </p>
+                <span className="text-xs text-muted-foreground">{preview.version}</span>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground">
+                content digest {preview.contentDigest.slice(0, 12)}…
+              </p>
+              <UploadConsentBlock
+                prompt={consentPrompt}
+                checked={consentChecked}
+                onCheckedChange={setConsentChecked}
+              />
+            </div>
+          }
         />
       )}
-    </form>
+
+      {!preview && hasFile && (
+        <p className="text-xs text-muted-foreground">
+          Choose a package this instance can install to continue.
+        </p>
+      )}
+    </div>
   );
 }

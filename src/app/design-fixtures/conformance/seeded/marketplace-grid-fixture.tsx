@@ -92,9 +92,10 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     // compat meta row agrees with its greyed CTA (same derivation the real
     // screen and the per-surface harness use). The restore-state card declares
     // NO range, so the grid also renders the third verdict — the neutral
-    // "Compatibility unknown" (cinatra#2409). That is the LONGEST of the three
-    // labels and therefore the widest footer-meta case; leaving it unrendered
-    // is why the meta row's overflow went unmeasured.
+    // "Compatibility" (cinatra#2409; the word alone since cinatra#3521). That
+    // is the LONGEST of the three labels and therefore the widest footer-meta
+    // case; leaving it unrendered is why the meta row's overflow went
+    // unmeasured.
     sdkAbiRange:
       seed.ctaState === "incompatible"
         ? ">=999.0.0"

@@ -10,7 +10,7 @@
 // Assistants/Agents tabs (#2808) and of the Artifacts/Skills tabs (#2810) are
 // their own slices, so what these shells render is an honest placeholder.
 import { createElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("next/link", () => ({
@@ -173,6 +173,23 @@ async function renderRoute(load: Loader, props: unknown) {
   const tree = await mod.default((props ?? {}) as never);
   render(tree as ReactNode);
 }
+
+// Whichever case runs first would otherwise pay the cold transform of this
+// file's whole page-module tree inside its own per-case hook, which trips the
+// run's hook budget on a loaded runner (cinatra#3550). Resolve every one of the
+// matrix's route modules and the landing page once here, so each per-case hook
+// is a module-cache hit. This hook carries its own budget for that one cold
+// cost; the per-case hooks keep the run's, tight enough to still fail a
+// genuinely hung render. The mock registry is hoisted above every import of
+// this graph, so these resolve exactly what the per-case hooks resolve today.
+beforeAll(async () => {
+  for (const entry of MATRIX) {
+    for (const load of Object.values(entry[5])) {
+      await load();
+    }
+  }
+  await import("../workspace/page");
+}, 180_000);
 
 beforeEach(() => {
   auth.requireAuthSession.mockClear();
