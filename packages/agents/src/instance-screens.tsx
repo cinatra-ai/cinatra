@@ -3580,7 +3580,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       : null;
     return (
       <section
-        className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+        className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
         data-run-review-slot={gateRef ? "review" : "working"}
       >
         {gateRef ? (

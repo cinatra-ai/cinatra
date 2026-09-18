@@ -1841,20 +1841,22 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
-          // eleventh set). The drawn card frame is
+          // THE GROUND OF BOTH READINGS IS THE DRAWN ONE (cinatra#3044 for the
+          // placeholder, the eleventh set; cinatra#3242 for the gate). The drawn
+          // card frame is
           // `border:1px solid var(--line); border-radius:12px;
           //  background:var(--surface-strong)`. `.soft-panel` grounds on
           // `var(--surface)` — one token light of it — and the review card's
           // `run_card` frame draws no background of its own, so this section is
-          // the ground a reader actually sees. Only the WORKING reading is
-          // redrawn here: the review reading is the graded cell it already was
-          // and keeps the class string it was measured on.
-          className={
-            reviewScreenNode !== null
-              ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
-              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
-          }
+          // the ground a reader actually sees. The earlier set redrew the WORKING
+          // reading only, because the review reading was the graded cell it
+          // already was and kept the class string it was measured on; cinatra#3242
+          // is the issue that carries the second reading, and the drawing settles
+          // it — section I gives the run detail ONE card frame and closes its pair
+          // with `One run detail, twice, in the same column under the same rail`.
+          // So the two readings take ONE class string, and the swap a proof reads
+          // stays where it is, on `data-run-review-slot` below.
+          className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
           // ruled property: a proof has to be able to see the placeholder go and
