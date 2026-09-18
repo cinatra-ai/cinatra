@@ -398,6 +398,12 @@ describe("AgenticRunPanel setup gate keeps its Continue on every surface (cinatr
       renderer: StubSetupRenderer as unknown as Parameters<
         typeof fieldRendererRegistry.register
       >[0]["renderer"],
+      // The stub stands in for SchemaFieldRenderer, which DRAWS ITS OWN
+      // CONTINUE — so it declares one (cinatra#3532), exactly as the shipped
+      // fallback entry does. That declaration is what keeps the send with the
+      // renderer here: the product draws its own Continue only for a field
+      // whose renderer declares none.
+      drawsOwnSubmit: true,
     });
     (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
       setupInterruptHookResult(opts.reviewTaskId, opts.xRenderer),

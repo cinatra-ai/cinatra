@@ -626,6 +626,15 @@ export async function ensureAgentPackageFromGitFile(opts: {
     activate: opts.activateDeclaredTables ?? defaultActivateDeclaredTables,
   });
 
+  // --- Has the gate already left the canonical record live? (cinatra#3589) ---
+  // The record is anchored on EXACTLY ONE road per invocation. The gate inside
+  // the version-skip guard below runs only on the version-matched road, and the
+  // ONLY way past it into the import is a REPAIRED — therefore live — record. So
+  // this flag says "the gate already did it, stay out" to the post-import anchor
+  // at the end of this function; every other road reaches that import with the
+  // gate never having run.
+  let installRecordLiveFromGate = false;
+
   // --- Version-skip guard — same pattern as ensureAgentPackage ---
   // Avoids redundant DB writes on every restart when the version is current.
   if (existing && existing.packageVersion === packageVersion) {
@@ -673,6 +682,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
         opts.healInstallRecord ?? defaultHealInstallRecord,
       );
       logInstallRecordState(packageName, packageVersion, gate);
+      installRecordLiveFromGate = gate.recordLive;
       if (!gate.reImport) {
         // Only a genuinely install-active package earns the "already up to
         // date" line; a refused/failed record already logged the truth and must
@@ -832,6 +842,33 @@ export async function ensureAgentPackageFromGitFile(opts: {
     packageName,
     packageVersion ?? undefined,
   );
+
+  // --- The canonical install record on the roads the gate never ran (cinatra#3589) ---
+  // A FIRST import (no template row at all) and a VERSION BUMP (an older row)
+  // never enter the version-skip guard above, so until now those roads wrote
+  // `agent_templates` and nothing else. A `guardedOptional` package with no
+  // canonical `installed_extension` row is classified `not-installed` and dropped
+  // from the agents page, so such an agent was offered only after a SECOND start
+  // — the start on which the repair road above finally wrote the record.
+  //
+  // Anchor it here instead, through the SAME idempotent heal seam the repair road
+  // uses and with the same four arguments: that seam probes the canonical store
+  // FIRST and returns `already-live` with no write, refuses an archived row and
+  // an organization-scoped install, and mints a row only for an ABSENT record
+  // whose on-disk manifest proves the identity.
+  //
+  // Consulted exactly ONCE per invocation: the repair road's own gate has already
+  // left the record live before it falls through to this import, and that road is
+  // unchanged.
+  if (!installRecordLiveFromGate) {
+    const gate = await installRecordGate(
+      packageName,
+      dirname(siblingManifestPath(opts.oasSourcePath)),
+      packageVersion,
+      opts.healInstallRecord ?? defaultHealInstallRecord,
+    );
+    logInstallRecordState(packageName, packageVersion, gate);
+  }
 
   console.info(
     `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} upserted`,
