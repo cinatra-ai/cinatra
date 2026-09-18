@@ -134,13 +134,19 @@ jobs:
       run: |
         timeout --kill-after=60 1800 pnpm exec playwright test -c tests/e2e/config/design.config.ts --project design-fixtures-chromium --update-snapshots
         git status --short tests/e2e/design/__screenshots__
-    - name: the refresh must have rewritten exactly the two baselines (fail closed)
+    - name: the refresh must have rewritten only the expected baselines, at least one (fail closed)
       run: |
         set -euo pipefail
         changed="$(git diff --name-only -- tests/e2e/design/__screenshots__ | sort)"
         expected="$(printf '%s\n' tests/e2e/design/__screenshots__/design-fixtures-dark.png tests/e2e/design/__screenshots__/design-fixtures-light.png | sort)"
         echo "changed:"; printf '%s\n' "$changed"
-        if [ "$changed" != "$expected" ]; then echo "::error::the refresh did not rewrite exactly the two expected baselines"; exit 1; fi
+        # 2026-09-18: a palette-local change rewrites ONE golden (the other stays byte-identical); the check accepts any
+        # non-empty subset of the two expected files and still refuses a third file (below: an untracked one too).
+        [ -n "$changed" ] || { echo "::error::the refresh rewrote no baseline - nothing to land"; exit 1; }
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          printf '%s\n' "$expected" | grep -qxF "$f" || { echo "::error::the refresh rewrote an unexpected file: $f"; exit 1; }
+        done <<< "$changed"
         if [ -n "$(git status --porcelain --untracked-files=all -- tests/e2e/design/__screenshots__ | grep '^??' || true)" ]; then echo "::error::the refresh created baseline files that are not in the repository"; exit 1; fi
     - name: upload the refreshed baselines
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

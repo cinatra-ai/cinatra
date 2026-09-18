@@ -117,8 +117,15 @@ export interface RunStepRailEntry {
      * admits no such value. The ACT is derived here, once, at the boundary where
      * a store row becomes a surface model, so no component ever reads the raw
      * column and names it itself. `null` on a pending gate, and on a value this
-     * build does not know. */
-    settledAct: ReviewSettledAct | null;
+     * build does not know.
+     *
+     * OPTIONAL BECAUSE THE BUILDER IS ITS ONLY WRITER. Every rail this module
+     * produces states it, on both gate roads below; what may leave it out is an
+     * entry composed by hand against this shape, which predates the field and
+     * says nothing about the act. The one reader defaults an absent reading to
+     * the same answer a pending gate gives (`entry.gate?.settledAct ?? null`),
+     * so absent and `null` are one reading and no surface can tell them apart. */
+    settledAct?: ReviewSettledAct | null;
     /** resolved ⇒ read-only history; a completed gate submission replays inert. */
     resolved: boolean;
   };

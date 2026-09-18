@@ -154,7 +154,7 @@ export function buildMarketplaceCardNodes({
         // now for a not-installed listing, Update now for an installed-older
         // one whose newer catalog version is incompatible). The
         // pointer-events override keeps the native title tooltip reachable on
-        // a disabled button. The red-triangle Incompatible verdict renders as
+        // a disabled button. The red-cross Incompatible verdict renders as
         // the plain footer-meta row (CompatMeta in marketplace-listing-card.tsx —
         // spec §IV L631 is not a badge).
         <Button

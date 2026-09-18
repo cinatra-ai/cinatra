@@ -702,6 +702,20 @@ function AgentRunTurnSlot({
     [runId, onActiveGateChange],
   );
 
+  // WHICH READING THE RUN'S PANEL IS DRAWING (cinatra#3484), held here beside
+  // the gate signal above and the settled register below because it is read
+  // together with them: the stand-down that follows asks what the turn is
+  // carrying AND what the panel is drawing, and only the panel can answer the
+  // second half.
+  const [panelDrawsReview, setPanelDrawsReview] = useState(false);
+  const onPanelReviewReadingChange = useCallback(
+    (reportingRunId: string, drawsReview: boolean) => {
+      if (reportingRunId !== runId) return;
+      setPanelDrawsReview(drawsReview);
+    },
+    [runId],
+  );
+
   // THE AGENT'S OWN NEXT SCREEN, written once and placed in one of two marked
   // containers (cinatra#3174, criterion 2), because the schedule card's turn may
   // not carry a second decidable card beside it.
@@ -733,9 +747,27 @@ function AgentRunTurnSlot({
     <InlineAgentRunCard
       runId={runId}
       onActiveGateChange={onGateChange}
+      onReviewReadingChange={onPanelReviewReadingChange}
       recommendationDecided={decided}
     />
   );
+
+  // DOES THIS TURN OWE THE READER A REVIEW? (cinatra#3484 and cinatra#3080.)
+  //
+  // TWO SOURCES, ONE ANSWER, because they answer for two different moments.
+  // `panelDrawsReview` is the panel's OWN published reading (cinatra#3484) --
+  // the live one, reported by the very panel this wrapper holds, and the only
+  // reading that can speak for what is actually on screen. `runCardDrawsAReview`
+  // is the run ROW's answer (cinatra#3080), read off this turn's own run moment
+  // card and the ambient host; it covers the settle window in which the run has
+  // finished, its gate row has not arrived yet and the panel is still drawing
+  // its working placeholder -- the window in which the panel truthfully reports
+  // "no review" while the reader is already owed one, and the case
+  // `chat-hosted-review-card-is-painted-3080.test.tsx` pins.
+  //
+  // Both fail closed, so a turn nothing can answer for behaves exactly as it
+  // did before either rule existed.
+  const turnOwesTheReaderAReview = panelDrawsReview || runCardDrawsAReview;
 
   const turn = (
     // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole
@@ -883,10 +915,44 @@ function AgentRunTurnSlot({
           stand-down applies only where #3044 was drawing one.
 
           The run page's own panel is untouched - what the section governs is
-          this turn. */}
-      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule &&
-        !runCardDrawsAReview ? (
-        <div hidden aria-hidden data-inline-run-panel-stood-down={runId}>
+          this turn.
+
+          AND IT STANDS DOWN ONLY WHILE IT ASKS NOTHING (cinatra#3484). The rule
+          above reads the SCHEDULE's state, and a one-off schedule stays settled
+          for the whole of the run that follows - so for that whole run this
+          wrapper took the panel out of the picture, review screen included. The
+          panel is also this conversation's only mount of that screen, and its
+          reading SWITCHES when the run parks: a reader owed a decision met the
+          record of a schedule that had already fired and nothing else, which is
+          none of the three readings the drawing's reader matrix allows.
+
+          "A spent schedule is still worth reading, so nothing is hidden; it
+          simply asks nothing", and "no host puts a step in front of those
+          actions, and no host trades one of these readings for another". So the
+          record stays the record and the card that ASKS is drawn: the panel
+          reports which reading it is drawing, and the stand-down applies to
+          every reading that asks nothing - the working placeholder and the
+          progress plate keep it, by this same name. Not gated on the surface
+          kind, exactly as the rule it corrects is not: the panel's own reading
+          is what decides, and a host that draws no review reports none.
+
+          AND THE REVEAL IS AN ATTRIBUTE, NEVER A SECOND TREE. The panel that
+          reports the reading is the panel this wrapper holds, so a reveal that
+          swapped the wrapper for a bare panel would unmount its own publisher:
+          the replacement starts at its own seed again, draws its loading line,
+          reports nothing, the report here falls back to false, and the wrapper
+          returns - a reader watching the decision appear and vanish while the
+          run's seed is fetched over and over. So the settled turn keeps ONE
+          wrapper element across both readings and the stand-down is written on
+          it and taken off it: same element, same position, same panel, and the
+          three marks are exactly the ones it always carried while it stands
+          down. */}
+      {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule ? (
+        <div
+          hidden={!turnOwesTheReaderAReview}
+          aria-hidden={turnOwesTheReaderAReview ? undefined : true}
+          data-inline-run-panel-stood-down={turnOwesTheReaderAReview ? undefined : runId}
+        >
           {runPanel}
         </div>
       ) : (

@@ -60,10 +60,35 @@ export function UploadInstallScopePanel({
   /** What was read from the supplied package — shown above the picker. */
   header?: ReactNode;
 }) {
+  // THE DRAWN SURFACE (design Extensions section VIII, cinatra#3204).
+  //
+  // The prose reads: "What it mounts is the same install panel section I.1
+  // already fixes, WITHOUT A CARD", and the example's caption repeats it: "The
+  // resolved panel is the section I.1 install panel on a mounting with no card
+  // - no header band, and so no corner cross: Cancel is the whole of the
+  // close." The drawing's own conformance-identified node for this panel
+  // carries a TOP RULE AND NOTHING ELSE - an 18px top margin, a 1px top border
+  // in the hairline colour, 14px of top padding and a 10px column gap. No box,
+  // no radius, no tint.
+  //
+  // The one bordered, rounded surface the drawing DOES frame this tab's content
+  // in is the section wrapper the screen draws around the whole form; a box
+  // here nested a second frame inside that one, which is the departure. So the
+  // separation this node carries is the rule, not a container.
+  //
+  // THE TOP MARGIN IS COMPOSED, NOT COPIED. In the drawing the panel is a
+  // sibling of the form inside a parent with NO gap, so its own 18px top
+  // margin IS the drawn separation. Here both mountings place this panel as
+  // the last child of a `flex flex-col gap-6` parent, which already puts 24px
+  // above it, and a flex item's margin does not collapse into that gap - a
+  // literal `mt-[18px]` would draw 42px, more than twice the drawn value. The
+  // drawn 18px is therefore reached by taking 6px back off the parent's 24px,
+  // and the suite grades the composed figure (the parent's gap plus this
+  // node's own margin) rather than the spelling of one class.
   return (
     <div
       data-testid="upload-install-scope"
-      className="soft-panel flex flex-col gap-3 rounded-card p-4"
+      className="mt-[-6px] flex flex-col gap-2.5 border-t border-line pt-3.5"
     >
       {header}
       <InstallPanelScopeProvider value={{ ...scope, installAction }}>

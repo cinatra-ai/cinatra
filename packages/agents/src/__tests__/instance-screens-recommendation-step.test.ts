@@ -193,13 +193,26 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     expect(SCREEN_SRC).toMatch(/<RunSurfaceRail\b/);
     expect(SCREEN_SRC).toMatch(/steps=\{railSteps\}/);
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
+    // THE NAME MOVED WITH cinatra#3243, AND ONLY THE NAME: the frame is handed
+    // the very node this screen composes, through `runDetailFallback` -- that
+    // node wherever it draws anything, and `null` where its every child is
+    // withheld, so that no row can open onto an empty column. The ratified
+    // drawing, `specs/app-artifact-review.html` section I: "Selecting a step
+    // opens that step's page in the run detail, and the page carries the one
+    // card of the step it belongs to."
+    //
     // AND THE DETAIL IT HANDS OVER CARRIES THE RAIL'S OWN NUMERAL FOR THE GATE
     // (cinatra#3080, the fix leg after the third proof round). The run detail is
     // composed above the rows, so the numeral those rows settle reaches the gate
     // header through the provider around the SAME detail node rather than as a
     // prop made before the rows exist.
+    //
+    // ONE ASSERTION, BOTH READINGS, because the two are one composition: the
+    // `detail` prop reaches the frame THROUGH the provider, and the node inside
+    // that provider is `runDetailFallback` and never the raw `detailNode` -- so
+    // a run whose detail draws nothing still hands the frame nothing at all.
     expect(SCREEN_SRC).toMatch(
-      /detail=\{\s*<RunRailGateStepProvider value=\{gateStepOnTheRail\}>\s*\{detailNode\}/,
+      /detail=\{\s*runDetailFallback \? \(\s*<RunRailGateStepProvider value=\{gateStepOnTheRail\}>\s*\{runDetailFallback\}/,
     );
     expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);
     expect(SCREEN_SRC).toContain("runDetailInitialStep({");

@@ -477,6 +477,34 @@ export function runDetailPanelKind(params: {
 }
 
 /**
+ * DOES THE RUN DETAIL THE SCREEN COMPOSES DRAW ANYTHING AT ALL? (cinatra#3243.)
+ *
+ * The run detail is composed as ONE fragment whose every child is gated: the
+ * verification cards on `verificationCardRefs.length > 0`, the scheduling step
+ * on `trigger`, the `TriggerStepWatcher` on `stepper`, and the two run panels
+ * on `panel !== "none" && panel !== "trigger"`. Where every gate is shut the
+ * fragment draws nothing — and a fragment is still an ELEMENT, so the frame's
+ * own predicate reads it as something to draw and a row with no surface of its
+ * own opens onto an empty column. `run-surface-rail-step.ts` states that limit
+ * rather than hiding it: "a step whose surface renders nothing on the client
+ * can still open an empty column … the frame refuses what it can see, and the
+ * page answers what only the page can."
+ *
+ * This is the page answering it, from the SAME conditions that gate those
+ * children and nothing else inferred. Where it is false the screen hands the
+ * frame `null` instead of the fragment, and every such row closes.
+ *
+ * Exported so the regression test can pin the reading without a DB, a session
+ * or a Next.js render.
+ */
+export function runDetailDrawsSomething(params: {
+  panel: RunDetailPanelKind;
+  verificationCardCount: number;
+}): boolean {
+  return params.verificationCardCount > 0 || params.panel !== "none";
+}
+
+/**
  * Does the run-detail SCREEN mount the page-level step rail (`RunStepRailPanel`)
  * itself? (cinatra#2739)
  *
@@ -2443,6 +2471,19 @@ export async function SetupScreen({
               )}
                 </>
               );
+              // AND IT IS HANDED ON ONLY WHERE IT DRAWS SOMETHING (cinatra#3243).
+              // The rail's rows fall back to this node when they carry no
+              // surface of their own, and the frame opens it for the selection
+              // no row carries. A fragment whose every child is withheld would
+              // register with the frame as something to draw and open an empty
+              // column, so the page answers what the frame cannot see -- see
+              // `runDetailDrawsSomething`.
+              const runDetailFallback = runDetailDrawsSomething({
+                panel: runDetailPanel,
+                verificationCardCount: verificationCardRefs.length,
+              })
+                ? detailNode
+                : null;
               // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
               // them: the recommendation at the trigger position (plan (A) §6.2
               // — "the top entry on the step rail, ahead of the work steps it
@@ -2575,7 +2616,7 @@ export async function SetupScreen({
                 // entry standing above them has to be counted here, or two rows
                 // carry the numeral 1.
                 const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
-                railSteps.push(...buildRunInputRailSteps(runInputSteps, detailNode, railRowsAboveTheInputSteps));
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps));
               }
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
@@ -2622,7 +2663,7 @@ export async function SetupScreen({
                       }
                       reached
                       settled={false}
-                      selectable={isRunSurfaceStepSelectable(parkedScheduleRailStep, detailNode)}
+                      selectable={isRunSurfaceStepSelectable(parkedScheduleRailStep, runDetailFallback)}
                       conformanceId="run-surface-rail-step"
                       indicatorConformanceId="run-surface-rail-indicator"
                       action="open-schedule-step"
@@ -2675,7 +2716,7 @@ export async function SetupScreen({
                       }
                       reached
                       settled={false}
-                      selectable={isRunSurfaceStepSelectable(parkedGateRailStep, detailNode)}
+                      selectable={isRunSurfaceStepSelectable(parkedGateRailStep, runDetailFallback)}
                       conformanceId="run-surface-rail-step"
                       indicatorConformanceId="run-surface-rail-indicator"
                       action="open-gate-step"
@@ -2922,7 +2963,7 @@ export async function SetupScreen({
                       displayStep={runRailNumeralTotal(railNumerals)}
                       reached={runReachedItsRecord}
                       settled={runReachedItsRecord}
-                      selectable={isRunSurfaceStepSelectable(madeRailStep, detailNode)}
+                      selectable={isRunSurfaceStepSelectable(madeRailStep, runDetailFallback)}
                       conformanceId="run-surface-rail-step"
                       indicatorConformanceId="run-surface-rail-indicator"
                       action="open-made-step"
@@ -2945,10 +2986,22 @@ export async function SetupScreen({
                     // AND THE DETAIL IS HANDED THE RAIL'S OWN NUMERAL FOR THE
                     // GATE IT DRAWS (cinatra#3080, the fix leg after the third
                     // proof round), from the one series above.
+                    //
+                    // AND ONLY WHERE THERE IS A CARD TO DRAW (cinatra#3243).
+                    // The node handed over is `runDetailFallback` -- the detail
+                    // wherever it draws anything, and `null` where its every
+                    // child is withheld -- so no rail row opens onto an empty
+                    // column. The provider WRAPS that node rather than
+                    // replacing it: a provider element around `null` would put
+                    // an element where this frame must draw none and quietly
+                    // undo the very reading #3243 corrected, so the wrap is
+                    // applied only where the node itself is there.
                     detail={
-                      <RunRailGateStepProvider value={gateStepOnTheRail}>
-                        {detailNode}
-                      </RunRailGateStepProvider>
+                      runDetailFallback ? (
+                        <RunRailGateStepProvider value={gateStepOnTheRail}>
+                          {runDetailFallback}
+                        </RunRailGateStepProvider>
+                      ) : null
                     }
                     initialSelection={initialStep}
                   />
@@ -2977,10 +3030,16 @@ export async function SetupScreen({
                       {railNode}
                     </div>
                   ) : null}
+                  {/* THE SAME TWO READINGS AS THE FRAME ABOVE: the rail's own
+                      numeral reaches the gate header through the provider
+                      (cinatra#3080), around the node that draws something and
+                      around nothing at all where it does not (cinatra#3243). */}
                   <div className="flex min-w-0 flex-1 flex-col gap-4">
-                    <RunRailGateStepProvider value={gateStepOnTheRail}>
-                      {detailNode}
-                    </RunRailGateStepProvider>
+                    {runDetailFallback ? (
+                      <RunRailGateStepProvider value={gateStepOnTheRail}>
+                        {runDetailFallback}
+                      </RunRailGateStepProvider>
+                    ) : null}
                   </div>
                 </>
               );
