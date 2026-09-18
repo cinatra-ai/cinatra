@@ -25,11 +25,14 @@
  * that file mocks `@/components/page-content` away, and this one must not,
  * because the wrapper is the code under test.
  *
- * THE RUNGS ARE DERIVED, NOT LISTED. `enumerateDispatchRungs` drives the pure
- * resolver `pickArtifactRenderer` over a probe matrix and collects the answers it
- * actually gives; the case table is then checked against that set in BOTH
- * directions, so a rung the resolver gains and this file has no case for fails
- * here rather than slipping past the way the drop did. The page also writes one
+ * THE RUNGS ARE DERIVED, NOT LISTED, AND PINNED TWICE. At run time
+ * `enumerateDispatchRungs` drives the pure resolver `pickArtifactRenderer` over a
+ * probe matrix and collects the answers it actually gives; the case table is
+ * checked against that set in BOTH directions. Because a probe matrix can only
+ * discover the branches its inputs reach, the case table is ALSO typed
+ * `Record<ArtifactRenderDispatch["kind"], ...>`, so a variant added to the union
+ * that no probe reaches fails this file at TYPECHECK rather than slipping past
+ * the way the drop did. The page also writes one
  * literal the resolver never produces — the dashboard-pointer arm — and that is
  * driven as its own case.
  */
@@ -99,7 +102,10 @@ function enumerateDispatchRungs(): ArtifactRenderDispatch["kind"][] {
 /** The mount the page would be handed for each rung. Only `dispatch` is under
  * test; the rest is the loosest shape the mount point accepts, and the mount
  * point itself is stubbed. */
-const MOUNT_FOR_RUNG: Record<string, Record<string, unknown>> = {
+const MOUNT_FOR_RUNG: Record<
+  ArtifactRenderDispatch["kind"],
+  Record<string, unknown>
+> = {
   semantic: {
     dispatch: "semantic",
     kind: "build-map",
@@ -304,8 +310,12 @@ describe("the content region carries the rung that answered (cinatra#3319)", () 
       // The attribute is on the region itself, never on a node added to carry
       // it: exactly one element in the whole document has it.
       expect(html.match(/data-render-dispatch=/g) ?? []).toHaveLength(1);
-      // The display still draws inside that region.
-      expect(html).toContain('data-testid="artifact-display-mount"');
+      // The display still draws INSIDE that region, not merely somewhere in
+      // the document: the stub's marker sits after the region's opening tag.
+      const regionAt = html.indexOf(tag ?? "");
+      const displayAt = html.indexOf('data-testid="artifact-display-mount"');
+      expect(displayAt).toBeGreaterThan(-1);
+      expect(displayAt).toBeGreaterThan(regionAt);
     });
   }
 });
