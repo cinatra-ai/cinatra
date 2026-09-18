@@ -320,6 +320,11 @@ export async function approveReviewTaskInternal(
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
     let inputParamsMerge: SQL | null = null;
+    // Did this submit knowingly settle an empty box (cinatra#3452: a declared
+    // default merged in its place, or a field the schema declares optional)?
+    // Read by the no-value guard below (cinatra#3532), which must not refuse a
+    // submission that DID answer its field with nothing.
+    let emptyFieldSettled = false;
     // Effective declared inputs for this run's template, resolved at most once
     // per approval (the resolver memoizes per packageName@version internally).
     // `null` = no template identity ⇒ nothing to validate against.
@@ -407,7 +412,6 @@ export async function approveReviewTaskInternal(
       // It FAILS CLOSED: a schema that cannot be resolved, or that does not
       // declare this field at all, keeps the refusal exactly as before.
       // -----------------------------------------------------------------
-      let emptyFieldSettled = false;
       if (typeof fieldName === "string") {
         const submitted =
           values !== null && typeof values === "object" && !Array.isArray(values)
@@ -555,6 +559,58 @@ export async function approveReviewTaskInternal(
           }
           inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+    //
+    // The setup loop parks one gate per required input the run is still
+    // missing, and the resume below hands it back exactly the inputs it parked
+    // on. So a submission that merged NO value and settled no field leaves the
+    // loop with the same reading it already had — and it parks the SAME field
+    // again, as a brand-new gate, while the card the person was answering says
+    // "This review is no longer open". That is the dead end #3532 was reported
+    // as: the wizard's second field could not be passed by any road.
+    //
+    // WHAT STILL RESUMES, so this reads as a narrowing and not a new refusal:
+    //   · every submission that merges a value (the single-field path, the
+    //     grouped merge, a declared default put in an empty box's place);
+    //   · an EMPTY box the schema settled (cinatra#3452) — an optional field
+    //     left blank is answered, and the loop asks required fields only;
+    //   · a run that is waiting for nothing — the plain approve, and the
+    //     envelope-only approval (#554), keep falling through to the CAS;
+    //   · a schema this road cannot resolve, which says nothing about what the
+    //     run is waiting for and must not start refusing on a guess.
+    //
+    // Refusing leaves the run `pending_approval` at the gate it is already
+    // parked on, with the values it already holds: the field stays open with
+    // its reading, and no second gate is ever minted for it.
+    // -----------------------------------------------------------------
+    if (inputParamsMerge === null && !emptyFieldSettled) {
+      const schema = await resolvedInputSchema();
+      const held =
+        run.inputParams !== null &&
+        typeof run.inputParams === "object" &&
+        !Array.isArray(run.inputParams)
+          ? (run.inputParams as Record<string, unknown>)
+          : {};
+      // The SAME reading the setup loop takes (execution.ts): a required field,
+      // not hidden, whose key the run does not already carry.
+      const stillWaitingFor = !schema
+        ? []
+        : schema.required.filter((name) => {
+            const declared = Object.prototype.hasOwnProperty.call(schema.properties, name)
+              ? (schema.properties[name] as { "x-hidden"?: boolean } | undefined)
+              : undefined;
+            if (declared?.["x-hidden"] === true) return false;
+            return !Object.prototype.hasOwnProperty.call(held, name);
+          });
+      if (stillWaitingFor.length > 0) {
+        throw new Error(
+          `Setup approval recorded no value: run ${runId} is still waiting for required ` +
+            `input "${stillWaitingFor[0]}" — the gate stays open`,
+        );
       }
     }
 
