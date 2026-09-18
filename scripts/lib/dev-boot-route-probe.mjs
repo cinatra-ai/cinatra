@@ -77,11 +77,27 @@ export function routeAnswered(status, contentType) {
  * probe spends, quoted rather than re-derived (the pinning test asserts they are
  * one number).
  *
- * cinatra#3194 records why it may not be widened: in every observed red the
- * failing answers arrive in 110-400 ms and are the runtime's not-found document,
- * and the measured cold compile of the route off CI is 11.7-21.3 s. The route was
- * ABSENT for the whole boot, not slow, so a wider bound would not have turned one
- * red green and would hide the exact signal the bound exists to surface.
+ * THIS BOUND IS NOT WIDENED, AND THE `unrouted` VERDICT STILL FALLS AT IT.
+ * cinatra#3194 records why: in every red it observed, the failing answers arrive
+ * in 110-400 ms and are the runtime's not-found document, and the measured cold
+ * compile of the route off CI is 11.7-21.3 s. The route was ABSENT for the whole
+ * boot, not slow, so a wider bound would not have turned one of those reds green
+ * and would hide the exact signal the bound exists to surface. Nothing below
+ * changes that: a boot whose probed route is never announced as compiling spends
+ * exactly this bound, reaches exactly the `unrouted` verdict, and is replaced.
+ *
+ * WHAT cinatra#3553 ADDS IS NOT A WIDER BOUND — it is a BOUNDED EXTENSION that
+ * only a route the runtime itself announced it is compiling can draw, and only
+ * once. The readings that separate the two cases come from one job's own logs:
+ * on a green boot the probed capabilities route announced its compile and
+ * answered `401 in 37.6s` on the first attempt; on the red boot the same route
+ * announced its compile and its first request was ended at exactly 60.0 s by the
+ * caller's transport cap, after which that path served the not-found document
+ * for the rest of the process; and in the #3194-shaped reds the probed route was
+ * NEVER announced at all — the only announcements were `instrumentation Node.js`
+ * and `/_not-found/page`, the page tree rendering because nothing was routable
+ * there. An announcement for the probed path is therefore evidence the route
+ * exists; its absence is the #3194 signature, and it buys nothing.
  */
 export const ROUTE_READY_BOUND_MS = 120_000;
 
@@ -168,6 +184,50 @@ export function bootProbeFailure(route, boundMs, result) {
   );
 }
 
+/** The escape sequences a colour-capable log wraps the runtime's glyph in. */
+const ANSI_ESCAPE = /\u001B\[[0-9;?]*[ -/]*[@-~]/g;
+
+/**
+ * THE ONE DECORATION A RUNTIME LINE MAY CARRY BEFORE ITS FIRST WORD: a single
+ * status glyph followed by whitespace, from the small set the runtime actually
+ * prints. It is a CLOSED set on purpose — stripping "anything that is not a
+ * letter" would swallow a quote, a bracket or a timestamp and let an ordinary
+ * diagnostic that merely mentions a compile be read as an announcement.
+ */
+const LEADING_GLYPH = /^[\u25a0-\u25ff\u2713\u2714\u2717\u26a0\u25b2\u2022\u00b7]\s+/;
+
+/**
+ * THE PATH A `Compiling ... ` LINE ANNOUNCES, or null (cinatra#3553).
+ *
+ * The development runtime prints one of these the moment it begins compiling a
+ * path, on the same stdout the boot gate already forwards to the job log, so the
+ * evidence that a route EXISTS is available before that route has answered
+ * anything. This reads the path back out of the line and nothing else:
+ *
+ *   `\u25cb Compiling /api/assistants/chat/capabilities ...` -> the path
+ *   `Compiling /_not-found/page ...`                  -> the path (a DIFFERENT
+ *                                                       path, which is exactly
+ *                                                       why the caller compares)
+ *   `\u25cb Compiling instrumentation Node.js ...`         -> null: it names no route
+ *
+ * A leading glyph and the escapes around it are tolerated because both shapes
+ * appear in the recorded logs. Anything that is not a compile announcement of an
+ * ABSOLUTE path is null, so nothing else in the runtime's output can ever be
+ * read as one.
+ */
+export function parseRuntimeCompileAnnouncement(line) {
+  if (typeof line !== "string") return null;
+  const plain = line.replace(ANSI_ESCAPE, "").trim().replace(LEADING_GLYPH, "");
+  // THE WHOLE LINE MUST BE THE ANNOUNCEMENT, terminator included: a line that
+  // merely CONTAINS `Compiling /api/...` — a quoted message, or a sentence that
+  // goes on to say something else about the path — is not the runtime announcing
+  // a compile, and must not buy a boot the extension (cinatra#3553).
+  const match = /^Compiling\s+(\/\S*?)\s*(?:\.\.\.|\u2026)?$/.exec(plain);
+  if (!match) return null;
+  const path = match[1];
+  return path.length > 1 || path === "/" ? path : null;
+}
+
 /** `POST:/api/x` -> `{ method: "POST", path: "/api/x" }`; a bare path is a POST. */
 export function parseRouteSpec(spec) {
   const text = String(spec ?? "").trim();
@@ -194,7 +254,18 @@ export function parseRouteSpec(spec) {
  *
  * THE BOUND IS HANDED TO THE REQUEST, not merely checked after it: a call begun a
  * moment before the deadline would otherwise run for its own transport timeout on
- * top of the bound.
+ * top of the bound — and a caller that narrows it further is imposing a second,
+ * undeclared bound (cinatra#3553 removed exactly that from the boot gate).
+ *
+ * THE ONE EXTENSION, AND WHAT MAY DRAW IT (cinatra#3553). `compileAnnounced()` is
+ * a predicate over what the runtime has announced it is compiling FOR THIS
+ * ROUTE'S OWN PATH. When the bound is spent, the route has not answered, and that
+ * predicate is true, the loop draws `extensionMs` ONCE and keeps probing; it can
+ * never draw a second one, so a compile that is announced and never finishes
+ * still ends at `boundMs + extensionMs` with today's verdict rather than hanging
+ * the boot. `extensionMs` defaults to 0, which is this loop exactly as it was —
+ * so a caller that asks for nothing gets the pre-#3553 behaviour byte for byte,
+ * and a boot whose probed path was never announced gets it too.
  */
 export async function probeRouteUntilAnswered(
   request,
@@ -205,10 +276,20 @@ export async function probeRouteUntilAnswered(
     now = () => Date.now(),
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     onAttempt,
+    compileAnnounced = () => false,
+    extensionMs = 0,
   } = {},
 ) {
   const started = now();
-  const deadline = started + boundMs;
+  let deadline = started + boundMs;
+  let compileExtensionMs = 0;
+  /** Draw the one extension, if one is on offer and this route has earned it. */
+  const drawCompileExtension = () => {
+    if (compileExtensionMs > 0 || !(extensionMs > 0) || !compileAnnounced()) return false;
+    compileExtensionMs = extensionMs;
+    deadline += extensionMs;
+    return true;
+  };
   const classifications = [];
   let attempts = 0;
   let status = null;
@@ -217,7 +298,10 @@ export async function probeRouteUntilAnswered(
 
   for (;;) {
     const remainingMs = deadline - now();
-    if (remainingMs <= 0 && attempts > 0) break;
+    if (remainingMs <= 0 && attempts > 0) {
+      if (drawCompileExtension()) continue;
+      break;
+    }
     attempts += 1;
     try {
       const outcome = await request(Math.max(1, remainingMs));
@@ -241,11 +325,12 @@ export async function probeRouteUntilAnswered(
         elapsedMs: now() - started,
         lastError,
         classifications,
+        compileExtensionMs,
         verdict: "ready",
       };
     }
     const delayMs = bootWindowBackoffMs(attempts - 1, { baseMs, capMs });
-    if (now() + delayMs >= deadline) break;
+    if (now() + delayMs >= deadline && !drawCompileExtension()) break;
     await sleep(delayMs);
   }
 
@@ -257,6 +342,7 @@ export async function probeRouteUntilAnswered(
     elapsedMs: now() - started,
     lastError,
     classifications,
+    compileExtensionMs,
   };
   return { ...result, verdict: bootVerdict({ answered: false, classifications }) };
 }

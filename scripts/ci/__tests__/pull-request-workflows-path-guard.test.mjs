@@ -73,6 +73,8 @@ const TREE_WIDE_JOBS = {
     gates: "pure-node micro-gates: the product-tree hygiene guard reads `git ls-files` and the docs-tree guard reads docs/ — the whole tracked tree is its input",
     "design-pin-drift": "reads the pull request's own touched-path set against the design pin maps — every path is its input",
     "design-pin-freshness": "sibling of design-pin-drift on the same touched-path set",
+    "design-anchor-resolution": "sibling of design-pin-drift on the same touched-path set",
+    "design-record-grammar": "sibling of design-pin-drift on the same touched-path set",
   },
 };
 
