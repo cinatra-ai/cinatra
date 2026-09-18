@@ -506,6 +506,13 @@ export function RailExtraEntry({
           data-run-surface-rail-step=""
           data-run-surface-rail-reached={railReached ? "true" : "false"}
           data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -528,6 +535,13 @@ export function RailExtraEntry({
           data-run-surface-rail-step=""
           data-run-surface-rail-reached={railReached ? "true" : "false"}
           data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -556,6 +570,13 @@ export function RailExtraEntry({
           data-run-surface-rail-step=""
           data-run-surface-rail-reached={railReached ? "true" : "false"}
           data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -591,6 +612,13 @@ export function RailExtraEntry({
           data-run-surface-rail-step=""
           data-run-surface-rail-reached={railReached ? "true" : "false"}
           data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
