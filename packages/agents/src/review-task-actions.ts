@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -180,35 +181,6 @@ async function assertRunScopeOrDeny(
   }
 }
 
-/**
- * The per-decision half of a setup resume's job id (cinatra#3035).
- *
- * A field name comes from the template's own inputSchema, so a queue key cannot
- * carry it verbatim. A key that merely SANITIZED the name was NOT injective,
- * and that is the same defect one level down: `a.b`, `a:b` and `a_b` all reduce
- * to one string, as do any two names sharing a truncated prefix, and two fields
- * of ONE run that share a key hand the second decision the first one's finished
- * job again — exactly the stall this id was changed to end. So the key carries a
- * digest of the WHOLE raw name; the sanitized, truncated part is kept only so the
- * id stays readable where jobs are listed.
- *
- * The digest is FNV-1a/32: this is an identity for de-duplication inside one
- * run's handful of declared fields, never a security boundary, so a wider or
- * cryptographic digest would buy nothing. The grouped form (no single field)
- * keeps a reserved identity of its own; a field whose name sanitizes to nothing
- * is still a field and keeps its digest rather than borrowing that identity.
- */
-function setupResumeDecisionKey(fieldName: string | undefined): string {
-  if (typeof fieldName !== "string") return "grouped";
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < fieldName.length; i += 1) {
-    hash ^= fieldName.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  const digest = (hash >>> 0).toString(16).padStart(8, "0");
-  const readable = fieldName.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48);
-  return readable.length > 0 ? `field-${readable}-${digest}` : `field-${digest}`;
-}
 
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
@@ -620,36 +592,97 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
-      // execution.ts that, once the last required field is in, this run owes the
-      // trigger step before it may dispatch — so it hands off to
-      // `pending_trigger` instead of running before the user has chosen when.
-      { runId, resumedFromSetup: true },
-      // cinatra#3035 — THE JOB ID NAMES THE DECISION, NOT THE ROAD. The setup
-      // gate synthesizes ONE review-task identity for the whole road
-      // (`setup-<runId>`), so an id derived from it alone was the SAME id for
-      // every declared field. BullMQ's id-carrying add is HSETNX and finished
-      // jobs are KEPT (`removeOnComplete` is a count, not zero), so the second
-      // field's resume found the first field's COMPLETED job, was handed that
-      // job back, and queued no work at all: the run stayed `queued` at the
-      // `hitl` moment on its already-decided gate, never parked on the Schedule
-      // step, never wrote a trigger row and never started.
-      //
-      // Each field is decided exactly once on this road (a decided gate is
-      // closed — a second press is answered "this review is no longer open"),
-      // so the field name is the decision's own identity and the grouped form,
-      // which decides the whole road at once, keeps an identity of its own. The
-      // de-duplication the deterministic id is here for is unchanged WITHIN one
-      // decision. A double submit racing ITSELF is refused before this enqueue by
-      // the guarded writer's org-scoped status compare-and-set, which updates 0
-      // rows and throws while the run is no longer `pending_approval`; a LATE
-      // repeat that arrives after the run has re-parked on the NEXT field passes
-      // that gate, and it is this deterministic id that then stops it from
-      // queuing a second copy of a decision already carried out.
-      { jobId: `resume-${reviewTaskId}-${setupResumeDecisionKey(fieldName)}` },
-    );
+    // MERGED (cinatra#3035 bring-up-to-date). This branch carried its own
+    // answer to the SAME defect — a job id derived from the decision rather
+    // than from `reviewTaskId`, which is constant for a run. The run-setup
+    // fix below landed on main first and supersedes it: a field-derived id
+    // still collides where a run parks on ONE field twice (the clear road
+    // removes an answered key again), which is the stall both changes exist
+    // to end. Both intents stand here — no confirmation of one run is
+    // swallowed, and a resume the runner is never handed lands the run
+    // failed with a message naming the field just answered.
+    // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
+    // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
+    // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic
+    // `setup-${runId}` minted once per RUN, so every confirmed field of one run
+    // asked the queue for the SAME id. The queue refuses to create a second job
+    // when the id key already exists (it hands the pre-existing id back and
+    // stores nothing) and it keeps its completed jobs, so the FIRST
+    // confirmation of a run landed and every later one was dropped: no next
+    // field was asked, no hand-over was made, and the run sat at `queued`.
+    //
+    // The id is now minted PER CONFIRMATION out of nothing the run can repeat,
+    // so two confirmations of one run never collide. It is still an id rather
+    // than none at all because the queue connection resends an unanswered
+    // command after a reconnect (`maxRetriesPerRequest: null` plus IORedis's
+    // default `autoResendUnfulfilledCommands`): with a per-call id the resent
+    // add is the duplicate the queue is meant to swallow, while with NO id the
+    // replay would mint a SECOND resume job for the same confirmation and park
+    // the same gate twice. An id derived from the field name would not do
+    // either, since a run really can park on the same field twice (the clear
+    // road above removes an answered key again).
+    //
+    // The org-scoped CAS in `resumeRunFromSetupApproval` one statement above
+    // moves the run pending_approval -> queued and throws when it updates no
+    // row, so the ordinary double-submit of one parked gate is refused before
+    // this line. It checks the run, its org and that status only — it is not by
+    // itself proof that no duplicate submission can ever arrive, and that
+    // admission gap is older than this change. Nothing reads this job id.
+    const resumeJobId = `resume-${randomUUID()}`;
+    try {
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+        // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
+        // execution.ts that, once the last required field is in, this run owes the
+        // trigger step before it may dispatch — so it hands off to
+        // `pending_trigger` instead of running before the user has chosen when.
+        { runId, resumedFromSetup: true },
+        { jobId: resumeJobId },
+      );
+    } catch (err) {
+      // cinatra#3585 — A SETUP THAT CANNOT BE HANDED BACK TO THE RUNNER SAYS SO
+      // ON THE RUN. The CAS above has already moved this run to `queued`; if the
+      // runner is never handed it back, the run would sit there with nothing
+      // said — the same silent shape this issue reports. Land it FAILED with a
+      // message a person can act on instead, naming the field just answered.
+      // Mirrors the tree's own rule for this class one file over (execution.ts
+      // lands the run failed with the message rather than letting a throw
+      // escape, "leaving the run parked at queued forever").
+      const enqueueError = err instanceof Error ? err.message : String(err);
+      const answeredField = fieldName ?? "(grouped)";
+      try {
+        await transitionRunStatus(
+          runId,
+          "queued",
+          "failed",
+          {
+            error:
+              `Setup could not be handed back to the runner after the field ` +
+              `"${answeredField}" was answered: ${enqueueError}`,
+          },
+          sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+        );
+      } catch (transitionErr) {
+        // stale_from_status: a concurrent stop — or a resume job the queue DID
+        // accept before the acknowledgement failed — already moved the run off
+        // `queued`. That writer wins, exactly as the sibling arms swallow it.
+        // Any OTHER compensation failure is reported here and not re-thrown:
+        // the enqueue failure below is the real cause, and replacing it with a
+        // secondary failure would hide it from the caller.
+        const stale =
+          transitionErr instanceof RunTransitionError &&
+          transitionErr.code === "stale_from_status";
+        if (!stale) {
+          console.error(
+            `[approveReviewTaskInternal] setup-path could not land run=${runId} failed ` +
+              `after the resume enqueue failed: ` +
+              `${transitionErr instanceof Error ? transitionErr.message : String(transitionErr)}`,
+          );
+        }
+      }
+      // …and the ENQUEUE failure — the real cause — travels on to the caller.
+      throw err;
+    }
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
     );
