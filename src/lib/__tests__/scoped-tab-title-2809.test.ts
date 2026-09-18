@@ -59,9 +59,17 @@ describe("cinatra#2809 — the agent tab title under a scope base", () => {
     ).toBe("Personal run");
   });
 
-  it("never shows a raw id: an unresolved instance mirrors the trail's abbreviation", () => {
+  // RE-PINNED BY THE FORWARD MERGE OF origin/main (2026-09-10). The rule this
+  // reading measures is the drawing's, and it is unchanged: an id-bearing route
+  // never shows a raw id in the tab, and the tab mirrors the trail. What the
+  // trail now says at an unresolved run position is the run's KIND rather than
+  // the id's first eight characters (cinatra#2934, the sixth graded proof set:
+  // "a truncated identifier is still an identifier"), so the tab mirrors THAT —
+  // strictly less of the id than this reading pinned, never more.
+  it("never shows a raw id: an unresolved instance mirrors the trail's word for it", () => {
     const label = titleFor("/organizations/org1/agents/acme/writer/9c0dfce6-1111-2222-3333-444444444444");
-    expect(label).toBe("9c0dfce6…");
+    expect(label).toBe("Agent run");
+    expect(label).not.toContain("9c0dfce6");
     expect(label).not.toContain("444444");
   });
 

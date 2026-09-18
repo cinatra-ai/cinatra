@@ -124,6 +124,14 @@ function mockResolve(
           body,
           // The aside travels BESIDE the body on the answer itself.
           ...aside,
+          // THE FIRING READING RIDES THE ANSWER, NOT THE BODY (cinatra#3174 fix
+          // leg 1, carried in by the forward merge of origin/main): a one-off`s
+          // gate stamp is no longer read as its firing on its own. These
+          // fixtures already mark the fired one with that stamp, so the answer
+          // carries the reading the resolver would put beside the body.
+          ...(body.phase === "settled" && body.released === true
+            ? { firedOnce: true }
+            : {}),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),

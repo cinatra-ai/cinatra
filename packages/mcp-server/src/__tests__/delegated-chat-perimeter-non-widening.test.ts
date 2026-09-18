@@ -167,11 +167,12 @@ describe("the perimeter swap did not change what is callable", () => {
   });
 
   // 83 names when this branch was cut, 84 after main's cinatra#2988 added the
-  // lent action to its own allowlist, 85 after cinatra#2368 granted the
-  // appointment-schedule add flow the chat reach its own acceptance criterion
-  // requires, and 86 with the fill this branch grants — each of the three
-  // carries its own comment above saying which it is: reach that already
-  // existed, or reach granted here on purpose.
+  // lent action to its own allowlist — see the entry itself for why it counts
+  // as reach that already existed rather than reach this swap granted — 85
+  // after cinatra#2368 granted the appointment-schedule add flow the chat reach
+  // its own acceptance criterion requires, and 86 with the fill this branch
+  // grants. Each of the last two carries its own comment above saying which it
+  // is: reach that already existed, or reach granted here on purpose.
   it("the frozen list is the real one (86 names), not an empty set passing vacuously", () => {
     expect(CALLABLE_BEFORE_2817).toHaveLength(86);
     expect(new Set(CALLABLE_BEFORE_2817).size).toBe(86);

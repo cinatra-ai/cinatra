@@ -71,8 +71,7 @@ vi.mock("lucide-react", () => {
 import {
   HitlConversationPanel,
   RUN_WINDOW_PLACEMENTS,
-  RUN_WINDOW_PLACEHOLDERS,
-  runWindowSendLabel,
+  RUN_WINDOW_SEND_LABEL,
 } from "../hitl-conversation-panel";
 import type { RunWindowSurface } from "../run-window-conversation-store";
 
@@ -111,7 +110,7 @@ function mount(surface: RunWindowSurface) {
   return { main, bar, panel };
 }
 
-describe("§VI — the review page's window stands beneath the decision bar", () => {
+describe("§VI — every run window stands beneath the work, never over it", () => {
   it("is IN FLOW: no sticky, no fixed, no absolute, no bottom, no stacking context", () => {
     const { panel } = mount("review");
     expect(panel).not.toBeNull();
@@ -132,47 +131,51 @@ describe("§VI — the review page's window stands beneath the decision bar", ()
     expect(rel & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeFalsy();
   });
 
-  it("no window docks any more — cinatra#3188 item 3 put every one of them in the flow, under the work", () => {
+  it("the other four windows stand in the flow too", () => {
+    // They floated only while three of them mounted the window on the page's
+    // own frame; cinatra#3188 item 3 moved every mount into the run detail
+    // column, and inside that column the drawing's foot-of-the-run-detail
+    // clause is met by a window that simply ends the column.
     for (const surface of SURFACES.filter((s) => s !== "review")) {
       const { panel } = mount(surface);
-      expect(panel!.className).not.toContain("sticky");
-      expect(panel!.className).not.toContain("bottom-0");
+      for (const token of ["sticky", "fixed", "absolute", "bottom-0", "z-30"]) {
+        expect(panel!.className).not.toContain(token);
+      }
       expect(panel!.getAttribute("style") ?? "").toBe("");
       cleanup();
       document.body.innerHTML = "";
     }
   });
 
-  it("every surface has a placement, and only the review page's is in flow", () => {
+  it("every surface has a placement, and every one of them is in flow", () => {
     expect(Object.keys(RUN_WINDOW_PLACEMENTS).sort()).toEqual([...SURFACES].sort());
-    expect(RUN_WINDOW_PLACEMENTS.review).toBe("in-flow");
-    for (const surface of SURFACES.filter((s) => s !== "review")) {
-      expect(RUN_WINDOW_PLACEMENTS[surface]).toBe("floating");
+    for (const surface of SURFACES) {
+      expect(RUN_WINDOW_PLACEMENTS[surface]).toBe("in-flow");
     }
   });
 });
 
-describe("the send control's accessible name carries the window's own sentence", () => {
-  it("is not the name borrowed from another surface", () => {
-    for (const surface of SURFACES) {
-      expect(runWindowSendLabel(surface)).not.toBe("Apply AI suggestion");
-    }
-  });
-
+// THE SEND CONTROL IS ONE ACROSS THE FIVE READINGS (forward resolution, main
+// merged). A per-surface accessible name derived from each reading's sentence
+// stood here. The ratified drawing's §X reads: "One thing is read per surface
+// — the sentence in the empty field, which names what the window does where it
+// stands. Nothing else about the window changes from one reading to the next."
+// The name is therefore pinned to ONE string on every reading, and only the
+// sentence in the empty field is read per surface.
+describe("the send control's accessible name is one across the readings", () => {
   for (const surface of SURFACES) {
-    it(`"${surface}" — the name the field is given is that sentence`, () => {
+    it(`"${surface}" — the name the field is given is the window's one name`, () => {
       mount(surface);
-      expect(promptField.submitAriaLabel).toBe(runWindowSendLabel(surface));
-      expect(promptField.submitAriaLabel).not.toBe("Apply AI suggestion");
+      expect(promptField.submitAriaLabel).toBe(RUN_WINDOW_SEND_LABEL);
     });
   }
 
-  for (const surface of SURFACES) {
-    it(`"${surface}" — the send control says what this window does`, () => {
-      const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
-      const label = runWindowSendLabel(surface);
-      expect(label.startsWith("Send — ")).toBe(true);
-      expect(label.slice("Send — ".length).toLowerCase()).toBe(sentence.toLowerCase());
-    });
-  }
+  it("no reading carries a name of its own", () => {
+    const names = new Set<string>();
+    for (const surface of SURFACES) {
+      mount(surface);
+      names.add(String(promptField.submitAriaLabel));
+    }
+    expect([...names]).toEqual([RUN_WINDOW_SEND_LABEL]);
+  });
 });

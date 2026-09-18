@@ -14,9 +14,7 @@
 // WHAT MOVED AND WHAT DID NOT. Everything that turns markdown into HTML moved:
 // the escaping, the URL allowlist, and every renderer override. What stayed in
 // `@cinatra-ai/chat` is what only /chat has — the syntax highlighter, KaTeX,
-// mermaid, charts and widgets — supplied through the hooks below. The table's
-// copy/CSV chrome is supplied by NEITHER: cinatra#3230 took it off the chat
-// thread's table, so there is no header strip left for a hook to draw. So there is ONE definition of the markup and ONE definition
+// mermaid, charts and widgets — supplied through the hooks below. So there is ONE definition of the markup and ONE definition
 // of the escaping, and a fix to either reaches both surfaces.
 //
 // THE SOURCE IS UNTRUSTED. The HTML built here is injected with
@@ -211,10 +209,11 @@ export function createCoreMarked(hooks: CoreMarkedHooks) {
         // column is right-aligned when (a) the delimiter row declares it so,
         // else (b) every non-empty body cell parses as a number or a timestamp
         // under the deterministic cell grammar at the foot of this file. The
-        // grammar reads the cell's DISPLAYED text, not the raw markdown. A
-        // centred delimiter is not honoured: no body cell ever carries a centre
-        // class. The header row keeps the renderer's fixed `text-left` — the
-        // sentence governs body cells only.
+        // grammar reads the cell's DISPLAYED text (inline markup such as
+        // `**12**`, `` `12` `` or a linked date stripped via its tokens), not
+        // the raw markdown. A centred delimiter is not honoured: no body cell
+        // ever carries a centre class. The header row keeps the renderer's
+        // fixed `text-left` — the sentence governs body cells only.
         const rightAligned = token.header.map((_, col) =>
           resolveColumnRightAligned(
             token.align[col] ?? null,
@@ -240,6 +239,11 @@ export function createCoreMarked(hooks: CoreMarkedHooks) {
           })
           .join("");
 
+        // The frame carries the table's scroll container and, past the page
+        // size, the row-pagination row — nothing else. The drawing's chat
+        // thread gives a table no header bar, and its Table component no copy
+        // or download control (cinatra#3230); the thread's parts "borrow
+        // rather than invent".
         // audit-allow: markdown-content
         return `<div class="my-3 overflow-hidden rounded-lg border border-line bg-card" data-chat-table-frame><div class="overflow-x-auto"><table id="${tableId}" class="min-w-full caption-bottom text-sm"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>${shouldPaginate ? `<div class="flex flex-col gap-2 border-t border-line bg-card px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between" data-chat-table-pagination data-page="0" data-page-size="${pageSize}" data-row-count="${bodyRows.length}"><span data-chat-table-range-label>1-${Math.min(pageSize, bodyRows.length)} of ${bodyRows.length}</span><div class="flex items-center gap-2"><span data-chat-table-page-label>Page 1 of ${pageCount}</span><div class="flex items-center gap-1"><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="previous" disabled>Previous</button><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="next" ${pageCount <= 1 ? "disabled" : ""}>Next</button></div></div></div>` : ""}</div>`;
       },
@@ -251,6 +255,109 @@ export function createCoreMarked(hooks: CoreMarkedHooks) {
 
 
   return md;
+}
+
+// ---------------------------------------------------------------------------
+// The deterministic cell grammar for the table renderer above (cinatra#3230).
+// It lives in THIS file rather than a sibling module because the chat route
+// carries a locked reachable-module ceiling (scripts/audit/route-graph-ratchet)
+// and the renderer is its only caller. That reason is why it moved DOWN with
+// the renderer rather than staying in `@cinatra-ai/chat`: /chat re-exports the
+// four names below from here, so the grammar keeps its one definition and adds
+// no module to either route's graph.
+// ---------------------------------------------------------------------------
+
+// Deterministic cell grammar for the chat markdown table renderer
+// (cinatra#3230). The ratified drawing's Table component: "never centre body
+// cells; right-align numerics and timestamps." A column's body cells are
+// right-aligned when (a) the markdown delimiter row declares the column
+// right-aligned, else (b) EVERY non-empty body cell in the column parses under
+// this grammar — a number, or a date/time the named parser below accepts.
+// Both helpers are plain regular expressions over the trimmed cell text: no
+// locale, no `Date.parse`, no environment-dependent result.
+
+
+/**
+ * The text a cell DISPLAYS: the inline tokens flattened to their plain text,
+ * so `**12**`, `` `12` `` or `[Sep 3, 2026](…)` classify by what the reader
+ * sees rather than by their markdown markup. HTML and images contribute
+ * nothing; a hard break reads as a space.
+ */
+export function cellPlainText(tokens: readonly Token[]): string {
+  let out = "";
+  for (const token of tokens) {
+    const nested = (token as { tokens?: Token[] }).tokens;
+    if (nested && nested.length > 0) {
+      out += cellPlainText(nested);
+      continue;
+    }
+    switch (token.type) {
+      case "text":
+      case "codespan":
+      case "escape":
+        out += token.text;
+        break;
+      case "br":
+        out += " ";
+        break;
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
+// A number: optional sign (ASCII or U+2212 minus), optional leading currency
+// symbol, digits with optional thousands separators and an optional decimal
+// part, optional trailing percent.
+const NUMERIC_RE =
+  /^[+\-\u2212]?[$€£¥]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$/;
+
+const MONTH = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\\.?";
+const TIME =
+  "(?:[01]?\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?(?:\\s?[AaPp][Mm])?(?:\\s?(?:Z|UTC|[+\\-]\\d{2}:?\\d{2}))?";
+const ISO_DATE = "\\d{4}-\\d{2}-\\d{2}";
+const SLASH_DATE = "\\d{1,2}[./]\\d{1,2}[./]\\d{2,4}";
+
+// A date/time, in one of the shapes an assistant turn writes:
+//   2026-09-03 · 2026-09-03T14:05:00Z · 2026-09-03 14:05
+//   Sep 3, 2026 · September 3, 2026 · Sep 3, 2026 14:05
+//   3 Sep 2026 · 03.09.2026 · 9/3/2026
+//   14:05 · 14:05:30 · 2:05 PM
+const TIMESTAMP_RES: readonly RegExp[] = [
+  new RegExp(`^${ISO_DATE}(?:[T ]${TIME})?$`),
+  new RegExp(`^${MONTH} \\d{1,2}(?:st|nd|rd|th)?,? \\d{4}(?:,? ${TIME})?$`, "i"),
+  new RegExp(`^\\d{1,2}(?:st|nd|rd|th)? ${MONTH},? \\d{4}(?:,? ${TIME})?$`, "i"),
+  new RegExp(`^${SLASH_DATE}(?: ${TIME})?$`),
+  new RegExp(`^${TIME}$`),
+];
+
+/** Does the cell text read as a number under the deterministic grammar? */
+export function isNumericCellText(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && NUMERIC_RE.test(t);
+}
+
+/** Does the cell text read as a date and/or time under the named shapes above? */
+export function isTimestampCellText(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && TIMESTAMP_RES.some((re) => re.test(t));
+}
+
+/**
+ * Whether a column's body cells are right-aligned: the delimiter row's own
+ * declaration first; otherwise every non-empty cell must be a number or a
+ * timestamp. A column with no non-empty cell stays left. A centred delimiter
+ * is never honoured — the drawing forbids centring body cells.
+ */
+export function resolveColumnRightAligned(
+  declared: "left" | "center" | "right" | null | undefined,
+  cellTexts: readonly string[],
+): boolean {
+  if (declared === "right") return true;
+  const nonEmpty = cellTexts.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (nonEmpty.length === 0) return false;
+  return nonEmpty.every((t) => isNumericCellText(t) || isTimestampCellText(t));
 }
 
 /**
@@ -368,94 +475,4 @@ export function normalizeCoreMarkdown(text: string): string {
  */
 export function stripEmptyParagraphs(html: string): string {
   return html.replace(/<p[^<>]*>\s*<\/p>/g, "");
-}
-
-// ---------------------------------------------------------------------------
-// The deterministic cell grammar for the table renderer above (cinatra#3230).
-// It lives in THIS file, beside its only caller, because the chat route carries
-// a locked reachable-module ceiling (scripts/audit/route-graph-ratchet) — and
-// the renderer moved down here so both surfaces draw the same table.
-// ---------------------------------------------------------------------------
-
-/**
- * The text a cell DISPLAYS: the inline tokens flattened to their plain text,
- * so `**12**`, `` `12` `` or `[Sep 3, 2026](…)` classify by what the reader
- * sees rather than by their markdown markup. HTML and images contribute
- * nothing; a hard break reads as a space.
- */
-export function cellPlainText(tokens: readonly Token[]): string {
-  let out = "";
-  for (const token of tokens) {
-    const nested = (token as { tokens?: Token[] }).tokens;
-    if (nested && nested.length > 0) {
-      out += cellPlainText(nested);
-      continue;
-    }
-    switch (token.type) {
-      case "text":
-      case "codespan":
-      case "escape":
-        out += token.text;
-        break;
-      case "br":
-        out += " ";
-        break;
-      default:
-        break;
-    }
-  }
-  return out;
-}
-
-// A number: optional sign (ASCII or U+2212 minus), optional leading currency
-// symbol, digits with optional thousands separators and an optional decimal
-// part, optional trailing percent.
-const NUMERIC_RE =
-  /^[+\-\u2212]?[$€£¥]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$/;
-
-const MONTH = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\\.?";
-const TIME =
-  "(?:[01]?\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?(?:\\s?[AaPp][Mm])?(?:\\s?(?:Z|UTC|[+\\-]\\d{2}:?\\d{2}))?";
-const ISO_DATE = "\\d{4}-\\d{2}-\\d{2}";
-const SLASH_DATE = "\\d{1,2}[./]\\d{1,2}[./]\\d{2,4}";
-
-// A date/time, in one of the shapes an assistant turn writes:
-//   2026-09-03 · 2026-09-03T14:05:00Z · 2026-09-03 14:05
-//   Sep 3, 2026 · September 3, 2026 · Sep 3, 2026 14:05
-//   3 Sep 2026 · 03.09.2026 · 9/3/2026
-//   14:05 · 14:05:30 · 2:05 PM
-const TIMESTAMP_RES: readonly RegExp[] = [
-  new RegExp(`^${ISO_DATE}(?:[T ]${TIME})?$`),
-  new RegExp(`^${MONTH} \\d{1,2}(?:st|nd|rd|th)?,? \\d{4}(?:,? ${TIME})?$`, "i"),
-  new RegExp(`^\\d{1,2}(?:st|nd|rd|th)? ${MONTH},? \\d{4}(?:,? ${TIME})?$`, "i"),
-  new RegExp(`^${SLASH_DATE}(?: ${TIME})?$`),
-  new RegExp(`^${TIME}$`),
-];
-
-/** Does the cell text read as a number under the deterministic grammar? */
-export function isNumericCellText(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && NUMERIC_RE.test(t);
-}
-
-/** Does the cell text read as a date and/or time under the named shapes above? */
-export function isTimestampCellText(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && TIMESTAMP_RES.some((re) => re.test(t));
-}
-
-/**
- * Whether a column's body cells are right-aligned: the delimiter row's own
- * declaration first; otherwise every non-empty cell must be a number or a
- * timestamp. A column with no non-empty cell stays left. A centred delimiter
- * is never honoured — the drawing forbids centring body cells.
- */
-export function resolveColumnRightAligned(
-  declared: "left" | "center" | "right" | null | undefined,
-  cellTexts: readonly string[],
-): boolean {
-  if (declared === "right") return true;
-  const nonEmpty = cellTexts.map((t) => t.trim()).filter((t) => t.length > 0);
-  if (nonEmpty.length === 0) return false;
-  return nonEmpty.every((t) => isNumericCellText(t) || isTimestampCellText(t));
 }

@@ -61,6 +61,7 @@
     "./agent-hitl-screen-card": "./src/agent-hitl-screen-card.tsx",
     "./verification-summary-card": "./src/verification-summary-card.tsx",
     "./schedule-proposal-card": "./src/schedule-proposal-card.tsx",
+    "./run-not-authorized-panel": "./src/run-not-authorized-panel.tsx",
     "./schedule-rail-step": "./src/schedule-rail-step.tsx",
     "./recommendation-rail-step": "./src/recommendation-rail-step.tsx",
     "./recommendation-rail-entry": "./src/recommendation-rail-entry.ts",

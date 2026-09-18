@@ -48,46 +48,48 @@ export const RUN_WINDOW_PLACEHOLDERS: Record<RunWindowSurface, string> = {
  * WHERE THE WINDOW STANDS, per surface (design `458fb7ffce6c`,
  * `app-artifact-review.html` §VI and §IX).
  *
- * §VI, in its own words: "BENEATH THE DECISION BAR the run detail carries a
- * conversational prompt window" — the drawing shows the card with its decision
- * bar and the window as two separately stacked examples, one after the other.
- * A window that floats over the bar is therefore not a second reading of the
- * drawing; it is a different drawing. On the review page the window sits in the
- * document flow, after the card, and nothing overlaps.
+ * ONE READING ON ALL FIVE. §VI, in its own words: "BENEATH THE DECISION BAR the
+ * run detail carries a conversational prompt window", and §IX asks that "the
+ * decision bar and prompt window stay reachable at the foot of the run detail at
+ * every width" — the foot of the RUN DETAIL, which is the column the step's work
+ * is drawn in, never the foot of the page frame around it.
  *
- * The four windows that sit UNDER A FORM the person is filling keep the floating
- * reading they were drawn with: there the window follows the person down a long
- * form so the field they are typing into and the box they are typing in stay on
- * screen together (§IX, "the decision bar and prompt window stay reachable at
- * the foot of the run detail at every width"). The review page has no form to
- * follow — it has a decision bar the window may not cover.
+ * The floating reading four of these windows carried was a consequence of the
+ * old mount: three callers handed the shared panel the page's own frame element,
+ * so the only way to keep the window near the work was to dock it across the
+ * foot of the frame. cinatra#3188 item 3 fixed the mount itself — every window
+ * now stands inside the run detail column, under the work it belongs to — and
+ * with the mount fixed the dock is not a second reading of the drawing but a
+ * different drawing, on the review page and on the four form-following windows
+ * alike. So every surface stands in the flow.
  *
- * IT IS A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares WHICH
- * READING it is and never a placement of its own, so no window can drift from
- * the drawing on its own and a sixth surface cannot compile without a placement.
+ * IT IS STILL A MAP FOR THE SAME REASON THE SENTENCES ARE. A mount declares
+ * WHICH READING it is and never a placement of its own, so no window can drift
+ * from the drawing on its own and a sixth surface cannot compile without a
+ * placement.
  */
 export const RUN_WINDOW_PLACEMENTS: Record<RunWindowSurface, "floating" | "in-flow"> = {
-  "run-page": "floating",
-  "step-by-step": "floating",
-  schedule: "floating",
-  "armed-trigger": "floating",
+  "run-page": "in-flow",
+  "step-by-step": "in-flow",
+  schedule: "in-flow",
+  "armed-trigger": "in-flow",
   /** §VI — beneath the decision bar, in the flow, never over it. */
   review: "in-flow",
 };
 
 /**
- * The send control's ACCESSIBLE NAME, per surface.
+ * The send control's ACCESSIBLE NAME — ONE name across the five readings.
  *
- * It carries the window's own sentence rather than a name borrowed from another
- * surface: a reader on a screen reader hears what this window does where it
- * stands, which is the same thing the empty field says to everyone else. It is
- * DERIVED from that sentence, so the two cannot drift and a sixth surface gets
- * a name the moment it gets a sentence.
+ * FORWARD RESOLUTION (main merged): a per-surface name derived from each
+ * reading's sentence stood here. The ratified drawing's §X, quoted in
+ * `run-page-prompt-window-one-window.test.tsx`, names the send control among
+ * the parts that do NOT change from one reading to the next — "One thing is
+ * read per surface — the sentence in the empty field ... Nothing else about
+ * the window changes from one reading to the next." A second per-surface part
+ * is a departure from that sentence, so the shared name stands and the derived
+ * one is left to the drawing to grant.
  */
-export function runWindowSendLabel(surface: RunWindowSurface): string {
-  const sentence = RUN_WINDOW_PLACEHOLDERS[surface].replace(/…$/u, "");
-  return `Send — ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
-}
+export const RUN_WINDOW_SEND_LABEL = "Apply AI suggestion";
 
 export type HitlConversationEntry = {
   id: number;
@@ -170,9 +172,6 @@ export function HitlConversationPanel({
   // §VI's own placement for this reading, resolved here rather than at any
   // mount, exactly as the sentence is.
   const placement = RUN_WINDOW_PLACEMENTS[surface];
-  const inFlow = placement === "in-flow";
-  // The window's own sentence, as the send control's accessible name.
-  const submitLabel = runWindowSendLabel(surface);
   const [convOpen, setConvOpen] = useState(false);
   const convContainerRef = useRef<HTMLDivElement>(null);
   const convScrollRef = useRef<HTMLDivElement>(null);
@@ -306,6 +305,10 @@ export function HitlConversationPanel({
     <div
       data-conv-open={convOpen}
       data-run-window-placement={placement}
+      // IN FLOW IS PLAIN STATIC FLOW — no `sticky`, no `bottom`, no stacking
+      // context, and no fade: an element that is not taken out of flow and
+      // comes after the work in document order cannot draw over it at any
+      // width, which is the whole of §VI's "beneath the decision bar".
       className="px-5 pb-4 pt-6"
     >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
@@ -375,7 +378,7 @@ export function HitlConversationPanel({
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}
-            submitAriaLabel={submitLabel}
+            submitAriaLabel={RUN_WINDOW_SEND_LABEL}
             canSubmitEmpty={false}
             pending={promptPending}
             fieldClassName="border-line shadow-lg"

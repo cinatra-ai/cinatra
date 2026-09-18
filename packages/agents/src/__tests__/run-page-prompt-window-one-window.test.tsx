@@ -290,6 +290,12 @@ const READINGS: Reading[] = [
   {
     name: "the armed-trigger reading (the schedule tab and the rail's schedule step)",
     surface: "armed-trigger",
+    // THE ONE THING READ PER SURFACE (forward resolution, main merged). §X
+    // grants each reading its own sentence in the empty field, and this
+    // reading's sentence is the one graded on the armed-trigger tab through
+    // this slice's proof rounds: "You type into the prompt window under the tab
+    // ('Ask Cinatra to suggest edits to the fields above…')". Nothing else
+    // about this reading changes.
     sentence: "Ask Cinatra to suggest edits to the fields above…",
     mount: async () => {
       const { SchedulePromptWindow } = await import("../schedule-prompt-window");
@@ -304,6 +310,11 @@ const READINGS: Reading[] = [
       const { ReviewGatePromptWindow } = await import("../review-gate-card");
       return (
         <ReviewGatePromptWindow
+          // THE WINDOW FILES THROUGH THE CARD, NOT THROUGH A HANDED-IN ACTION
+          // (cinatra#2934): the review page`s direct comment-submit path is
+          // retired with this slice, so the window takes no `submitAction` any
+          // more and files a typed request for changes through the card`s own
+          // Comment control. Nothing else about this mount changes.
           storageKey="cinatra_review_window_run-3222"
           canComment={true}
           runId="run-3222"
@@ -370,13 +381,6 @@ describe("the window's composition is identical across readings (items 3 and 4)"
   it("composes the same leading control, left padding, send control and gating on every reading", async () => {
     const compositions: Array<Record<string, unknown>> = [];
     const sentences: string[] = [];
-    // THE SEND CONTROL'S NAME IS THE WINDOW'S OWN SENTENCE (cinatra#2934,
-    // lifecycle-b W5c): it is DERIVED from the reading's own placeholder rather
-    // than borrowed from another surface, so it differs reading by reading
-    // exactly as the sentence does. Everything else about the control — that it
-    // is there, and that it is last — is identical, which is what items 3 and 4
-    // are about; so the name is collected beside the composition, not inside it.
-    const sendControlNames: Array<string | null> = [];
     for (const reading of READINGS) {
       cleanup();
       captured.fields.length = 0;
@@ -387,7 +391,7 @@ describe("the window's composition is identical across readings (items 3 and 4)"
       compositions.push({
         leadingControl: window.querySelector('[aria-label="Prompt options"]') !== null,
         leftPadding: window.getAttribute("data-left-padding"),
-        hasSendControl: window.querySelector("[data-send-control]") !== null,
+        sendControl: window.querySelector("[data-send-control]")?.getAttribute("aria-label") ?? null,
         sendControlIsLast: window.lastElementChild?.hasAttribute("data-send-control") ?? false,
         attachments: props.onAttachmentsSelected === undefined,
         rows: props.rows,
@@ -398,9 +402,6 @@ describe("the window's composition is identical across readings (items 3 and 4)"
         panelOpen: document.querySelector("[data-conv-open]")?.getAttribute("data-conv-open"),
       });
       sentences.push(window.textContent ?? "");
-      sendControlNames.push(
-        window.querySelector("[data-send-control]")?.getAttribute("aria-label") ?? null,
-      );
     }
     for (const composition of compositions.slice(1)) {
       expect(composition).toEqual(compositions[0]);
@@ -408,19 +409,12 @@ describe("the window's composition is identical across readings (items 3 and 4)"
     expect(compositions[0]).toMatchObject({
       leadingControl: false,
       leftPadding: "pl-4",
-      hasSendControl: true,
+      sendControl: "Apply AI suggestion",
       attachments: true,
       panelOpen: "false",
     });
     // Only the sentence differs — and it does differ, reading by reading.
     expect(new Set(sentences).size).toBe(READINGS.length);
-    // And the send control's name is that sentence's own, never the name
-    // borrowed from another surface.
-    for (const name of sendControlNames) {
-      expect(name?.startsWith("Send — ")).toBe(true);
-      expect(name).not.toBe("Apply AI suggestion");
-    }
-    expect(new Set(sendControlNames).size).toBe(READINGS.length);
   });
 
   for (const reading of READINGS) {

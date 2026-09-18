@@ -247,19 +247,28 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
   }
 
   it("the rows of a fired one-off are read-only, showing the schedule that fired", async () => {
+    // AMENDED BY THE FIFTH GRADED CAPTURE (cinatra#2934). This assertion used
+    // to look for a DISABLED picker holding the armed moment, and a disabled
+    // picker is not what the drawing draws here: "the rows go read-only — the
+    // values still legible, the PICKERS GONE". A dead picker is the reading for
+    // a reader who may not act on a live schedule; this schedule is over. So
+    // the same fact is now read where the drawing puts it — the value as text,
+    // with no control holding it.
     const { container } = mount(BODIES.oneOffFired, "run_card");
     await waitFor(() => expect(rows(container)).not.toBeNull());
     // THE ROWS GO READ-ONLY, NOT DEAD (cinatra#3174 fix leg 1). §VI: "the rows
     // go read-only — the values still legible, the pickers gone". A disabled
     // picker is still a picker, and the first graded proof round photographed
-    // exactly that. The value stands where the field stood.
+    // exactly that. The value stands where the field stood, in the named
+    // reading box the fifth graded proof set pinned (cinatra#2934).
     expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
     expect(container.querySelectorAll("input")).toHaveLength(0);
     // The MOMENT, in the reader's own locale — the same reading the picker drew
     // a moment earlier, never the wire's naive wall clock (cinatra#3174 fix leg
     // 1). Asserted on the parts, because the locale is the reader's.
-    const readAt = rows(container)?.textContent ?? "";
-    expect(readAt).toContain(
+    expect(
+      container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
+    ).toContain(
       // The whole wall clock, in the reader's locale — see the note in
       // schedule-card-readings-per-drawing-3193-fix1: the year and the hour
       // alone would pass a formatter that moved the day (converge round).
@@ -407,9 +416,13 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     expect(cancel(container)).toBeNull();
     expect(container.textContent).not.toContain(SAVE_SCHEDULE_REFUSALS.stopped);
     // The schedule is still DRAWN — stopping it is not deleting it — and it is
-    // drawn as the record it now is (cinatra#3174 fix leg 1): the values stand
-    // where the pickers were.
+    // drawn as the record it now is (cinatra#3174 fix leg 1) the way the fifth
+    // graded proof set reads it (cinatra#2934): the value legible in its named
+    // box, the picker gone, rather than a picker standing there dead.
     expect(container.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(
+      container.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent,
+    ).toBe("Europe/Berlin");
     expect(rows(container)?.textContent).toContain("Europe/Berlin");
   });
 });

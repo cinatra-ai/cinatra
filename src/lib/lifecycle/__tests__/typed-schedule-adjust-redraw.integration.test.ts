@@ -66,9 +66,10 @@ import {
 } from "@cinatra-ai/chat/renderer/ag-ui-reducer";
 import { createLifecycleCardSettleBus } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { X2853_SCHEMA } from "./typed-schedule-adjust-redraw.setup";
+import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
-const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
+const HAS_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
 const describeDb = HAS_DB ? describe : describe.skip;
 
 const IN_DEDICATED_LANE = process.env.CINATRA_TYPED_SCHEDULE_ADJUST_REALDB === "1";

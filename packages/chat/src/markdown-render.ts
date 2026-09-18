@@ -20,10 +20,11 @@ import {
   safeHref,
   stripEmptyParagraphs,
 } from "@cinatra-ai/agents/markdown-render-core";
-// THE CELL GRAMMAR TRAVELLED WITH THE TABLE IT ALIGNS (cinatra#3230 on the
-// moved renderer): it is re-exported here under the names this package's own
-// readers already use, so the grammar has ONE definition and both surfaces
-// right-align a column the same way.
+// THE TABLE'S CELL GRAMMAR MOVED WITH THE RENDERER (cinatra#3230, forward merge
+// of origin/main). The four names below are the deterministic reader that
+// decides a column's alignment; they are defined beside the table renderer that
+// is their only caller, and re-exported here so /chat's own suite reads them
+// where it always has.
 export {
   cellPlainText,
   isNumericCellText,
@@ -79,8 +80,11 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
       const encodedCode = encodeURIComponent(text);
       return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line" data-shiki-code="${encodedCode}" data-shiki-lang="${safeLang}" data-shiki-theme="${theme}"><pre class="overflow-x-auto whitespace-pre bg-surface-muted p-4 text-[0.8rem] leading-relaxed font-mono text-foreground"><code>${escaped}</code></pre>${copyBtn}</div>`;
     },
-    // /chat pages a long table; the run window draws no pager, which is why
-    // the page size is surface-supplied and not built in.
+    // /chat pages a long table and listens for these buttons; the run window
+    // draws neither, which is why the page size is surface-supplied and not
+    // built in. The table's own header strip, copy and download controls are
+    // GONE with cinatra#3230 — the drawing gives an assistant turn's table no
+    // chrome of its own — so nothing is supplied for them any more.
     tablePageSize: 25,
   });
 
@@ -278,3 +282,4 @@ export function detectMermaidBlocks(text: string): MermaidSource[] {
   }
   return blocks;
 }
+

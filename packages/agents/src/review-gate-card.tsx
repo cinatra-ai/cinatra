@@ -184,10 +184,7 @@ import {
   ReviewGateLoading,
   ReviewGateSettled,
 } from "./review-gate-states";
-import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
@@ -717,11 +714,15 @@ export function ReviewGateCard({
     return outcome;
   };
 
-  // THE WINDOW SUBMITS NOTHING AT ALL ANY MORE (cinatra#2934, lifecycle-b W5c):
-  // what is typed under the gate reaches the assistant, and a request for
-  // changes is filed through this card's OWN Comment control — the closure
-  // below — under the person's own grant. So the window is handed no submitter
-  // of its own, and there is no second transport that could drift from the bar's.
+  // THE WINDOW TAKES NO DECISION ACTION AT ALL (cinatra#2934, lifecycle-b
+  // W5c). It used to be handed one — a closure that filed whatever was typed
+  // as a comment before any assistant read it — and that road is retired with
+  // the rest of the typed roads this slice removes: what is typed in the
+  // window now goes to the run's own assistant, and a request for changes is
+  // filed through the card's OWN Comment control, word for word, under the
+  // reader's own credential. The card still hands the window `onGateMoved`,
+  // because a turn that PRESSED that control settled the gate and a transcript
+  // host has no server component for `router.refresh()` to re-render.
 
   // #2566's COMPOSER COMMENT — the card's own comment path, published to the
   // composer rather than re-implemented by it.
@@ -1044,11 +1045,10 @@ function renderState(args: {
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          {/* §XIII.1's ONE settled marker — "Continued is the only settled
+              reading; there is no second status after it". It names nobody
+              (§VI); the disposition rides the element as a record. */}
+          <ReviewGateSettled outcome={state.outcome} />
         </>
       ) : (
         <>
@@ -2025,19 +2025,40 @@ export function ReviewTargetHeaders({
  * draws it beneath the decision bar, where the reader is already looking. The
  * panel keeps its own markup unchanged — only the element it lands in moved.
  *
- * The REAL conversational prompt window on the review surface (cinatra#2063): the changes-request channel is the same live
- * PromptField conversation the pre-migration review HITL used
- * (§X's reading for this surface: "Ask Cinatra about this review, or ask for
- * changes to the work…"), NOT the decision-bar
- * rationale box. It mounts the shared `HitlConversationPanel` (sticky, portalled
- * into <main>) and routes a typed request through the EXISTING Comment path
- * (`submitReviewDecisionAction` with disposition "comment") — which, on a fenced
- * single-target lifecycle gate, the action resolves as `changes_requested` and a
- * repair. It is NOT a fourth decision affordance: the Approve/Reject/Comment floor
- * is untouched; this is where the human asks for changes, and the exchange (the
- * typed request + the resulting repair/annotation state) is shown as conversation
- * entries. When the request resolves the gate (changes-requested / blocked) the
- * page is refreshed to the now-resolved live gate.
+ * AND WHAT IS TYPED HERE GOES TO THE ASSISTANT (cinatra#2934, lifecycle-b W5c).
+ * From the plan (PLAN: Agents Lifecycle (B), §4):
+ *
+ *   "On the review page, what you type goes to the assistant — and only a
+ *    request for changes requests changes. Today the box under a review is not a
+ *    conversation. Whatever you type there is filed at once, with no model
+ *    reading it, as a request for changes: the review closes and the work goes
+ *    back for repair — a question is treated exactly like an instruction …
+ *    When you ask for a change — 'tighten the opening paragraph' — the assistant
+ *    files it through the card's own Comment control, word for word, exactly as
+ *    pressing Comment with that text does today, and the work goes back for
+ *    repair. When you ask a question, you get an answer and nothing is filed.
+ *    The card's own buttons — Approve, Reject, Comment — keep working as they do
+ *    today, with no assistant in the way."
+ *
+ * WHAT WENT, AND WHAT REPLACED IT. The direct filing this window used to do on
+ * every send — the typed sentence handed straight to the review's decision
+ * action, before any model saw it — is GONE, with the platform outcome lines it
+ * composed. The filing now happens through the card's OWN Comment control,
+ * operated by the conversation's assistant under the person's own credential,
+ * with the person's own words read out of the server-held grant
+ * (`src/lib/lifecycle/lent-action-mcp.ts`). So a question is answered and files
+ * nothing, and a request for changes lands word for word.
+ *
+ * THE EXCHANGE IS NOT LOST BY THE RE-READ, which is what let the refresh move.
+ * The ruling this window carried — "the EXCHANGE must stay visible" — was met
+ * before by refusing to re-resolve, because the outcome line lived only in this
+ * component's own state. Since W5b the exchange is the RUN's, stored server side
+ * per turn and read back on mount (cinatra#2933), so a turn that PRESSED the
+ * Comment control can settle the card and the reader's own words are still on
+ * screen afterwards. A turn that only answered presses nothing and moves
+ * nothing.
+ *
+ * The decision bar is untouched: this is not a fourth affordance.
  */
 export function ReviewGatePromptWindow({
   onGateMoved,
@@ -2047,11 +2068,11 @@ export function ReviewGatePromptWindow({
   boundCardRef,
 }: {
   /**
-   * The gate MOVED under the reviewer — it was already decided, or the run went
-   * on — and the surface has to go back to the server for the live answer. It is
-   * the only outcome that refreshes: a landed change request keeps its exchange
-   * on screen. Given by the card so the re-resolve reaches a transcript host as
-   * well, where `router.refresh()` has no server component to re-render.
+   * The turn PRESSED a control of this gate — it asked for changes in so many
+   * words and the assistant filed it — so the surface has to go back to the
+   * server for the live answer. A turn that only answered moves nothing. Given
+   * by the card so the re-resolve reaches a transcript host as well, where
+   * `router.refresh()` has no server component to re-render.
    */
   onGateMoved?: () => void;
   storageKey: string;
@@ -2084,6 +2105,7 @@ export function ReviewGatePromptWindow({
       ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
       : {}),
   });
+
   // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT. The window is the one
   // road to requesting changes, so an anchor drawn with nothing inside it would
   // put the drawing's affordance on screen for a reader whose message the server
@@ -2092,21 +2114,10 @@ export function ReviewGatePromptWindow({
   if (!canComment) return null;
 
   const handleSubmit = async (prompt: string) => {
-    // THE ONE ROAD (cinatra#2934, lifecycle-b W5c): what was typed goes to the
-    // run's conversation with the assistant. The direct comment-submit this
-    // window used to do — the typed sentence handed straight to the review's
-    // decision action, before any model saw it — is GONE. The filing now
-    // happens through the card's OWN Comment control, operated by the
-    // conversation's assistant under the person's own credential, with the
-    // person's own words read out of the server-held grant
-    // (`src/lib/lifecycle/lent-action-mcp.ts`). So a question is answered and
-    // files nothing, and a request for changes lands word for word.
     const effect = await runWindow.send(prompt);
-    // THE CARD RE-READS ITSELF. A turn that pressed Comment resolved the gate
-    // and sent the work back for repair, so the surface must show the state the
-    // server now holds. A turn that only answered moves nothing. It goes
-    // through `onGateMoved` where the host gave one, so a transcript host
-    // re-resolves too — `router.refresh()` re-renders no server component there.
+    // THE CARD RE-READS ITSELF. A turn that pressed Comment resolved the gate and
+    // sent the work back for repair, so the surface must show the state the
+    // server now holds. A turn that only answered moves nothing.
     if (effect.acted) {
       if (onGateMoved) onGateMoved();
       else router.refresh();
@@ -2117,9 +2128,7 @@ export function ReviewGatePromptWindow({
     // The conversational prompt window (cinatra#2063): the
     // typed change request IS how changes are requested — there is no dedicated
     // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    // The anchor marks this mount for the run-embedded conformance closed set.
     <div
       data-conformance-id="review-prompt-window"
       data-action="request-changes -> changes-requested"
@@ -2127,9 +2136,9 @@ export function ReviewGatePromptWindow({
     >
       <HitlConversationPanel
         portalTarget={portalTarget}
-        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-        // `app-artifact-review.html` §X): the mount names its surface and the
-        // window reads the drawing's own sentence for it.
+        // WHICH READING OF THE ONE WINDOW THIS IS (the ratified artifact-review
+        // drawing, §X): the mount names its surface and the window reads the
+        // drawing's own sentence for it.
         surface="review"
         visible={!!portalTarget}
         conversation={runWindow.entries}
