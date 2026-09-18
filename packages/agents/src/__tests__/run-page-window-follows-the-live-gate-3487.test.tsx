@@ -277,6 +277,14 @@ async function poll(ms = 6000): Promise<void> {
   });
 }
 
+/**
+ * THE WINDOW'S OWN INVITATION, keyed by surface in `hitl-conversation-panel.tsx`
+ * (:28 the run page's, :36 the review's). Reading it is how a case says WHICH
+ * registration the page drew, not merely that it drew one.
+ */
+const REVIEW_INVITATION = "Ask Cinatra about this review";
+const SETUP_INVITATION = "Ask Cinatra to fill the fields above";
+
 const windows = (root: ParentNode) =>
   root.querySelectorAll('[data-conformance-id="review-prompt-window"]');
 const chromeNode = (root: ParentNode) =>
@@ -347,10 +355,28 @@ describe("(i) the live transition into the marked review gate", () => {
     expect(windows(container)).toHaveLength(1);
     const chrome = chromeNode(container);
     expect(chrome).not.toBeNull();
+    // NO REMOUNT: the host node the window hangs in is the very node the page
+    // already had before the run parked on its gate.
+    expect(chrome).toBe(treeBefore);
     expect(windows(container)[0].closest('[data-run-window-host="page-chrome"]')).toBe(chrome);
+    // AND IT IS THE REVIEW'S OWN WINDOW, not a setup window left standing: the
+    // invitation is keyed by the drawn record's surface, so the sentence the
+    // window carries names which registration the page is drawing.
+    expect(windows(container)[0].textContent).toContain(REVIEW_INVITATION);
+    expect(windows(container)[0].textContent).not.toContain(SETUP_INVITATION);
     expect(anchorsInsideScreensOrCards(container)).toBe(0);
     // It is the PAGE's node, never the card's.
     expect(windows(container)[0].closest("[data-lifecycle-card-host]")).toBeNull();
+
+    // AND IT SURVIVES THE PANEL'S NEXT POLL TICK. The panel re-publishes its own
+    // nothing-to-manipulate reading every few seconds; under arrival order that
+    // is where the page lost the window again, which is why the round read zero
+    // for minutes rather than once.
+    await poll();
+    expect(windows(container)).toHaveLength(1);
+    expect(chromeNode(container)).toBe(treeBefore);
+    expect(windows(container)[0].textContent).toContain(REVIEW_INVITATION);
+    expect(anchorsInsideScreensOrCards(container)).toBe(0);
   });
 });
 
@@ -458,6 +484,9 @@ describe("(vi) the finished run, with the record step selected", () => {
     );
     await poll();
 
+    // NOT AN EMPTY ROOM: the finished run really did draw a screen or card root
+    // for the reading to be taken inside of.
+    expect(container.querySelector(SCREEN_AND_CARD_ROOTS.join(","))).not.toBeNull();
     expect(anchorsInsideScreensOrCards(container)).toBe(0);
   });
 });
