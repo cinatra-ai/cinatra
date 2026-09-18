@@ -248,6 +248,34 @@ describe("cinatra#1039 decision 2 — resolveAgentScopeAncestry (the REAL ladder
     expect(team.map((l) => l.label)).toEqual(["team:team-1", `organization:${ORG}`, "platform"]);
   });
 
+  it("the app-wide WORKSPACE anchor resolves with NO owner id and matches the rows the store writes (cinatra#3204)", async () => {
+    // The workspace anchor carries no principal: the canonical store writes the
+    // platform sentinel into owner_id and reads it back verbatim, so the ladder
+    // that has to match those rows normalizes to the sentinel instead of
+    // refusing a tuple every "Workspace: All" install creates.
+    const chain = await resolveAgentScopeAncestry({
+      ownerLevel: "workspace",
+      ownerId: null,
+      organizationId: null,
+    });
+    expect(chain.map((l) => l.label)).toEqual(["workspace:__platform__", "platform"]);
+    const workspaceRow = row(DEP, "0.2.1", {
+      organizationId: null,
+      ownerLevel: "workspace",
+      ownerId: "__platform__",
+    });
+    expect(chain[0]!.matches(workspaceRow)).toBe(true);
+  });
+
+  it("a workspace tuple that DOES name an owner is unchanged", async () => {
+    const chain = await resolveAgentScopeAncestry({
+      ownerLevel: "workspace",
+      ownerId: "ws-7",
+      organizationId: null,
+    });
+    expect(chain.map((l) => l.label)).toEqual(["workspace:ws-7", "platform"]);
+  });
+
   it("project tuple walks project→owning-team→org→platform via the injected project reader", async () => {
     const readProject = vi.fn(async () => ({
       organizationId: ORG,
