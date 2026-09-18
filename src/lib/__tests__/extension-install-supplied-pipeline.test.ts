@@ -41,11 +41,12 @@ const githubProvenance = {
 };
 
 /**
- * Every supplied install below names a METADATA-ONLY kind. That is not a
- * convenience: it is the boundary. A supplied package is unsigned, so the trust
- * classifier never admits it — and the pipeline lets an unadmitted package
- * INSTALL only for the kinds that import nothing. A supplied connector is
- * refused, and there is a test for that below.
+ * The default supplied install below names a METADATA-ONLY kind, which is the
+ * kind set that imports nothing in this process. The kinds that DO import are
+ * admitted by the supplied road's own activation standing (the operator supplied
+ * the bytes and the road re-verified their content digest) — never by a
+ * signature it does not have, and never at the privileged tier. Both halves have
+ * tests below.
  */
 const suppliedInstall = (over: Record<string, unknown> = {}) =>
   ({
@@ -309,9 +310,10 @@ describe("a supplied package stays untrusted (criterion 26)", () => {
 
 describe("per-kind reach (the pipeline half of criterion 31)", () => {
   it("drives each of the four live kinds through the same entry", async () => {
-    // The three kinds a supplied package can reach through this entry. The
-    // fourth (connector) is refused by the trust boundary, asserted below.
-    for (const kind of ["agent", "skill", "artifact"] as const) {
+    // ALL FOUR live kinds reach this entry and install through it — the issue's
+    // headline claim, and the one the connector could not meet while the origin
+    // factor accepted only a registry host.
+    for (const kind of ["agent", "skill", "artifact", "connector"] as const) {
       const writes: Record<string, unknown>[] = [];
       const deps: SuppliedInstallPipelineDeps = makeTestSuppliedInstallPipelineDeps({
         treeDigest: DIGEST,
@@ -363,31 +365,67 @@ describe("the trust boundary the supplied road does NOT move", () => {
     const result = await installExtensionFromSuppliedSnapshot(suppliedInstall(), deps);
     expect(result.installed).toBe(true);
     expect(result.activated).toBe(false);
-    expect(result.reason).toBe("untrusted-no-in-process-activation");
-    // Not "called and refused" — never called. Untrusted bytes are not imported.
+    // The KIND is why, and the reason says so: this package imports nothing, so
+    // the in-process activator is not called at all.
+    expect(result.reason).toBe("metadata-only-no-in-process-activation");
+    // Not "called and refused" — never called.
     expect(activated).toBe(false);
   });
 
-  it("a supplied CONNECTOR is REFUSED — its install exists to run register(ctx)", async () => {
-    const deps = makeTestSuppliedInstallPipelineDeps({ treeDigest: DIGEST });
-    await expect(
-      installExtensionFromSuppliedSnapshot(
-        suppliedInstall({ packageName: "@acme/thing-connector", expectedKind: "connector" }),
-        deps,
-      ),
-    ).rejects.toThrow(/not a trusted activation host|UNTRUSTED/i);
-  });
-
-  it("the supplied origin is never added to a trusted-host allowlist by the road itself", async () => {
-    // Stated as a test because it is the one shortcut that would make every
-    // assertion above pass for the wrong reason.
+  it("a supplied CONNECTOR INSTALLS and its row is written — the road is an activation origin", async () => {
+    const writes: Record<string, unknown>[] = [];
+    let activatedPackage: string | null = null;
     const deps = makeTestSuppliedInstallPipelineDeps({
       treeDigest: DIGEST,
-      trustedActivationHosts: () => ["registry.cinatra.ai"],
+      // The host policy of a deployment with NO configured marketplace: no
+      // activation host at all, and the unsigned-bootstrap lever off. A store
+      // install reaches nothing under it. The supplied road stands on the supply
+      // act instead, so the kind whose install exists to run `register(ctx)`
+      // gets to run it.
+      trustedActivationHosts: () => [],
+      allowMarketplaceBootstrapTrust: () => false,
+      recordSuppliedProvenance: async (p) => {
+        writes.push(p as unknown as Record<string, unknown>);
+      },
+      activateInProcess: async (i) => {
+        activatedPackage = i.packageName;
+        return { activated: true };
+      },
+    });
+
+    const result = await installExtensionFromSuppliedSnapshot(
+      suppliedInstall({ packageName: "@acme/thing-connector", expectedKind: "connector" }),
+      deps,
+    );
+
+    expect(result.installed).toBe(true);
+    expect(result.activated).toBe(true);
+    expect(activatedPackage).toBe("@acme/thing-connector");
+    // THE ROW: honest supplied provenance, exactly as every other kind records it.
+    expect(writes).toHaveLength(1);
+    expect(writes[0].provenance).toEqual(localProvenance);
+    // Admitted for IMPORT, not for privilege: nothing self-granted.
+    expect(result.grantStatus).not.toBe("approved");
+  });
+
+  it("the supplied road never widens the host allowlist, and never self-grants", async () => {
+    // Stated as a test because it is the one shortcut that would make every
+    // assertion above pass for the wrong reason: the road is admitted by its own
+    // declared origin, and it neither adds itself to the deployment's activation
+    // hosts nor climbs to the privileged tier.
+    const seenHosts: string[][] = [];
+    const deps = makeTestSuppliedInstallPipelineDeps({
+      treeDigest: DIGEST,
+      trustedActivationHosts: () => {
+        const hosts = ["registry.cinatra.ai"];
+        seenHosts.push(hosts);
+        return hosts;
+      },
       allowMarketplaceBootstrapTrust: () => true,
     });
     const result = await installExtensionFromSuppliedSnapshot(suppliedInstall(), deps);
     expect(result.grantStatus).toBe("pending");
     expect(result.activated).toBe(false);
+    expect(seenHosts).toEqual([["registry.cinatra.ai"]]);
   });
 });
