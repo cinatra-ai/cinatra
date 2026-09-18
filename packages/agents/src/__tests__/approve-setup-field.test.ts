@@ -239,6 +239,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     for (const jobId of jobIds) {
       expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
     }
+    // TWO asks, not two DISTINCT strings among any number of asks: the count is
+    // half the sentence and the merge's id-shape reading must not drop it
+    // (convergence round).
+    expect(jobIds).toHaveLength(2);
     expect(new Set(jobIds).size).toBe(2);
   });
 
@@ -269,6 +273,8 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     for (const jobId of jobIds) {
       expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
     }
+    // Three names, three asks AND three ids (convergence round: the count).
+    expect(jobIds).toHaveLength(3);
     expect(new Set(jobIds).size).toBe(3);
   });
 
