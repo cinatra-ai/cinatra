@@ -27,6 +27,8 @@
       "src/app/design-fixtures/conformance/card-fixtures.tsx",
       "src/app/design-fixtures/conformance/fixture-data.ts",
       "src/app/design-fixtures/conformance/install-config-needs-fixture.tsx",
+      "src/app/design-fixtures/conformance/upload-extension-fixtures.tsx",
+      "src/app/design-fixtures/conformance/upload-extension-fixture-data.ts",
       "src/app/design-fixtures/conformance/seed-data.ts",
       "src/app/design-fixtures/conformance/seeded/page.tsx",
       "src/app/design-fixtures/conformance/seeded/marketplace-grid-fixture.tsx",

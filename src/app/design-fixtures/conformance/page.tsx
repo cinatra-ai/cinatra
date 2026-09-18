@@ -20,6 +20,7 @@ import {
 } from "./connector-multi-connection-fixture";
 import { ConnectorSharingFixture } from "./connector-sharing-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
+import { UploadExtensionConformanceFixtures } from "./upload-extension-fixtures";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
@@ -228,6 +229,22 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <InstallConfigNeedsConformanceFixture />
+          </CardContent>
+        </Card>
+
+        {/* The Upload Extension screen's three surfaces (design spec §VIII,
+            published with the app-extensions manifest adopted in cinatra#3546):
+            upload-extension-screen, upload-github-form and
+            upload-resolved-install-panel. */}
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Upload Extension screen (surfaces: upload-extension-screen,
+              upload-github-form, upload-resolved-install-panel)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <UploadExtensionConformanceFixtures />
           </CardContent>
         </Card>
 
