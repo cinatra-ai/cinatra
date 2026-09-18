@@ -720,6 +720,14 @@ async function runTheLaunch(
             ...create.input,
             runBy: create.input.runBy,
             humanPresent: humanPresent ? true : undefined,
+            // WHAT STARTED THIS RUN (cinatra#3450). It lives on the FENCE for
+            // the same reason the anchor below it does: this function is the
+            // single place every way of creating a run goes through, so the key
+            // recorded here reaches all of them — including a road added
+            // tomorrow — and no producer can forget it. Passed AS GIVEN: the
+            // inventory key is the producer's own, and nothing here derives it
+            // from the frame, the dispatch shape or the presence reading.
+            launchProducer: input.producer,
             launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,
@@ -729,6 +737,14 @@ async function runTheLaunch(
             ...create.input,
             initialStatus: parkOnCreate ? "pending_input" : "queued",
             humanPresent: humanPresent ? true : undefined,
+            // WHAT STARTED THIS RUN (cinatra#3450). It lives on the FENCE for
+            // the same reason the anchor below it does: this function is the
+            // single place every way of creating a run goes through, so the key
+            // recorded here reaches all of them — including a road added
+            // tomorrow — and no producer can forget it. Passed AS GIVEN: the
+            // inventory key is the producer's own, and nothing here derives it
+            // from the frame, the dispatch shape or the presence reading.
+            launchProducer: input.producer,
             launchScopeAnchor: input.launchScopeAnchor ?? null,
           },
           authority,

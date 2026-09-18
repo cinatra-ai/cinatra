@@ -22,6 +22,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { runDetailInitialStep } from "../instance-screens";
@@ -133,6 +134,22 @@ describe("buildRunInputRailSteps — the input form gets the rail's own step row
     const railSteps = buildRunInputRailSteps(steps, "the run detail");
 
     expect(railSteps.map((s) => s.reached)).toEqual([true, false]);
+    // AND THE ROW READS AS THE DRAWING'S STEPS STILL TO COME (cinatra#3243,
+    // acceptance item 2), pinned here by name rather than left to the reader.
+    // `specs/app-artifact-review.html` section I: "The step the run is paused on
+    // is highlighted; steps already passed sit above it, steps still to come
+    // below." So the unreached row is drawn muted and its action word says the
+    // row opens nothing -- which is how it never opens an empty column either.
+    const upcomingRow = railSteps[1].row as ReactElement<{
+      reached: boolean;
+      settled: boolean;
+      selectable: boolean;
+      action: string;
+    }>;
+    expect(upcomingRow.props.reached).toBe(false);
+    expect(upcomingRow.props.settled).toBe(false);
+    expect(upcomingRow.props.selectable).toBe(false);
+    expect(upcomingRow.props.action).toBe("input-step-unavailable");
   });
 
   it("numbers the rows from the offset the caller gives it", () => {
