@@ -157,6 +157,24 @@ const HOST_STANDARD_IDS = new Set([
   // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
   // photographed (https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity, the S5a / R7a cells).
   "review-gate-placeholder",
+  // cinatra#3046 -- the placeholder's EMPTY FRAME, closing the stated skeleton
+  // deviation: the box the review screen will fill, drawn as an empty frame
+  // per section II ("names no status, reports no result, draws nothing to
+  // press") rather than the borrowed bar-skeleton motif. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (frame
+  // present, no bar-skeleton motif inside it) is pinned in
+  // packages/agents/src/__tests__/review-gate-placeholder-drawing.test.tsx.
+  "review-gate-placeholder-frame",
+  // cinatra#3046 -- the run the wordless box is waiting on, named beside the
+  // spinner so a page that has been open a while says WHICH run it holds for
+  // rather than drawing one anonymous empty box. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (the
+  // reference is drawn on BOTH hosts, and the box stops claiming something is
+  // coming once the run settles) is pinned in
+  // packages/agents/src/__tests__/agentic-run-panel.park-drawing-both-surfaces.test.tsx.
+  "review-gate-placeholder-run-ref",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer
@@ -219,6 +237,18 @@ const HOST_STANDARD_IDS = new Set([
   // SPEC_CONFORMANCE under its spec commit.
   "review-target-island-skeleton",
   "review-target-island-timeout",
+  // cinatra#3046 fix leg 17 (cinatra#3294) — the two parts of the SETTLED
+  // MARKER's drawn row, so a graded reading can address each of them.
+  //
+  // NAMED HONESTLY, like the anchors above: the COMPOSITION is the drawing's
+  // own and is quoted in the component — a wrapping flex row with the panel
+  // line, `var(--surface)` and 9px/12px padding, holding a pill with a 7px dot
+  // and then a 12px muted sentence — but the drawing's markup carries no
+  // conformance id on those two nodes, so the ids themselves are this surface's
+  // and are listed here rather than under SPEC_CONFORMANCE. The outer marker
+  // keeps its spec anchor, `review-gate-settled`, unchanged.
+  "review-gate-settled-pill",
+  "review-gate-settled-sentence",
 ]);
 
 function conformanceIdsIn(src: string): string[] {

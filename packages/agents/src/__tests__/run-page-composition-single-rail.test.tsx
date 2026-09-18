@@ -264,15 +264,26 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
-  listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
-  readReviewGate: vi.fn(async () => null),
-  readRunReviewSlot: vi.fn(async () => ({
-    reviewTaskId: reviewSlot.reviewTaskId,
-    awaiting: reviewSlot.awaiting,
-  })),
-  readVerificationRecordsForGates: vi.fn(async () => []),
-}));
+vi.mock("../artifact-review-gate-store", async () => {
+  // cinatra#3046 — this screen also asks the store whether the run is parked on
+  // the review its own output opened. That predicate is PURE: it answers from the
+  // run row it is handed, so this factory hands the suite the REAL one (re-exported
+  // by the store from its writer) instead of a stub that could answer differently
+  // from the page under test.
+  const hold = await vi.importActual<typeof import("../run-produced-review-hold")>(
+    "../run-produced-review-hold",
+  );
+  return {
+    listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
+    readReviewGate: vi.fn(async () => null),
+    readRunReviewSlot: vi.fn(async () => ({
+      reviewTaskId: reviewSlot.reviewTaskId,
+      awaiting: reviewSlot.awaiting,
+    })),
+    readVerificationRecordsForGates: vi.fn(async () => []),
+    isParkedOnProducedReview: hold.isParkedOnProducedReview,
+  };
+});
 
 vi.mock("../lifecycle-policy-store", () => ({
   readLifecycleDecisionsForRun: vi.fn(async () => []),

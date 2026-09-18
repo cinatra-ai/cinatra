@@ -7,6 +7,7 @@ import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 
 import { cn } from "@/lib/utils";
+import { reviewGateRailSettlement } from "@/lib/artifacts/review-surface-model";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 // THE SELECTION VOCABULARY, AS A TYPE ONLY (cinatra#3478, the click leg).
@@ -331,6 +332,13 @@ export function RailExtraEntry({
   const isLifecycle = entry.kind === "lifecycleDecision";
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
+  // THE SETTLED WORD IS THE DRAWING'S, NOT THE WIRE'S (cinatra#3046, fix leg
+  // 16). This badge used to print `entry.gate.disposition` straight through, so
+  // the rail read "APPROVE" beside a Review step whose card, on the same
+  // screen, read "Continued" — one settlement in two vocabularies, one of them
+  // the decider's verb rather than a reading. Derived from the one closed set
+  // the header and the settled line already read.
+  const gateSettlement = reviewGateRailSettlement(entry.gate?.disposition);
   const isPending = entry.status === "pending";
 
   // THE GATE THE RUN IS PARKED ON OPENS IN PLACE (cinatra#3478, the click leg).
@@ -356,8 +364,11 @@ export function RailExtraEntry({
     >
       {entry.label}
       {isGate && isResolved ? (
-        <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          {entry.gate?.disposition ?? "resolved"}
+        <span
+          className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground"
+          data-rail-gate-settlement={gateSettlement}
+        >
+          {gateSettlement}
         </span>
       ) : null}
       {isVerification ? (

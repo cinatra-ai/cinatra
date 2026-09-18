@@ -731,6 +731,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // SLOT — what the run card draws where the review screen goes (cinatra#2997).
   //
+  // AND WHETHER THE RUN IS WAITING ON IT (cinatra#3046). None of the runs below
+  // has an `agent_runs` row at all, so none of them is parked and every reading
+  // here is the unparked one — which is the point: the third fact is a fact about
+  // the RUN, and it is false for a run that is not held by a review.
+  //
   // The run card is a placeholder for the review screen while the agent works
   // and becomes that screen when the work opens one, so it asks the run's own
   // rows: which gate is this run's, and might one still be opened for what it
@@ -742,6 +747,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -761,6 +767,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -776,6 +783,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
 
     // A RESOLVED gate is still the answer. The reader who decided in place must
@@ -795,6 +803,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -836,6 +845,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -866,6 +876,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: second,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -882,6 +893,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(mine.runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 });

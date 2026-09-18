@@ -74,9 +74,28 @@ export const HITL_RECOVERY_MIN_ATTEMPTS = 3;
 export function classifyHitlDerivation(
   status: string | null,
   context: unknown,
+  /**
+   * IS THIS PAUSE THE REVIEW OF WHAT THE RUN PRODUCED? (cinatra#3007.)
+   *
+   * The derivation contract this module opens with — "a paused run always
+   * yields a context" — was true of every pause that existed when it was
+   * written, and cinatra#3007 added one it is not true of. A run held for the
+   * review of its own output waits in `pending_approval` with NO approval step
+   * at all: the hold withholds the run's terminal write instead of minting a
+   * gate for anybody to answer. So for THAT pause "paused, and no context" is
+   * the ordinary reading and not a failure on the wire, and calling it a
+   * failure is conclusive on its first occurrence — which is how the run page
+   * came to draw "its approval step could not be loaded" with a Re-check beside
+   * it, on the very first tick of a park that was working exactly as designed.
+   *
+   * Absent (the default), every existing caller is classified byte-for-byte as
+   * it was.
+   */
+  parkedOnProducedReview: boolean = false,
 ): HitlDerivationOutcome {
   if (context) return { kind: "context" };
   if (status === "pending_approval") {
+    if (parkedOnProducedReview) return { kind: "resolved" };
     return {
       kind: "derivation_failed",
       reason: "the server reported this run as paused but sent no approval step",
@@ -120,8 +139,13 @@ export function isHitlRecoveryVisible(input: {
   isPendingApproval: boolean;
   hasContext: boolean;
   state: HitlDerivationState;
+  /** Is this pause the review of what the run produced — or the window before
+   *  the surface has heard which pause it is? See the note above the
+   *  classifier: neither is a run with a step that failed to load. */
+  isProducedReviewPark?: boolean;
 }): boolean {
   if (!input.isPendingApproval || input.hasContext) return false;
+  if (input.isProducedReviewPark) return false;
   if (input.state.lastFailure !== null) return true;
   return input.state.attempts >= HITL_RECOVERY_MIN_ATTEMPTS;
 }
@@ -141,6 +165,8 @@ export function describeHitlInvariantViolation(input: {
   isPendingApproval: boolean;
   hasContext: boolean;
   state: HitlDerivationState;
+  /** Carried through to the predicate below — a park is not a violation. */
+  isProducedReviewPark?: boolean;
 }): {
   attempts: number;
   consecutiveFailures: number;
