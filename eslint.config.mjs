@@ -445,7 +445,7 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   "packages/chat/src/chat-messages-view.tsx",
   "packages/mcp-server/src/index.tsx",
   "packages/agents/src/campaign-recipients-review-renderer.tsx",
-  "packages/agents/src/import-skill-from-github-form.tsx",
+  "packages/agents/src/upload-repository-link-form.tsx",
   "packages/permissions/src/user-impersonation-panel.tsx",
   "packages/permissions/src/impersonation-banner.tsx",
   "packages/extensions/src/screens/extension-resolution-panel.tsx",

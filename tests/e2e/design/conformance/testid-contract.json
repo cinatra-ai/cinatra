@@ -308,7 +308,7 @@
           "literals": ["<UploadExtensionScreenBody"]
         },
         {
-          "file": "packages/agents/src/import-skill-from-github-form.tsx",
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
           "literals": ["data-testid=\"upload-resolved-name\""]
         }
       ]
@@ -318,7 +318,7 @@
       "selector": "[data-conformance-id=\"upload-github-form\"] (the repository form of the §VIII GitHub tab; the loading variant is [data-state=\"loading\"] on that same node, present only while the lookup is in flight). resolve-reference action: [data-conformance-id=\"resolve-reference\"], beside the shipped [data-testid=\"github-upload-submit\"]. Fields: #github-repo-url and #github-ref, each with its drawn placeholder",
       "requires": [
         {
-          "file": "packages/agents/src/import-skill-from-github-form.tsx",
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
           "literals": [
             "data-conformance-id=\"upload-github-form\"",
             "data-state={isLooking ? \"loading\" : undefined}",
@@ -344,7 +344,7 @@
           ]
         },
         {
-          "file": "packages/agents/src/import-skill-from-github-form.tsx",
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
           "literals": [
             "data-testid=\"upload-resolved-kind\"",
             "data-testid=\"upload-resolved-name\"",

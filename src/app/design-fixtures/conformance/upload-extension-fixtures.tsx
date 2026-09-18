@@ -23,7 +23,7 @@ import { useState } from "react";
 import {
   ImportPackageFromGitHubForm,
   type UploadGitHubFormHarness,
-} from "@cinatra-ai/agents/import-skill-from-github-form";
+} from "@cinatra-ai/agents/upload-repository-link-form";
 import { UploadExtensionScreenBody } from "@cinatra-ai/agents/upload-extension-screen-body";
 
 import {
@@ -81,7 +81,10 @@ function harnessInstall(
 
 /**
  * `upload-extension-screen` — the screen's own JSX body, the component the
- * route renders. The GitHub tab is planted resolved so the screen's single
+ * route renders, asked for in its BARE form and bounded the way every sibling
+ * fixture on this page bounds its component: the harness page already draws the
+ * one page shell, and a second one nested in its card re-flows the page the
+ * other mounts are measured in. The shipped route keeps the page shell. The GitHub tab is planted resolved so the screen's single
  * `name` reading (the drawing annotates the whole §VIII example, whose only
  * name reading is the resolved package's) is reachable through the real tab
  * strip.
@@ -89,10 +92,13 @@ function harnessInstall(
 function UploadScreenMount() {
   return (
     <div data-surface-id="upload-extension-screen" data-variant="populated">
-      <UploadExtensionScreenBody
-        installScope={UPLOAD_CONFORMANCE_INSTALL_SCOPE}
-        githubHarness={{ initialPreview: UPLOAD_CONFORMANCE_PREVIEW, previewPackage }}
-      />
+      <div className="w-full max-w-3xl">
+        <UploadExtensionScreenBody
+          outerElement="bare"
+          installScope={UPLOAD_CONFORMANCE_INSTALL_SCOPE}
+          githubHarness={{ initialPreview: UPLOAD_CONFORMANCE_PREVIEW, previewPackage }}
+        />
+      </div>
     </div>
   );
 }

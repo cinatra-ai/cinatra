@@ -30,7 +30,7 @@ import { ImportAgentForm } from "./import-form";
 import {
   ImportPackageFromGitHubForm,
   type UploadGitHubFormHarness,
-} from "./import-skill-from-github-form";
+} from "./upload-repository-link-form";
 import type { UploadInstallScopeContext } from "./upload-install-scope-panel";
 
 export type UploadExtensionScreenBodyProps = {
@@ -38,18 +38,34 @@ export type UploadExtensionScreenBodyProps = {
   installScope: UploadInstallScopeContext;
   /**
    * Conformance-harness seam, forwarded untouched to the GitHub tab — see
-   * `UploadGitHubFormHarness` in ./import-skill-from-github-form. Absent on
+   * `UploadGitHubFormHarness` in ./upload-repository-link-form. Absent on
    * every shipped road.
    */
   githubHarness?: UploadGitHubFormHarness;
+  /**
+   * Which outer element the body draws around its unchanged subtree.
+   *
+   *  - "page" (DEFAULT) — the page shell the shipped route draws: the
+   *    viewport-claiming `Main`. Every shipped road takes this and is
+   *    unchanged by the option existing.
+   *  - "bare" — a plain container element claiming no viewport, for a mounting
+   *    that is ALREADY inside a page (the conformance harness mounts this body
+   *    inside its own page's card, and a second page shell nested there
+   *    re-flows the page every other mount on it is measured in).
+   *
+   * The header, the content wrapper, the tab strip, both tabs' forms and the
+   * surface id on the outer node are identical either way.
+   */
+  outerElement?: "page" | "bare";
 };
 
 export function UploadExtensionScreenBody({
   installScope,
   githubHarness,
+  outerElement = "page",
 }: UploadExtensionScreenBodyProps) {
-  return (
-    <Main className="min-h-screen" data-conformance-id="upload-extension-screen">
+  const body = (
+    <>
       <PageHeader
         label="Extensions"
         title="Upload Extension"
@@ -83,6 +99,15 @@ export function UploadExtensionScreenBody({
           </TabsContent>
         </Tabs>
       </PageContent>
+    </>
+  );
+
+  if (outerElement === "bare") {
+    return <div data-conformance-id="upload-extension-screen">{body}</div>;
+  }
+  return (
+    <Main className="min-h-screen" data-conformance-id="upload-extension-screen">
+      {body}
     </Main>
   );
 }

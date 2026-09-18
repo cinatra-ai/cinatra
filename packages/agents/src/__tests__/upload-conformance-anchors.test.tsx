@@ -53,7 +53,7 @@ vi.mock("../supplied-install-actions", () => actions);
 const toastState = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }));
 vi.mock("@/lib/cinatra-toast", () => ({ toast: toastState }));
 
-import { ImportPackageFromGitHubForm } from "../import-skill-from-github-form";
+import { ImportPackageFromGitHubForm } from "../upload-repository-link-form";
 import { UploadExtensionScreenBody } from "../upload-extension-screen-body";
 
 const INSTALL_SCOPE = {
@@ -103,6 +103,13 @@ describe("the screen carries the surface id and the header action's name", () =>
 
     const screenRoot = container.querySelector('[data-conformance-id="upload-extension-screen"]');
     expect(screenRoot, "the screen body root carries its manifest surface id").not.toBeNull();
+
+    // The SHIPPED road's own outer element, pinned. The route renders this body
+    // with its default props, and that default is the page shell every route
+    // draws: a viewport-claiming main. The bare form a mounting can ask for is
+    // an opt-in that never reaches the route.
+    expect(screenRoot?.tagName.toLowerCase()).toBe("main");
+    expect(screenRoot?.classList.contains("min-h-screen")).toBe(true);
 
     // The drawing: "a single outline action reading Back to Marketplace that
     // points at the marketplace page".

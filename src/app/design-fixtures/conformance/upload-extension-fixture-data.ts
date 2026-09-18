@@ -14,7 +14,7 @@
 // example names this one.
 // ---------------------------------------------------------------------------
 
-import type { UploadGitHubFormHarness } from "@cinatra-ai/agents/import-skill-from-github-form";
+import type { UploadGitHubFormHarness } from "@cinatra-ai/agents/upload-repository-link-form";
 import type { UploadInstallScopeContext } from "@cinatra-ai/agents/upload-install-scope-panel";
 import { resolveInstallPanelAvailability } from "@cinatra-ai/extensions/screens/install-panel-availability";
 

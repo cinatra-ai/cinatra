@@ -70,7 +70,7 @@
     "./run-made-reading": "./src/run-made-reading.ts",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
-    "./import-skill-from-github-form": "./src/import-skill-from-github-form.tsx",
+    "./upload-repository-link-form": "./src/upload-repository-link-form.tsx",
     "./upload-extension-screen-body": "./src/upload-extension-screen-body.tsx",
     "./upload-install-scope-panel": "./src/upload-install-scope-panel.tsx",
     "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",

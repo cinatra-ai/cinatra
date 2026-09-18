@@ -93,6 +93,26 @@ describe("the Upload Extension conformance mounts", () => {
     ).toBe("/configuration/marketplace");
   });
 
+  it("mounts the screen body without a page shell, so the harness page keeps the viewport", () => {
+    // Every sibling conformance fixture mounts its real component inside a
+    // bounded plain container (card-fixtures.tsx, lifecycle-composer-fixtures.tsx,
+    // notification-config-needs-fixture.tsx, connector-sharing-fixture.tsx); only
+    // the harness PAGES draw a page shell. A second viewport-claiming main
+    // nested inside the harness page's card re-flows the page that every other
+    // mount on it is measured in, so this mount asks the body for its bare form.
+    const { container } = render(<UploadExtensionConformanceFixtures />);
+    expect(container.querySelectorAll("main").length).toBe(0);
+    expect(
+      Array.from(container.querySelectorAll("*")).filter((node) =>
+        node.classList.contains("min-h-screen"),
+      ).length,
+    ).toBe(0);
+    // The node the driver grades stays exactly where it was.
+    expect(
+      container.querySelector('[data-conformance-id="upload-extension-screen"]'),
+    ).not.toBeNull();
+  });
+
   it("opens the repository road at rest so the resolve action is the product's own", () => {
     const root = mount("upload-github-form");
     // No panel before a lookup: the `resolve-reference` action has somewhere to
