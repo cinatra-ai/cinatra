@@ -283,6 +283,7 @@ function AgentRunTurnSlot({
   onScheduleWaitChange,
   onScheduleFiredChange,
   onScheduleFiredRecurringChange,
+  onScheduleStandingReadingChange,
   onApplyIntent,
   children,
 }: {
@@ -318,6 +319,15 @@ function AgentRunTurnSlot({
    *  exactly the terms the other two are — off this container's own settled
    *  reading, up to the parts list that draws the sibling line. */
   onScheduleFiredRecurringChange?: (runId: string, firedRecurring: boolean) => void;
+  /** THE READING ITSELF, NOT A BOOLEAN DERIVED FROM IT (cinatra#3281). The two
+   *  booleans above answer "is this run's card in MY reading" for two of the
+   *  three readings the drawing writes a sentence for, and the stopped one is
+   *  not carried at all — so the turn's own prose could not ask "which sentence
+   *  does §VI give the card standing in this slot". This reports the settled
+   *  card's standing reading on exactly the terms its neighbours are reported
+   *  on: off this container's own settled reading, up to the parts list that
+   *  draws the sibling prose. */
+  onScheduleStandingReadingChange?: (runId: string, reading: ScheduleCardReading) => void;
   /** The §6e apply-intent seam, threaded to the settled reading this container
    *  draws for exactly the reason the ordinary slotted views get it: the card is
    *  the same card, drawn through the same registry, and the gesture the widget
@@ -559,6 +569,22 @@ function AgentRunTurnSlot({
       onScheduleFiredRecurringChange?.(runId, false);
     };
   }, [onScheduleFiredRecurringChange, runId, scheduleFiredRecurring]);
+
+  // AND THE STANDING READING ITSELF (cinatra#3281), for the road whose prose is
+  // a sibling of this container and which therefore has no slot to ask. It is
+  // the settled card's own reading while this container is drawing one, and
+  // "other" when it is drawing none — the same question the two booleans above
+  // ask, asked once and without losing the stopped reading on the way.
+  const scheduleStandingReading: ScheduleCardReading =
+    settledMomentViews.length > 0 ? settledReading : "other";
+  useEffect(() => {
+    onScheduleStandingReadingChange?.(runId, scheduleStandingReading);
+    // A SLOT THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as the two above.
+    if (scheduleStandingReading === "other") return;
+    return () => {
+      onScheduleStandingReadingChange?.(runId, "other");
+    };
+  }, [onScheduleStandingReadingChange, runId, scheduleStandingReading]);
 
   // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
   // slot. It also WAITS on a turn that carries the moment's card until the run
@@ -972,6 +998,38 @@ function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
 }
 
 /**
+ * THE ONE DRAWN NODE FOR THAT LINE (cinatra#3281).
+ *
+ * The sentence reaches the reader on TWO roads now — the ordered trace's own
+ * produced-views slot, and the flat prose of a turn projected without that
+ * trace — and a second copy of the paragraph would be a second place for a
+ * class, an attribute or a value vocabulary to drift. So the node is written
+ * once here and both roads render THIS: same attribute, same value, same
+ * classes, whichever road drew it.
+ *
+ * It is the ELECTION's own node, so a reading with no sentence draws nothing at
+ * all rather than an empty paragraph.
+ */
+function StandingScheduleLine({
+  reading,
+}: {
+  reading: ScheduleCardReading;
+}): ReactElement | null {
+  const line = standingScheduleLineFor(reading);
+  if (line === null) return null;
+  return (
+    <p
+      // Passive: it names WHICH reading drew the line, for a test and for
+      // a rendered reading of the screen. The words are what is drawn.
+      data-schedule-standing-line={reading}
+      className="max-w-none text-[15px] leading-relaxed text-foreground"
+    >
+      {line}
+    </p>
+  );
+}
+
+/**
  * A STEP'S OWN CONTAINER, AND THE READING ITS CARD SETTLED ON (cinatra#3174 fix
  * leg 7, criterion 4).
  *
@@ -1036,16 +1094,7 @@ function ProducedViewsSlot({
   return (
     <ScheduleReadingReport onReading={setReading}>
       <div data-transcript-slot={slot}>
-        {line === null ? null : (
-          <p
-            // Passive: it names WHICH reading drew the line, for a test and for
-            // a rendered reading of the screen. The words are what is drawn.
-            data-schedule-standing-line={reading}
-            className="max-w-none text-[15px] leading-relaxed text-foreground"
-          >
-            {line}
-          </p>
-        )}
+        <StandingScheduleLine reading={reading} />
         {children}
       </div>
     </ScheduleReadingReport>
@@ -1067,6 +1116,7 @@ function OrderedPartsSection({
   onWaitingRunsChange,
   onFiredRunsChange,
   onFiredRecurringRunsChange,
+  onScheduleStandingReadingsChange,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -1099,6 +1149,11 @@ function OrderedPartsSection({
   onFiredRunsChange?: (runIds: readonly string[]) => void;
   /** The fired-RECURRING readings in this turn (cinatra#3174 fix leg 3). */
   onFiredRecurringRunsChange?: (runIds: readonly string[]) => void;
+  /** THE STANDING READINGS THIS TURN'S SLOTS SETTLED ON (cinatra#3281), in slot
+   *  order, for the layouts whose prose is a SIBLING of this list. The prose
+   *  there has to make the very decision this list makes below — which slot's
+   *  sentence is the turn's one line — and only the slots know the answer. */
+  onScheduleStandingReadingsChange?: (readings: readonly ScheduleCardReading[]) => void;
 }) {
   // WHICH RUNS IN THIS TURN ARE WAITING FOR A SCHEDULE (cinatra#3044). Each
   // run's own container reads its row for the card it draws and reports the
@@ -1157,6 +1212,46 @@ function OrderedPartsSection({
   useEffect(() => {
     onFiredRecurringRunsChange?.(scheduleFiredRecurringRunIds);
   }, [onFiredRecurringRunsChange, scheduleFiredRecurringRunIds]);
+  // AND THE STANDING READING OF EACH RUN THAT HAS ONE (cinatra#3281). The two
+  // lists above are kept exactly as they are — the platform-sentence
+  // corrections still ask their questions — and this one carries the answer
+  // those two cannot give: WHICH sentence §VI draws over this run's card.
+  // Readings that draw no sentence are not carried at all, so the list is the
+  // turn's drawn sentences in slot order and an empty list means "no line".
+  const [scheduleStandingReadings, setScheduleStandingReadings] = useState<
+    readonly { runId: string; reading: ScheduleCardReading }[]
+  >([]);
+  const onScheduleStandingReadingChange = useCallback(
+    (runId: string, reading: ScheduleCardReading) => {
+      setScheduleStandingReadings((prev) => {
+        const known = prev.find((entry) => entry.runId === runId);
+        // Identity is preserved when nothing changed, so a run that reports the
+        // same reading on every read cannot re-render the transcript.
+        if ((known?.reading ?? "other") === reading) return prev;
+        if (reading === "other") return prev.filter((entry) => entry.runId !== runId);
+        return known === undefined
+          ? [...prev, { runId, reading }]
+          : prev.map((entry) => (entry.runId === runId ? { runId, reading } : entry));
+      });
+    },
+    [],
+  );
+  useEffect(() => {
+    const readings = scheduleStandingReadings.map((entry) => entry.reading);
+    onScheduleStandingReadingsChange?.(readings);
+    // A LIST THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as each slot does
+    // above (cinatra#3281, convergence). This mount can go away while the prose
+    // that reads its answer stays: `MessageLifecycleSlots` draws nothing once
+    // the turn carries no admitted slot, so the individual slots' own cleanup
+    // has no list left to report into. Without this the flat prose would go on
+    // drawing a sentence for a card that is no longer on the screen, and go on
+    // withholding the turn's own lead-in. The two boolean lists above are left
+    // exactly as they are, as this leg's own scope requires.
+    if (readings.length === 0) return;
+    return () => {
+      onScheduleStandingReadingsChange?.([]);
+    };
+  }, [onScheduleStandingReadingsChange, scheduleStandingReadings]);
   // WHICH SLOTS IN THIS TURN DRAW SECTION VI's OWN SENTENCE (cinatra#3174 fix
   // leg 9). Section VI draws every one of its example turns the same way: one
   // prose line, then the card. The settled readings — fired one-off, fired
@@ -1316,6 +1411,7 @@ function OrderedPartsSection({
               onScheduleWaitChange={onScheduleWaitChange}
               onScheduleFiredChange={onScheduleFiredChange}
               onScheduleFiredRecurringChange={onScheduleFiredRecurringChange}
+              onScheduleStandingReadingChange={onScheduleStandingReadingChange}
               {...(onApplyIntent ? { onApplyIntent } : {})}
             >
               {slottedViews}
@@ -1977,9 +2073,13 @@ const ScheduleWaitContext = createContext<{
   waitingRunIds: readonly string[];
   firedRunIds: readonly string[];
   firedRecurringRunIds: readonly string[];
+  /** The sentences §VI draws over this turn's settled cards, in slot order
+   *  (cinatra#3281) — the answer the flat prose needs and cannot derive. */
+  standingReadings: readonly ScheduleCardReading[];
   reportWaitingRunIds: (runIds: readonly string[]) => void;
   reportFiredRunIds: (runIds: readonly string[]) => void;
   reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
+  reportStandingReadings: (readings: readonly ScheduleCardReading[]) => void;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
@@ -1993,6 +2093,7 @@ function ScheduleWaitTurnBody({
   const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
   const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
   const [firedRecurringRunIds, setFiredRecurringRunIds] = useState<readonly string[]>([]);
+  const [standingReadings, setStandingReadings] = useState<readonly ScheduleCardReading[]>([]);
   // Identity is preserved when the answer did not change, so a run that reports
   // the same reading on every poll cannot re-render the transcript.
   const reportWaitingRunIds = useCallback((next: readonly string[]) => {
@@ -2010,22 +2111,33 @@ function ScheduleWaitTurnBody({
       prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
     );
   }, []);
+  const reportStandingReadings = useCallback((next: readonly ScheduleCardReading[]) => {
+    setStandingReadings((prev) =>
+      prev.length === next.length && prev.every((reading, i) => reading === next[i])
+        ? prev
+        : next,
+    );
+  }, []);
   const value = useMemo(
     () => ({
       waitingRunIds,
       firedRunIds,
       firedRecurringRunIds,
+      standingReadings,
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      reportStandingReadings,
     }),
     [
       waitingRunIds,
       firedRunIds,
       firedRecurringRunIds,
+      standingReadings,
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      reportStandingReadings,
     ],
   );
   return (
@@ -2052,6 +2164,25 @@ function FlatAssistantContent({
   onMarkdownClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const scheduleSentences = useContext(ScheduleWaitContext);
+  // THE TURN'S ONE PROSE LINE IS THE DRAWN SENTENCE, ON THIS ROAD TOO
+  // (cinatra#3281). This is the identical decision `OrderedPartsSection` makes
+  // inside its own list — prose standing ABOVE the slot that draws §VI's
+  // sentence is not drawn — expressed once on the road where the prose is a
+  // SIBLING of that slot and could see no answer until the slots reported one.
+  //
+  // THE FIRST READING THAT HAS A SENTENCE decides, exactly as the first slot
+  // that draws a line does there: a turn can carry more than one card, and what
+  // §VI rules out is prose standing above the sentence.
+  //
+  // NOTHING WRITTEN BY THE MODEL IS READ, MATCHED OR REWRITTEN. The lead-in is
+  // not drawn; it is not parsed, and no reading with no sentence of its own can
+  // reach this branch, so a schedule that has never fired keeps its lead-in
+  // byte for byte with its corrections still applied.
+  const standingReading =
+    (scheduleSentences?.standingReadings ?? []).find(
+      (reading) => standingScheduleLineFor(reading) !== null,
+    ) ?? null;
+  if (standingReading !== null) return <StandingScheduleLine reading={standingReading} />;
   // While streaming, trim incomplete embed prefixes so partial JSON/mermaid
   // never flashes as raw text in the markdown output.
   let raw = streaming ? trimIncompleteEmbeds(message.content) : message.content;
@@ -2116,6 +2247,7 @@ function MessageLifecycleSlots({
   const reportWaitingRunIds = scheduleSentences?.reportWaitingRunIds;
   const reportFiredRunIds = scheduleSentences?.reportFiredRunIds;
   const reportFiredRecurringRunIds = scheduleSentences?.reportFiredRecurringRunIds;
+  const reportStandingReadings = scheduleSentences?.reportStandingReadings;
   // The ordered-parts branch condition, restated: when it ran, it already drew
   // every slot in the trace and this mount must draw nothing.
   if (message.parts && message.parts.length > 0 && !message.error) return null;
@@ -2131,6 +2263,9 @@ function MessageLifecycleSlots({
       {...(reportFiredRunIds ? { onFiredRunsChange: reportFiredRunIds } : {})}
       {...(reportFiredRecurringRunIds
         ? { onFiredRecurringRunsChange: reportFiredRecurringRunIds }
+        : {})}
+      {...(reportStandingReadings
+        ? { onScheduleStandingReadingsChange: reportStandingReadings }
         : {})}
     />
   );
