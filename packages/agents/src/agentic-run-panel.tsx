@@ -268,6 +268,17 @@ export type AgenticRunPanelProps = {
    * otherwise answer as whoever else is signed in on that browser.
    */
   readReviewSlot?: RunReviewSlotReader;
+  /**
+   * WHICH READING THIS PANEL IS DRAWING (cinatra#3484).
+   *
+   * Fires with `true` while the panel's current reading is the review screen
+   * and `false` for every other reading it has, and `false` once more when the
+   * panel unmounts. A host that has to decide whether standing this panel down
+   * takes a decision away from the reader cannot answer that for itself: the
+   * reading is chosen from the run's own gate and slot rows, which a transcript
+   * deliberately does not read. Absent on a host that does not ask.
+   */
+  onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
 };
 
 export type ChatGateField = {
@@ -470,6 +481,7 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  onReviewReadingChange,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -1798,6 +1810,51 @@ export function AgenticRunPanel({
     (status === "queued" ||
       status === "running" ||
       (reviewMayStillOpen && !widgetHostedPanel));
+
+  // THE READING IS REPORTED TO WHOEVER HOSTS THIS PANEL (cinatra#3484).
+  //
+  // Exactly one of this panel's readings draws a lifecycle card that asks the
+  // reader, and it is the review screen: the working placeholder asks nothing,
+  // the progress plate asks nothing, no input screen is mounted here on a
+  // conversation host at all (`panelMountsHitlScreenCard`), and no
+  // recommendation row is mounted on any host (cinatra#3047). A container that
+  // withholds this panel is therefore withholding a decision in exactly one
+  // case, and only the panel can say which case it is in: the reading is chosen
+  // from the run's own gate and slot rows, and a transcript that resolved those
+  // for itself would be the second dispatch path the lifecycle wire exists to
+  // prevent.
+  //
+  // PUBLISHED THE WAY THE GATE CHANGE ABOVE ALREADY IS. The callback lives in a
+  // ref, so a parent that hands down a fresh function every render cannot
+  // re-fire the report; the effect is keyed on the reported VALUE alone, so this
+  // panel's own 2s tick cannot republish it. And it is declared HERE - after the
+  // two readings above are computed and before the early return below - so the
+  // hook order is identical on every reading this panel draws.
+  //
+  // NOTHING ELSE IS REPORTED, and no behaviour of this panel changes: the value
+  // is the answer to one question, and the panel draws exactly what it drew.
+  //
+  // AND THE QUESTION IS THE PANEL'S OWN READING, NOT THE CARD'S STATE. The
+  // value says this panel's current reading is its review screen - the slot it
+  // selected from the run's gate and slot rows. It does NOT say the card inside
+  // that slot resolved to a pending decision: a review the reader may not read
+  // draws no card at all, and a settled one draws a reading that asks nothing,
+  // and both of those still report a review reading here. Reporting on what the
+  // card resolved to would have to come from the card, which is a wire this
+  // change does not open; so the value is read for what it is, and a host that
+  // needs the stronger question asks it of the card.
+  const panelDrawsReview = Boolean(inPlaceReviewRef);
+  const onReviewReadingChangeRef = useRef(onReviewReadingChange);
+  onReviewReadingChangeRef.current = onReviewReadingChange;
+  useEffect(() => {
+    onReviewReadingChangeRef.current?.(runId, panelDrawsReview);
+    // A PANEL THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as the gate publish
+    // above clears on unmount: a host left holding "this panel is drawing a
+    // review" for a panel that is gone would hold a stand-down open for ever.
+    return () => {
+      onReviewReadingChangeRef.current?.(runId, false);
+    };
+  }, [runId, panelDrawsReview]);
 
   // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
   //
