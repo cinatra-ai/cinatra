@@ -775,6 +775,106 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     );
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+  //
+  // The setup loop parks one gate per required input it is still missing, and
+  // this branch flips the run back to `queued` and re-enqueues it. A submit that
+  // recorded NO value and settled no field therefore hands the loop the exact
+  // state it parked on — and it parks the SAME field again, as a brand-new
+  // gate, while the card that was on screen reads "This review is no longer
+  // open". That is the loop #3532 was reported as: six wizard attempts, the gate
+  // row still on `callToAction`, nothing ever recorded.
+  //
+  // So a submit that records nothing does not resume a run that is still waiting
+  // for a required input: the gate stays open with its reading, and the refusal
+  // names the field. A submit that DOES record something — or that settles an
+  // empty box the schema declared optional or defaulted (cinatra#3452 above) —
+  // is untouched.
+  // ---------------------------------------------------------------------------
+  const CTA_TEMPLATE = {
+    id: "tpl-3532",
+    inputSchema: {
+      type: "object",
+      required: ["offeringCompanyWebsite", "callToAction"],
+      properties: {
+        offeringCompanyWebsite: { type: "string" },
+        callToAction: { type: "string" },
+      },
+    },
+  };
+
+  it("cinatra#3532: a submit that records no value does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    // A bare value with no field name: the merge keys off `fieldName`, so
+    // nothing is recorded — the shape `wrapPrimitiveSetupPayload` warns about.
+    await expect(
+      approveReviewTaskInternal("setup-run-3532", "actor-1", "Book a meeting"),
+    ).rejects.toThrow(/callToAction/);
+
+    // Nothing written, the run stays parked at its gate, and no resume job is
+    // enqueued — so the loop cannot mint a second gate for the same field.
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeUndefined();
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: an APPROVAL ENVELOPE alone does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532b",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await expect(
+      approveReviewTaskInternal("setup-run-3532b", "actor-1", {
+        approved: true,
+        approvedAt: "2026-09-16T00:00:00.000Z",
+      }),
+    ).rejects.toThrow(/callToAction/);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: the value the renderer holds still records and resumes the run", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532c",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await approveReviewTaskInternal(
+      "setup-run-3532c",
+      "actor-1",
+      { callToAction: "Book a meeting: https://cal.example/intro" },
+      "callToAction",
+    );
+
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeDefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-3532c", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
   it("throws when values payload exceeds 65536 bytes", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
       id: "run-s5",
