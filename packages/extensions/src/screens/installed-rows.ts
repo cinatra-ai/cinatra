@@ -447,8 +447,14 @@ export async function loadInstalledCardRows(
   // did.
   const canonicalRows = await listInstalledExtensions();
 
-  const [availableOutcome, discoveredActive, discoveredArchived, activeManifests, archivedManifests] =
-    await Promise.all([
+  const [
+    availableOutcome,
+    discoveredActive,
+    discoveredArchived,
+    activeManifests,
+    archivedManifests,
+    activeArtifactManifests,
+  ] = await Promise.all([
       availableOutcome_,
       // Active = canonical dispatcher across ALL kinds: installed_extension
       // (active|locked) gate ∩ each kind's visibility reader facet.
@@ -460,6 +466,11 @@ export async function loadInstalledCardRows(
       // union re-applies the shared owner-scope gate before rendering).
       readActiveManifestsFromStore({ kind: "connector", canonicalRows }),
       readArchivedManifestsFromStore({ kind: "connector", canonicalRows }),
+      // The artifact twin of that coarse read (cinatra#3533), for the
+      // package-level artifact descriptors derived below. It rides the SAME
+      // threaded canonical snapshot and applies its kind filter in memory, so
+      // it costs no extra database read.
+      readActiveManifestsFromStore({ kind: "artifact", canonicalRows }),
     ]);
 
   // FAIL-SOFT, narrowly (cinatra#2539). The registry is an OPTIONAL hydration
@@ -591,11 +602,50 @@ export async function loadInstalledCardRows(
       .map((c) => c.packageId),
   );
 
+  // ARTIFACT, the active side (cinatra#3533). The artifact reader facet
+  // (`artifact-handler.ts` `listActive`) resolves rows out of the IN-MEMORY
+  // object-type registry, and that registry is populated only by the build-time
+  // bundle scan — `registerArtifactExtensions` in
+  // `packages/objects/src/integration/register-artifact-extensions.ts`, rooted
+  // at the dev-bundle `extensions/` directory by
+  // `src/lib/register-all-object-types.ts`. A pack installed at RUNTIME from
+  // the marketplace is never copied into that scanned tree, so it registers no
+  // descriptor, the facet returns nothing for it, and its row was dropped from
+  // the list §III opens by saying it "manage[s] installed agents, skills,
+  // connectors, and artifacts".
+  //
+  // The archived side of this same kind already has the fallback: `listArchived`
+  // derives a package-level `{ packageName }` descriptor per scope-visible
+  // archived manifest. Give the live side the same one — one descriptor per
+  // scope-VISIBLE PACKAGE (several owner identities of one pack collapse to a
+  // single descriptor, as they do on the archived side), under the SAME shared owner-scope
+  // gate the facet applies (so a runtime-only row is never MORE visible than a
+  // registered one), and only for packages the registry did not already
+  // resolve. Everything the row draws — name, version, lifecycle status, kind
+  // label, settings href — then comes from `collapseKindRows`, the same road
+  // every other kind's row travels.
+  const activeArtifactDescriptors = [...(discoveredActive.byKind.artifact ?? [])];
+  const registeredArtifactPackages = new Set(
+    (activeArtifactDescriptors as ArtifactDescriptorLike[])
+      .map((a) => a.packageName ?? (a.type ? a.type.split(":")[0] : null))
+      .filter((packageName): packageName is string => packageName !== null),
+  );
+  const runtimeOnlyArtifactPackages = visibleManifestPackageNames(
+    activeArtifactManifests.filter((m) => !registeredArtifactPackages.has(m.packageName)),
+    scope,
+  );
+  for (const packageName of runtimeOnlyArtifactPackages) {
+    activeArtifactDescriptors.push({ packageName } satisfies ArtifactDescriptorLike);
+  }
+
   const active = sortRows([
     ...KIND_ORDER.flatMap((kind) =>
       collapseKindRows({
         kind,
-        descriptors: discoveredActive.byKind[kind] ?? [],
+        descriptors:
+          kind === "artifact"
+            ? activeArtifactDescriptors
+            : (discoveredActive.byKind[kind] ?? []),
         status: "active",
         availableByName,
         canonicalByKey,

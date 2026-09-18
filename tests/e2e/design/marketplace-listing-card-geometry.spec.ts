@@ -348,7 +348,8 @@ for (const [bp, size] of Object.entries(VIEWPORTS)) {
         expect(geometry.maxRight).toBeLessThanOrEqual(geometry.contentRight + 1);
         expect(geometry.metaOverflow).toBeLessThanOrEqual(1);
         // The verdict is one of the three FULL labels — never a sliced tail.
-        expect(["Compatible", "Incompatible", "Compatibility unknown"]).toContain(
+        // The three readings are the maintainer's decision (cinatra#3521).
+        expect(["Compatible", "Incompatible", "Compatibility"]).toContain(
           geometry.compatText,
         );
         testInfo.annotations.push({
@@ -654,7 +655,7 @@ for (const width of MEASURED_VIEWPORTS) {
       expect(card.spanCount).toBeGreaterThan(0);
       expect(card.overshoot).toBeLessThanOrEqual(1);
       expect(card.metaOverflow).toBeLessThanOrEqual(1);
-      expect(["Compatible", "Incompatible", "Compatibility unknown"]).toContain(card.compatText);
+      expect(["Compatible", "Incompatible", "Compatibility"]).toContain(card.compatText);
     }
 
     testInfo.annotations.push({
