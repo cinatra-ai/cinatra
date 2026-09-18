@@ -108,25 +108,14 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (
-      head !== "CREATE" &&
-      head !== "ALTER " &&
-      head !== "DROP T" &&
-      head !== "DROP S" &&
-      head !== "DO $$ "
-    ) {
-      continue;
-    }
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  // This file's loop also accepted the `DO $$ ` head at the head this change
+  // was cut from: the bootstrap creates its ENUM types in anonymous blocks and
+  // the tables referencing those types need them. Naming the head keeps the
+  // replay statement-for-statement what it was.
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA), {
+    additionalHeads: ["DO $$ "],
+  });
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 

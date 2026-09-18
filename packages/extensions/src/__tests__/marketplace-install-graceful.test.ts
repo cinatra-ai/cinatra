@@ -173,7 +173,8 @@ describe("#2333 — the no-category fallbacks render the real escalation copy", 
     expect(read("marketplace-install-form.tsx")).toContain("toast.error(defaultFailureMessage)");
     // cinatra#2374: the scoped popup was deleted; the in-card install panel is
     // the scoped surface now, and its thrown-failure branch reports the same
-    // handed-down default (toast + the hidden role="alert" mirror).
+    // handed-down default — on the toast, and nowhere else (cinatra#3520:
+    // the panel's own DOM renders nothing for a failure).
     expect(read("extension-install-scope-panel.tsx")).toContain(
       "reportFailure(defaultFailureMessage)",
     );
