@@ -55,7 +55,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-artifact",
       "repo": "cinatra-ai/blog-image-artifact",
-      "resolvedSha": "38bb111c45c6c89d7da7fdc317cbb4f6fe8754cf"
+      "resolvedSha": "b1f1c88f978ac12cab1860b7c0c56edd1ca46c7d"
     },
     {
       "packageName": "@cinatra-ai/blog-image-generator-agent",
@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f5a5dba5f0f409b49a8a0eb00750bce7358b0eeb"
+      "resolvedSha": "4bcd9c98a5e43b4f229001b34af64f8042614238"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",

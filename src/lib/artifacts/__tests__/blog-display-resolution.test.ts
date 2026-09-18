@@ -29,31 +29,38 @@ import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers
 
 const EXT_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "extensions");
 
-/** The four blog displays, each with the type it draws and the slots it ships. */
+/**
+ * The four blog displays, each with the type it draws, the slots it ships and
+ * the renderer props contract version the package declares at its own pin.
+ */
 const BLOG_DISPLAYS = [
   {
     packageName: "@cinatra-ai/blog-idea-artifact",
     objectType: "@cinatra-ai/blog-idea-artifact:blog-idea",
     semanticSlots: ["detail"] as const,
     mapSlots: ["detail", "preview"] as const,
+    propsApiVersion: 1,
   },
   {
     packageName: "@cinatra-ai/blog-post-artifact",
     objectType: "@cinatra-ai/blog-post-artifact:post",
     semanticSlots: ["detail"] as const,
     mapSlots: ["detail", "preview"] as const,
+    propsApiVersion: 1,
   },
   {
     packageName: "@cinatra-ai/blog-image-artifact",
     objectType: "@cinatra-ai/blog-image-artifact:blog-image",
     semanticSlots: ["detail", "listRow"] as const,
     mapSlots: ["detail", "preview", "listRow"] as const,
+    propsApiVersion: 2,
   },
   {
     packageName: "@cinatra-ai/linkedin-artifacts",
     objectType: "@cinatra-ai/linkedin:post-draft",
     semanticSlots: ["detail"] as const,
     mapSlots: ["detail", "preview"] as const,
+    propsApiVersion: 1,
   },
 ] as const;
 
@@ -71,7 +78,7 @@ describe("the four blog displays resolve at the pinned revisions", () => {
 
   it.each(BLOG_DISPLAYS)(
     "$packageName registers its display for $objectType and the build map carries it",
-    ({ packageName, objectType, semanticSlots, mapSlots }) => {
+    ({ packageName, objectType, semanticSlots, mapSlots, propsApiVersion }) => {
       for (const slot of semanticSlots) {
         const descriptor = semanticRendererRegistry.resolve(
           objectType,
@@ -97,7 +104,7 @@ describe("the four blog displays resolve at the pinned revisions", () => {
         const entry = GENERATED_ARTIFACT_RENDERERS[key];
         expect(entry.packageName).toBe(packageName);
         expect(entry.slot).toBe(slot);
-        expect(entry.propsApiVersion).toBe(1);
+        expect(entry.propsApiVersion, key).toBe(propsApiVersion);
         expect(entry.representations.length).toBeGreaterThan(0);
       }
     },
