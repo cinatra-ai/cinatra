@@ -32,6 +32,12 @@ import {
 } from "@/lib/extension-data-tool";
 import { parseDeclaredTables } from "@cinatra-ai/sdk-extensions/manifest";
 import {
+  ExtensionToolRefusal,
+  dispatchExtensionTool,
+  type ExtensionToolPorts,
+} from "@/lib/extension-tool-dispatch";
+import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
+import {
   ArtifactAdmissionRefusal,
   resolveArtifactDependencyAdmission,
 } from "@/lib/artifacts/extension-artifact-admission";
@@ -59,6 +65,12 @@ const ARTIFACT_READ_TOOLS = new Set<string>([
  *  below, so no pack's tool name is written in core. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
   "extension_data",
+  // The second generic layer (cinatra#3525): ONE passthrough tool that runs a
+  // module the CALLING extension declares in its own manifest. It names no
+  // extension either — the caller comes from the run, the name is resolved
+  // against that caller's own declaration, and the ports it is handed are the
+  // scoped primitives beside it.
+  "extension_tool",
   ...ARTIFACT_READ_TOOLS,
 ]);
 
@@ -106,31 +118,40 @@ export async function dispatchExtensionScopedTool(input: {
     if (input.tool === "extension_data") {
       return { ok: true, result: await runDataTool(context, input) };
     }
+    // THE CALLING EXTENSION'S OWN DECLARATION IS READ FIRST, so a pack that
+    // declares a node calling this name keeps its own road even where the name
+    // collides with one of the host's generic ones below. The admission reads
+    // the pack the run is bound to at the version it is pinned to, and admits
+    // the name only when a node of that declaration calls this route with it;
+    // the SCOPE is unchanged, since every read and write the call makes still
+    // goes through the scoped tools beside it. An unresolved, unreadable or
+    // silent declaration admits nothing. The reader lives at the foot of THIS
+    // module rather than beside it: the routes that reach this dispatch are
+    // ratcheted on their reachable first-party graph, and a module of its own
+    // would join every one of them.
+    if (await declaresPassthroughTool(context.packageName, input.tool)) {
+      return { ok: true, result: await runStoredIdeasGate(context, input) };
+    }
+    // NOT DECLARED BY THE CALLER — so the HOST'S OWN generic names answer,
+    // each scoped to that same declaration.
+    if (input.tool === "extension_tool") {
+      return { ok: true, result: await runExtensionTool(context, input) };
+    }
     if (ARTIFACT_READ_TOOLS.has(input.tool)) {
       return { ok: true, result: await runArtifactRead(context, input) };
     }
-    // NOT ONE OF THE HOST'S OWN NAMES — so the CALLING extension's own
-    // declaration has to name it. The admission reads the pack the run is bound
-    // to at the version it is pinned to, and admits the name only when a node of
-    // that declaration calls this route with it; the SCOPE is unchanged, since
-    // every read and write the call makes still goes through the scoped tools
-    // above. An unresolved, unreadable or silent declaration admits nothing.
-    // The reader lives at the foot of THIS module rather than beside it: the
-    // routes that reach this dispatch are ratcheted on their reachable
-    // first-party graph, and a module of its own would join every one of them.
-    if (!(await declaresPassthroughTool(context.packageName, input.tool))) {
-      return {
-        ok: false,
-        status: 403,
-        error:
-          `${input.tool}: the calling extension's own declaration at the version this run is ` +
-          `pinned to names no node that calls this tool, so there is no admission for it`,
-      };
-    }
-    return { ok: true, result: await runStoredIdeasGate(context, input) };
+    return {
+      ok: false,
+      status: 403,
+      error:
+        `${input.tool}: the calling extension's own declaration at the version this run is ` +
+        `pinned to names no node that calls this tool, so there is no admission for it`,
+    };
   } catch (e) {
     if (
       e instanceof ExtensionDataRefusal ||
+      e instanceof ExtensionToolRefusal ||
+      e instanceof ExtensionToolModuleRefusal ||
       e instanceof ArtifactAdmissionRefusal ||
       e instanceof ArtifactCursorRefusal
     ) {
@@ -181,6 +202,52 @@ async function runDataTool(
   } finally {
     client.release();
   }
+}
+
+/**
+ * THE CALLING EXTENSION'S OWN MODULE, run under the same declaration that
+ * admits everything else here (cinatra#3525).
+ *
+ * The ports handed to it are the scoped primitives beside this function, bound
+ * to THIS run: the caller's own table operations, the two artifact reads over
+ * the types it declares as dependencies, the review-gate filing, and the clock.
+ * The run's identity rides in the envelope and in those bindings, never into
+ * the module's input — `dispatchExtensionTool` refuses a call that tries to.
+ */
+async function runExtensionTool(
+  context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
+  input: {
+    tool: string;
+    input: Record<string, unknown>;
+    run: ExtensionScopedToolRun;
+    actor?: ActorContext;
+  },
+): Promise<unknown> {
+  const ports: Omit<ExtensionToolPorts, "review"> = {
+    data: {
+      select: (request) =>
+        runDataTool(context, { ...input, input: { ...request, operation: "select" } }),
+      insertIfAbsent: (request) =>
+        runDataTool(context, { ...input, input: { ...request, operation: "insertIfAbsent" } }),
+      updateWhere: (request) =>
+        runDataTool(context, { ...input, input: { ...request, operation: "updateWhere" } }),
+    },
+    artifacts: {
+      list: (request) =>
+        runArtifactRead(context, { ...input, tool: "artifacts_list", input: request }),
+      contentRead: (request) =>
+        runArtifactRead(context, { ...input, tool: "artifact_content_read", input: request }),
+    },
+    clock: { now: () => new Date() },
+  };
+  return dispatchExtensionTool({
+    packageName: context.packageName,
+    packageVersion: context.packageVersion,
+    orgId: input.run.orgId,
+    cinatra: context.cinatra,
+    request: input.input,
+    ports,
+  });
 }
 
 async function runArtifactRead(

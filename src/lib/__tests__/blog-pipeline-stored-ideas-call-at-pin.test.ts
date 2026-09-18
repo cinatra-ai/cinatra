@@ -12,7 +12,7 @@
  * change that stopped reading it, fails here rather than on a run.
  *
  * The version is asserted from the pinned checkout's own manifest: this file
- * pins the call AT 0.2.2, and says so, so the reading cannot silently be taken
+ * pins the call AT 0.2.4, and says so, so the reading cannot silently be taken
  * as proof about some other version of the pack.
  */
 import { readFileSync } from "node:fs";
@@ -62,7 +62,7 @@ const PACKAGE_NAME = "@cinatra-ai/blog-pipeline-agent";
 const PACK_ROOT = join(REPO_ROOT, "extensions", "cinatra-ai", "blog-pipeline-agent");
 const OAS_PATH = join(PACK_ROOT, "cinatra", "oas.json");
 /** The version whose call this file pins. */
-const PINNED_VERSION = "0.2.2";
+const PINNED_VERSION = "0.2.4";
 /** The declaration node that makes the pack's first call — its stored-ideas step. */
 const PREPARE_NODE_ID = "prepare_ideas";
 

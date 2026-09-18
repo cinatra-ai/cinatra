@@ -15,6 +15,11 @@
       "reason": "dynamic-name: the job name is a ${{ }} expression (a matrix leg), so the check-run name is not knowable statically"
     },
     {
+      "context": "design-anchor-resolution",
+      "workflow": ".github/workflows/gates.yml",
+      "reason": "report-only: the job declares continue-on-error: true"
+    },
+    {
       "context": "merge-readiness / merge-readiness",
       "workflow": ".github/workflows/merge-readiness.yml",
       "reason": "self: the merge-readiness context itself — the job never waits on itself"
@@ -217,7 +222,7 @@
       "paths": [
         "**"
       ],
-      "skippable": false,
+      "skippable": true,
       "timeoutMinutes": null
     },
     {
@@ -339,9 +344,39 @@
       "timeoutMinutes": 10
     },
     {
+      "context": "design-record-grammar",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
       "context": "detect",
       "app": "github-actions",
       "workflow": ".github/workflows/dashboard-live-verify.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect changed paths (crm-migration-gate)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/crm-migration-gate.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 5
+    },
+    {
+      "context": "Detect changed paths (gates-pnpm)",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
       "paths": [
         "**"
       ],
@@ -461,7 +496,7 @@
       "paths": [
         "**"
       ],
-      "skippable": false,
+      "skippable": true,
       "timeoutMinutes": 15
     },
     {
