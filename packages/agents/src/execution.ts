@@ -2458,6 +2458,29 @@ export async function assertOrchestratorReady(
 // BullMQ worker function
 // ---------------------------------------------------------------------------
 
+/**
+ * cinatra#3582 — IS THIS REQUIRED FIELD ALREADY ANSWERED?
+ *
+ * The setup loop used to read KEY PRESENCE alone, so a run created with
+ * `brief: ""` had nothing pending: it never parked, never asked, and dispatched
+ * with an empty brief that failed at the agent's first step. Presence is not an
+ * answer — a blank value is the same silence an absent key is, read with the
+ * file's own `isEmptyDeclaredValue`.
+ *
+ * A field that declares a `default` IS answered, by that default: the run
+ * carries it and the loop must not ask (the same ruling the approval road takes
+ * in review-task-actions.ts, cinatra#3452).
+ */
+export function setupFieldIsAlreadyAnswered(
+  fieldSchema: Record<string, unknown>,
+  inputParams: Record<string, unknown>,
+  fieldName: string,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(inputParams, fieldName)) return false;
+  if (Object.prototype.hasOwnProperty.call(fieldSchema, "default")) return true;
+  return !isEmptyDeclaredValue(inputParams[fieldName]);
+}
+
 export async function runAgentBuilderExecutionJob(
   data: {
     runId: string;
@@ -2919,7 +2942,15 @@ async function runAgentBuilderExecutionJobInner(
   const pendingFields = requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
     if ((fieldSchema as { "x-hidden"?: boolean })["x-hidden"]) return false;
-    if (Object.prototype.hasOwnProperty.call(run.inputParams, fieldName)) return false;
+    if (
+      setupFieldIsAlreadyAnswered(
+        fieldSchema as Record<string, unknown>,
+        run.inputParams as Record<string, unknown>,
+        fieldName,
+      )
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -2983,7 +3014,16 @@ async function runAgentBuilderExecutionJobInner(
           (enrichedEnvelope.properties as Record<string, Record<string, unknown>>)[fieldName]
           ?? (fieldSchema as Record<string, unknown>);
         return {
-          schema: enrichedFieldSchema,
+          // cinatra#3582 — THE DECLARATION RIDES WITH THE FIELD'S OWN SCHEMA.
+          // This gate is minted only for a field `inputSchema.required` names
+          // (the `pendingFields` filter above), so the hint is true by
+          // construction. `x-` is the tree's own presentation-hint namespace:
+          // both input-schema roads copy those keys verbatim, the durable gate
+          // row stores the whole schema as jsonb, and every consumer that does
+          // not know the key ignores it — so no protocol argument, no new
+          // column and no migration. Without it the screen is handed no
+          // requiredness at all and draws a required field as "(optional)".
+          schema: { ...enrichedFieldSchema, "x-required": true },
           xRenderer,
           values: run.inputParams as Record<string, unknown>,
           reviewTaskId: syntheticId,

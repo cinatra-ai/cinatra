@@ -107,10 +107,20 @@ function SetupStep({
 }) {
   const [advanced, setAdvanced] = React.useState(false);
   if (advanced) return <p>Schedule this run</p>;
+  // cinatra#3582 — the field's own schema states what the agent declared,
+  // including the DEFAULT: both input-schema roads copy `default` onto the
+  // property, and the renderer now reads it (a required field that declares a
+  // default is answered by that default, so the empty box still submits —
+  // exactly what the second test below is about).
+  const declaredDefault = declaredDefaults?.[fieldName];
   return (
     <SchemaFieldRenderer
       fieldName={fieldName}
-      schema={{ type: "integer", title: "Idea count" }}
+      schema={
+        declaredDefault === undefined
+          ? { type: "integer", title: "Idea count" }
+          : { type: "integer", title: "Idea count", default: declaredDefault }
+      }
       value=""
       required={required}
       onChange={async (next: unknown) => {
@@ -215,11 +225,24 @@ describe("SchemaFieldRenderer — an optional numeric Setup field left empty (ci
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-
+    // cinatra#3582 — the refusal now stands ONE DOOR EARLIER. A field the agent
+    // declares required and for which it declares no default cannot be
+    // continued blank at all: the Continue is unavailable while the box is
+    // empty, so the submission never reaches the approval road, and the field
+    // is not drawn as "(optional)". The SERVER's own refusal, naming the field
+    // whatever a client sends, is pinned in approve-setup-field.test.ts and in
+    // setup-required-start-field-is-gated-for-every-kind.test.tsx.
+    const continueButton = screen.getByRole("button", {
+      name: /Continue/i,
+    }) as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(true);
+    fireEvent.click(continueButton);
     await waitFor(() => {
-      expect(screen.queryByText(/fieldName "ideaCount" is not present/i)).not.toBeNull();
+      expect(screen.getByLabelText(/Idea count/i)).not.toBeNull();
     });
+
     expect(screen.queryByText(/Schedule this run/i)).toBeNull();
+    const label = screen.getByText(/Idea count/i);
+    expect(label.textContent ?? "").not.toMatch(/\(optional\)/);
   });
 });
