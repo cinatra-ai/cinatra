@@ -19,9 +19,28 @@
  *   1. exactly ONE node in the entry's subtree matches
  *      `[data-run-surface-rail-step]` — never the wrapper and the row counted
  *      as two;
- *   2. that node is the node carrying the shared row class the kind draws
+ *   2. that node IS the entry's row box — element identity, and the row box
+ *      found WITHOUT reading any `data-run-surface-rail-*` attribute. THE
+ *      READING THIS REPLACES WAS CIRCULAR: it found the row BY the mark and
+ *      then asked only whether that same node's class list contained the
+ *      shared row class, so the marked node answered for both sides and a
+ *      mark sitting on a node that is not the entry's row could not fail it.
+ *      TWO SEPARATE GAPS, NAMED APART so the record stays exact: at the head
+ *      the mark DID sit on the row box for every kind (the census read it so),
+ *      and what this file could not see is the row box's own SPAN — it read no
+ *      ancestor and asserted no width, which is why the third picture round
+ *      measured two review entries' rows at 137px inside a 208px rail column
+ *      while this file stayed green; the circularity above is the OTHER gap,
+ *      the one that would have let a later leg move a mark off its row
+ *      unnoticed. The identity reading closes the second, the span assertion
+ *      below closes the first. The row box is now found FIRST, from the rail's own
+ *      row anchors (the rhythm suite's candidate union with its mark member
+ *      dropped, the inert row's anchor added, and the frame row's own control
+ *      anchor standing in for the dropped member), narrowed to the node
+ *      carrying every token of the shared row class the kind draws
  *      (`RUN_SURFACE_RAIL_ROW_CLASS` for a frame row,
- *      `RUN_PAGE_RAIL_ROW_CLASS` for a page-rail row);
+ *      `RUN_PAGE_RAIL_ROW_CLASS` for a page-rail row), and the mark is then
+ *      asked to BE it;
  *   3. it carries `data-run-surface-rail-reached` and
  *      `-settled` with the values the kind's own `RailStatus` vocabulary gives
  *      it (`run-step-rail.ts`, derived as
@@ -39,6 +58,15 @@
  * a `RunStepSelection` the frame can open (`run-surface-rail.tsx`), and a page
  * rail entry is not a frame selection, so it carries none BY DESIGN and this
  * file asserts its absence rather than inventing one.
+ *
+ * AND THE ROW BOX SPANS THE RAIL COLUMN. jsdom lays nothing out, so this file
+ * MEASURES NO WIDTH anywhere: it reads the CLASS that makes the width resolve —
+ * the run page rail's own vertical nav states the full width of the column it
+ * is drawn in, so the widths already declared on the entry wrapper and on the
+ * row-class node resolve against that column instead of against a shrink-wrapped
+ * inline-flex nav. The two widths themselves — the marked node's and the
+ * independently-read row box's — are measured on a real finished run by the
+ * later picture round, never here.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -621,10 +649,55 @@ function tokens(className: string): string[] {
   return className.split(/\s+/).filter(Boolean);
 }
 
+/**
+ * THE CANDIDATE ROWS OF THE RAIL, READ WITHOUT THE MARK. This is the union
+ * `run-page-rail-rhythm.test.tsx:364-368` collects the composed rail's rows
+ * with, with the `[data-run-surface-rail-step]` member DROPPED — reading it
+ * here is what made the old per-kind reading circular — the inert row's own
+ * anchor added (`run-step-rail-panel.tsx:244`,
+ * `run-step-rail-extra-entry.tsx:564`), and the frame row's own control anchor
+ * standing in for the dropped member: the frame's generic row
+ * (`run-surface-rail.tsx:329`), the schedule row (`schedule-rail-step.tsx:128`)
+ * and the recommendation row (`recommendation-rail-step.tsx:82`) each draw
+ * their row as the design system's Button, whose own slot is
+ * `data-slot="button"` (`src/components/ui/button.tsx:63`) — the rhythm
+ * suite catches those three through the mark, which this reading may not.
+ * Not one member reads a `data-run-surface-rail-*` attribute.
+ */
+const ROW_CANDIDATES = [
+  '[data-slot="stepper-trigger"]',
+  "a[data-rail-gate-link]",
+  "a[data-rail-verification-link]",
+  "[data-rail-inert]",
+  '[data-slot="button"]',
+].join(", ");
+
 describe("every kind of rail entry marks its state on its own row (cinatra#3449)", () => {
   for (const kind of KINDS) {
     it(`${kind.name} — one marked row, carrying every mark (${kind.where})`, async () => {
       const entry = await kind.mount();
+
+      // THE ENTRY'S ROW BOX, FOUND FIRST AND FOUND WITHOUT THE MARK. The scope
+      // is the entry's own `[data-rail-kind]` wrapper for a page-rail entry and
+      // the rail column for a frame row — and where a mount draws one entry
+      // alone, the entry's subtree IS its position in that column's ordered row
+      // list, so the one candidate carrying the shared row class is the row at
+      // the entry's own position.
+      const scope = entry.closest<HTMLElement>("[data-run-step-rail-column]") ?? entry;
+      const candidates = [
+        ...(scope.matches(ROW_CANDIDATES) ? [scope] : []),
+        ...Array.from(scope.querySelectorAll<HTMLElement>(ROW_CANDIDATES)),
+      ];
+      // THE ROW BOX IS THE CANDIDATE CARRYING THE SHARED ROW CLASS THE KIND
+      // DRAWS — never the box around it, and never a node named by the mark.
+      const rowBoxes = candidates.filter((node) =>
+        tokens(kind.rowClass).every((token) => tokens(node.className).includes(token)),
+      );
+      expect(
+        rowBoxes,
+        `${kind.name}: one row box in the entry, found without reading the mark`,
+      ).toHaveLength(1);
+      const rowBox = rowBoxes[0]!;
 
       // ONE node per drawn entry, THE ENTRY'S OWN BOX INCLUDED: a wrapper and
       // the row inside it counted as two is the reading the picture rounds kept
@@ -637,13 +710,11 @@ describe("every kind of rail entry marks its state on its own row (cinatra#3449)
       expect(marked, `${kind.name}: exactly one marked node in the entry`).toHaveLength(1);
       const row = marked[0]!;
 
-      // AND THE MARKED NODE IS THE ENTRY'S ROW — the node carrying the shared
-      // row class the kind draws, never the box around it.
-      for (const token of tokens(kind.rowClass)) {
-        expect(tokens(row.className), `${kind.name}: the marked node carries the shared row class`).toContain(
-          token,
-        );
-      }
+      // AND THE MARKED NODE *IS* THE ENTRY'S ROW BOX — element identity, not
+      // class containment: the two nodes were found by roads that share no
+      // attribute, so this fails when a mark sits on a node that is not the
+      // row the rail draws.
+      expect(row, `${kind.name}: the marked node IS the entry's own row box`).toBe(rowBox);
 
       expect(row.getAttribute("data-run-surface-rail-reached")).toBe(kind.reached);
       expect(row.getAttribute("data-run-surface-rail-settled")).toBe(kind.settled);
@@ -656,6 +727,51 @@ describe("every kind of rail entry marks its state on its own row (cinatra#3449)
       expect(row.getAttribute("data-run-surface-rail-step-key")).toBe(kind.stepKey);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// AND THE ROW BOX SPANS THE RAIL COLUMN (cinatra#3449).
+//
+// The rail column states its own width (`run-step-rail-panel.tsx:105`,
+// `w-52` — the 208px the third picture round measured). Inside it the vendored
+// `Stepper` states a full width of its own (`src/components/reui/stepper.tsx:160`),
+// but the vendored `StepperNav` is an INLINE-FLEX nav given a width only in the
+// horizontal orientation (`src/components/reui/stepper.tsx:412-427`), so in the
+// vertical orientation this rail uses it shrink-wraps to its widest child — and
+// the panel mounted it with no class of its own. Every box below it states its
+// width as a share of what is above it (the entry wrapper,
+// `run-step-rail-extra-entry.tsx:422`, and the shared row class,
+// `run-step-rail-extra-entry.tsx:97-98`), so the two review entries' rows
+// resolved to the shrink-wrapped nav's width rather than the column's: 137px
+// inside a 208px column, which is not the column's row. The nav states the
+// column's width, and every drawn entry's row box spans it.
+//
+// A CLASS assertion, deliberately: jsdom lays nothing out, so no width is
+// measured here — the widths are measured on a real finished run by the later
+// picture round.
+// ---------------------------------------------------------------------------
+describe("the run page rail's own vertical nav spans the rail column (cinatra#3449)", () => {
+  it("states the column's full width on the nav the panel mounts", () => {
+    const { container } = render(
+      <RunStepRailPanel
+        entries={[step({ status: "completed" })]}
+        activeOrdinal={null}
+        reviewHrefBase="/agents/v/p/run/review"
+      />,
+    );
+
+    const column = only(container, "[data-run-step-rail]");
+    expect(
+      tokens(column.className),
+      "the rail column states its own width, which the nav is asked to span",
+    ).toContain("w-52");
+
+    const nav = only(column, '[data-slot="stepper-nav"][data-orientation="vertical"]');
+    expect(
+      tokens(nav.className),
+      "the vertical rail nav states the full width of the column it is drawn in",
+    ).toContain("w-full");
+  });
 });
 
 // ---------------------------------------------------------------------------

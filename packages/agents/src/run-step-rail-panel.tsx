@@ -110,7 +110,20 @@ export function RunStepRailPanel({
         orientation="vertical"
         indicators={{ completed: <Check className="h-3 w-3" /> }}
       >
-        <StepperNav>
+        {/* THE NAV STATES THE COLUMN'S WIDTH (cinatra#3449). The vendored
+            StepperNav is an inline-flex nav given a width only in the
+            HORIZONTAL orientation (`src/components/reui/stepper.tsx:412-427`),
+            so in the vertical orientation this rail uses it shrink-wraps to
+            its widest child — and every box below it states its width as a
+            share of what is above it (the entry wrapper and the shared row
+            class, `run-step-rail-extra-entry.tsx:97-98,422`). Mounted with no
+            class of its own, the two review entries' rows resolved to the
+            shrink-wrapped nav rather than to the `w-52` column above it: the
+            third picture round measured them at 137px inside a 208px column,
+            which is not the column's row. Stated here, on the ONE call site
+            this rail owns, so the shared vendored component — and every other
+            stepper in the product drawn through it — is untouched. */}
+        <StepperNav className="w-full">
           {entries.map((entry, i) => {
             const displayStep = i + 1 + stepOffset;
             const isResolved = entry.status === "resolved";
