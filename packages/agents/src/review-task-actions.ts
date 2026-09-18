@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -363,6 +364,11 @@ export async function approveReviewTaskInternal(
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
     let inputParamsMerge: SQL | null = null;
+    // Did this submit knowingly settle an empty box (cinatra#3452: a declared
+    // default merged in its place, or a field the schema declares optional)?
+    // Read by the no-value guard below (cinatra#3532), which must not refuse a
+    // submission that DID answer its field with nothing.
+    let emptyFieldSettled = false;
     // Effective declared inputs for this run's template, resolved at most once
     // per approval (the resolver memoizes per packageName@version internally).
     // `null` = no template identity ⇒ nothing to validate against.
@@ -450,7 +456,6 @@ export async function approveReviewTaskInternal(
       // It FAILS CLOSED: a schema that cannot be resolved, or that does not
       // declare this field at all, keeps the refusal exactly as before.
       // -----------------------------------------------------------------
-      let emptyFieldSettled = false;
       if (typeof fieldName === "string") {
         const submitted =
           values !== null && typeof values === "object" && !Array.isArray(values)
@@ -657,6 +662,58 @@ export async function approveReviewTaskInternal(
       }
     }
 
+    // -----------------------------------------------------------------
+    // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+    //
+    // The setup loop parks one gate per required input the run is still
+    // missing, and the resume below hands it back exactly the inputs it parked
+    // on. So a submission that merged NO value and settled no field leaves the
+    // loop with the same reading it already had — and it parks the SAME field
+    // again, as a brand-new gate, while the card the person was answering says
+    // "This review is no longer open". That is the dead end #3532 was reported
+    // as: the wizard's second field could not be passed by any road.
+    //
+    // WHAT STILL RESUMES, so this reads as a narrowing and not a new refusal:
+    //   · every submission that merges a value (the single-field path, the
+    //     grouped merge, a declared default put in an empty box's place);
+    //   · an EMPTY box the schema settled (cinatra#3452) — an optional field
+    //     left blank is answered, and the loop asks required fields only;
+    //   · a run that is waiting for nothing — the plain approve, and the
+    //     envelope-only approval (#554), keep falling through to the CAS;
+    //   · a schema this road cannot resolve, which says nothing about what the
+    //     run is waiting for and must not start refusing on a guess.
+    //
+    // Refusing leaves the run `pending_approval` at the gate it is already
+    // parked on, with the values it already holds: the field stays open with
+    // its reading, and no second gate is ever minted for it.
+    // -----------------------------------------------------------------
+    if (inputParamsMerge === null && !emptyFieldSettled) {
+      const schema = await resolvedInputSchema();
+      const held =
+        run.inputParams !== null &&
+        typeof run.inputParams === "object" &&
+        !Array.isArray(run.inputParams)
+          ? (run.inputParams as Record<string, unknown>)
+          : {};
+      // The SAME reading the setup loop takes (execution.ts): a required field,
+      // not hidden, whose key the run does not already carry.
+      const stillWaitingFor = !schema
+        ? []
+        : schema.required.filter((name) => {
+            const declared = Object.prototype.hasOwnProperty.call(schema.properties, name)
+              ? (schema.properties[name] as { "x-hidden"?: boolean } | undefined)
+              : undefined;
+            if (declared?.["x-hidden"] === true) return false;
+            return !Object.prototype.hasOwnProperty.call(held, name);
+          });
+      if (stillWaitingFor.length > 0) {
+        throw new Error(
+          `Setup approval recorded no value: run ${runId} is still waiting for required ` +
+            `input "${stillWaitingFor[0]}" — the gate stays open`,
+        );
+      }
+    }
+
     // Single atomic CAS UPDATE (#76), now GUARDED (§7.1): merge the approved
     // value(s) into inputParams (when present) AND transition the run back to
     // "queued" — so runAgentBuilderExecutionJob won't skip — in ONE statement,
@@ -691,15 +748,88 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
-      // execution.ts that, once the last required field is in, this run owes the
-      // trigger step before it may dispatch — so it hands off to
-      // `pending_trigger` instead of running before the user has chosen when.
-      { runId, resumedFromSetup: true },
-      { jobId: `resume-${reviewTaskId}` },
-    );
+    // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
+    // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
+    // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic
+    // `setup-${runId}` minted once per RUN, so every confirmed field of one run
+    // asked the queue for the SAME id. The queue refuses to create a second job
+    // when the id key already exists (it hands the pre-existing id back and
+    // stores nothing) and it keeps its completed jobs, so the FIRST
+    // confirmation of a run landed and every later one was dropped: no next
+    // field was asked, no hand-over was made, and the run sat at `queued`.
+    //
+    // The id is now minted PER CONFIRMATION out of nothing the run can repeat,
+    // so two confirmations of one run never collide. It is still an id rather
+    // than none at all because the queue connection resends an unanswered
+    // command after a reconnect (`maxRetriesPerRequest: null` plus IORedis's
+    // default `autoResendUnfulfilledCommands`): with a per-call id the resent
+    // add is the duplicate the queue is meant to swallow, while with NO id the
+    // replay would mint a SECOND resume job for the same confirmation and park
+    // the same gate twice. An id derived from the field name would not do
+    // either, since a run really can park on the same field twice (the clear
+    // road above removes an answered key again).
+    //
+    // The org-scoped CAS in `resumeRunFromSetupApproval` one statement above
+    // moves the run pending_approval -> queued and throws when it updates no
+    // row, so the ordinary double-submit of one parked gate is refused before
+    // this line. It checks the run, its org and that status only — it is not by
+    // itself proof that no duplicate submission can ever arrive, and that
+    // admission gap is older than this change. Nothing reads this job id.
+    const resumeJobId = `resume-${randomUUID()}`;
+    try {
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+        // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
+        // execution.ts that, once the last required field is in, this run owes the
+        // trigger step before it may dispatch — so it hands off to
+        // `pending_trigger` instead of running before the user has chosen when.
+        { runId, resumedFromSetup: true },
+        { jobId: resumeJobId },
+      );
+    } catch (err) {
+      // cinatra#3585 — A SETUP THAT CANNOT BE HANDED BACK TO THE RUNNER SAYS SO
+      // ON THE RUN. The CAS above has already moved this run to `queued`; if the
+      // runner is never handed it back, the run would sit there with nothing
+      // said — the same silent shape this issue reports. Land it FAILED with a
+      // message a person can act on instead, naming the field just answered.
+      // Mirrors the tree's own rule for this class one file over (execution.ts
+      // lands the run failed with the message rather than letting a throw
+      // escape, "leaving the run parked at queued forever").
+      const enqueueError = err instanceof Error ? err.message : String(err);
+      const answeredField = fieldName ?? "(grouped)";
+      try {
+        await transitionRunStatus(
+          runId,
+          "queued",
+          "failed",
+          {
+            error:
+              `Setup could not be handed back to the runner after the field ` +
+              `"${answeredField}" was answered: ${enqueueError}`,
+          },
+          sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+        );
+      } catch (transitionErr) {
+        // stale_from_status: a concurrent stop — or a resume job the queue DID
+        // accept before the acknowledgement failed — already moved the run off
+        // `queued`. That writer wins, exactly as the sibling arms swallow it.
+        // Any OTHER compensation failure is reported here and not re-thrown:
+        // the enqueue failure below is the real cause, and replacing it with a
+        // secondary failure would hide it from the caller.
+        const stale =
+          transitionErr instanceof RunTransitionError &&
+          transitionErr.code === "stale_from_status";
+        if (!stale) {
+          console.error(
+            `[approveReviewTaskInternal] setup-path could not land run=${runId} failed ` +
+              `after the resume enqueue failed: ` +
+              `${transitionErr instanceof Error ? transitionErr.message : String(transitionErr)}`,
+          );
+        }
+      }
+      // …and the ENQUEUE failure — the real cause — travels on to the caller.
+      throw err;
+    }
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
     );
