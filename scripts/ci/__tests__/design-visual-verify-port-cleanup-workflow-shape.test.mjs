@@ -1,5 +1,5 @@
-// Pixel job port lifecycle (cinatra#3383): the SHAPE of the shipped
-// design-visual-verify workflow, read from the real file in this repo.
+// Pixel job port lifecycle (cinatra#3383, cinatra#3416): the SHAPE of the
+// shipped design-visual-verify workflow, read from the real file in this repo.
 //
 // The job starts a standalone server on ONE port. A previous job that ended
 // without stopping its server leaves the process on a self-hosted runner, and
@@ -15,6 +15,12 @@
 // The port is now DERIVED FROM THE RUNNER and exported through $GITHUB_ENV, so
 // the only process that can hold it is this runner's own stale server, which is
 // the case the freeing step was written for.
+//
+// ONE port per runner slot is also ONE port per LIVE JOB — a runner process
+// runs at most one job at a time — and the derivation therefore runs ahead of
+// the BUILD as well as ahead of the free and start steps: the NEXT_PUBLIC_*
+// base URLs are baked into the client bundle at build time, so they must
+// already name the port this job will actually bind.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,7 +86,7 @@ const FREE = /free.*port/i;
 const START = /^Start standalone server$/;
 const STOP = /stop.*(standalone )?server/i;
 
-describe("design-visual-verify.yml pixel-diff: the port is free before the server starts", () => {
+describe("design-visual-verify.yml pixel-diff: one port per runner slot (cinatra#3416)", () => {
   it("sets the port ONCE, derived from the runner rather than pinned literally", () => {
     const block = PIXEL_JOB();
     // cinatra#3416: a job-level literal is ONE port for every runner of the
@@ -103,6 +109,32 @@ describe("design-visual-verify.yml pixel-diff: the port is free before the serve
     expect(derive).toBeLessThan(free);
   });
 
+  it("derives it BEFORE the build, so the URLs baked in name the port that is bound", () => {
+    const block = PIXEL_JOB();
+    const derive = indexOfStep(block, DERIVE);
+    const build = indexOfStep(block, /^Build \(/i);
+    expect(derive).toBeGreaterThan(-1);
+    expect(build).toBeGreaterThan(-1);
+    expect(derive).toBeLessThan(build);
+    expect(derive).toBeLessThan(indexOfStep(block, FREE));
+    expect(derive).toBeLessThan(indexOfStep(block, START));
+  });
+
+  it("leaves no public URL pinned to a port literal at job level", () => {
+    const block = PIXEL_JOB();
+    for (const name of [
+      "BETTER_AUTH_URL",
+      "NEXT_PUBLIC_BETTER_AUTH_URL",
+      "NEXT_PUBLIC_APP_URL",
+      "NEXT_PUBLIC_SITE_URL",
+    ]) {
+      expect(block).not.toMatch(new RegExp(`^ {6}${name}: \\S*:\\d+`, "m"));
+    }
+    expect(stepMatching(block, DERIVE).text).toMatch(/NEXT_PUBLIC_APP_URL=/);
+  });
+});
+
+describe("design-visual-verify.yml pixel-diff: the port is free before the server starts", () => {
   it("has a step that frees the port, BEFORE the step that starts the server", () => {
     const block = PIXEL_JOB();
     const free = indexOfStep(block, FREE);
