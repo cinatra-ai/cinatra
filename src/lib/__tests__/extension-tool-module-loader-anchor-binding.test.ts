@@ -52,6 +52,30 @@ vi.mock("@/lib/extension-install-anchor", () => ({
   },
 }));
 
+/**
+ * The fixture tool module's source — a CONSTANT, never built from a value.
+ *
+ * Constructing the module text by interpolating the digest into it made the
+ * written file's CODE depend on a value, which is the shape the scanner names
+ * (js/bad-code-sanitization). The fixture needs no such interpolation: the
+ * store layout this file builds below is
+ * `<dataRoot>/agent/fixture-tool-pack/<digest>/cinatra/tools/fixture-tool.mjs`,
+ * so the digest is the fourth path segment from the end of the module's OWN
+ * url and the module reads it out of its own location instead.
+ *
+ * Every arm of this suite passes `load` its own `importModule` stub, so this
+ * body is never executed by the tests — the file exists only so the loader has
+ * a real module to resolve and refuse or admit.
+ */
+const FIXTURE_TOOL_MODULE_SOURCE = `import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export function extensionTool() {
+  const segments = path.dirname(fileURLToPath(import.meta.url)).split(path.sep);
+  return { digest: segments[segments.length - 3] };
+}
+`;
+
 /** Two digest dirs of the SAME package at the SAME version, as a store that has
  *  retained an older install beside the live one actually looks. */
 async function twoDigestStore() {
@@ -65,10 +89,7 @@ async function twoDigestStore() {
       path.join(dataRoot, "agent", "fixture-tool-pack", digest, "package.json"),
       JSON.stringify({ name: PACK, version: PINNED }),
     );
-    await writeFile(
-      path.join(dir, "fixture-tool.mjs"),
-      `export function extensionTool() { return { digest: ${JSON.stringify(digest)} }; }\n`,
-    );
+    await writeFile(path.join(dir, "fixture-tool.mjs"), FIXTURE_TOOL_MODULE_SOURCE);
     storeRecords.push({
       packageName: PACK,
       kind: "agent",
