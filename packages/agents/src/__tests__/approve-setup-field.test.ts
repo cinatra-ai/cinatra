@@ -199,11 +199,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      // cinatra#3033: PER-LEG job id. A single `resume-setup-<runId>` was
-      // constant for the whole run, and the queue both retains settled jobs and
-      // holds the previous leg ACTIVE across its own unwind — so BullMQ's
-      // HSETNX add silently dropped the second approval of a two-field setup.
-      { jobId: expect.stringMatching(/^resume-setup-run-s1__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -224,9 +226,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   // Clearing a settled entry of the shared id is NOT enough: the leg that
   // re-parks the run is still ACTIVE for the rest of its own unwind after the
   // park commits, so a press inside that window meets a LIVE job of the same id
-  // and is dropped exactly as before. The fix is a PER-LEG id, so the
-  // assertions below pin that the two legs enqueue under DIFFERENT ids — the
+  // and is dropped exactly as before. The fix is an id no two legs can share, so
+  // the assertions below pin that the two legs enqueue under DIFFERENT ids — the
   // whole point is that the second one is a real enqueue.
+  //
+  // That id is now minted PER CONFIRMATION (cinatra#3585) out of nothing the run
+  // can repeat, so it no longer names the run at all — which is the shape the
+  // per-call assertion below reads.
   // ---------------------------------------------------------------------------
   it("cinatra#3033: EVERY setup leg gets its OWN job id, so a second approval really enqueues", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
@@ -269,8 +275,8 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
         Record<string, unknown>,
       ];
       expect(payload).toEqual({ runId: "run-two-field", resumedFromSetup: true });
-      // The id still names the run it resumes, for anyone reading the queue...
-      expect(String(options.jobId)).toMatch(/^resume-setup-run-two-field__.+/);
+      // The id is the per-confirmation one the seam mints...
+      expect(String(options.jobId)).toMatch(/^resume-[0-9a-f-]{36}$/);
       jobIds.push(String(options.jobId));
     }
     // ...but the two legs are DIFFERENT jobs. A shared id is what let BullMQ
@@ -287,6 +293,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   // 500 before anything is enqueued: the run's status write has already landed,
   // so the run sits at `queued` with no job and no trigger row — the very
   // deadlock the per-leg id was added to close, reached by a different door.
+  //
+  // The id is now minted PER CONFIRMATION (cinatra#3585) and no longer names the
+  // run, so the case reads that shape; the colon reading it pins is unchanged,
+  // because the queue's rule is about the id whatever mints it.
   // ---------------------------------------------------------------------------
   it("cinatra#3033: the per-leg resume job id carries NO colon (the queue rejects one) and stays unique per leg", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
@@ -329,11 +339,9 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // The queue's own rule. A colon here is not a style question: `add`
       // throws and the approval never enqueues.
       expect(jobId).not.toContain(":");
-      // It still names the run it resumes, for anyone reading the queue.
-      expect(jobId.startsWith("resume-setup-run-no-colon")).toBe(true);
-      // And it still carries a per-leg suffix — the constant id is what
-      // stranded the run before.
-      expect(jobId.length).toBeGreaterThan("resume-setup-run-no-colon".length);
+      // And it is the per-confirmation id the seam now mints — the constant,
+      // run-named id is what stranded the run before.
+      expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
     }
     expect(jobIds[0]).not.toBe(jobIds[1]);
   });
@@ -517,7 +525,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s2__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -610,14 +624,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-opt1", resumedFromSetup: true },
-      // cinatra#3033: PER-LEG job id (the same reading the cases above pin). A
-      // single `resume-setup-<runId>` was constant for the whole run, and the
-      // queue both retains settled jobs and holds the previous leg ACTIVE across
-      // its own unwind, so BullMQ's HSETNX add silently dropped a second
-      // approval. What this case is about is unchanged — that the resume leg IS
-      // enqueued for this run — so it names the run's own prefix and lets the
-      // per-leg suffix be whatever the leg minted.
-      { jobId: expect.stringMatching(/^resume-setup-run-opt1__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -722,14 +735,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-def1", resumedFromSetup: true },
-      // cinatra#3033: PER-LEG job id (the same reading the cases above pin). A
-      // single `resume-setup-<runId>` was constant for the whole run, and the
-      // queue both retains settled jobs and holds the previous leg ACTIVE across
-      // its own unwind, so BullMQ's HSETNX add silently dropped a second
-      // approval. What this case is about is unchanged — that the resume leg IS
-      // enqueued for this run — so it names the run's own prefix and lets the
-      // per-leg suffix be whatever the leg minted.
-      { jobId: expect.stringMatching(/^resume-setup-run-def1__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -890,14 +902,113 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
       { runId: "run-clear1", resumedFromSetup: true },
-      // cinatra#3033: PER-LEG job id (the same reading the cases above pin). A
-      // single `resume-setup-<runId>` was constant for the whole run, and the
-      // queue both retains settled jobs and holds the previous leg ACTIVE across
-      // its own unwind, so BullMQ's HSETNX add silently dropped a second
-      // approval. What this case is about is unchanged — that the resume leg IS
-      // enqueued for this run — so it names the run's own prefix and lets the
-      // per-leg suffix be whatever the leg minted.
-      { jobId: expect.stringMatching(/^resume-setup-run-clear1__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+  //
+  // The setup loop parks one gate per required input it is still missing, and
+  // this branch flips the run back to `queued` and re-enqueues it. A submit that
+  // recorded NO value and settled no field therefore hands the loop the exact
+  // state it parked on — and it parks the SAME field again, as a brand-new
+  // gate, while the card that was on screen reads "This review is no longer
+  // open". That is the loop #3532 was reported as: six wizard attempts, the gate
+  // row still on `callToAction`, nothing ever recorded.
+  //
+  // So a submit that records nothing does not resume a run that is still waiting
+  // for a required input: the gate stays open with its reading, and the refusal
+  // names the field. A submit that DOES record something — or that settles an
+  // empty box the schema declared optional or defaulted (cinatra#3452 above) —
+  // is untouched.
+  // ---------------------------------------------------------------------------
+  const CTA_TEMPLATE = {
+    id: "tpl-3532",
+    inputSchema: {
+      type: "object",
+      required: ["offeringCompanyWebsite", "callToAction"],
+      properties: {
+        offeringCompanyWebsite: { type: "string" },
+        callToAction: { type: "string" },
+      },
+    },
+  };
+
+  it("cinatra#3532: a submit that records no value does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    // A bare value with no field name: the merge keys off `fieldName`, so
+    // nothing is recorded — the shape `wrapPrimitiveSetupPayload` warns about.
+    await expect(
+      approveReviewTaskInternal("setup-run-3532", "actor-1", "Book a meeting"),
+    ).rejects.toThrow(/callToAction/);
+
+    // Nothing written, the run stays parked at its gate, and no resume job is
+    // enqueued — so the loop cannot mint a second gate for the same field.
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeUndefined();
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: an APPROVAL ENVELOPE alone does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532b",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await expect(
+      approveReviewTaskInternal("setup-run-3532b", "actor-1", {
+        approved: true,
+        approvedAt: "2026-09-16T00:00:00.000Z",
+      }),
+    ).rejects.toThrow(/callToAction/);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: the value the renderer holds still records and resumes the run", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532c",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await approveReviewTaskInternal(
+      "setup-run-3532c",
+      "actor-1",
+      { callToAction: "Book a meeting: https://cal.example/intro" },
+      "callToAction",
+    );
+
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeDefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-3532c", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -937,7 +1048,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s6__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -985,7 +1102,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-554a__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
