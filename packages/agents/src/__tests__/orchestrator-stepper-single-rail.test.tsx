@@ -266,12 +266,23 @@ describe("the flow-agent run detail renders ONE step rail, never two (cinatra#27
 });
 
 describe("the surviving rail carries the UNION of both rails' behaviours", () => {
-  it("keeps the ⓘ gate tooltip trigger the page-level rail never had", async () => {
+  it("carries NO ⓘ on its rows — the rail names the run's steps and nothing else (cinatra#3358)", async () => {
+    // WHAT CHANGED, AND WHY THIS ASSERTION TURNED OVER. The surviving rail
+    // inherited an ⓘ on every row that carried a description, and this suite
+    // pinned it as part of the union of the two retired rails. Graded against
+    // the drawing on a real run, that ⓘ is a control the rail is not given:
+    // Agent run & review §I draws the rail as the run's ordered steps, and a
+    // step's description belongs to the step's own page in the run detail. The
+    // rest of the union — the replay click, the review deep links — is
+    // untouched and still asserted below.
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     const rail = rails()[0];
-    // One per step that carries a description — three in the email-outreach shape.
-    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(3);
+    expect(rail.querySelectorAll("[data-rail-step-info]").length).toBe(0);
+    // The rows themselves still name the run's steps.
+    for (const step of EMAIL_OUTREACH_STEPS) {
+      expect(rail.textContent).toContain(step.label);
+    }
   });
 
   it("keeps the completed-step REPLAY click", async () => {

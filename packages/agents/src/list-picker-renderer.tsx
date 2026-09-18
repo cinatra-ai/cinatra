@@ -1,18 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
 import type {
@@ -30,26 +27,95 @@ import type {
 // Value shape
 // ---------------------------------------------------------------------------
 
+// THE STEP TAKES SEVERAL ENTRIES (cinatra#3562). The ruling this gate is drawn
+// from reads "The user must select at least one view/list and can select
+// multiple ones", so the answer is an ORDERED SET of entries rather than one
+// identifier. `listId`/`listName` stay beside it as the FIRST ticked entry:
+// every reader that already resolves one identifier — the pinned pack's legacy
+// branch included — keeps resolving, and nothing downstream has to migrate in
+// this slice.
 type ListPickerValue = {
   scope: "list";
+  /** Every ticked entry, in the order the reader ticked them. */
+  listIds: string[];
+  listNames: string[];
+  /** The first ticked entry, for a reader that resolves a single identifier. */
   listId: string;
   listName: string;
-  memberCount: number;
 };
 
+function listPickerValue(listIds: string[], listNames: string[]): ListPickerValue {
+  return {
+    scope: "list",
+    listIds,
+    listNames,
+    listId: listIds[0] ?? "",
+    listName: listNames[0] ?? "",
+  };
+}
+
+/** The entries an incoming answer NAMES, paired as they were written.
+ *
+ *  A NAME BELONGS TO THE IDENTIFIER IT STANDS BESIDE (convergence round,
+ *  cinatra#3562). `listIds` and `listNames` are one list of PAIRS written as two
+ *  arrays, so a name is read at the index of its own identifier: filtering the
+ *  names on their own would hand an entry whose name this step could not
+ *  resolve — for which "" is written — the NEXT entry's name. And a repeated
+ *  identifier is ONE ticked entry however the answer was authored, so it is kept
+ *  once: keeping it twice would carry a phantom entry into the next answer the
+ *  reader makes. */
+function namedEntries(rawIds: unknown, rawNames: unknown): {
+  ids: string[];
+  names: string[];
+} {
+  const ids: string[] = [];
+  const names: string[] = [];
+  if (!Array.isArray(rawIds)) return { ids, names };
+  const nameAt = Array.isArray(rawNames) ? rawNames : [];
+  for (let i = 0; i < rawIds.length; i += 1) {
+    const id = rawIds[i];
+    if (typeof id !== "string" || id.trim() === "") continue;
+    if (ids.includes(id)) continue;
+    ids.push(id);
+    names.push(typeof nameAt[i] === "string" ? (nameAt[i] as string) : "");
+  }
+  return { ids, names };
+}
+
+// BOTH SHAPES READ BACK (cinatra#3562). A step re-opened on an answer it
+// already holds shows those rows ticked, and the answer it holds may have been
+// written by this renderer (`listIds`) or by the one-identifier shape that came
+// before it (`listId`) — an answer stored before this change is still the
+// reader's own, so it is read as the one-entry set it is.
 function toListPickerValue(value: unknown): ListPickerValue {
   // Defensive value normalization for the HITL renderer payload.
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const v = value as Record<string, unknown>;
-    return {
-      scope: "list",
-      listId: typeof v.listId === "string" ? v.listId : "",
-      listName: typeof v.listName === "string" ? v.listName : "",
-      memberCount: typeof v.memberCount === "number" ? v.memberCount : 0,
-    };
+    const entries = namedEntries(v.listIds, v.listNames);
+    if (entries.ids.length > 0) return listPickerValue(entries.ids, entries.names);
+    const legacyId = typeof v.listId === "string" && v.listId.trim() !== "" ? v.listId : "";
+    if (legacyId === "") return listPickerValue([], []);
+    const legacyName = typeof v.listName === "string" ? v.listName : "";
+    return listPickerValue([legacyId], legacyName === "" ? [] : [legacyName]);
   }
-  return { scope: "list", listId: "", listName: "", memberCount: 0 };
+  return listPickerValue([], []);
 }
+
+// ---------------------------------------------------------------------------
+// THE QUESTION A GATE THAT LISTS OPENS ON
+// ---------------------------------------------------------------------------
+
+/** The question this gate opens on when the step it draws NAMES NONE (Agent run
+ *  & review §I.1, which draws the gate opening on its question — "Which idea
+ *  should this run draft?" — over its state line, in every reading including
+ *  the zero-content one).
+ *
+ *  It belongs to the RENDERER'S KIND, not to any package: every binding that
+ *  raises a list-picking gate lists lists, so the question asks about a list
+ *  and names no pack (the core/extension border). A step that carries its own
+ *  question still wins — this is the floor under a step that carries none, and
+ *  the reading it replaces was an EMPTY heading. */
+export const LIST_PICKER_QUESTION = "Which list should this run use?";
 
 function formatLastUpdated(iso: string | null): string {
   if (!iso) return "—";
@@ -78,11 +144,15 @@ export function ListPickerRenderer({
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const current = toListPickerValue(value);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    current.listId ? current.listId : null,
-  );
+  const held = toListPickerValue(value);
+  // WHOSE READING THE ROWS SHOW. `null` is "the reader has ticked nothing yet",
+  // so the rows show the answer the step arrived holding, whenever it arrived —
+  // a step re-hydrated with its stored answer while the rows were still loading
+  // shows it the moment they land. Any array is the reader's own set and is the
+  // whole truth, the EMPTY one included: an answer the reader ticked back off
+  // must draw as empty rather than fall back to what was stored.
+  const [pickedIds, setPickedIds] = useState<string[] | null>(null);
+  const chosenIds = pickedIds ?? held.listIds;
 
   // Stable ref to onChange so the effect below doesn't re-fire on every
   // parent re-render.
@@ -122,110 +192,126 @@ export function ListPickerRenderer({
     };
   }, [runId]);
 
-  // v1: client-side search filter only. The crm_list_search facade accepts a
-  // server-side query param, but the v1 dataset is small enough that
-  // round-tripping per keystroke is wasteful. Switch to server-side when the
-  // dataset outgrows ~200 lists.
-  const filteredLists = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return lists;
-    return lists.filter((l) => l.name.toLowerCase().includes(q));
-  }, [lists, search]);
-
-  function handleSelect(list: AvailableListSummary) {
-    setSelectedId(list.id);
-    onChangeRef.current({
-      scope: "list",
-      listId: list.id,
-      listName: list.name,
-      memberCount: list.memberCount,
-    });
+  /** The name the loaded rows give an entry. Every entry an answer made here
+   *  carries is one of those rows — see `handleToggle`. */
+  function nameOf(id: string): string {
+    return lists.find((l) => l.id === id)?.name ?? "";
   }
 
+  // A PRESS TOGGLES, IT DOES NOT REPLACE (cinatra#3562). The single-answer
+  // press moved the one identifier, so a second row could never be added; a
+  // gate that takes several entries adds the pressed row when it is not among
+  // the chosen and drops it when it is.
+  function handleToggle(list: AvailableListSummary) {
+    // ONLY WHAT THIS STEP SHOWED REACHES THE ANSWER THE READER MAKES
+    // (convergence round, cinatra#3562). A held entry the live read no longer
+    // returns — a view deleted where the views live since the step was answered
+    // — is drawn in no row, so the reader can neither see it ticked nor tick it
+    // back off; carrying it into an answer they are making NOW would send the
+    // run a scope they were never shown. The rows are loaded by the time any of
+    // them can be pressed, so the set the reader sees is the set the answer
+    // carries, and every entry in it has a row to take its name from.
+    const shown = new Set(lists.map((l) => l.id));
+    const kept = chosenIds.filter((id) => shown.has(id));
+    const nextIds = kept.includes(list.id)
+      ? kept.filter((id) => id !== list.id)
+      : [...kept, list.id];
+    setPickedIds(nextIds);
+    onChangeRef.current(listPickerValue(nextIds, nextIds.map(nameOf)));
+  }
+
+  // THE QUESTION THE GATE ACTUALLY OPENS ON. The step's own question wherever
+  // the gate's data carries one — the binding's resolved label — and the kind's
+  // question wherever it does not. A step whose schema titles the FIELD rather
+  // than asking the reader anything reaches this renderer with no label at all,
+  // and the heading was rendered from that label alone: the gate opened on an
+  // EMPTY h3 over its state line, which is the one reading §I.1 never draws.
+  const question =
+    typeof label === "string" && label.trim() !== ""
+      ? label
+      : LIST_PICKER_QUESTION;
+
   return (
-    <div className="flex flex-col gap-3">
-      <Label className="text-foreground">
-        {label}
-        {required ? " *" : ""}
-      </Label>
+    <div className="flex flex-col gap-3" data-conformance-id="gate-that-lists">
+      {/* THE GATE OPENS ON ITS QUESTION, OVER ITS STATE LINE (Agent run &
+          review §I.1: "Which idea should this run draft?" over "Awaiting your
+          pick"). The question is the step's own — declared by the package that
+          raised the gate — and the line beneath it says where the gate stands,
+          never what to do about it. */}
+      <div className="flex flex-col gap-1">
+        <h3
+          className="text-sm font-semibold text-foreground"
+          data-testid="list-picker-question"
+        >
+          {question}
+          {required ? " *" : ""}
+        </h3>
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="list-picker-state-line"
+        >
+          {loading
+            ? "Loading lists…"
+            : lists.length === 0
+              ? "Nothing to pick"
+              : "Awaiting your pick"}
+        </p>
+      </div>
       {description ? (
         <p className="text-xs text-muted-foreground">{description}</p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Pick a list to send this campaign to. Lists are reusable saved sets of
-          contacts.
+      ) : null}
+
+      {loading ? null : lists.length === 0 ? (
+        // THE ZERO-CONTENT READING IS THE STATE LINE AND THE SENTENCE, AND
+        // NOTHING FRAMES IT OR FOLLOWS IT (cinatra#3562). The ruling reads "If
+        // no views/lists are available in Twenty CRM, a message asks the user to
+        // create one in Twenty CRM", so the reading says what the reader can do
+        // about it where the views and lists actually live, and says the step
+        // will list what they make when they come back. It offers NO road: the
+        // step that used to send the reader to another agent no longer does, and
+        // the run cannot be continued from here either — that is the one shared
+        // answer-refusal doing its work (./hitl-gate-submit), not a second rule.
+        //
+        // IT ASSERTS NO CAUSE THE READING DOES NOT CARRY. An empty set comes
+        // back both from a workspace that holds no contact view and from a read
+        // that could not be made at all (list-picker-actions.ts degrades a
+        // missing capability and a throwing provider to an empty array), so the
+        // sentence states what to do rather than why there is nothing.
+        <p
+          role="status"
+          className="text-sm leading-relaxed text-foreground"
+          data-testid="list-picker-empty-reading"
+        >
+          No views or lists yet. Create one in Twenty CRM and this step will list
+          it when you come back.
         </p>
-      )}
-
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <Input
-          type="search"
-          placeholder="Search lists by name"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          disabled={disabled || loading}
-          className="sm:max-w-sm"
-          aria-label="Search lists by name"
-        />
-        {/*
-          "Create new list" affordance retired. CRM lists are scoped to the
-          provider (Twenty Views); operators create them via the Twenty UI
-          or via the list-curator-agent run dispatched below. Direct CRUD
-          on lists from a cinatra route was removed alongside the
-          `lists_*` MCP retirement.
-        */}
-        {/*
-          "Build a list with AI" CTA.
-          Deep-links to a NEW list-curator-agent run. The operator completes
-          the curator's two HITL gates (scrape-schema-review + final-list-review)
-          there; on completion they return to this picker with the new listId
-          pre-selected via the ?onComplete query param.
-
-          Separate-run UX (not nested HITL): the WayFlow runtime does not yet
-          support surfacing child HITL gates in a parent run, so deep-linking
-          keeps the child run's review gates visible and actionable.
-        */}
-        <Button asChild type="button" variant="default" disabled={disabled}>
-          <Link
-            href="/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker"
-            target="_blank"
-            rel="noreferrer"
-            data-testid="build-list-with-ai-cta"
-          >
-            Build a list with AI
-          </Link>
-        </Button>
-      </div>
-
-      {loading ? (
-        <p className="text-xs text-muted-foreground">Loading lists…</p>
-      ) : filteredLists.length === 0 ? (
-        <Card className="border-line bg-surface">
-          <CardContent className="py-6 text-center text-sm text-muted-foreground">
-            {lists.length === 0
-              ? "No lists yet. Create one to get started."
-              : "No lists match your search."}
-          </CardContent>
-        </Card>
       ) : (
         <div className="flex flex-col gap-2">
-          {filteredLists.map((list) => {
-            const isSelected = selectedId === list.id;
+          {lists.map((list) => {
+            const isSelected = chosenIds.includes(list.id);
             return (
+              // A ROW THAT CAN BE TICKED BESIDE OTHERS IS A CHECKBOX, NOT A
+              // TOGGLE BUTTON (cinatra#3562). `data-selected` keeps its meaning
+              // exactly — this row is among the chosen — and the ARIA moves from
+              // `aria-pressed` on `role="button"` to `aria-checked` on
+              // `role="checkbox"`, which is what the design system draws a
+              // multi-select with (Components § Checkbox / Radio / Switch:
+              // "multi-select (checkbox)"). The box itself is the drawn
+              // primitive, presentational here because the ROW is the control.
               <Card
                 key={list.id}
-                role="button"
+                role="checkbox"
                 tabIndex={disabled ? -1 : 0}
-                aria-pressed={isSelected}
+                aria-checked={isSelected}
                 data-selected={isSelected ? "true" : "false"}
                 onClick={() => {
-                  if (!disabled) handleSelect(list);
+                  if (!disabled) handleToggle(list);
                 }}
                 onKeyDown={(e) => {
                   if (disabled) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    handleSelect(list);
+                    handleToggle(list);
                   }
                 }}
                 className={[
@@ -240,15 +326,23 @@ export function ListPickerRenderer({
               >
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Checkbox
+                      checked={isSelected}
+                      disabled={disabled}
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      className="pointer-events-none"
+                    />
                     <span className="flex-1 truncate">{list.name}</span>
                     <Badge variant="secondary">{list.memberType}</Badge>
                   </CardTitle>
                 </CardHeader>
+                {/* NO MEMBER COUNT (cinatra#3562). The reader contract returns
+                    `memberCount` as null by construction — a Twenty view is
+                    filter-defined, not materialized (list-picker-actions.ts) —
+                    so a row that printed one printed a number the read never
+                    made. The row names the entry and says when it moved. */}
                 <CardContent className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span>
-                    {list.memberCount} contact{list.memberCount === 1 ? "" : "s"}
-                  </span>
-                  <span aria-hidden="true">·</span>
                   <span>Updated {formatLastUpdated(list.lastUpdated)}</span>
                 </CardContent>
               </Card>
