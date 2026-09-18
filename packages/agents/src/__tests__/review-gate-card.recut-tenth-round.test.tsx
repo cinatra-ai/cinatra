@@ -107,6 +107,22 @@ const frameIn = (container: HTMLElement): HTMLIFrameElement => {
   return frame;
 };
 
+/** THE FRAME'S LOAD, WITH THE ISLAND'S OWN BODY IN IT (the forward of the
+ *  widget-review work onto this suite, cinatra#3051). The card now reads WHICH
+ *  document arrived — only the island's own body anchor is a painted target —
+ *  so a load fired over jsdom's empty document is a frame that did not paint.
+ *  These cases are about the palette and the height of a frame that DID paint,
+ *  so they hand it the anchored document a real navigation delivers. */
+function loadPaintedIsland(frame: HTMLIFrameElement): void {
+  const doc = frame.contentDocument!;
+  doc.open();
+  doc.write(
+    '<html><body><div data-conformance-id="review-target-island-body"></div></body></html>',
+  );
+  doc.close();
+  fireEvent.load(frame);
+}
+
 const skeletonIn = (container: HTMLElement) =>
   container.querySelector('[data-conformance-id="review-target-island-skeleton"]');
 
@@ -144,7 +160,7 @@ describe("a palette repaint never draws a blank plate over work already on scree
 
     // The island arrives, and the frame paints.
     await act(async () => {
-      fireEvent.load(frameIn(container));
+      loadPaintedIsland(frameIn(container));
     });
     expect(islandIn(container).getAttribute("data-island-load-state")).toBe("loaded");
     expect(frameIn(container).getAttribute("src")).toContain("scheme=light");

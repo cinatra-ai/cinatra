@@ -537,8 +537,28 @@ export function reviewIslandFramingHeaders(request: NextRequest): {
  * of a credential-phishing surface. An empty document is what every other
  * island denial draws, so this one is not distinguishable from them either.
  */
+/**
+ * THE EMPTY ISLAND, AS A DOCUMENT (cinatra#3051).
+ *
+ * This response and the island page's own `emptyIsland` are the SAME refusal,
+ * and they have to be the same DOCUMENT. The review card reads the framed
+ * document to tell a frame that PAINTED from one that merely LOADED — an empty
+ * document fires `load` exactly like a full one, and treating that as painted is
+ * what left the reader in front of a panel naming nothing. A zero-byte body
+ * carried no anchor, so the card could not tell this refusal from a target that
+ * had arrived, and it is the refusal a genuinely cross-site widget frame with no
+ * minted address gets EVERY time.
+ *
+ * It carries the page's own anchor and nothing else. No reason, no content,
+ * nothing that could tell one refusal from another — the generic refusal
+ * contract is exactly as closed as it was.
+ */
+const EMPTY_ISLAND_DOCUMENT =
+  '<!doctype html><html><head><meta charset="utf-8"></head>' +
+  '<body><div data-conformance-id="review-target-island-empty"></div></body></html>';
+
 function emptyIslandResponse(): NextResponse {
-  return new NextResponse("", {
+  return new NextResponse(EMPTY_ISLAND_DOCUMENT, {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
