@@ -157,13 +157,24 @@ not overwritten or misreported as the latest capture's facts.
 
 The standalone command uses the workspace's SSR loader so real host modules
 retain their path aliases and async initialization. Only the `server-only`
-bundler marker is consumed; database, registry and artifact modules are real.
+bundler marker is consumed; file-relative CommonJS globals are supplied for host
+modules that normally receive them from Next. Database, registry and artifact
+modules are real. The registry client also handles pacote's native Node ESM
+default export, where its computed CommonJS methods are exposed.
 All fixture entry points require an explicit development runtime.
+
+The artifact page carries the authorized live object record through the bounded
+object-content projection when a file has no text projection. That lets the
+screenshot display read the recorded capture facts beside the actual PNG. The
+projection explicitly says `source: "live"` and names no snapshot revision.
+Historical review readers do not receive this live record; this page wiring does
+not claim to supply immutable capture facts for a pinned review.
 
 ## Validation and remaining acceptance
 
 ```sh
 pnpm exec vitest run src/lib/__tests__/dev-screenshot-producer.test.ts
+pnpm exec vitest run src/lib/__tests__/dev-screenshot-fixture.test.ts
 node --import tsx --test scripts/fixtures/__tests__/screenshot-capture.test.ts
 ```
 

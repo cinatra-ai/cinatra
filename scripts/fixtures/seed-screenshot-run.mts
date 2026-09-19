@@ -14,10 +14,12 @@ if (!process.env.SUPABASE_DB_URL || !process.env.REDIS_URL || !process.env.BULLM
 const schema = (process.env.SUPABASE_SCHEMA ?? "cinatra").replaceAll('"', '""');
 const db = new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 5000 });
 await db.connect();
-const queue = new Queue(process.env.BULLMQ_QUEUE_NAME, { connection: { url: process.env.REDIS_URL } });
+let queue: Queue | undefined;
 try {
   const template = (await db.query(`SELECT id, package_version FROM "${schema}".agent_templates WHERE package_name=$1`, ["@codex-widget-proof/screenshot-proof"])).rows;
   if (template.length !== 1) throw new Error("Stage the private screenshot fixture into extensions and restart the development app first");
+  queue = new Queue(process.env.BULLMQ_QUEUE_NAME, { connection: { url: process.env.REDIS_URL } });
+  await queue.waitUntilReady();
   const runId = randomUUID();
   await db.query(`INSERT INTO "${schema}".agent_runs
     (id, template_id, run_by, status, input_params, source_type, package_version, ag_ui_enabled, org_id)
@@ -40,6 +42,6 @@ try {
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 } finally {
-  await queue.close();
+  await queue?.close();
   await db.end();
 }

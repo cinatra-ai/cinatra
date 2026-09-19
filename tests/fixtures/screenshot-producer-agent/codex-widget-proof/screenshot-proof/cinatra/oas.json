@@ -12,14 +12,14 @@
   },
   "inputs": [
     {
-      "description": "The nonce to echo back.",
+      "description": "The page URL to capture after this run completes.",
       "title": "capture_url",
       "type": "string"
     }
   ],
   "outputs": [
     {
-      "description": "The echoed nonce output.",
+      "description": "The completed run’s capture target URL.",
       "title": "capture_url",
       "type": "string"
     }
@@ -43,7 +43,7 @@
       "component_type": "ControlFlowEdge",
       "id": "screenshot-proof-start->echo",
       "name": "start->echo",
-      "description": null,
+      "description": "",
       "metadata": {},
       "from_node": {
         "$component_ref": "screenshot-proof-start"
@@ -57,7 +57,7 @@
       "component_type": "ControlFlowEdge",
       "id": "screenshot-proof-echo->end",
       "name": "echo->end",
-      "description": null,
+      "description": "",
       "metadata": {},
       "from_node": {
         "$component_ref": "screenshot-proof-echo"
@@ -71,9 +71,9 @@
   "data_flow_connections": [
     {
       "component_type": "DataFlowEdge",
-      "id": "screenshot-proof-nonce:start->echo",
-      "name": "nonce:start->echo",
-      "description": null,
+      "id": "screenshot-proof-capture_url:start->echo",
+      "name": "capture_url:start->echo",
+      "description": "",
       "metadata": {},
       "source_node": {
         "$component_ref": "screenshot-proof-start"
@@ -86,9 +86,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "id": "screenshot-proof-nonce:start->end",
-      "name": "nonce:start->end",
-      "description": null,
+      "id": "screenshot-proof-capture_url:start->end",
+      "name": "capture_url:start->end",
+      "description": "",
       "metadata": {},
       "source_node": {
         "$component_ref": "screenshot-proof-start"
@@ -105,18 +105,18 @@
       "component_type": "StartNode",
       "id": "screenshot-proof-start",
       "name": "start",
-      "description": null,
+      "description": "",
       "metadata": {},
       "inputs": [
         {
-          "description": "The nonce to echo back.",
+          "description": "The page URL to capture after this run completes.",
           "title": "capture_url",
           "type": "string"
         }
       ],
       "outputs": [
         {
-          "description": "The nonce to echo back.",
+          "description": "The page URL to capture after this run completes.",
           "title": "capture_url",
           "type": "string"
         }
@@ -129,7 +129,7 @@
       "component_type": "OutputMessageNode",
       "id": "screenshot-proof-echo",
       "name": "echo",
-      "description": null,
+      "description": "",
       "metadata": {},
       "inputs": [
         {
@@ -147,18 +147,18 @@
       "component_type": "EndNode",
       "id": "screenshot-proof-end",
       "name": "end",
-      "description": null,
+      "description": "",
       "metadata": {},
       "inputs": [
         {
-          "description": "The echoed nonce output.",
+          "description": "The completed run’s capture target URL.",
           "title": "capture_url",
           "type": "string"
         }
       ],
       "outputs": [
         {
-          "description": "The echoed nonce output.",
+          "description": "The completed run’s capture target URL.",
           "title": "capture_url",
           "type": "string"
         }

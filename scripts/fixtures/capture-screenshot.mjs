@@ -21,8 +21,11 @@ const server = await createViteServer({
       const globals = { __dirname: path.dirname(file), __filename: file };
       const prefix = Object.entries(globals)
         .filter(([name]) => code.includes(name) && !new RegExp(`\\b(?:const|let|var)\\s+${name}\\b`).test(code))
-        .map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`).join("\n");
-      return prefix ? { code: `${prefix}\n${code}`, map: null } : undefined;
+        .map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`);
+      if (/\brequire\s*\(/.test(code) && !/\b(?:const|let|var|function)\s+require\b/.test(code)) {
+        prefix.push(`import { createRequire as __fixtureCreateRequire } from "node:module";\nconst require = __fixtureCreateRequire(${JSON.stringify(file)});`);
+      }
+      return prefix.length ? { code: `${prefix.join("\n")}\n${code}`, map: null } : undefined;
     },
   }],
   resolve: {
