@@ -488,9 +488,28 @@ export function effectiveCap(workflowLevel, scoped, stepLine) {
   return "none";
 }
 
+/** Stable identity within a job; physical lines remain diagnostics only. */
+export function stepIdentity(lines, runIdx) {
+  let start = runIdx;
+  while (start >= 0 && !/^ {6}-\s/.test(lines[start])) start -= 1;
+  if (start < 0) throw new Error("run block has no step boundary");
+  let end = start + 1;
+  while (end < lines.length && !/^ {6}-\s|^ {2}[\w-]+:/.test(lines[end])) end += 1;
+  const fields = {};
+  for (const line of lines.slice(start, end)) {
+    const m = /^(?: {6}- | {8})(id|name):\s*(.*?)\s*$/.exec(line);
+    if (m) fields[m[1]] = m[2].replace(/^(["'])(.*)\1$/, "$2");
+  }
+  if (fields.id) return `id:${fields.id}`;
+  if (fields.name) return `name:${fields.name}`;
+  // Anonymous steps have no declared identity. Their command is stable under
+  // unrelated line insertion and still changes when an invocation is added.
+  return `run:${lines.slice(start, end).join("\n").trim()}`;
+}
+
 /**
  * The parser-derived invocation inventory: one entry per
- * (workflow, job, step line, runner class, resolved runner, disposition,
+ * (workflow, job, stable step identity, runner class, resolved runner, disposition,
  * effective cap).
  */
 export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoot, WORKFLOW_DIR_REL)) {
@@ -503,6 +522,7 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
     const lines = yamlText.split("\n");
     const workflowLevel = workflowLevelAssignments(yamlText, ENV_NAME);
     const scoped = scopedAssignments(yamlText, ENV_NAME);
+    const stepLines = new Map();
     for (const block of extractRunBlocks(yamlText)) {
       if (!block.isStep) continue; // a `run:` key nothing executes
       let normalized = block.body.replace(/\\[ \t]*\n/g, " ");
@@ -542,9 +562,16 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
         else if (res.runner !== "vitest") disposition = res.runner;
         else disposition = hostedPinned ? "hosted-pinned" : "governed";
         const effective = effectiveCap(workflowLevel, scoped, block.startLine);
-        const key = [file, job, block.startLine, cls, res.runner, disposition, effective].join(" | ");
+        const step = stepIdentity(lines, block.startLine - 1);
+        const stepKey = JSON.stringify([job, step]);
+        const previousLine = stepLines.get(stepKey);
+        if (previousLine !== undefined && previousLine !== block.startLine) {
+          errors.push(`${file} (job ${job}): duplicate test step identity ${step}; give the steps distinct ids`);
+        }
+        stepLines.set(stepKey, block.startLine);
+        const key = [file, job, step, cls, res.runner, disposition, effective].join(" | ");
         if (!entries.has(key)) {
-          entries.set(key, { file, job, line: block.startLine, cls, runner: res.runner, disposition, effective });
+          entries.set(key, { file, job, step, line: block.startLine, cls, runner: res.runner, disposition, effective });
         }
       }
     }
@@ -554,7 +581,15 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
 
 /** One inventory row, exactly as it is written in the inventory document. */
 export function inventoryRow(e) {
-  return `| ${e.file} | ${e.job} | ${e.line} | ${e.cls} | ${e.runner} | ${e.disposition} | ${e.effective} |`;
+  return `| ${e.file} | ${e.job} | ${encodeURIComponent(e.step)} | ${e.line} | ${e.cls} | ${e.runner} | ${e.disposition} | ${e.effective} |`;
+}
+
+/** Exclude only the informational line column from the comparison. */
+export function inventoryKey(row) {
+  const fields = row.split("|").map((part) => part.trim());
+  if (fields.length !== 10 || !/^\d+$/.test(fields[4])) return row;
+  fields.splice(4, 1);
+  return fields.join(" | ");
 }
 
 /** The rows a committed inventory document carries. */
@@ -625,13 +660,14 @@ export function auditVitestWorkerCap(opts = {}) {
   }
 
   if (docPath) {
-    const want = entries.map(inventoryRow).sort();
-    const have = existsSync(docPath) ? parseInventoryDoc(readFileSync(docPath, "utf8")).sort() : [];
+    const wantRows = entries.map(inventoryRow);
+    const want = wantRows.map(inventoryKey).sort();
+    const have = existsSync(docPath) ? parseInventoryDoc(readFileSync(docPath, "utf8")).map(inventoryKey).sort() : [];
     const missing = want.filter((r) => !have.includes(r));
     const stale = have.filter((r) => !want.includes(r));
     if (missing.length || stale.length) {
       failures.push(
-        `${INVENTORY_DOC_REL} does not match the derived inventory (${missing.length} missing, ${stale.length} stale). The full expected table is:\n${want.join("\n")}`,
+        `${INVENTORY_DOC_REL} does not match the derived inventory (${missing.length} missing, ${stale.length} stale). The full expected table is:\n${wantRows.join("\n")}`,
       );
     }
   }

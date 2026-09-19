@@ -50,6 +50,8 @@ on:
     - cron: "10 6 * * 1" # weekly Monday 06:10 UTC — offset from the S1 capture's 05:23 slot
   pull_request:
     paths:
+      - 'src/lib/__tests__/helpers/prepared-mcp-clients.ts'
+      - 'src/lib/__tests__/prepared-mcp-clients.test.ts'
       - ".github/workflows/trusted-read-scale-smoke.yml"
       - "docker/wordpress/scale-smoke-plugin/**"
       - "docker/wordpress/Dockerfile"
