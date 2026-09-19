@@ -271,10 +271,18 @@ export function ImportAgentForm({ installScope }: ImportAgentFormProps) {
                 <Badge variant="outline" data-testid="upload-resolved-kind">
                   {KIND_LABEL[preview.kind] ?? preview.kind}
                 </Badge>
-                <p className="truncate text-sm font-semibold text-foreground">
+                <p
+                  className="truncate text-sm font-semibold text-foreground"
+                  data-testid="upload-resolved-name"
+                >
                   {preview.packageName}
                 </p>
-                <span className="text-xs text-muted-foreground">{preview.version}</span>
+                <span
+                  className="text-xs text-muted-foreground"
+                  data-testid="upload-resolved-version"
+                >
+                  {preview.version}
+                </span>
               </div>
               <p className="font-mono text-xs text-muted-foreground">
                 content digest {preview.contentDigest.slice(0, 12)}…
