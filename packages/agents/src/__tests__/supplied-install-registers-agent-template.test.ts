@@ -6,7 +6,10 @@
  * canonical row went live, and nothing on the road ever registered the agent
  * TEMPLATE — so the pack's Run wizard answered 404 and the run screen's search
  * found no agent, while the very same pack loaded by the development fleet sync
- * was runnable.
+ * did get a template row. What this file measures is that REGISTRATION step, not
+ * whether the registered row is runnable: the install road below the action is
+ * substituted here, and the run-scope admissibility of the row an install writes
+ * is proved by supplied-install-agent-template-run-scope.test.ts.
  *
  * What is measured here is the step between the dispatcher and the access
  * write, for the agent kind alone:
