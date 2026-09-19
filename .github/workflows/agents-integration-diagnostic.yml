@@ -1,0 +1,221 @@
+name: Agents integration diagnostic
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: agents-integration-diagnostic
+  cancel-in-progress: false
+env:
+  VITEST_MAX_WORKERS: "3"
+jobs:
+  full-tier:
+    name: Agents integration — scheduled whole-tier diagnostic
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.postgres.ports` in this
+          # job's first step, so two jobs holding a postgres on ONE
+          # self-hosted machine never race for 5432 (cinatra#3267).
+          - "5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:8
+        ports:
+          # Container port only: the runner publishes it on a RANDOM free
+          # host port, read back from `job.services.redis.ports` in this
+          # job's first step, so two jobs holding a redis on ONE
+          # self-hosted machine never race for 6379 (cinatra#3267).
+          - "6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    # JOB-LEVEL env — the whole point of this job's shape. Every step sees these
+    # unconditionally, so no `if:` can read an unset value. SUPABASE_DB_URL is
+    # what the provisioning scripts read; CINATRA_TEST_DB_URL is what
+    # vitest.integration.config.ts reads (and hard-throws on if absent, so a
+    # broken wiring change here fails loudly instead of skipping quietly).
+    # Those two plus REDIS_URL now name the RANDOM host ports the runner
+    # mapped for this job's service containers, which a job-level `env:`
+    # cannot read — the first step exports them to $GITHUB_ENV instead, so
+    # every later step still sees them unconditionally (cinatra#3267).
+    env:
+      SUPABASE_SCHEMA: cinatra
+      # cinatra#2675 — the registry half of the AC1 preflight proof (see the
+      # "Start a disposable Verdaccio" step below for the container itself and
+      # why it is not a native `services:` entry above it). REQUIRED=1 turns a
+      # missing prerequisite (this OR the database) into a hard failure instead
+      # of the suite's default loud-but-passing skip — standing up this lane is
+      # the whole point of giving it something to require (PR #2678's recorded
+      # residual).
+      # CINATRA_TEST_VERDACCIO_URL is NOT set here: the disposable registry
+      # below publishes a RANDOM host port, so the step that starts it reads
+      # the mapping back and exports the URL to $GITHUB_ENV (cinatra#3267).
+      CINATRA_TEST_VERDACCIO_REQUIRED: "1"
+    steps:
+      # SUPABASE_DB_URL / CINATRA_TEST_DB_URL / REDIS_URL, resolved against
+      # the RANDOM host ports the runner mapped: `job.services.*` is
+      # unreadable from a job-level `env:`, so they are exported here,
+      # before the first step that reads one (cinatra#3267).
+      - name: Export the mapped service ports
+        run: |
+          {
+            echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "CINATRA_TEST_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
+            echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # cinatra#2675 AC1 — the one suite that can prove a colliding publish
+      # refuses BEFORE it reaches the registry
+      # (agent-source-publish-claim-preflight.integration.test.ts) self-skips
+      # (loudly) unless CINATRA_TEST_VERDACCIO_URL is set. PR #2678 shipped
+      # that suite and recorded standing up this lane as the owed follow-up
+      # rather than mix a CI-wiring change into a PR that also changes
+      # application code (protected-path hygiene) — this is that follow-up.
+      #
+      # A plain `docker run`, NOT this job's native `services:` block above:
+      # GitHub starts service containers before the job's first STEP (the
+      # checkout above), so a `services:`-declared container cannot bind-mount
+      # a file this repo ships — it is not yet on disk when that mount would
+      # happen. Running the container from a step, after checkout, sidesteps
+      # that entirely; scripts/ci/works-after/verdaccio.sh already uses this
+      # exact shape for the same reason (see its header comment). Nothing is
+      # host- or repo-mounted at /verdaccio/storage, so Docker gives it the
+      # image's declared VOLUME as a fresh ANONYMOUS volume scoped to this one
+      # container — it starts empty every run, and the "Stop the disposable
+      # Verdaccio" cleanup step's `docker rm -v` removes that volume along
+      # with the container, so nothing survives past the end of this job.
+      #
+      # The image ref is SCRAPED from docker-compose.yml's `verdaccio:`
+      # service (mirrors works-after-proof.yml's `svc_image_str`) instead of
+      # being re-pinned here as a second literal: one source of truth for the
+      # digest, so Renovate's docker-compose manager (which already owns that
+      # line, e.g. #2622) keeps this lane's version current for free. A
+      # digest hand-pinned a second time inside a `run:` shell block would sit
+      # outside every automated pin-freshness tool this repo has — Renovate's
+      # compose manager only reads compose files, and Dependabot's
+      # github-actions manager only reads `uses:` refs — so it would go stale
+      # silently instead.
+      #
+      # docker/verdaccio/config.ci.yaml (mounted read-only below) is a
+      # DIFFERENT config from the dev registry's docker/verdaccio/config.yaml:
+      # no uplink, ephemeral container-scoped storage, and open (`$all`)
+      # publish so the suite's static bearer token — never a real
+      # Verdaccio-signed session — is enough to admit a publish. See that
+      # file's header for the full reasoning.
+      - name: Start a disposable Verdaccio (cinatra#2675 AC1 registry-refusal proof)
+        run: |
+          set -euo pipefail
+          VERDACCIO_IMAGE="$(awk '
+            $0 ~ "^  verdaccio:[[:space:]]*$" {found=1; next}
+            found && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {exit}
+            found && $1=="image:" {print $2; exit}' "${GITHUB_WORKSPACE}/docker-compose.yml")"
+          [ -n "$VERDACCIO_IMAGE" ] || { echo "::error::could not scrape the verdaccio image from docker-compose.yml"; exit 1; }
+          echo "Starting disposable Verdaccio from ${VERDACCIO_IMAGE}"
+          # Loopback-only publish (127.0.0.1, not every interface): this
+          # registry grants `publish: $all` (see config.ci.yaml), so nothing
+          # else should be able to reach it — hardening-only on a
+          # single-tenant, ephemeral GitHub-hosted runner, but free and
+          # matches scripts/ci/works-after/verdaccio.sh's identical `-p
+          # 127.0.0.1::4873`.
+          # An EMPTY host port: Docker picks a free one, so two jobs running
+          # this registry on ONE self-hosted machine never race for 4873
+          # (cinatra#3267). The mapping is read back below and published as
+          # CINATRA_TEST_VERDACCIO_URL for the integration suite further down.
+          # A per-job container NAME, from the one shared derivation
+          # (scripts/ci/job-scoped-name.sh — read its header for the class):
+          # a FIXED name can exist once per MACHINE, so a second job holding
+          # this registry on one self-hosted box died at `docker run` with
+          # `Conflict. The container name "/agents-it-verdaccio" is already
+          # in use` and exit 125, before it reached a single test
+          # (cinatra#3332). $GITHUB_ENV carries the derived name to the
+          # always() "Stop the disposable Verdaccio" step at the end of this
+          # job, so the cleanup removes THIS job's container and can never
+          # reach into a neighbouring job's.
+          VERDACCIO_CONTAINER="$("${GITHUB_WORKSPACE}/scripts/ci/job-scoped-name.sh" agents-it-verdaccio)"
+          echo "AGENTS_IT_VERDACCIO_CONTAINER=${VERDACCIO_CONTAINER}" >> "$GITHUB_ENV"
+          echo "container name: ${VERDACCIO_CONTAINER}"
+          docker run -d --name "$VERDACCIO_CONTAINER" -p 127.0.0.1::4873 \
+            -v "${GITHUB_WORKSPACE}/docker/verdaccio/config.ci.yaml:/verdaccio/conf/config.yaml:ro" \
+            "$VERDACCIO_IMAGE" >/dev/null
+          VERDACCIO_PORT="$(docker port "$VERDACCIO_CONTAINER" 4873/tcp | head -n 1 | sed 's/.*://')"
+          [ -n "$VERDACCIO_PORT" ] || { echo "::error::could not read back the mapped verdaccio host port"; exit 1; }
+          VERDACCIO_URL="http://127.0.0.1:${VERDACCIO_PORT}"
+          # $GITHUB_ENV reaches the LATER steps (the integration suite reads
+          # process.env.CINATRA_TEST_VERDACCIO_URL); this step's own curl loop
+          # has to use the local variable, which $GITHUB_ENV does not feed.
+          echo "CINATRA_TEST_VERDACCIO_URL=${VERDACCIO_URL}" >> "$GITHUB_ENV"
+          for i in $(seq 1 40); do
+            if curl -fsS "${VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
+              echo "verdaccio is up at ${VERDACCIO_URL} (attempt ${i}/40)"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::disposable verdaccio did not answer /-/ping within 120s"
+          docker logs "$VERDACCIO_CONTAINER" || true
+          exit 1
+
+      - name: Provision Better Auth tables (public schema)
+        # FIRST — the store DDL below carries FKs to public."user" /
+        # "organization" / "team" / "member". Same step, same reason, as the
+        # extension-lifecycle-db-tests and e2e jobs.
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Provision the cinatra store schema (bootstrap DDL)
+        # The baseline `cinatra setup branch` gives a dev checkout. Needs tsx —
+        # the canonical builder is TypeScript and imports `@/…`.
+        run: node --import tsx scripts/ci/apply-store-schema.mjs
+
+      - name: Agents integration tests — WHOLE tier incl. known-red files (informational; never blocking)
+        if: ${{ !cancelled() }}
+        working-directory: packages/agents
+        run: |
+          set +e
+          pnpm exec vitest run --config vitest.integration.config.ts --no-coverage --no-file-parallelism
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Whole-tier packages/agents integration run exited $status. Recorded baseline for this branch (cinatra#2226): 31 files / 277 tests, 0 skipped, 8 files / 44 tests failing — pre-existing test-health debt named in this job's header. COMPARE the summary above against that baseline: a WORSE result (more failing files/tests, a different file, a crash or timeout rather than assertion failures) is a real finding and should be investigated, not assumed pre-existing. This scheduled diagnostic is informational; build-image.yml retains the blocking subset."
+          fi
+          echo "Whole-tier integration exit: $status" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Stop the disposable Verdaccio
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ -n "${AGENTS_IT_VERDACCIO_CONTAINER:-}" ]; then
+            docker rm -fv "${AGENTS_IT_VERDACCIO_CONTAINER}" >/dev/null 2>&1 || true
+          fi
+

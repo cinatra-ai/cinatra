@@ -446,3 +446,37 @@ describe("a cap is a MAXIMUM, so a narrowing override keeps the contract", () =>
     expect(failures[0]).toContain("not an integer of at least 1");
   });
 });
+
+
+describe("stable inventory identities", () => {
+  function recorded(text) {
+    const root = makeRoot({ workflows: { "a.yml": text } });
+    const docPath = join(root, "inventory.md");
+    writeFileSync(docPath, deriveInventory(root).entries.map(inventoryRow).join("\n"));
+    return { root, docPath, check: () => auditVitestWorkerCap({ repoRoot: root, docPath, suiteGatePath: null }) };
+  }
+
+  it("ignores an unrelated inserted step and still detects a changed cap", () => {
+    const original = workflow({ env: capped });
+    const f = recorded(original);
+    const moved = original.replace("    steps:\n", "    steps:\n      - name: New setup\n        run: echo ready\n");
+    writeFileSync(join(f.root, ".github/workflows/a.yml"), moved);
+    expect(f.check().failures).toEqual([]);
+    writeFileSync(join(f.root, ".github/workflows/a.yml"), moved.replace('VITEST_MAX_WORKERS: "3"', 'VITEST_MAX_WORKERS: "4"'));
+    expect(f.check().failures.join("\n")).toMatch(/expected "3"/);
+  });
+
+  it("requires a new invocation to be inventoried", () => {
+    const original = workflow({ env: capped });
+    const f = recorded(original);
+    writeFileSync(join(f.root, ".github/workflows/a.yml"), original + "      - name: Extra tests\n        run: pnpm exec vitest run extra\n");
+    expect(f.check().failures.join("\n")).toMatch(/1 missing/);
+  });
+
+  it("refuses duplicate names rather than hiding a new step", () => {
+    const original = workflow({ env: capped });
+    const f = recorded(original);
+    writeFileSync(join(f.root, ".github/workflows/a.yml"), original + "      - name: Run the suite\n        run: pnpm exec vitest run extra\n");
+    expect(f.check().failures.join("\n")).toMatch(/duplicate test step identity/);
+  });
+});
