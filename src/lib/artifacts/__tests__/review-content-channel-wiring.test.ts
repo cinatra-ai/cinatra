@@ -16,7 +16,7 @@
  *       when the revision has one, and with a NAMED absence when it has none —
  *       never a fabricated empty body.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   prepareReviewTargetsCore,
@@ -183,19 +183,37 @@ describe("the pinned-substance read behind the channel", () => {
     });
   });
 
-  it("bytes that cannot be opened degrade to the named absence, not a throw", async () => {
-    const projection = await buildArtifactContentProjection(
-      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
-      createPinnedSubstanceReader(
-        {},
-        deps({
-          openBytes: async () => {
-            throw new Error("blob gone");
-          },
-        }),
-      ),
-    );
-    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+  it("bytes that cannot be opened degrade to the named absence, and the failure is REPORTED", async () => {
+    // NO SILENT CATCH. One unreadable blob still degrades ONE panel rather than
+    // failing the whole prepared set — but a read that failed is written to the
+    // server's own error channel, so an absence drawn over a revision that HAS
+    // bytes can be told from one over a revision that has none.
+    const reported: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      reported.push(args);
+    });
+    try {
+      const projection = await buildArtifactContentProjection(
+        { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+        createPinnedSubstanceReader(
+          {},
+          deps({
+            openBytes: async () => {
+              throw new Error("blob gone");
+            },
+          }),
+        ),
+      );
+      expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+      expect(reported.length).toBe(1);
+      expect(String(reported[0]?.[0])).toContain("could not be read");
+      expect(reported[0]?.[1]).toMatchObject({
+        artifactId: "art",
+        representationRevisionId: "rev-1",
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a file over the READ CEILING is an absence rather than a read of the whole blob", async () => {
@@ -220,6 +238,152 @@ describe("the pinned-substance read behind the channel", () => {
     );
     expect(projection).toMatchObject({ kind: "none", reason: "absent" });
     expect(opened).toBe(false);
+  });
+
+  it("the READ CEILING is the shared reader's own PARAMETER — a caller's cap bounds the read", async () => {
+    // ONE shared reader, and the ceiling it reads under is a parameter of it:
+    // a surface that carries a tighter cap passes that cap here rather than
+    // standing a second capped reader beside this one.
+    let opened = false;
+    const projection = await buildArtifactContentProjection(
+      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+      createPinnedSubstanceReader(
+        { readCeilingBytes: Buffer.byteLength(DRAFT, "utf8") - 1 },
+        deps({
+          openBytes: async () => {
+            opened = true;
+            return {
+              stream: (async function* () {
+                yield new TextEncoder().encode(DRAFT);
+              })(),
+            };
+          },
+        }),
+      ),
+    );
+    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+    // The row already says it is over the caller's ceiling, so nothing is opened.
+    expect(opened).toBe(false);
+  });
+
+  it("the caller's ceiling bounds the HANDLE's own size, not only the row's", async () => {
+    // The convergence round's reading: a ceiling proved only on the recorded
+    // row size would still pass if the two checks below kept the DEFAULT. Here
+    // the row is under the caller's bound and the opened handle is over it.
+    let pulled = 0;
+    const projection = await buildArtifactContentProjection(
+      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+      createPinnedSubstanceReader(
+        { readCeilingBytes: 8 },
+        deps({
+          resolveFileRevision: () => ({
+            storageKey: "org-1/blob",
+            mime: "text/markdown",
+            sizeBytes: 4,
+            originKind: "upload",
+          }),
+          openBytes: async () => ({
+            sizeBytes: 9,
+            stream: (async function* () {
+              pulled += 1;
+              yield new TextEncoder().encode("123456789");
+            })(),
+          }),
+        }),
+      ),
+    );
+    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+    // The physical size answered the bound before one byte was pulled.
+    expect(pulled).toBe(0);
+  });
+
+  it("the caller's ceiling bounds the STREAMED bytes when neither recorded size told the truth", async () => {
+    const projection = await buildArtifactContentProjection(
+      { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+      createPinnedSubstanceReader(
+        { readCeilingBytes: 8 },
+        deps({
+          resolveFileRevision: () => ({
+            storageKey: "org-1/blob",
+            mime: "text/markdown",
+            sizeBytes: 4,
+            originKind: "upload",
+          }),
+          openBytes: async () => ({
+            stream: (async function* () {
+              yield new TextEncoder().encode("123456789012");
+            })(),
+          }),
+        }),
+      ),
+    );
+    expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+  });
+
+  it("a SUPPLIED ceiling that is not a usable bound is REFUSED, never widened to the default", () => {
+    // A caller asking for a tighter read must never be answered with a wider
+    // one, so an unusable supplied bound fails at construction instead of
+    // silently selecting the default ceiling.
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => createPinnedSubstanceReader({ readCeilingBytes: bad }, deps())).toThrow(TypeError);
+    }
+    // An OMITTED option is not a refusal: the default ceiling stands.
+    expect(() => createPinnedSubstanceReader({}, deps())).not.toThrow();
+  });
+
+  it("the reported failure is a BOUNDED reading, never the raw thrown payload", async () => {
+    const thrown: unknown = { body: "x".repeat(5000), storagePath: "the-unredacted-payload-marker" };
+    const reported: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      reported.push(args);
+    });
+    try {
+      const projection = await buildArtifactContentProjection(
+        { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+        createPinnedSubstanceReader(
+          {},
+          deps({
+            openBytes: async () => {
+              throw thrown;
+            },
+          }),
+        ),
+      );
+      expect(projection).toMatchObject({ kind: "none", reason: "absent" });
+      expect(reported.length).toBe(1);
+      const payload = reported[0]?.[2];
+      expect(typeof payload).toBe("string");
+      expect(String(payload)).not.toContain("the-unredacted-payload-marker");
+      expect(String(payload).length).toBeLessThanOrEqual(201);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a very long failure message is CUT rather than written through whole", async () => {
+    const reported: unknown[][] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      reported.push(args);
+    });
+    try {
+      await buildArtifactContentProjection(
+        { orgId: "org-1", artifactId: "art", representationRevisionId: "rev-1", form: "file", mime: "text/markdown" },
+        createPinnedSubstanceReader(
+          {},
+          deps({
+            openBytes: async () => {
+              throw new Error("y".repeat(5000));
+            },
+          }),
+        ),
+      );
+      expect(reported.length).toBe(1);
+      const payload = String(reported[0]?.[2]);
+      expect(payload.length).toBeLessThanOrEqual(201);
+      expect(payload.endsWith("\u2026")).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("the STORE's own size over the ceiling is an absence, whatever the row claims", async () => {

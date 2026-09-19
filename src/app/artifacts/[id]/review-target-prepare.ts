@@ -61,19 +61,6 @@ import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artif
 // VALUES, the way main wires them, and the route-graph ratchet records what
 // that costs the four locked routes.
 import {
-  buildArtifactContentProjection,
-  type ArtifactContentChannelPorts,
-  type ArtifactRepresentationForm,
-} from "@/lib/artifacts/artifact-content-channel";
-import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
-// The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
-// that choose them (`./review-surface-roads`), none of which is a locked
-// route, and named here by type alone, which the compiler erases.
-import type {
-  ArtifactContentBuilder,
-  ArtifactByteUrlMinter,
-} from "./review-surface-roads";
-import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
   type PrepareReviewInput,
@@ -83,6 +70,23 @@ import {
   type RevisionMemberOutcome,
   isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
+
+// The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
+// that choose them (`./review-surface-roads`), none of which is a locked
+// route, and named here by type alone, which the compiler erases.
+import type {
+  ArtifactContentBuilder,
+  ArtifactByteUrlMinter,
+} from "./review-surface-roads";
+
+import {
+  artifactContentCapFor,
+  buildArtifactContentProjection,
+  type ArtifactContentChannelPorts,
+  type ArtifactRepresentationForm,
+} from "@/lib/artifacts/artifact-content-channel";
+import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
+import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
 
 import { pickArtifactRenderer } from "./renderer-dispatch";
 import {
@@ -99,6 +103,121 @@ export type ReviewRunGatePorts = Pick<
 >;
 
 /** Build the artifact-side ports bound to the reviewing actor + org. */
+// ---------------------------------------------------------------------------
+// THE CONTENT CHANNEL, WIRED FOR THE REVIEW TARGET (cinatra#3080, fix leg 7).
+//
+// THE DEFECT. This consumer passed `absentArtifactContent(...)` unconditionally
+// and said so in a comment — "this consumer is not wired to it yet". The
+// eighth proof round measured what that means on a real review: a run produced a
+// `text/markdown` post, the gate pinned its revision, and the markdown display
+// drew its `content-absent` floor — "No markdown is available to show for the
+// revision being viewed." — over a document that was sitting readable in the
+// blob store. §V of the ratified review drawing keeps the floor for the target
+// that does NOT resolve; a floor over a resolvable one tells the reviewer
+// something false about the work they are deciding on.
+//
+// WHAT IS WIRED, AND WHAT IS NOT. The TEXT arm reads the pinned revision's bytes
+// through the shared pinned-substance reader over `resolveArtifactVersionForServe`
+// + the local blob store — the same canonical server-side read the artifact
+// page's own markdown handler uses, under one implementation rather than two. The
+// CONFIGURATION arm needs no read at all: a dashboard revision's pinned
+// configuration travels on the member the gate already resolved, with its own
+// stable digest. The `page` class (a `connectorRef` revision's remote content)
+// has no server-side reader on this surface, so it answers `null` and the
+// channel says `absent` — the same honest absence it says today, and named here
+// rather than hidden behind a comment.
+// ---------------------------------------------------------------------------
+
+/** The pinned revision's bytes, stopped one byte past the channel's own text cap.
+ *
+ * THE ONE SERVER READ STAYS THE SHARED READER'S. This surface used to carry a
+ * second copy of the text read, and the copy meant the shipped binder no longer
+ * went through `createPinnedSubstanceReader` at all: the reader's own
+ * degrade-to-a-named-absence road and this surface's were two implementations
+ * of one behaviour, and the binder's own suite measured the drift. What is this
+ * surface's own is only how far the bytes are pulled — a review card draws as
+ * much of the work as the channel can carry, so the stream handed to the shared
+ * reader stops one byte past the channel's cap and lets the projection report
+ * itself `truncated`.
+ */
+async function openCappedPinnedBytes(input: { orgId: string; storageKey: string }): Promise<{
+  stream: AsyncIterable<Uint8Array>;
+  sizeBytes?: number;
+}> {
+  const handle = await createLocalDiskBlobStore().openByStorageKey(input);
+  const budget = artifactContentCapFor("text") + 1;
+  const stream = (async function* () {
+    let read = 0;
+    for await (const chunk of handle.stream) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      read += buf.byteLength;
+      yield buf;
+      // Past the cap nothing more can ever be projected, so the read stops
+      // here; leaving the loop calls the source iterator's `return`, which
+      // cancels the underlying stream.
+      if (read >= budget) return;
+    }
+  })();
+  return { stream, sizeBytes: handle.sizeBytes };
+}
+
+/** The substance read for ONE pinned review target, over the member the gate
+ *  already resolved. Exported shape kept injectable so the wiring is testable
+ *  without a blob store. */
+export function reviewTargetSubstancePorts(
+  member: NonNullable<RevisionMemberOutcome>,
+): ArtifactContentChannelPorts {
+  const liveOnly = member.historical !== true;
+
+  // EVERY CLASS IS THE CANONICAL SHARED READER'S — the text bytes, the carried
+  // configuration record preferred over a second read of the same row, and the
+  // `page` class answered as a named absence. This surface contributes only its
+  // own byte source: the capped stream above.
+  return createPinnedSubstanceReader(
+    {
+      liveOnly,
+      carriedConfiguration:
+        member.configuration === undefined || member.configuration === null
+          ? null
+          : {
+              configuration: member.configuration,
+              digest: member.configurationDigest ?? null,
+            },
+    },
+    {
+      resolveFileRevision: (input) => resolveArtifactVersionForServe(input),
+      resolveNonFileRevision: (input) => resolveNonFileArtifactRevision(input),
+      openBytes: openCappedPinnedBytes,
+    },
+  );
+}
+
+/** Build ONE review target's content projection. The form is the SUBSTRATE's own
+ *  (`member.form`, defaulting to `file` exactly as `isFileFormMember` reads it),
+ *  never a caller claim. */
+export async function buildReviewTargetContentProjection(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    mime: string;
+    member: NonNullable<RevisionMemberOutcome>;
+  },
+  ports: ArtifactContentChannelPorts = reviewTargetSubstancePorts(input.member),
+): Promise<ArtifactContentProjection> {
+  const form: ArtifactRepresentationForm = input.member.form ?? "file";
+  return buildArtifactContentProjection(
+    {
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+      form,
+      mime: input.mime,
+    },
+    ports,
+  );
+}
+
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
@@ -456,12 +575,16 @@ export function bindArtifactReviewPorts(ctx: {
         // read that throws is logged against its revision and comes back as the
         // channel's named absence, so a store fault draws the floor instead of
         // failing the whole card.
+        // ...over THIS SURFACE'S OWN SUBSTANCE PORTS (cinatra#3080, fix leg 7).
+        // `reviewTargetSubstancePorts` says what each class reads and which one
+        // still answers an honest absence, and it contributes the one thing the
+        // reader's defaults cannot: this surface's capped pinned-byte stream.
+        // It derives `liveOnly` and the carried configuration from the same
+        // member `contentInput` did, so the bound the membership answer was made
+        // under still travels with the read.
         await readPinnedContentOrAbsence(
           contentInput,
-          createPinnedSubstanceReader({
-            liveOnly: contentInput.liveOnly,
-            carriedConfiguration: contentInput.carriedConfiguration,
-          }),
+          reviewTargetSubstancePorts(input.member),
         );
 
     return buildArtifactRendererProps({
@@ -478,7 +601,15 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
+      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED (cinatra#3080,
+      // fix leg 7), under the default branch's throw-degrade wrapper. The read
+      // itself is computed above: a surface that named a road reads through ITS
+      // builder, and a surface that named none reads through this surface's own
+      // substance ports. `buildReviewTargetContentProjection` is the same read
+      // without the wrapper, kept for the seam its own tests drive.
       content,
+      // THE BYTE ROAD travels beside it: nothing passes a byte through the
+      // model, so the full bytes are reached by address, never inlined here.
       bytes,
     });
   };

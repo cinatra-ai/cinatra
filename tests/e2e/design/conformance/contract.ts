@@ -6347,8 +6347,8 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         // dropped: a withheld card must never be drawn as a disabled one, and a
         // disabled one must never be silently dropped.
         for (const terminal of [
-          '[data-action="approve-review -> resolved"]',
-          '[data-action="reject-review -> resolved"]',
+          '[data-action="regenerate-review -> changes-requested"]',
+          '[data-action="continue-review -> resolved"]',
         ]) {
           const control = bar.locator(terminal);
           await expect(control).toBeVisible();
@@ -6422,8 +6422,10 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         await expect(count).toContainText(`${suggestions.length} of ${suggestions.length}`);
         await expect(count).toContainText("ride this decision");
         // The gate is decidable for this reader, so the terminal controls are live.
-        await expect(bar.locator('[data-action="approve-review -> resolved"]')).toBeEnabled();
-        await expect(bar.locator('[data-action="reject-review -> resolved"]')).toBeEnabled();
+        await expect(
+          bar.locator('[data-action="regenerate-review -> changes-requested"]'),
+        ).toBeEnabled();
+        await expect(bar.locator('[data-action="continue-review -> resolved"]')).toBeEnabled();
         await expect(
           bar.locator('[data-conformance-id="review-decision-disabled"]'),
         ).toHaveCount(0);
@@ -6888,7 +6890,7 @@ const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
     await expect(viewRow).toHaveAttribute("data-suggestion-chips-mode", "read-only");
     await expect(viewRow.getByRole("button")).toHaveCount(0);
     await expect(viewRow.locator('[data-conformance-id="suggestion-accepted"]')).toBeVisible();
-    await expect(viewRow).toContainText("Deciding these needs approve access on this run.");
+    await expect(viewRow).toContainText("Deciding these needs decision access on this run.");
 
     // The two readings are never drawn for each other: read-only is a plain
     // element, and there is no disabled press target anywhere in the matrix.

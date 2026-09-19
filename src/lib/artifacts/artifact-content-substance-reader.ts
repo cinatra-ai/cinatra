@@ -98,16 +98,37 @@ export function createPinnedSubstanceReader(
      * projection rather than an absence.
      */
     carriedConfiguration?: { configuration: unknown; digest: string | null } | null;
+    /**
+     * THE READ CEILING, as a PARAMETER of this one reader.
+     *
+     * A surface that reads under a tighter bound than the default — a review
+     * card, which draws no more of the work than its channel can carry — passes
+     * that bound here. The alternative was a second capped text reader standing
+     * beside this one, and two implementations of the degrade-to-a-named-absence
+     * road drifted apart once already. Absent, the default ceiling below holds;
+     * SUPPLIED and unusable, the reader refuses at construction rather than
+     * quietly reading under the wider default.
+     */
+    readCeilingBytes?: number;
   } = {},
   deps: PinnedSubstanceReaderDeps = defaultDeps,
 ): ArtifactContentChannelPorts {
   const liveOnly = options.liveOnly !== false;
   const carried = options.carriedConfiguration ?? null;
+  // A SUPPLIED ceiling is honoured or REFUSED — never silently widened. A
+  // caller that passes zero, a negative, a NaN or a non-number asked for a
+  // bound this reader cannot read under, and answering it with the default
+  // would read FURTHER than the caller asked for. Only an OMITTED option falls
+  // back to the default ceiling.
+  const readCeilingBytes = resolveReadCeiling(options.readCeilingBytes);
 
   return {
     async readPinnedSubstance({ orgId, artifactId, representationRevisionId, contentClass }) {
       if (contentClass === "text") {
-        return readTextSubstance({ orgId, artifactId, representationRevisionId, liveOnly }, deps);
+        return readTextSubstance(
+          { orgId, artifactId, representationRevisionId, liveOnly, readCeilingBytes },
+          deps,
+        );
       }
       if (contentClass === "configuration") {
         if (carried) {
@@ -147,15 +168,43 @@ export function createPinnedSubstanceReader(
   };
 }
 
+/** THE SUPPLIED CEILING, RESOLVED. An omitted option takes the default; a
+ *  supplied one that is not a usable bound is REFUSED here rather than widened
+ *  to the default, because a caller that asked for a tighter read must never be
+ *  answered with a wider one. */
+function resolveReadCeiling(supplied: number | undefined): number {
+  if (supplied === undefined) return PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES;
+  if (typeof supplied !== "number" || !Number.isFinite(supplied) || supplied <= 0) {
+    throw new TypeError(
+      `createPinnedSubstanceReader: readCeilingBytes must be a finite positive number, received ${String(supplied)}`,
+    );
+  }
+  return supplied;
+}
+
+/** The read failure's BOUNDED reading for the server's error channel: the kind
+ *  and the message, cut to a fixed length. The thrown value itself is not
+ *  written through — a storage failure's payload can carry a machine path or a
+ *  slice of the body, and this record wants the failure, not the payload. */
+const READ_FAILURE_TEXT_CEILING_CHARS = 200;
+function describeReadFailure(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return text.length > READ_FAILURE_TEXT_CEILING_CHARS
+    ? `${text.slice(0, READ_FAILURE_TEXT_CEILING_CHARS)}…`
+    : text;
+}
+
 async function readTextSubstance(
   input: {
     orgId: string;
     artifactId: string;
     representationRevisionId: string;
     liveOnly: boolean;
+    readCeilingBytes: number;
   },
   deps: PinnedSubstanceReaderDeps,
 ): Promise<PinnedRevisionSubstance | null> {
+  const ceiling = input.readCeilingBytes;
   const resolved = deps.resolveFileRevision({
     orgId: input.orgId,
     artifactId: input.artifactId,
@@ -163,7 +212,7 @@ async function readTextSubstance(
     liveOnly: input.liveOnly,
   });
   if (!resolved) return null;
-  if (resolved.sizeBytes > PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES) return null;
+  if (resolved.sizeBytes > ceiling) return null;
   try {
     const handle = await deps.openBytes({
       orgId: input.orgId,
@@ -174,7 +223,7 @@ async function readTextSubstance(
     // disagree — a truncated or replaced blob, a row written before its upload
     // finished — and it is the physical one that decides how much this read
     // would pull into memory.
-    if (typeof handle.sizeBytes === "number" && handle.sizeBytes > PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES) {
+    if (typeof handle.sizeBytes === "number" && handle.sizeBytes > ceiling) {
       return null;
     }
     const chunks: Buffer[] = [];
@@ -188,14 +237,28 @@ async function readTextSubstance(
       // this stops pulling (leaving the loop calls the iterator's `return`,
       // which cancels the underlying stream) and answers the channel's named
       // absence, exactly as an over-ceiling row does.
-      if (read > PINNED_TEXT_SUBSTANCE_READ_CEILING_BYTES) return null;
+      if (read > ceiling) return null;
       chunks.push(buf);
     }
     return { class: "text", text: Buffer.concat(chunks).toString("utf8") };
-  } catch {
+  } catch (error) {
     // A revision the substrate names but whose bytes cannot be opened is an
     // absence, not a throw: one unreadable blob must degrade ONE panel to the
     // channel's named absence rather than fail the whole prepared set.
+    //
+    // AND IT IS NOT SWALLOWED. The absence a failed read draws is the same
+    // absence a revision with nothing pinned draws, so a silent catch makes a
+    // broken read indistinguishable from an empty one — on the surface AND in
+    // the server's own record. The failure is reported here; the panel still
+    // degrades.
+    console.error(
+      "[artifact-content] the pinned revision's bytes could not be read",
+      {
+        artifactId: input.artifactId,
+        representationRevisionId: input.representationRevisionId,
+      },
+      describeReadFailure(error),
+    );
     return null;
   }
 }

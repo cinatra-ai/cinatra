@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 16 workflow files carry a test-runner step;
-10 of them are governed. 135 invocations:
-94 governed, 13 hosted-pinned,
+10 of them are governed. 136 invocations:
+94 governed, 14 hosted-pinned,
 20 node:test, 7 playwright,
 1 extension-suite-gate.
 
@@ -126,12 +126,13 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | chat-hitl-held-turn-e2e | 3758 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | 3763 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | 3775 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3787 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3801 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3790 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3802 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | 3816 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3834 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3850 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3864 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3831 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3849 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3865 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3879 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | context-resolve-route-shape | 520 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | devperf-invariants | 1775 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | devperf-invariants | 1778 | CI_RUNNER_POOL | node:test | node:test | 3 |
@@ -214,7 +215,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | perpetual-core | 2858 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | 2863 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-extension-suites | 2968 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
-| build-image.yml | presence-degraded-build | 4725 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | presence-degraded-build | 4740 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | build-image.yml | rbac-authz-unit | 485 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | schema-migration-gate | 670 | CI_RUNNER_GATE | node:test | node:test | 3 |
 | build-image.yml | skills-unit | 303 | CI_RUNNER_HEAVY | vitest | governed | 3 |

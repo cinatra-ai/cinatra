@@ -152,11 +152,15 @@ describe("the frame height is the island document's own reported height", () => 
         fireEvent.load(frameIn(container));
       });
 
-      // One header per pinned target — the card's reading of the pinned set is
-      // unchanged; only the frame's height stops being derived from it.
+      // The card's reading of the pinned set: one header for a ONE-target gate
+      // (every gate minted under one-review-per-artifact), and none for a legacy
+      // multi-target row, whose headers ride their own bodies inside the island
+      // (cinatra#3080, the fix leg after the first proof round). Either way the
+      // frame's height stops being derived from the count, which is what this
+      // case is about.
       expect(
         container.querySelectorAll('[data-conformance-id="review-target-header"]').length,
-      ).toBe(count);
+      ).toBe(count > 1 ? 0 : count);
 
       await islandReports(container, reported);
 

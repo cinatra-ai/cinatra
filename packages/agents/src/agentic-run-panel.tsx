@@ -40,6 +40,7 @@ import {
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  useRunRailGateStep,
   useRunReviewSlot,
   type RunReviewSlot,
   type RunReviewSlotReader,
@@ -224,6 +225,29 @@ export type AgenticRunPanelProps = {
    * card alone in the detail. Every other host is untouched.
    */
   railDrawsTheFrame?: boolean;
+  /**
+   * THE GATE HEADER'S NAMING, FROM THE HOST THAT HOLDS IT (cinatra#3080, fix
+   * leg 8).
+   *
+   * The naming line "names the agent, the run and the step position", and
+   * `reviewGateNamingLine` already joins whatever it is given — "The naming is
+   * the HOST's to supply, not the wire's: the run surface that draws this gate
+   * already knows the agent, the run and the step". This panel is one of the
+   * two run surfaces that draw the gate, and it was passing the run alone, so
+   * the ninth proof round read `run 1551362…` where the drawing reads
+   * "Outreach agent · run rn_8f31… · step 4 of 6". The two facts it could not
+   * source itself now travel down from the screen that resolved them for the
+   * rail beside this column, so the line and the rail cannot disagree.
+   *
+   * Absent ⇒ the header draws the segments it can name, exactly as before.
+   *
+   * THE STEP IS NOT ONE OF THESE PROPS (cinatra#3080, the fix leg after the
+   * third proof round). It is the numeral the rail beside this panel draws, and
+   * the screen settles it with those rows — after this panel's element is made —
+   * so it reaches the header through `RunRailGateStepProvider` around the same
+   * tree instead of travelling down as a prop.
+   */
+  reviewGateAgentLabel?: string | null;
   /**
    * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
    * (cinatra#2790, epic #2784 S9f).
@@ -485,10 +509,15 @@ export function AgenticRunPanel({
   onReviewReadingChange,
   inputStepInRail = false,
   railDrawsTheFrame = false,
+  reviewGateAgentLabel = null,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
   const viewerIsAdmin = useViewerIsAdmin();
+  // THE RAIL'S OWN NUMERAL FOR THE GATE THIS PANEL DRAWS (cinatra#3080, the fix
+  // leg after the third proof round) — the one series the rail beside it is
+  // drawn from, so the header's line and that rail cannot disagree.
+  const railGateStep = useRunRailGateStep();
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
   // resolution below picks them up.
@@ -2032,6 +2061,11 @@ export function AgenticRunPanel({
         // §VI — the gate's conversational prompt window keeps its exchange with
         // the RUN (cinatra#3141 item 1).
         runId={runId}
+        // AND THE HEADER'S NAMING (cinatra#3080, fix leg 8). The same three
+        // segments the review page's own mount hands down; this panel takes the
+        // two it cannot source from its host.
+        agentLabel={reviewGateAgentLabel ?? null}
+        step={railGateStep}
       />
     ) : (
       <LifecycleCardSurfaceProvider host="run_card">
@@ -2044,6 +2078,13 @@ export function AgenticRunPanel({
           // §VI — the gate's conversational prompt window keeps its exchange
           // with the RUN (cinatra#3141 item 1).
           runId={runId}
+          // AND THE HEADER'S NAMING ON THIS BRANCH TOO (cinatra#3080, fix leg
+          // 8). The host declaration above is what differs between the two
+          // readings (cinatra#3484); the header's three segments are not, and
+          // §XIII.1 asks them of EVERY run-surface mount. The same two this
+          // panel cannot source from its host, from the same places.
+          agentLabel={reviewGateAgentLabel ?? null}
+          step={railGateStep}
         />
       </LifecycleCardSurfaceProvider>
     )

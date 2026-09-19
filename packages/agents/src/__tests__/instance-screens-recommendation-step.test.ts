@@ -200,7 +200,20 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     // drawing, `specs/app-artifact-review.html` section I: "Selecting a step
     // opens that step's page in the run detail, and the page carries the one
     // card of the step it belongs to."
-    expect(SCREEN_SRC).toMatch(/detail=\{runDetailFallback\}/);
+    //
+    // AND THE DETAIL IT HANDS OVER CARRIES THE RAIL'S OWN NUMERAL FOR THE GATE
+    // (cinatra#3080, the fix leg after the third proof round). The run detail is
+    // composed above the rows, so the numeral those rows settle reaches the gate
+    // header through the provider around the SAME detail node rather than as a
+    // prop made before the rows exist.
+    //
+    // ONE ASSERTION, BOTH READINGS, because the two are one composition: the
+    // `detail` prop reaches the frame THROUGH the provider, and the node inside
+    // that provider is `runDetailFallback` and never the raw `detailNode` -- so
+    // a run whose detail draws nothing still hands the frame nothing at all.
+    expect(SCREEN_SRC).toMatch(
+      /detail=\{\s*runDetailFallback \? \(\s*<RunRailGateStepProvider value=\{gateStepOnTheRail\}>\s*\{runDetailFallback\}/,
+    );
     expect(SCREEN_SRC).toMatch(/initialSelection=\{initialStep\}/);
     expect(SCREEN_SRC).toContain("runDetailInitialStep({");
   });
@@ -216,9 +229,14 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     // counting it pushed the run's first work step to "2". The offset is the
     // rail's own rule now (`runSurfaceRailNumberedCount`), asked once, and the
     // arithmetic itself is pinned in `skills-step-glyph-and-numerals.test.tsx`.
+    // AND IT IS THE ONE SERIES THE HEADER READS TOO (cinatra#3080, the fix leg
+    // after the third proof round): the same count is stated once, beside the
+    // rail's entries and the record row that closes them, and handed to the rail
+    // panel, to that record row and to the gate header together.
     expect(SCREEN_SRC).toMatch(
-      /stepOffset=\{runSurfaceRailNumberedCount\(railSteps\.map\(\(step\) => step\.key\)\)\}/,
+      /numeralsAboveTheEntries: runSurfaceRailNumberedCount\(\s*railSteps\.map\(\(step\) => step\.key\),\s*\)/,
     );
+    expect(SCREEN_SRC).toMatch(/stepOffset=\{railNumerals\.numeralsAboveTheEntries\}/);
     expect(SCREEN_SRC).not.toMatch(/stepOffset=\{railSteps\.length\}/);
   });
 

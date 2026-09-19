@@ -199,69 +199,79 @@ describe.skipIf(!HAS_DB)("cinatra#3028 W4 — the projector by kind, on the prod
     expect(snapshotSuggestions(payload!).length).toBeGreaterThan(0);
   });
 
-  it("BATCH PATH: a production of several artifacts gets a snapshot too — the path that skipped the lane entirely", async () => {
+  it("BATCH PATH: a production of several artifacts gets a snapshot too — one per artifact's own gate", async () => {
     const runId = `run-${randomUUID()}`;
     const a = await produce(FIXTURE_KIND, { producerRunId: runId });
     const b = await produce(FIXTURE_KIND, { producerRunId: runId });
     await orch.sweepReviewOrchestration();
 
-    const targets = [
-      { artifactId: a.artifactId, representationRevisionId: a.representationRevisionId },
-      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
-    ];
-    const gate = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId(targets));
-    expect(gate).not.toBeNull();
-    expect(gate!.pinnedTargets).toHaveLength(2);
+    // ONE GATE PER ARTIFACT (cinatra#3080: "Work that made several artifacts
+    // raises one gate per artifact, in order … never one gate combining them").
+    // The coalesced road still runs the lane — what changed is that each
+    // artifact's snapshot hangs off the artifact's OWN gate, so the reviewer
+    // reading one gate sees the suggestions for the one thing on screen.
+    for (const ev of [a, b]) {
+      const target = {
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      };
+      const gate = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId([target]));
+      expect(gate).not.toBeNull();
+      expect(gate!.pinnedTargets).toHaveLength(1);
+      expect(gate!.pinnedTargets[0]).toEqual(target);
 
-    const rows = await snapshotRowsFor(gate!.id);
-    expect(rows).toHaveLength(1);
-    const payload = verifyGateSuggestionSnapshotPayload(rows[0]!.payload);
-    expect(payload).not.toBeNull();
+      const rows = await snapshotRowsFor(gate!.id);
+      expect(rows).toHaveLength(1);
+      const payload = verifyGateSuggestionSnapshotPayload(rows[0]!.payload);
+      expect(payload).not.toBeNull();
 
-    // ONE SNAPSHOT PER GATE HOLDING A PAYLOAD PER PINNED TARGET — and, before
-    // this slice, the second target would have returned `already-bound` even if
-    // the lane had run at all.
-    const halves = snapshotTargetPayloads(payload!);
-    expect(halves).toHaveLength(2);
-    expect(new Set(halves.map((h) => h.target.artifactId))).toEqual(
-      new Set([a.artifactId, b.artifactId]),
-    );
-    for (const half of halves) {
-      expect(half.kind).toBe(FIXTURE_KIND);
-      expect(half.projectorId).toBe(FIXTURE_PROJECTOR_ID);
-      expect(half.suggestions.length).toBeGreaterThan(0);
+      const halves = snapshotTargetPayloads(payload!);
+      expect(halves).toHaveLength(1);
+      expect(halves[0]!.target).toEqual(target);
+      expect(halves[0]!.kind).toBe(FIXTURE_KIND);
+      expect(halves[0]!.projectorId).toBe(FIXTURE_PROJECTOR_ID);
+      expect(halves[0]!.suggestions.length).toBeGreaterThan(0);
+
+      // One gate, one snapshot, one surfaced set — with no duplicate ids in it.
+      const ids = snapshotSuggestions(payload!).map((s) => s.id);
+      expect(new Set(ids).size).toBe(ids.length);
     }
-    // The batch decision stays ONE all-or-nothing boundary: one gate, one
-    // snapshot, one surfaced set.
-    const ids = snapshotSuggestions(payload!).map((s) => s.id);
-    expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("BATCH PATH, SEVERAL KINDS: a kind with no projector is served alike and RECORDED as such", async () => {
+  it("BATCH PATH, SEVERAL KINDS: each artifact's own gate is served by its own kind", async () => {
     const runId = `run-${randomUUID()}`;
     const a = await produce(FIXTURE_KIND, { producerRunId: runId });
     const b = await produce(KIND_WITHOUT_PROJECTOR, { producerRunId: runId });
     await orch.sweepReviewOrchestration();
 
-    const targets = [
-      { artifactId: a.artifactId, representationRevisionId: a.representationRevisionId },
-      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
-    ];
-    const gate = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId(targets));
-    expect(gate).not.toBeNull();
+    const targetOf = (ev: { artifactId: string; representationRevisionId: string }) => ({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
 
-    const payload = verifyGateSuggestionSnapshotPayload(
-      (await snapshotRowsFor(gate!.id))[0]!.payload,
+    // THE KIND WITH A PROJECTOR: its own gate, its own snapshot, its own half.
+    const gateA = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId([targetOf(a)]));
+    expect(gateA).not.toBeNull();
+    expect(gateA!.pinnedTargets).toHaveLength(1);
+    const payloadA = verifyGateSuggestionSnapshotPayload(
+      (await snapshotRowsFor(gateA!.id))[0]!.payload,
     );
-    expect(payload).not.toBeNull();
-    const halves = snapshotTargetPayloads(payload!);
-    const withProjector = halves.find((h) => h.kind === FIXTURE_KIND)!;
-    const without = halves.find((h) => h.kind === KIND_WITHOUT_PROJECTOR)!;
-    expect(withProjector.suggestions.length).toBeGreaterThan(0);
-    // "a kind without one yields no suggestions, RECORDED AS SUCH" — the entry
-    // exists, names its kind, and names no projector.
-    expect(without.projectorId).toBeNull();
-    expect(without.suggestions).toEqual([]);
+    expect(payloadA).not.toBeNull();
+    const halvesA = snapshotTargetPayloads(payloadA!);
+    expect(halvesA).toHaveLength(1);
+    expect(halvesA[0]!.kind).toBe(FIXTURE_KIND);
+    expect(halvesA[0]!.suggestions.length).toBeGreaterThan(0);
+
+    // THE KIND WITHOUT ONE: now that one gate pins one artifact (cinatra#3080),
+    // this kind reaches the lane exactly as it does when it is produced alone —
+    // "nothing to propose", which the lane records by writing NO row rather than
+    // an empty half beside somebody else's suggestions. Same reading as the
+    // A-KIND-WITH-NO-PROJECTOR-ALONE case below; the batch road no longer has a
+    // second, combined answer for it.
+    const gateB = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId([targetOf(b)]));
+    expect(gateB).not.toBeNull();
+    expect(gateB!.pinnedTargets).toHaveLength(1);
+    expect(await snapshotRowsFor(gateB!.id)).toHaveLength(0);
   });
 
   it("A KIND WITH NO PROJECTOR ALONE writes no row — 'nothing to propose', not a silent failure", async () => {

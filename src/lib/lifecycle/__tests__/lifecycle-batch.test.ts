@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   sealBatch,
   partitionBatchTargets,
+  partitionBatchTargetsPerArtifact,
   aggregateBatchDisposition,
   carryForwardApprovals,
   MAX_BATCH_PARTITION,
@@ -71,6 +72,29 @@ describe("AC-5: deterministic ≤50 partitions", () => {
     expect(parts.length).toBe(Math.ceil(137 / MAX_BATCH_PARTITION));
     for (const p of parts) expect(p.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
     expect(parts.flat()).toHaveLength(137);
+  });
+});
+
+describe("cinatra#3080: one partition per artifact, in the membership's own order", () => {
+  it("cuts the sealed membership one target at a time, in the order it was sealed", () => {
+    const sealed = [t("c", "3"), t("a", "1"), t("b", "2")];
+    const parts = partitionBatchTargetsPerArtifact(sealed);
+    expect(parts).toEqual([[t("c", "3")], [t("a", "1")], [t("b", "2")]]);
+  });
+
+  it("is idempotent: the SAME sealed membership always yields the same partitions", () => {
+    const sealed = Array.from({ length: 137 }, (_, i) => t("art", `rev-${i}`));
+    expect(JSON.stringify(partitionBatchTargetsPerArtifact(sealed))).toBe(
+      JSON.stringify(partitionBatchTargetsPerArtifact(sealed)),
+    );
+    const parts = partitionBatchTargetsPerArtifact(sealed);
+    expect(parts).toHaveLength(137);
+    for (const p of parts) expect(p).toHaveLength(1);
+    expect(parts.flat()).toHaveLength(137);
+  });
+
+  it("an empty membership partitions into nothing", () => {
+    expect(partitionBatchTargetsPerArtifact([])).toEqual([]);
   });
 });
 

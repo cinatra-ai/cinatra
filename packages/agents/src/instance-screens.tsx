@@ -34,6 +34,7 @@ import {
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
+import { runRailNumeralPosition, runRailNumeralTotal } from "./orchestrator-gate-predicate";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 // WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
@@ -56,7 +57,7 @@ import {
 // (cinatra#2970). A leaf, so this server component can call it.
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
-import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import { LifecycleCardSurfaceProvider, RunRailGateStepProvider } from "./lifecycle-card-runtime";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
@@ -114,7 +115,11 @@ import { RecommendationRailStepRow } from "./recommendation-rail-step";
 // own rail rows and run detail; the setup run page composes the whole frame from
 // it, with the shared row for steps that carry no anchors of their own
 // (cinatra#2970).
-import { RunSurfaceRail, RunSurfaceRailRow } from "./run-surface-rail";
+import {
+  RUN_SURFACE_RAIL_COLUMN_CLASS,
+  RunSurfaceRail,
+  RunSurfaceRailRow,
+} from "./run-surface-rail";
 // The step's own shape, and the setup page's step-to-row mapping. Both read from
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
@@ -412,6 +417,48 @@ export type RunDetailPanelKind = "none" | "trigger" | "stepper" | "agentic";
  * Exported so the regression test can pin the branch table (and the host
  * ownership derived from it) without a DB, a session or a Next.js render.
  */
+/**
+ * IS THE RUN DETAIL COLUMN DRAWING A REVIEW RIGHT NOW? (cinatra#3080, fix leg 8.)
+ *
+ * Both readings count. A gate this run already has is one; a review this run is
+ * still expected to open is the other, because the panel draws its placeholder
+ * for that one in the very slot the gate lands in — so a card stacked above it
+ * would be stacked above the gate a moment later.
+ *
+ * What it decides: whether the run page's own §VII audit card is drawn in this
+ * column. The review drawing lets nothing stand between the reader and the work
+ * — a surface "shows the work and nothing about itself … no provenance line"
+ * (Agent run & review §V) — and §XIII.1 draws the in-run gate as its header, its
+ * display and its floor, with nothing above it. The audit card keeps every other
+ * host it has, including its own entry on the rail beside this column.
+ */
+export function runDetailDrawsReview(
+  reviewGate: { ref: string | null; awaiting: boolean } | null,
+): boolean {
+  if (!reviewGate) return false;
+  return reviewGate.ref !== null || reviewGate.awaiting;
+}
+
+/**
+ * WHERE THE REVIEW STEP SITS ON THE SETUP RUN PAGE'S RAIL (cinatra#3080, fix
+ * leg 8).
+ *
+ * That rail is the run's answered input steps followed by the setup flow's own
+ * three — the skills recommendation, the schedule, and the review — in that
+ * fixed order (the recommendation first is the standing review point; the review
+ * is last because "a review card exists only after the agent has run"). So the
+ * review's place is the whole rail's length, and the total is the same number:
+ * it is the last entry.
+ */
+export const SETUP_RAIL_STEP_COUNT = 3;
+
+export function setupReviewStepPosition(
+  inputStepCount: number,
+): { index: number; total: number } {
+  const total = Math.max(0, inputStepCount) + SETUP_RAIL_STEP_COUNT;
+  return { index: total, total };
+}
+
 export function runDetailPanelKind(params: {
   runStatus: string | null | undefined;
   templateType: string | null | undefined;
@@ -1849,6 +1896,24 @@ export async function SetupScreen({
         awaiting: Boolean(runReviewSlot?.awaiting),
       }
     : null;
+  // ── THE GATE HEADER'S NAMING, RESOLVED HERE (cinatra#3080, fix leg 8) ────
+  //
+  // The drawing's gate header reads "Outreach agent · run rn_8f31… · step 4 of
+  // 6" (Lifecycle cards §XIII.1). The card composes whatever it is handed and
+  // leaves out what it cannot name truthfully, and "the naming is the HOST's to
+  // supply, not the wire's" — so the two segments the panel below cannot source
+  // are resolved on this screen, from the two things it has already read for the
+  // rail beside that column: the template's own name, and the gate's place in
+  // the run's ordered series. The ninth round read `run 1551362…` alone here.
+  //
+  // THE POSITION IS READ OFF THE RAIL ITSELF, never counted a second way, so
+  // the line and the rail beside it can never disagree about which step this is.
+  const reviewGateAgentLabel =
+    template.name && template.name.trim().length > 0 ? template.name.trim() : null;
+  // IS THIS COLUMN DRAWING A REVIEW AT ALL? Both readings count: a gate this run
+  // already has, and a review this run is still expected to open (the panel
+  // draws its placeholder for that one, in the same slot the gate lands in).
+  const runDetailDrawsAReview = runDetailDrawsReview(initialReviewGate);
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their
   // verifications, lifecycle policy decisions, and any surplus stepResult row
   // past the policy spine. On the stepper branch the panel's own LIVE column is
@@ -2078,7 +2143,6 @@ export async function SetupScreen({
           return listRunMadeArtifacts({ orgId: run.orgId, runId: run.id });
         })()
       : [];
-
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
@@ -2214,13 +2278,37 @@ export async function SetupScreen({
               // nothing from them, so the move is an ordering only.
               const detailNode = (
                 <>
+              {/* AND NOT ABOVE THE GATE (cinatra#3080, fix leg 8).
+                  ------------------------------------------------------------
+                  The ninth proof round photographed this column with the audit
+                  lane's own service-authored body — "Audit of 3 disclosed
+                  field(s) … [provenance] lane=… projection=… authz=…" — drawn
+                  VERBATIM above the review gate, on the parked reading and on
+                  the settled one.
+
+                  The review drawing is flat about what a reviewer's surface
+                  says about itself: a display "shows the work and NOTHING ABOUT
+                  ITSELF — no renderer name, no package identity, NO PROVENANCE
+                  LINE — because the reader is deciding on the work, not on what
+                  drew it" (Agent run & review §V). And the gate's own drawing
+                  puts nothing above the gate but the gate's header: §XIII.1
+                  draws the in-run gate as the header strip, the display, and
+                  the floor — "the frame changes and nothing else does".
+
+                  So while this column is drawing a review, the audit card is
+                  not stacked over it. The card is untouched everywhere it
+                  belongs — §VII gives it the turn after a repair, and the rail
+                  beside this column keeps its own audit entry, which is where a
+                  reader opens it. Nothing is filtered by author kind and no
+                  body is rewritten: the row is simply not drawn in the gate's
+                  own thread. */}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the
                   SAME component the chat transcript and the review page mount.
                   One per verification record this run carries; none at all when
                   it carries none, and none for a reader the resolver answers
                   `absent`. */}
-              {verificationCardRefs.length > 0 ? (
+              {verificationCardRefs.length > 0 && !runDetailDrawsAReview ? (
                 <LifecycleCardSurfaceProvider host="run_card">
                   {verificationCardRefs.map((entry) => (
                     <VerificationSummaryCard
@@ -2351,6 +2439,7 @@ export async function SetupScreen({
                     agentPackageName={agentId}
                     traceId={run.traceId ?? undefined}
                     requiredFields={required}
+                    reviewGateAgentLabel={reviewGateAgentLabel}
                     initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
                     noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
                     runHasExecuted={runHasExecuted}
@@ -2779,17 +2868,47 @@ export async function SetupScreen({
                 panel: runDetailPanel,
                 stepperStepCount: stepperSteps.length,
               });
+              // THE RAIL'S OWN NUMERAL SERIES, STATED ONCE FROM THE ROWS THIS
+              // BLOCK JUST BUILT (cinatra#3080, the fix leg after the third
+              // proof round).
+              //
+              // WHAT THE THIRD ROUND READ. Beside a rail of EIGHT numerals — the
+              // frame's two rows, five Review entries, and the run's own record
+              // row — the gate header read "step 6 of 6", and the row the rail
+              // highlighted for that gate was the THIRD. The header was counting
+              // a second universe: a work ladder plus the rail's trailing rows,
+              // with neither the numerals these rows consume nor the record row
+              // that closes the series in it.
+              //
+              // ONE SERIES, THREE READERS. The rail panel's offset, the record
+              // row's numeral and the gate header's line are the same series, so
+              // it is stated ONCE here — from the rows the page actually draws,
+              // never from a second prediction of them — and handed to all three.
+              const railNumerals = {
+                // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS ONLY
+                // (cinatra#3047). The Skills entry is unnumbered, so a run
+                // paused on its skills question numbers its first work step "1"
+                // — the drawing's own rail — instead of the "2" the re-shoot
+                // photographed.
+                numeralsAboveTheEntries: runSurfaceRailNumberedCount(
+                  railSteps.map((step) => step.key),
+                ),
+                entries: railDraws ? rail.entries : [],
+                recordRowCloses: run != null && railCarriesMadeStep,
+              };
+              // AND THE GATE'S ROW IS FOUND BY ITS OWN KEY: a gate this rail does
+              // not carry answers null, and the header then draws the segments it
+              // can name truthfully rather than being placed on the last row.
+              const gateStepOnTheRail = runRailNumeralPosition({
+                ...railNumerals,
+                key: runReviewSlot?.reviewTaskId ? `gate:${runReviewSlot.reviewTaskId}` : null,
+              });
               const railNode = railDraws ? (
                 <RunStepRailPanel
                   entries={rail.entries}
                   activeOrdinal={rail.activeOrdinal}
                   reviewHrefBase={reviewHrefBase}
-                  // AND THE WORK STEPS START AFTER THE NUMBERED GATE ROWS
-                  // ONLY (cinatra#3047). The Skills entry is unnumbered, so a
-                  // run paused on its skills question numbers its first work
-                  // step "1" — the drawing's own rail — instead of the "2" the
-                  // re-shoot photographed.
-                  stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
+                  stepOffset={railNumerals.numeralsAboveTheEntries}
                 />
               ) : null;
               // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
@@ -2837,11 +2956,11 @@ export async function SetupScreen({
                     <RunSurfaceRailRow
                       selectionKey="made"
                       label={RUN_MADE_STEP_LABEL}
-                      displayStep={
-                        runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
-                        (railDraws ? rail.entries.length : 0) +
-                        1
-                      }
+                      // AND ITS NUMERAL IS THE SERIES' LAST (cinatra#3080, the
+                      // fix leg after the third proof round): the record row
+                      // closes the rail, so its numeral is the total of the one
+                      // series the rail and the gate header both read.
+                      displayStep={runRailNumeralTotal(railNumerals)}
                       reached={runReachedItsRecord}
                       settled={runReachedItsRecord}
                       selectable={isRunSurfaceStepSelectable(madeRailStep, runDetailFallback)}
@@ -2864,7 +2983,26 @@ export async function SetupScreen({
                   <RunSurfaceRail
                     steps={railSteps}
                     rail={railNode}
-                    detail={runDetailFallback}
+                    // AND THE DETAIL IS HANDED THE RAIL'S OWN NUMERAL FOR THE
+                    // GATE IT DRAWS (cinatra#3080, the fix leg after the third
+                    // proof round), from the one series above.
+                    //
+                    // AND ONLY WHERE THERE IS A CARD TO DRAW (cinatra#3243).
+                    // The node handed over is `runDetailFallback` -- the detail
+                    // wherever it draws anything, and `null` where its every
+                    // child is withheld -- so no rail row opens onto an empty
+                    // column. The provider WRAPS that node rather than
+                    // replacing it: a provider element around `null` would put
+                    // an element where this frame must draw none and quietly
+                    // undo the very reading #3243 corrected, so the wrap is
+                    // applied only where the node itself is there.
+                    detail={
+                      runDetailFallback ? (
+                        <RunRailGateStepProvider value={gateStepOnTheRail}>
+                          {runDetailFallback}
+                        </RunRailGateStepProvider>
+                      ) : null
+                    }
                     initialSelection={initialStep}
                   />
                 );
@@ -2872,9 +3010,37 @@ export async function SetupScreen({
               return (
                 <>
                   {railNode ? (
-                    <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
+                    // The SAME column the frame draws (cinatra#3080, fix leg 6):
+                    // a rail that stays in view on the branch with gate steps and
+                    // scrolls away on the branch without them would be two rails.
+                    // The holder carries no CONFORMANCE ID of its own — this
+                    // file's run-embedded anchor set is closed by the ratified
+                    // spec, and the rail inside it already carries its own.
+                    //
+                    // IT IS STILL MEASURABLE (fix leg 7). The eighth proof round
+                    // read this branch and reported that the sticky column "never
+                    // rendered" on a one-step run, because the only thing it
+                    // could name was the rail PANEL inside it. The column did
+                    // render; it was anonymous. The marker below is the same
+                    // attribute the two-column frame's own rail column carries,
+                    // so a graded frame can measure the sticky column on either
+                    // branch — and it is an attribute, not a conformance id, so
+                    // the closed anchor set is untouched.
+                    <div data-run-step-rail-column="" className={RUN_SURFACE_RAIL_COLUMN_CLASS}>
+                      {railNode}
+                    </div>
                   ) : null}
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">{runDetailFallback}</div>
+                  {/* THE SAME TWO READINGS AS THE FRAME ABOVE: the rail's own
+                      numeral reaches the gate header through the provider
+                      (cinatra#3080), around the node that draws something and
+                      around nothing at all where it does not (cinatra#3243). */}
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    {runDetailFallback ? (
+                      <RunRailGateStepProvider value={gateStepOnTheRail}>
+                        {runDetailFallback}
+                      </RunRailGateStepProvider>
+                    ) : null}
+                  </div>
                 </>
               );
             })()}
@@ -3568,6 +3734,24 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // drawn around nothing. The box is still there — the column is never blank —
   // and closing the gap needs the card's resolved state, which belongs to the
   // card. It is the same residual the run page's panel carries.
+  const triggerInputSchema = await resolveTemplateInputSchema(template);
+  const runInputSteps = run
+    ? buildRunInputSteps({
+        required: triggerInputSchema.required,
+        properties: triggerInputSchema.properties,
+        inputParams,
+        // This screen is never the input moment -- a run reaches it by having
+        // answered -- so no form is open here and every answered one is history.
+        atInputMoment: false,
+      })
+    : [];
+  const inputRailSteps: RunSurfaceRailStep[] = runCarriesInputSteps(
+    runInputSteps,
+    false,
+  )
+    ? buildRunInputRailSteps(runInputSteps, null)
+    : [];
+
   const reviewStepSurface = (() => {
     if (!run || reviewStepReading === "none") return null;
     // The gate's ref is minted HERE, from the run and the gate the slot named —
@@ -3595,6 +3779,17 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
               // with the RUN (cinatra#3141 item 1), so the mount that names the
               // gate names the run it opened on too.
               runId={run.id}
+              // AND THE OTHER TWO SEGMENTS (cinatra#3080, fix leg 8). This
+              // screen's rail is the run's input steps followed by the three
+              // setup steps, and the review is the last of them — so the gate's
+              // place is the whole rail's length, read from the same numbers
+              // `buildSetupRailSteps` is offset by below.
+              agentLabel={
+                template.name && template.name.trim().length > 0
+                  ? template.name.trim()
+                  : null
+              }
+              step={setupReviewStepPosition(inputRailSteps.length)}
             />
           </LifecycleCardSurfaceProvider>
         ) : (
@@ -3721,23 +3916,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // THE RESOLVED SCHEMA, the same one the run page reads and the setup loop
   // walks: a stored schema that is empty names no step for exactly the agents
   // whose form the loop still asks.
-  const triggerInputSchema = await resolveTemplateInputSchema(template);
-  const runInputSteps = run
-    ? buildRunInputSteps({
-        required: triggerInputSchema.required,
-        properties: triggerInputSchema.properties,
-        inputParams,
-        // This screen is never the input moment -- a run reaches it by having
-        // answered -- so no form is open here and every answered one is history.
-        atInputMoment: false,
-      })
-    : [];
-  const inputRailSteps: RunSurfaceRailStep[] = runCarriesInputSteps(
-    runInputSteps,
-    false,
-  )
-    ? buildRunInputRailSteps(runInputSteps, null)
-    : [];
   // AND NO SKILLS ENTRY THE RUN HAS ALREADY GONE PAST (cinatra#3221 item 3, fix
   // leg 8). This screen composes its rail from the setup steps themselves, so
   // leg 7's rule -- written for the run page's forecast rows -- never reached

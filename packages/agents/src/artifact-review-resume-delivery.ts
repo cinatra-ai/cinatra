@@ -61,6 +61,7 @@ import {
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { isDeclaredReviewCompanionTaskId } from "./agent-builder-ids";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -118,6 +119,26 @@ export async function deliverArtifactReviewResumeIntent(
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); run continuation is the lifecycle park — marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
+  }
+
+  // A COMPANION GATE OF A DECLARED REVIEW (cinatra#3080 item 4): one review per
+  // artifact means a step that made several artifacts opens one gate each, and
+  // only the FIRST — the carrier, `wayflow-<taskId>` — is the gate the run is
+  // parked on and the only one with a WayFlow wire. A companion's terminal
+  // decision still commits a resume intent, and that intent has nowhere of its
+  // own to travel: the run's continuation is the carrier's. Mark it done here
+  // (idempotent, lease-guarded), exactly as an S1 auto-gate is, instead of
+  // slicing a task id no run has and churning it toward dead-letter — or, worse,
+  // resolving the run anyway and sending a companion's decision down the
+  // carrier's wire, which would resume the run on a review it is not parked on.
+  if (isDeclaredReviewCompanionTaskId(reviewTaskId)) {
+    if (!leaseToken) return "retryable";
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} is a companion review (task=${reviewTaskId}); ` +
+        `the run's continuation is its carrier gate — marked ${ok ? "done" : "LEASE-LOST"}`,
     );
     return ok ? "already-advanced" : "lease-lost";
   }

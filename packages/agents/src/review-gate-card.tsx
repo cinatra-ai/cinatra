@@ -140,7 +140,6 @@ import {
   ArrowRight,
   Check,
   CircleX,
-  ClipboardCheck,
   MessageSquare,
   RotateCcw,
 } from "lucide-react";
@@ -153,14 +152,13 @@ import {
   type LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorAction, ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
+import { REGENERATE_MULTI_TARGET_REASON } from "@/lib/artifacts/review-surface-model";
 
 import {
   useComposerFocusBinding,
@@ -525,9 +523,23 @@ function composerCommentResult(outcome: ReviewSubmitOutcome): ComposerCommentRes
 export function ReviewGateCard({
   view,
   submitAction,
+  picturePrompt,
   runId,
+  agentLabel,
+  step,
 }: {
   view: ReviewGateCardView;
+  /**
+   * WHAT THE HEADER NAMES (cinatra#3080, fix leg 7). The drawing's header strip
+   * carries a mono line beside the word — "Outreach agent · run rn_8f31… · step
+   * 4 of 6" — and every fact in it is one the HOST already holds at render time:
+   * the run surface that mounts this gate drew the agent's name and the step
+   * ladder before the card ever resolved. Both are optional and both degrade:
+   * the line prints the segments it was given and nothing else.
+   */
+  agentLabel?: string | null;
+  /** Where the gated step sits in the run, when the host knows the ladder. */
+  step?: { index: number; total: number } | null;
   /**
    * The RUN this gate belongs to (cinatra#3141 item 1). The gate's conversational
    * prompt window — the drawing's one channel for requesting changes — keeps its
@@ -543,6 +555,18 @@ export function ReviewGateCard({
    * to the gate-scoped, ref-bound endpoint — the same core either way.
    */
   submitAction?: SubmitReviewDecisionAction;
+  /**
+   * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080
+   * item 5), for the floor's own pre-filled field.
+   *
+   * SUPPLIED BY THE REVIEW SCREEN, and by it alone. It is the surface that
+   * resolves it — server-side, under the reader's own access, off the artifact
+   * projection the target was already prepared from — and hands it down; the
+   * card's own resolve carries no such field, so a card in a transcript draws
+   * the note alone. That asymmetry is the drawing's: the prompt is edited on the
+   * review SCREEN, where the person is looking at the picture full size.
+   */
+  picturePrompt?: string | null;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   // The PLACE this card is drawn in, which is what §II's sentence is about: true
@@ -590,6 +614,21 @@ export function ReviewGateCard({
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
   const targetHeaders: LifecycleTargetHeader[] | null = resolved?.targetHeaders ?? null;
+  // IS THIS A LEGACY GATE THAT STILL PINS MORE THAN ONE TARGET (#3080 item 4)?
+  //
+  // READ OFF THE GATE, NOT OFF THE HEADER LIST (the convergence round of
+  // 2026-09-16). The answer composes no header for a target whose actor-scoped
+  // read is not `ok`, so a two-target gate with one unreadable row hands this
+  // card ONE header: reading the cardinality there would draw Regenerate live on
+  // exactly the gate that must refuse it — a control that fails on press — and
+  // would put the card's own header back above the island that is already
+  // pairing each header with its own panel. An answer composed before the field
+  // existed carries `null` and falls back to the header list, which is the
+  // reading this card had then.
+  const multiTargetGate: boolean =
+    resolved?.pinnedTargetCount != null
+      ? resolved.pinnedTargetCount > 1
+      : (targetHeaders?.length ?? 0) > 1;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -643,8 +682,9 @@ export function ReviewGateCard({
   // identity is stable across re-resolves.
   const refBoundSubmit = useMemo<SubmitReviewDecisionAction>(() => {
     return async (input: {
-      disposition: ReviewDisposition;
+      disposition: ReviewFloorSubmission;
       comment: string | null;
+      regeneratePrompt?: string | null;
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
@@ -659,6 +699,10 @@ export function ReviewGateCard({
             ref: view.ref,
             disposition: input.disposition,
             comment: input.comment,
+            // The picture prompt, when Regenerate carried one (cinatra#3080
+            // item 5). Omitted entirely otherwise, so every other press posts
+            // the body it posted before the field existed.
+            ...(input.regeneratePrompt ? { regeneratePrompt: input.regeneratePrompt } : {}),
             // Omitted entirely when there is no partition, so a gate with no
             // chips posts the body it posted before this slice — and lands the
             // identity-version-1 fingerprint S6b pinned.
@@ -815,12 +859,12 @@ export function ReviewGateCard({
     setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
   // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
-  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
-    disposition === "reject"
-      ? rejectPartition(surfaced)
-      : disposition === "approve"
-        ? buildPartition(surfaced, dismissed)
-        : null;
+  // §VIII, cinatra#3080: the marks ride the ONE decision that still decides the
+  // items under the gate — Continue. Regenerate settles the gate as superseded
+  // and Comment settles nothing, so neither carries them; the retired reject's
+  // "record every surfaced suggestion as not taken" partition went with it.
+  const suggestionDecisionsFor = (action: ReviewFloorAction) =>
+    action === "continue" ? buildPartition(surfaced, dismissed) : null;
 
   const frame = HOST_FRAME[host];
   // The server-minted island URL, when this answer carried one (cinatra#2754).
@@ -847,6 +891,13 @@ export function ReviewGateCard({
   const body = renderState({
     state,
     targetHeaders,
+    multiTargetGate,
+    insideConversation,
+    naming: {
+      agentLabel: agentLabel ?? null,
+      runId: runId ?? null,
+      step: step ?? null,
+    },
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
     // composer: Agent run & review §VI fixes typing a request as the whole
@@ -906,6 +957,7 @@ export function ReviewGateCard({
       }),
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt: picturePrompt ?? null,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
@@ -930,9 +982,35 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  /** What the header strip's mono line names — the host's own facts. */
+  naming: ReviewGateNaming;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target — a legacy row from before
+   * one-review-per-artifact (#3080 item 4). Never derived from `targetHeaders`;
+   * see where it is read. */
+  multiTargetGate: boolean;
+  /**
+   * IS THIS CARD DRAWN INSIDE A CONVERSATION (cinatra#3080, the fix leg after
+   * the first proof round)?
+   *
+   * THE HEADER STRIP IS THE PAGE'S, NOT THE CARD'S. `app-artifact-review.html`
+   * §III gives the strip to the run detail — "the gate opens with a gate header
+   * ..., then the review target, then the decision bar and the conversational
+   * prompt window" — and `app-lifecycle-cards.html` §II gives the card in a
+   * thread two parts and no third: "the target panel naming what is under
+   * review and pinning its exact revision, then the decision floor that governs
+   * it", with §II.1 saying it again from the other side ("what the card puts
+   * around the display is the floor"). The turn's own prose is the assistant's
+   * line ABOVE the card; a strip inside it repeats in the card's voice what the
+   * thread already said in the assistant's.
+   *
+   * READ AS CONTAINMENT, NOT AS A HOST, exactly as #3481's window is: the
+   * inline run panel mounts this same card under its own `run_card` declaration
+   * while being drawn between the thread's turns.
+   */
+  insideConversation: boolean;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
    * the request road (cinatra#3481). Taken as a factory so the one permission
@@ -945,12 +1023,16 @@ function renderState(args: {
   dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (action: ReviewFloorAction) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
+  picturePrompt: string | null;
 }): ReactElement | null {
   const {
     state,
+    naming,
     targetHeaders,
+    multiTargetGate,
+    insideConversation,
     promptWindow,
     islandSrc,
     islandCredentialed,
@@ -961,13 +1043,14 @@ function renderState(args: {
     onToggleMark,
     suggestionDecisionsFor,
     focusBinding,
+    picturePrompt,
   } = args;
 
   switch (state.state) {
     case "loading":
       return (
         <>
-          <ReviewGateHeader pending />
+          {insideConversation ? null : <ReviewGateHeader pending naming={naming} />}
           <ReviewGateLoading />
         </>
       );
@@ -1017,18 +1100,18 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} />
+          {insideConversation ? null : <ReviewGateHeader pending={false} naming={naming} />}
           {/* §IV — the header the decision was taken on, kept over the reviewed
-              work: a settled gate names what was reviewed whether or not its
-              read-only preview has painted. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the reviewed target(s), read-only, exactly as the pending
-              reading drew them: one island, every pinned target, the renderer
-              resolved from the artifact's own type. The island carries no
-              decision chrome on either reading. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+              work, inside the one panel the drawing draws: a settled gate names
+              what was reviewed whether or not its read-only preview has painted.
+              §III — the reviewed target, read-only, exactly as the pending reading
+              drew it, the renderer resolved from the artifact's own type. The
+              island carries no decision chrome on either reading. */}
+          <ReviewTargetPanel
+            headers={targetHeaders}
+            multiTarget={multiTargetGate}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -1037,10 +1120,7 @@ function renderState(args: {
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
           {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          <ReviewGateSettled outcome={state.outcome} />
         </>
       ) : (
         <>
@@ -1064,20 +1144,23 @@ function renderState(args: {
       const suggestions = state.suggestions ?? [];
       return (
         <>
-          <ReviewGateHeader pending />
+          {insideConversation ? null : <ReviewGateHeader pending naming={naming} />}
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
               below it — the skeleton while the preview is still arriving and the
               recovery panel when it never did. Inert: no control, no revision
               picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
-          {/* §III — the target(s). ONE island renders every pinned target as
-              sibling panels, exactly as the page stacks them, because the
-              decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
+          {/* §III/§IV — ONE PANEL: the immutable header over the representation,
+              inside one border. A LEGACY gate that still pins several targets
+              draws no panel and no header here — its bodies are composed together
+              in the island's one document, where each header can sit directly
+              over its own. */}
+          <ReviewTargetPanel
+            headers={targetHeaders}
+            multiTarget={multiTargetGate}
+            islandSrc={islandSrc}
+            islandCredentialed={islandCredentialed}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
@@ -1100,6 +1183,14 @@ function renderState(args: {
           <ReviewDecisionBar
             permissions={permissions}
             submitAction={submit}
+            picturePrompt={picturePrompt}
+            // ITEM 4 — A LEGACY MULTI-TARGET GATE REFUSES REGENERATE, and says
+            // so before it is pressed. The pinned set is read off the GATE (see
+            // `multiTargetGate`), never off the header list this reader happened
+            // to be shown. The sentence is the surface model's, the same one the
+            // decision operation refuses with — never a second wording of the
+            // same refusal.
+            regenerateRefusal={multiTargetGate ? REGENERATE_MULTI_TARGET_REASON : null}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1207,7 +1298,9 @@ export function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding })
           data-conformance-id="review-composer-bound"
           className="text-xs leading-relaxed text-muted-foreground"
         >
-          Your next chat message becomes a comment on this review. Press again to chat normally.
+          {
+            "Your next chat message goes to Cinatra, which can use this review's own controls for you. Press again to chat normally."
+          }
         </span>
       ) : binding.ambiguous ? (
         // The refusal the composer will give, said BEFORE the reader types it.
@@ -1296,29 +1389,12 @@ function buildPartition(
   return { accepted, dismissed: notTaken };
 }
 
-/**
- * The partition a REJECT carries: every surfaced suggestion recorded as NOT
- * TAKEN (§VIII, cinatra#2852).
- *
- * The shipped guard refused an immediate Reject while anything was accepted, and
- * with the old unmarked default that was survivable — nothing was accepted until
- * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
- * first press of Reject, on a row the reviewer never touched, which is a control
- * that fails on press.
- *
- * So the rework is here, at the surface that knows what a reject MEANS for these
- * items: a reject tombstones every reviewed revision, so nothing can be applied
- * into them, and the truthful record of that is a dismissal for each surfaced
- * id — the reviewer looked at them and took none. The decision core's rule ("a
- * reject decision cannot accept suggestions") is untouched and still enforced
- * server-side; this simply never asks it for the impossible.
- */
-function rejectPartition(
-  surfaced: ReadonlyArray<LifecycleSuggestion>,
-): SuggestionDecisionPartition | null {
-  if (surfaced.length === 0) return null;
-  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
-}
+// THE REJECT PARTITION IS GONE (cinatra#3080). It recorded every surfaced
+// suggestion as NOT TAKEN, which was the truthful reading of a decision that
+// tombstoned the revisions the marks would have been applied into. With Reject
+// retired there is no such decision to build one for: Continue carries the marks
+// as they stand, Regenerate settles the gate as superseded without deciding the
+// items under it, and Comment decides nothing at all.
 
 /**
  * §VIII's TWO drawn readings, plus the one HISTORY reading a settled gate can
@@ -1570,8 +1646,8 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
-              : "Deciding these needs approve access on this run."}
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you decide below."
+              : "Deciding these needs decision access on this run."}
         </p>
       ) : null}
     </div>
@@ -1582,14 +1658,94 @@ export function SuggestionChips({
  * §I/§II — the gate header the review page has always drawn ("Review requested"
  * + the awaiting-your-decision pill), now owned by the card so all three hosts
  * show the same thing. Markup and tokens are the page's, unchanged.
+ *
+ * A SETTLED GATE KEEPS A HEADER, AND IT IS NOT A REQUEST (cinatra#3080, fix leg
+ * 6). Fix leg 5 headed a settled gate with NOTHING, reading "the same pane, the
+ * marker below the whole card, no floor" as taking the whole strip away. The
+ * drawing does not: §XIII.1 draws the settled reading outside a conversation
+ * with the SAME header strip its pending frame carries — the sans heading
+ * "Review" over the gate, byte for byte in both frames — and the annotation
+ * above it takes away only the floor: "Settled, outside the conversation — the
+ * same display, no floor, and the marker below the whole gate". What is untrue
+ * once a gate is decided is the REQUEST and the ASK: the request wording, and
+ * the awaiting-your-decision pill. Those go; the heading stays and says what the
+ * region is. (§XIII was written after this branch's pin was taken, which is why
+ * fix leg 5 could not read it.)
+ *
+ * THE STRIP, AS DRAWN (fix leg 7). The eighth proof round charged three
+ * things against it. NO GLYPH: the drawing's header strip is the word and
+ * the naming line and nothing else, and the clipboard tile drawn before the
+ * word appears in no frame of it. A BOTTOM RULE: the strip carries
+ * `border-bottom:1px solid var(--line)`, which is what separates the header
+ * from the body beneath it. AND THE TARGET-NAMING LINE: beside the word, on
+ * the same baseline, a mono ten-pixel muted line naming what is under
+ * review — "Outreach agent \u00b7 run rn_8f31\u2026 \u00b7 step 4 of 6".
+ *
+ * The naming is the HOST's to supply, not the wire's: the run surface that
+ * draws this gate already knows the agent, the run and the step, and a field
+ * added to the resolve answer would be a second, later-arriving source for
+ * facts the host holds at render time. A host that holds none passes none,
+ * and the line is not drawn at all.
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
+export type ReviewGateNaming = {
+  /** The agent whose run raised the gate, as a person would name it. */
+  agentLabel: string | null;
+  /** The run the gate is a step of. */
+  runId: string | null;
+  /** Where in the run the gated step sits. */
+  step: { index: number; total: number } | null;
+};
+
+/** The run id, truncated to the length the drawing prints it at ("rn_8f31…"). */
+function shortRunId(runId: string): string {
+  return runId.length > 8 ? `${runId.slice(0, 7)}…` : runId;
+}
+
+/**
+ * The mono line the drawing draws BESIDE the word — "Outreach agent · run
+ * rn_8f31… · step 4 of 6". It says only what the host could source: a segment
+ * the card cannot name truthfully is left out rather than invented, because a
+ * gate that names the wrong run is worse than a gate that names none.
+ */
+export function reviewGateNamingLine(naming: ReviewGateNaming | null): string | null {
+  if (!naming) return null;
+  const segments: string[] = [];
+  if (naming.agentLabel) segments.push(naming.agentLabel);
+  if (naming.runId) segments.push(`run ${shortRunId(naming.runId)}`);
+  if (naming.step) segments.push(`step ${naming.step.index} of ${naming.step.total}`);
+  return segments.length > 0 ? segments.join(" · ") : null;
+}
+
+export function ReviewGateHeader({
+  pending,
+  naming,
+}: {
+  pending: boolean;
+  naming: ReviewGateNaming | null;
+}): ReactElement {
+  const namingLine = reviewGateNamingLine(naming);
   return (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
-        <ClipboardCheck aria-hidden="true" className="size-4" />
+    <div
+      data-conformance-id="review-gate-header"
+      className="flex flex-wrap items-baseline gap-2 border-b border-line pb-2.5"
+    >
+      <span className="font-sans text-sm font-bold text-foreground">
+        {pending ? "Review requested" : "Review"}
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      {namingLine ? (
+        <span
+          data-review-gate-naming=""
+          // The SAME mono treatment the target header's identity line already
+          // carries a few lines below — `font-mono text-badge-2xs tracking-tight
+          // text-muted-foreground`. The drawing letter-spaces both at 0.04em; the
+          // shipped tracking scale has no token at that value and arbitrary
+          // tracking is refused (cinatra#886), so the two mono lines stay
+          // identical to each other rather than one of them drifting.
+          className="font-mono text-badge-2xs tracking-tight text-muted-foreground"
+        >
+          {namingLine}
+        </span>
+      ) : null}
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-brand-mustard" aria-hidden="true" />
@@ -1637,12 +1793,18 @@ function ReviewTargetIsland({
   src,
   credentialed,
   onRetryResolve,
+  inPanel = false,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
   credentialed: boolean;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
+  /** Drawn INSIDE the target panel's frame (cinatra#3080), which owns the border
+   * and the rounding — §IV draws ONE panel per target, not a header card above a
+   * separate body card. Unframed (a legacy multi-target gate, whose bodies the
+   * island's own document pairs with their headers) it keeps its own frame. */
+  inPanel?: boolean;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -1704,7 +1866,11 @@ function ReviewTargetIsland({
     <div
       data-conformance-id="review-target-island"
       data-island-load-state={state}
-      className="relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      className={
+        inPanel
+          ? "relative overflow-hidden bg-surface-strong"
+          : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+      }
     >
       <iframe
         // Keyed by src+attempt so a retry (or a genuinely new target) forces a
@@ -1883,12 +2049,27 @@ function revisionMarker(revisionId: string): { short: string; full: string } {
 /**
  * The header for ONE target. Drawn above the island, inside the gate's frame.
  */
-export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }): ReactElement {
+export function ReviewTargetHeader({
+  header,
+  inPanel = false,
+}: {
+  header: LifecycleTargetHeader;
+  /** Drawn INSIDE the target panel's own frame (cinatra#3080, the fix leg after
+   * the second proof round), where the panel draws the border and the header
+   * draws only the rule that separates it from the work beneath it. The island's
+   * own document still draws a header per target on the LEGACY multi-target
+   * reading, where each header tops its own framed panel and this is false. */
+  inPanel?: boolean;
+}): ReactElement {
   const revision = revisionMarker(header.revisionId);
   return (
     <div
       data-conformance-id="review-target-header"
-      className="rounded-control border border-line bg-surface-strong px-4 py-3"
+      className={
+        inPanel
+          ? "border-b border-line px-4 py-3"
+          : "rounded-control border border-line bg-surface-strong px-4 py-3"
+      }
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-sans text-sm font-bold text-foreground">{header.title}</span>
@@ -1921,16 +2102,102 @@ export function ReviewTargetHeader({ header }: { header: LifecycleTargetHeader }
  */
 export function ReviewTargetHeaders({
   headers,
+  multiTarget = false,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target, which is not the same question
+   *  as how many headers this reader was given — the convergence round of
+   *  2026-09-16. */
+  multiTarget?: boolean;
 }): ReactElement | null {
   if (!headers || headers.length === 0) return null;
+  // EACH ARTIFACT IS ONE BLOCK — ITS HEADER DIRECTLY OVER ITS OWN BODY
+  // (cinatra#3080, the fix leg after the first proof round; the ruling of
+  // 2026-09-13, and §IV: "Every target OPENS with a header ... Beneath the
+  // header sits the representation slot").
+  //
+  // ONE header is the ordinary reading and it stays HERE, above the island,
+  // where it survives the skeleton and the recovery panel (#3141 item 7) — and
+  // it is the only reading a gate minted under one-review-per-artifact can have.
+  //
+  // SEVERAL headers is a LEGACY gate, and stacking them here is exactly the
+  // grouping the ruling forbids: the bodies are composed together inside the
+  // island's one document, so a block drawn outside that frame can only be every
+  // header over every body. That reading is the island's to draw, where each
+  // header can sit directly over its own panel, so the card draws none. The
+  // trade is knowingly taken and it is bounded by history: a legacy multi-target
+  // gate carries no header while its frame is still arriving, and no gate minted
+  // from now on can be one.
+  if (multiTarget || headers.length > 1) return null;
   return (
     <>
       {headers.map((header) => (
         <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
       ))}
     </>
+  );
+}
+
+/**
+ * THE TARGET PANEL — ONE BORDER AROUND THE HEADER AND THE WORK (cinatra#3080,
+ * the fix leg after the second proof round).
+ *
+ * §IV of the ratified review drawing, in its own markup, draws ONE container per
+ * target: a bordered, rounded box whose first child is the immutable header
+ * (carrying the rule that separates it) and whose second is the representation
+ * slot. "Every target opens with a header that names what is under review and
+ * fixes it in place … Beneath the header sits the representation slot."
+ *
+ * WHAT THE SECOND ROUND GRADED. The card drew the header as its own rounded card
+ * and the island as another beneath it, with the frame's twelve-pixel gap between
+ * them — three boxes for one target once the island's document drew its own panel
+ * inside. The header and the work now share one frame, and the two halves draw
+ * none of their own (the island's document drops its panel's frame for a
+ * one-target gate; `review-target-panel.tsx` on the review route).
+ *
+ * A LEGACY GATE THAT PINS SEVERAL TARGETS draws NO panel here, exactly as it drew
+ * no header here: its bodies are composed together inside the island's one
+ * document, which is the only place each header can sit directly over its own
+ * body. That reading keeps the island's own frame.
+ */
+export function ReviewTargetPanel({
+  headers,
+  multiTarget = false,
+  islandSrc,
+  islandCredentialed,
+  onRetryResolve,
+}: {
+  headers: readonly LifecycleTargetHeader[] | null;
+  /** Whether the GATE pins more than one target — read off the gate, never off
+   *  the header list this reader happened to be shown. */
+  multiTarget?: boolean;
+  islandSrc: string;
+  islandCredentialed: boolean;
+  onRetryResolve: () => void;
+}): ReactElement {
+  const only = !multiTarget && headers && headers.length === 1 ? headers[0] : null;
+  if (!only) {
+    return (
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        onRetryResolve={onRetryResolve}
+      />
+    );
+  }
+  return (
+    <div
+      data-conformance-id="review-target-panel"
+      className="overflow-hidden rounded-control border border-line bg-surface-strong"
+    >
+      <ReviewTargetHeader header={only} inPanel />
+      <ReviewTargetIsland
+        src={islandSrc}
+        credentialed={islandCredentialed}
+        onRetryResolve={onRetryResolve}
+        inPanel
+      />
+    </div>
   );
 }
 
@@ -2072,15 +2339,30 @@ export function ReviewGatePromptWindow({
   };
 
   return (
-    // The conversational prompt window (cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    // The conversational prompt window (cinatra#2063). The anchor marks this
+    // mount for the run-embedded conformance closed set.
+    //
+    // WHAT IS TYPED HERE IS A NOTE, AND ONLY A NOTE (cinatra#3080). Until this
+    // branch a non-empty sentence on a single-target lifecycle gate resolved as
+    // `changes_requested` — the gate closed and a repair opened, from a window
+    // whose whole promise is that it decides nothing. Asking for another go is
+    // REGENERATE's, on the floor above, where it carries the right a terminal
+    // decision needs. So `handleSubmit` files what is typed through the Comment
+    // path and the gate stays pending: the outcome the card reads back is
+    // `annotated`, and its own message is "Comment added to the review. It is
+    // still open." The marker below says which road this is; it moved with the
+    // window when the card took the mount over from the review route, and it
+    // travelled as the older wording by accident.
+    //
+    // AND IT IS NOT A `data-action` (fix leg 7). The window is the
+    // CONVERSATIONAL reading of Comment, not a fourth decision affordance, and
+    // the card composes the floor rather than drawing one: not a single
+    // review-action anchor may be emitted by this file, which is what makes "one
+    // renderer, every host" true rather than asserted. The road is named on a
+    // marker of the window's own.
     <div
       data-conformance-id="review-prompt-window"
-      data-action="request-changes -> changes-requested"
+      data-review-prompt-road="comment-review -> annotated"
       ref={setPortalTarget}
     >
       <HitlConversationPanel

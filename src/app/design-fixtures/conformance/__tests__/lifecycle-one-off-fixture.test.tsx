@@ -133,7 +133,7 @@ describe("the harness mounts for the drawing's one-off surfaces", () => {
     expect(viewsRow.querySelectorAll("button").length).toBe(0);
     expect(viewsRow.querySelector('[data-conformance-id="suggestion-accepted"]')).not.toBeNull();
     // The reason is the component's own sentence, and it is on screen.
-    expect(viewsRow.textContent).toContain("Deciding these needs approve access on this run.");
+    expect(viewsRow.textContent).toContain("Deciding these needs decision access on this run.");
 
     // The withheld reading is NOT mounted from an empty suggestion set: that
     // would pin what an empty list does, not what a denied reader gets. It is on

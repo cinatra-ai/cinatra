@@ -68,6 +68,7 @@ import {
   readArtifactForDetail,
   readArtifactForSettledReview,
 } from "@/lib/artifacts/artifact-service";
+import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
@@ -83,12 +84,26 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
  * nothing, which is what the card already draws for an answer composed before
  * this field existed.
  */
+export type ReviewTargetHeaderReading = {
+  /** The headers this reader may be shown, in gate order, or `null` when none
+   *  could be composed. */
+  headers: LifecycleTargetHeader[] | null;
+  /** HOW MANY TARGETS THE GATE ACTUALLY PINS — which is NOT `headers.length`
+   *  (the convergence round of 2026-09-16). A header is skipped for every target
+   *  whose actor-scoped read is not `ok`, so a LEGACY two-target gate with one
+   *  unreadable row composes one header. Reading the pinned cardinality off that
+   *  list would draw Regenerate live on exactly the gate item 4 says must refuse
+   *  it, and would put the card's own header back over the island's paired one.
+   *  The cardinality is the gate row's; the header list is the reader's. */
+  pinnedTargetCount: number;
+};
+
 export async function readReviewTargetHeaders(input: {
   viewType: LifecycleDataPartViewType;
   ref: string;
   state: LifecycleCardState;
   actorCtx: ReviewActorContext;
-}): Promise<LifecycleTargetHeader[] | null> {
+}): Promise<ReviewTargetHeaderReading | null> {
   const { viewType, ref, state, actorCtx } = input;
   // Only the review kind has a target, and only the three states that draw one
   // may carry its header. `absent` carries nothing beside itself.
@@ -148,33 +163,91 @@ export async function readReviewTargetHeaders(input: {
               actor,
             });
       if (read.kind !== "ok") continue;
-      const artifact = read.artifact;
-      headers.push({
-        title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
-        typeLabel: artifact.objectType
-          ? clamp(artifactKindLabelFor(artifact.objectType), "Artifact")
-          : "Artifact",
-        objectType: (artifact.objectType ?? "").slice(0, LIFECYCLE_TARGET_HEADER_MAX_TEXT),
-        revisionId: clamp(target.representationRevisionId, "—"),
-        // Worded by the SURFACE MODEL, not here: the card owns no artifact
-        // vocabulary, and the island's own header reads the same function, so
-        // the two cannot word the same fact differently.
-        facts: reviewTargetRowFacts({
-          ownerLevel: artifact.ownerLevel,
-          visibility: artifact.visibility,
-          mime: artifact.mime,
-          updatedAt: artifact.updatedAt,
-        })
-          .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
-          .map((fact) => clamp(fact, "—")),
-      });
+      // Composed by the ONE composer below, which the island's own header also
+      // calls: the card owns no artifact vocabulary, and two places that word
+      // the same fact are two places that can word it differently.
+      headers.push(composeTargetHeader(target, read.artifact));
       if (headers.length === LIFECYCLE_TARGET_HEADERS_MAX) break;
     }
-    return headers.length > 0 ? headers : null;
+    return {
+      headers: headers.length > 0 ? headers : null,
+      pinnedTargetCount: gate.pinnedTargets.length,
+    };
   } catch {
     // The reading is lost, never the card.
     return null;
   }
+}
+
+/**
+ * §IV's header for ONE ALREADY-PREPARED TARGET — the island's own composition
+ * (cinatra#3080, the fix leg after the first proof round).
+ *
+ * WHY THE ISLAND NEEDS ONE AT ALL. The card draws the header above the frame
+ * (item 7 of #3141) so it survives the island's skeleton and its recovery panel,
+ * and for a gate that pins ONE target — every gate minted under
+ * one-review-per-artifact — that is the whole story and this function is not
+ * called. A LEGACY gate that still pins several targets is the case the card
+ * cannot draw correctly: the bodies are rendered together inside one server
+ * document, so a card outside the frame can only stack every header over every
+ * body, which is the grouping the 2026-09-13 ruling forbids — "each artifact is
+ * one block, its header directly over its own body, one after another". Inside
+ * the document each header CAN sit directly over its own panel, so that is where
+ * the multi-target reading composes it.
+ *
+ * IT READS NOTHING. The prepared target already carries the row metadata the
+ * host authorized for this reader, and the facts are worded by the SAME surface
+ * model `readReviewTargetHeaders` words them with, so the two places cannot word
+ * one fact differently. A target with no props — the floor cases, a denied or
+ * tombstoned row — yields NO header, exactly as the card's own composition
+ * yields none: naming the wrong artifact over a review is worse than naming
+ * none.
+ */
+export function preparedTargetHeader(prepared: {
+  target: { artifactId: string; representationRevisionId: string };
+  props: { artifact: TargetHeaderRow } | null;
+}): LifecycleTargetHeader | null {
+  const artifact = prepared.props?.artifact;
+  return artifact ? composeTargetHeader(prepared.target, artifact) : null;
+}
+
+/** The row facts a header is composed from — the projection both callers hold. */
+type TargetHeaderRow = {
+  title: string | null;
+  objectType: string;
+  mime: string;
+  ownerLevel: ArtifactSummary["ownerLevel"];
+  visibility: ArtifactSummary["visibility"];
+  updatedAt: string;
+};
+
+/**
+ * §IV's header, composed from one target and the row read for it. THE ONE PLACE
+ * the header's wording lives: the card's answer (above) and the island's own
+ * per-target header (below) both come through here, so the two surfaces cannot
+ * word the same fact differently — the parity `artifact-kind-label`'s suite
+ * pins by spelling the shared call exactly once in this file.
+ */
+function composeTargetHeader(
+  target: { artifactId: string; representationRevisionId: string },
+  artifact: TargetHeaderRow,
+): LifecycleTargetHeader {
+  return {
+    title: clamp(artifact.title ?? target.artifactId, target.artifactId),
+    typeLabel: artifact.objectType
+      ? clamp(artifactKindLabelFor(artifact.objectType), "Artifact")
+      : "Artifact",
+    objectType: (artifact.objectType ?? "").slice(0, LIFECYCLE_TARGET_HEADER_MAX_TEXT),
+    revisionId: clamp(target.representationRevisionId, "—"),
+    facts: reviewTargetRowFacts({
+      ownerLevel: artifact.ownerLevel,
+      visibility: artifact.visibility,
+      mime: artifact.mime,
+      updatedAt: artifact.updatedAt,
+    })
+      .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
+      .map((fact) => clamp(fact, "—")),
+  };
 }
 
 /**

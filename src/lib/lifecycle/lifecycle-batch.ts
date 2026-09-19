@@ -153,6 +153,34 @@ export function partitionBatchTargets(
   return partitions;
 }
 
+/**
+ * ONE PARTITION PER ARTIFACT, IN THE PRODUCTION'S OWN OUTPUT ORDER (cinatra#3080,
+ * the fix leg after the second proof round).
+ *
+ * THE DRAWING, `specs/app-artifact-review.html` §III: "A gate carries one target:
+ * one artifact, one pinned reference. Work that made several artifacts raises one
+ * gate per artifact, in order — each its own entry on the rail, the run waiting at
+ * each — never one gate combining them." §VI says it again ("One artifact per
+ * review, one reference per gate ... There is no combined gate and no per-target
+ * verdict to reconcile"), and §I.3 draws the two reviews of one run as two rail
+ * entries, the post first and then its featured image.
+ *
+ * WHY IT IS A SECOND FUNCTION AND NOT A CHANGED `partitionBatchTargets`. The
+ * ≤50-target partition above is the S0 batch CONTRACT's atomicity unit, and it
+ * sorts by the canonical key precisely so a re-seal of the same membership yields
+ * byte-identical partitions. This road wants a different, equally deterministic
+ * shape: the sealed membership's OWN order, one target each. The sealed membership
+ * is frozen and order-stable (`sealBatch` dedupes first-occurrence-wins over the
+ * production's events in `created_at` order), so the same sealed set always yields
+ * the same single-target partitions in the same order — idempotent under a
+ * re-sweep, which is what the store's crash-recovery phases rely on.
+ */
+export function partitionBatchTargetsPerArtifact(
+  targets: readonly BatchTarget[],
+): BatchTarget[][] {
+  return targets.map((t) => [t]);
+}
+
 // ---------------------------------------------------------------------------
 // Disposition matrix.
 // ---------------------------------------------------------------------------

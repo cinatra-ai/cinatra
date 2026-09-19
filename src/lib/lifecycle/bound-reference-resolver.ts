@@ -54,6 +54,10 @@ import {
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
+import {
+  REVIEW_FLOOR_ACTIONS,
+  resolveTypedReviewWord,
+} from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
@@ -210,17 +214,63 @@ export async function resolveBoundReference(input: {
  * pure and separate from the resolve so the lending rule can be read on its own
  * and cannot drift into a store call.
  *
- *   · a REVIEW lends its own three buttons — Comment, Approve, Reject;
+ *   · a REVIEW lends its own three buttons — Comment, Regenerate, Continue
+ *     (cinatra#3080; they were Comment, Approve, Reject);
  *   · a HITL SCREEN lends Submit, the button under its form;
  *   · anything ABSENT lends nothing at all.
+ *
+ * A CARD LENDS WHAT IT DRAWS, so the list is literally the floor and the aliases
+ * are not in it: `approve` is a word a person may TYPE (and `typedControlFor`
+ * resolves it to Continue), not a fourth control the card offers, and `reject` is
+ * not on the card at all.
  *
  * Filling a form without submitting it is NOT here: it is the plan's own
  * separate road and is built by cinatra#2934.
  */
 export function controlsLentBy(
   resolution: BoundReferenceResolution,
-): readonly ("comment" | "approve" | "reject" | "submit")[] {
-  if (resolution.kind === "review") return ["comment", "approve", "reject"];
+): readonly ("comment" | "regenerate" | "continue" | "submit")[] {
+  if (resolution.kind === "review") return [...REVIEW_FLOOR_ACTIONS];
   if (resolution.kind === "hitl_screen") return ["submit"];
   return [];
+}
+
+/**
+ * WHICH CONTROL A TYPED SENTENCE ASKS FOR (cinatra#3080 acceptance item 6).
+ *
+ * `controlsLentBy` says what a card offers; this says which one a person's
+ * message reaches for. Pure, so the whole typed road is one readable ladder:
+ *
+ *   · an exact floor word — "continue" (and its compatibility alias "approve"),
+ *     "regenerate", "comment" — asks for that control;
+ *   · "reject" asks for a control that no longer exists, and is answered with
+ *     the platform's own sentence rather than silence;
+ *   · ANYTHING ELSE is an ordinary sentence and is filed as a Comment, exactly
+ *     as it has been since the composer bound to a card at all.
+ *
+ * WHY AN EXACT WORD, AND ONLY AN EXACT WORD, MAY REACH A TERMINAL CONTROL. What
+ * is matched is the WHOLE message the person typed, held on the server with the
+ * grant — not a model's reading of it and not anything the run's own content
+ * could steer. A person who types the single word "continue" beside the review
+ * they are looking at has asked for exactly one thing; a person who types a
+ * sentence has asked for a note. Nothing in between mints a decision.
+ *
+ * A WAITING SCREEN STILL MINTS NOTHING (the rule this replaces kept): its
+ * Continue resumes a run, and typed actions per card kind are cinatra#2853's
+ * road, not this one.
+ */
+export type TypedControlAsk =
+  | { kind: "control"; control: "comment" | "regenerate" | "continue" }
+  | { kind: "retired"; reason: string }
+  | { kind: "none" };
+
+export function typedControlFor(
+  resolution: BoundReferenceResolution,
+  messageText: string | null | undefined,
+): TypedControlAsk {
+  if (resolution.kind !== "review") return { kind: "none" };
+  const asked = resolveTypedReviewWord(messageText ?? "");
+  if (asked.kind === "retired") return { kind: "retired", reason: asked.reason };
+  if (asked.kind === "action") return { kind: "control", control: asked.action };
+  return { kind: "control", control: "comment" };
 }

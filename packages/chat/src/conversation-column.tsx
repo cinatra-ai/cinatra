@@ -429,6 +429,8 @@ export function ConversationColumn({
     if (!hasActiveStream) promptRef.current?.focus();
   }, [hasActiveStream, promptRef]);
 
+  // THE DOCKED COMPOSER'S CLEARANCE IS MEASURED, NEVER GUESSED (cinatra#3080).
+  //
   const column = (
     <div className="relative flex min-h-0 flex-1 flex-col">
 

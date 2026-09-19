@@ -83,9 +83,14 @@ describe("the grant names the person, the message, the card and ONE control", ()
   });
 
   it("the control vocabulary is exactly the buttons a card draws", () => {
-    expect([...LENT_ACTION_CONTROLS]).toEqual(["comment", "approve", "reject", "submit"]);
+    // cinatra#3080 — the review floor is Comment · Regenerate · Continue, so a
+    // grant can name those and the screen's Submit, and nothing else. The
+    // retired words buy nothing: a grant naming one cannot be minted at all.
+    expect([...LENT_ACTION_CONTROLS]).toEqual(["comment", "regenerate", "continue", "submit"]);
     expect(isLentActionControl("fill")).toBe(false);
-    expect(isLentActionControl("approve")).toBe(true);
+    expect(isLentActionControl("continue")).toBe(true);
+    expect(isLentActionControl("approve")).toBe(false);
+    expect(isLentActionControl("reject")).toBe(false);
   });
 });
 

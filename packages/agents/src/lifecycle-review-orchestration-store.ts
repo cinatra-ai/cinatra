@@ -90,7 +90,7 @@ import {
   type ReviewOrchestrationPlan,
   type EffectHoldVerdict,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { partitionBatchTargets } from "@/lib/lifecycle/lifecycle-batch";
+import { partitionBatchTargetsPerArtifact } from "@/lib/lifecycle/lifecycle-batch";
 import {
   sealBatchEpoch,
   closeBatchEpoch,
@@ -831,7 +831,7 @@ export interface ReviewOrchestrationSweepSummary {
   notClassifiable: number;
   failed: number;
   /** How many multi-artifact PRODUCTIONS were coalesced into a sealed batch this
-   * pass (each may fan into several ≤50-target partition gates, counted in
+   * pass (each may fan into several gates — one per artifact — counted in
    * `gatesCreated`). Zero when every pending event is a single-artifact production. */
   batchesCoalesced: number;
 }
@@ -911,9 +911,10 @@ export const MAX_BATCH_MEMBERSHIP = 1000;
  * run-less direct upload) orchestrates per-event, one gate per artifact — the
  * standard path. A MULTI-artifact production (the same run's several pending
  * revisions) COALESCES: its fired targets are sealed into one explicit membership,
- * partitioned into deterministic ≤50-target partitions, and each partition becomes
- * ONE gate whose terminal decision commits atomically across its targets (a single
- * aggregate commit). See `orchestrateProducedBatch`.
+ * partitioned into deterministic ONE-ARTIFACT partitions in the production's own
+ * output order (cinatra#3080: "one gate per artifact, in order … never one gate
+ * combining them"), and each partition becomes ONE gate whose terminal decision
+ * commits atomically over the artifact it pins. See `orchestrateProducedBatch`.
  */
 export async function sweepReviewOrchestration(opts?: {
   limit?: number;
@@ -1072,7 +1073,7 @@ export async function sweepReviewOrchestration(opts?: {
 }
 
 // ---------------------------------------------------------------------------
-// Batch coalescing (multi-artifact production → sealed membership → ≤50-target
+// Batch coalescing (multi-artifact production → sealed membership → one-artifact
 // partition gates, per the S0 lifecycle-batch contract).
 // ---------------------------------------------------------------------------
 
@@ -1108,9 +1109,12 @@ type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestratio
  *      explicit list seals immediately, so the seal is provable (the returned
  *      `sealed:true` is the proof the set is frozen; a later arrival is a SUCCESSOR
  *      batch, carry-forward is S2).
- *   3. PARTITION the sealed set into deterministic ≤50-target partitions
- *      (`partitionBatchTargets`) — each partition is one per-gate atomicity unit.
- *   4. Per partition: emit ONE gate pinning the partition's targets (idempotent on
+ *   3. PARTITION the sealed set into ONE PARTITION PER ARTIFACT, in the sealed
+ *      membership's own order (`partitionBatchTargetsPerArtifact`) — cinatra#3080:
+ *      "Work that made several artifacts raises one gate per artifact, in order …
+ *      never one gate combining them" (`app-artifact-review.html` §III). Each
+ *      partition is still one per-gate atomicity unit; it now holds one target.
+ *   4. Per partition: emit ONE gate pinning the partition's target (idempotent on
  *      the deterministic partition task id); then, in ORDER: park every checkpointed
  *      member, ATOMICALLY link ALL members onto the gate (one UPDATE), and only THEN
  *      mark every member processed. The gate's terminal decision commits atomically
@@ -1198,7 +1202,7 @@ async function orchestrateProducedBatch(
     })),
   });
   const frozenMembership = epoch.membership;
-  const partitions = partitionBatchTargets(frozenMembership);
+  const partitions = partitionBatchTargetsPerArtifact(frozenMembership);
   if (!reused) summary.batchesCoalesced += 1;
 
   // Map the FROZEN membership targets → their current fired plan (only the
@@ -1213,6 +1217,19 @@ async function orchestrateProducedBatch(
   let anyConflict = false;
   for (const partition of partitions) {
     const reviewTaskId = batchPartitionReviewTaskId(partition);
+    // THE STILL-PENDING MEMBERS OF THIS PARTITION, READ BEFORE THE EMIT
+    // (cinatra#3080, the fix leg after the second proof round). A partition is
+    // ONE artifact now, so a frozen membership recovered on a crash-recovery
+    // pass can carry members that are already gated, linked and marked — and
+    // emitting their partition again would mint a SECOND gate over work that is
+    // already under review, which is exactly the surface defect this leg exists
+    // to remove. A partition with nothing left to do is skipped whole; a
+    // partition whose member is still pending re-emits idempotently onto its own
+    // deterministic task id, exactly as before.
+    const members = partition
+      .map((t) => firedByKey.get(targetKeyOf(t)))
+      .filter((m): m is FiredCreateGate => m !== undefined);
+    if (members.length === 0) continue;
     let gateId: string;
     let gateIdempotent: boolean;
     try {
@@ -1270,11 +1287,6 @@ async function orchestrateProducedBatch(
       // all-or-nothing boundary.
       await produceSuggestionsForPinnedTargets(gateId, orgId, partition);
     }
-
-    const members = partition
-      .map((t) => firedByKey.get(targetKeyOf(t)))
-      .filter((m): m is FiredCreateGate => m !== undefined);
-    if (members.length === 0) continue; // all this partition's members already processed.
 
     // Phase 1: PARK every checkpointed member (idempotent on run,event,checkpoint)
     // BEFORE linking, so a linked member is always already parked.
@@ -1645,6 +1657,15 @@ export interface GateMaintenanceSummary {
    * — the successor gate shows an uncaptured side. Ops-visible here as well as
    * logged, so a silently one-sided repair pair can never go unnoticed again. */
   cmsRepairsUncaptured: number;
+  /**
+   * cinatra#3080 — repairs COMPLETED by the generic producer completer: the
+   * repair run did its producing work and its successor gate is now open. The
+   * CMS counters above stay the CMS completer's own; these are every other
+   * producer's, which had no completer at all before this.
+   */
+  producerRepairsCompleted: number;
+  /** A repair the generic completer would not finalize on what it found. */
+  producerRepairsUnresolved: number;
 }
 
 /**
@@ -1677,6 +1698,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     cmsRepairsCompleted: 0,
     cmsRepairsUnresolved: 0,
     cmsRepairsUncaptured: 0,
+    producerRepairsCompleted: 0,
+    producerRepairsUnresolved: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1699,6 +1722,12 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   //    the repair response; a non-CMS repair (e.g. blog) is left untouched for
   //    its own producer's inline completion path.
   await completeCmsRepairs(summary);
+  // 3b. cinatra#3080 — and the SAME step for every other producer. Before this
+  //     the CMS completer was the only one, so a blog draft's Regenerate settled
+  //     its gate, minted its repair run, and then had nothing to open the
+  //     successor the drawing requires. The two completers never claim the same
+  //     row: the generic one skips a repair whose base target is a CMS snapshot.
+  await completeProducerRepairs(summary);
 
   return summary;
 }
@@ -1737,6 +1766,27 @@ async function completeCmsRepairs(summary: GateMaintenanceSummary): Promise<void
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] CMS repair completion drain failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/** Run the GENERIC repair-completion drain (cinatra#3080), folding its counters
+ * into the maintenance summary. Best-effort on the same contract as its CMS
+ * sibling: a failure never aborts the pass, the repair stays `dispatched`, and
+ * the next pass retries. Dynamically imported for the same reason. */
+async function completeProducerRepairs(summary: GateMaintenanceSummary): Promise<void> {
+  try {
+    const { completeDispatchedProducerRepairs } = await import(
+      "./lifecycle-repair-producer-completion-store"
+    );
+    const completion = await completeDispatchedProducerRepairs();
+    summary.producerRepairsCompleted += completion.completed;
+    summary.producerRepairsUnresolved += completion.unresolved;
+  } catch (err) {
+    console.error(
+      `[lifecycle-review-orchestration] producer repair completion drain failed: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

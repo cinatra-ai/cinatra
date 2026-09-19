@@ -64,6 +64,7 @@ import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  declaredReviewCompanionTaskId,
 } from "./agent-builder-ids";
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
@@ -1215,10 +1216,18 @@ export type HandleWayflowTaskStateArgs = {
  * ratchet guards this hot path), mirroring the same duplication precedent in
  * packages/notifications/src/agent-run-href.ts.
  */
+// cinatra#3080 — THE INSTANCE ID IS A PATH SEGMENT, SO IT IS ENCODED AS ONE.
+// Every ordinary run id is a uuid, which encodes to itself, so every link the
+// product has ever drawn is byte-identical. A repair run's id is not: it is
+// derived from its repair (`lifecycle-repair-run:<repairId>`) and carries a
+// character a path segment must escape, so the link the product built for it
+// was not a URL for that run at all. A repair run is a run; the link to its
+// page is built the same way as any other run's and is valid for any id.
 function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+  const segment = encodeURIComponent(instanceId);
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `/agents/${match[1]}/${match[2]}/${segment}`;
+  return `/agents/${agentPackageName}/${segment}`;
 }
 
 /**
@@ -1648,18 +1657,95 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         if (coreDecision.review && coreDecision.targets) {
           pinnedTargets = coreDecision.targets;
         }
-        const emitResult = coreDecision.review
-          ? await gateSeam.emit({
-              runId,
-              orgId: run.orgId,
-              reviewTaskId,
-              targets: pinnedTargets,
-            })
-          : ({
-              ok: false as const,
-              code: "invalid-targets" as const,
-              message: coreDecision.why ?? "the review core opened no review",
-            });
+        // ONE REVIEW PER ARTIFACT (cinatra#3080 item 4) — the MINT ROAD.
+        //
+        // "A gate that still pins more than one target (legacy rows from before
+        // one-review-per-artifact) refuses Regenerate with a stated reason and
+        // allows Comment and Continue; NO NEW MULTI-TARGET GATE IS MINTED."
+        // The drawing says it twice: `app-lifecycle-cards.html` §II — "A gate
+        // pins one artifact at one reference, so a card carries one target
+        // panel over one floor. Work that made several artifacts is not
+        // gathered into a single card: it raises one review per artifact, in
+        // order" — and `app-artifact-review.html` §VI, "One artifact per
+        // review, one reference per gate ... There is no combined gate and no
+        // per-target verdict to reconcile".
+        //
+        // This is the only place a DECLARED review is minted, and it pinned the
+        // marker's whole set under one gate: a step that made three blog ideas
+        // opened one gate, one card and one decision floor over all three.
+        // Every surface drew what it was given, so the defect had exactly one
+        // cause and has exactly one fix — here, at the mint.
+        //
+        // THE FIRST ARTIFACT KEEPS THE CARRIER GATE. `wayflow-<taskId>` is the
+        // id the resume wire, the lifecycle card ref, the park moment and the
+        // review deep link all derive for themselves from the paused task, so
+        // the first artifact's review is addressed by every road exactly as the
+        // combined gate was, and the reader is still taken to the review the
+        // drawing says comes up first. The further artifacts open COMPANION
+        // gates, in the step's own order, so the thread draws one card per
+        // gate, one after another, and the run page and the review route follow
+        // the same gates.
+        //
+        // A SINGLE-ARTIFACT STEP IS BYTE-IDENTICAL: one target, one emit, the
+        // carrier id, the same call this branch always made.
+        const declaredTargets =
+          Array.isArray(pinnedTargets) && pinnedTargets.length > 1
+            ? (pinnedTargets as unknown[])
+            : null;
+        let emitResult: Awaited<ReturnType<typeof gateSeam.emit>>;
+        if (!coreDecision.review) {
+          emitResult = {
+            ok: false as const,
+            code: "invalid-targets" as const,
+            message: coreDecision.why ?? "the review core opened no review",
+          };
+        } else if (!declaredTargets) {
+          emitResult = await gateSeam.emit({
+            runId,
+            orgId: run.orgId,
+            reviewTaskId,
+            targets: pinnedTargets,
+          });
+        } else {
+          emitResult = await gateSeam.emit({
+            runId,
+            orgId: run.orgId,
+            reviewTaskId,
+            targets: [declaredTargets[0]],
+          });
+          // THE COMPANIONS ARE RAISED ONLY ONCE THE CARRIER STANDS. The carrier
+          // is the gate this run is parked on; a companion beside no carrier
+          // would be a review with no run behind it. And a companion that fails
+          // to open never fails the park: the run is already correctly parked on
+          // a single-artifact review, and a reviewer who cannot see the second
+          // artifact's card is a worse reading than a dead-ended run, but a
+          // dead-ended run is worse than both.
+          if (emitResult.ok) {
+            for (let ordinal = 1; ordinal < declaredTargets.length; ordinal += 1) {
+              const companionTaskId = declaredReviewCompanionTaskId(reviewTaskId, ordinal + 1);
+              try {
+                const companion = await gateSeam.emit({
+                  runId,
+                  orgId: run.orgId,
+                  reviewTaskId: companionTaskId,
+                  targets: [declaredTargets[ordinal]],
+                });
+                if (!companion.ok) {
+                  console.warn(
+                    `[artifact-review-gate] run=${runId} task=${task.id} companion review ` +
+                      `${companionTaskId} not opened (${companion.code}: ${companion.message})`,
+                  );
+                }
+              } catch (companionErr) {
+                console.warn(
+                  `[artifact-review-gate] run=${runId} task=${task.id} companion review ` +
+                    `${companionTaskId} threw ` +
+                    `(${companionErr instanceof Error ? companionErr.message : String(companionErr)})`,
+                );
+              }
+            }
+          }
+        }
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
@@ -1742,7 +1828,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             reviewSurfaceUrl,
             reviewTaskId,
             lifecycleCardRef,
-            targetCount: Array.isArray(pinnedTargets) ? pinnedTargets.length : null,
+            // WHAT THIS GATE PINS, not what the step made (cinatra#3080 item
+            // 4). The redirect names the carrier gate, and a carrier pins one
+            // artifact like every other gate now does.
+            targetCount: Array.isArray(pinnedTargets) ? Math.min(pinnedTargets.length, 1) : null,
             agentSummary: historyText ?? "",
           },
           reviewTaskId,
