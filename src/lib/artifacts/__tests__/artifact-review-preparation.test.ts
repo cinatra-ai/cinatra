@@ -349,3 +349,133 @@ describe("prepareReviewTargetsCore — the props builder may read the pinned rev
     expect(r.prepared[0].props).toBe(built);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CONCURRENT PREPARATION (cinatra#3334). The targets of one gate are prepared
+// with a bounded fan-out instead of one after another: a gate over several
+// targets used to spend the whole of the card's load bound inside this loop
+// before the first target body could stream.
+//
+// The three properties the surface above depends on are pinned here: the CAP
+// (a gate never opens more than four target preparations at once), the ORDER
+// (the result is the caller's order, never the completion order), and the
+// per-target DEGRADE ISOLATION (one target's floor is still that target's
+// floor, and it no longer holds the others behind it).
+// ---------------------------------------------------------------------------
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Let every microtask AND every already-resolved continuation run. */
+async function settleTicks(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("prepareReviewTargetsCore — concurrent, order-preserving, degrade-safe preparation (cinatra#3334)", () => {
+  it("prepares the targets concurrently with a fan-out cap of 4, and keeps the input order", async () => {
+    const targets = Array.from({ length: 9 }, (_, i) => t(`a${i}`, `r${i}`));
+    const gates = targets.map(() => deferred<void>());
+    let inFlight = 0;
+    let peak = 0;
+
+    const running = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        readArtifact: async (id) => {
+          const index = Number(id.slice(1));
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await gates[index].promise;
+          inFlight -= 1;
+          return { kind: "ok", artifact: fakeArtifact(id) };
+        },
+      }),
+    );
+
+    // Nine targets, none of them finished: the cap — and only the cap — is in
+    // flight. A serial loop reaches one.
+    await settleTicks();
+    expect(peak).toBe(4);
+    expect(inFlight).toBe(4);
+
+    // Released in REVERSE, so completion order is the opposite of input order:
+    // the result must still be the caller's order.
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      gates[i].resolve();
+      await settleTicks();
+      expect(inFlight).toBeLessThanOrEqual(4);
+    }
+
+    const r = await running;
+    expect(peak).toBe(4);
+    expect(r.ok).toBe(true);
+    expect(r.ok === true && r.prepared.map((p) => p.target.artifactId)).toEqual(
+      targets.map((x) => x.artifactId),
+    );
+  });
+
+  it("a typed degrade on one target still yields ITS fallback while the others resolve", async () => {
+    const targets = [t("degraded", "r1"), t("b", "r2"), t("c", "r3")];
+    const held = deferred<void>();
+    const started: string[] = [];
+
+    const running = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        readArtifact: async (id) => {
+          started.push(id);
+          if (id === "degraded") {
+            await held.promise;
+            return { kind: "not-found" };
+          }
+          return { kind: "ok", artifact: fakeArtifact(id) };
+        },
+      }),
+    );
+
+    // The degrading target is still in flight and the others are ALREADY
+    // through their read — the whole point of the fan-out.
+    await settleTicks();
+    expect(started).toEqual(["degraded", "b", "c"]);
+
+    held.resolve();
+    const r = await running;
+    expect(r.ok).toBe(true);
+    if (r.ok !== true) return;
+    expect(r.prepared.map((p) => p.target.artifactId)).toEqual(["degraded", "b", "c"]);
+    // Its OWN typed degrade, unchanged by the fan-out …
+    expect(r.prepared[0].props).toBeNull();
+    expect(r.prepared[0].mount).toEqual({
+      kind: "floor",
+      slot: "detail",
+      packageName: null,
+      reason: "unknown-or-tombstoned",
+    });
+    // … and the siblings resolved normally rather than inheriting it.
+    expect(r.prepared[1].mount.kind).toBe("build-map");
+    expect(r.prepared[2].mount.kind).toBe("build-map");
+  });
+
+  it("an unexpected rejection keeps the documented port contract — never a fallback", async () => {
+    const targets = [t("a", "r1"), t("b", "r2")];
+    const r = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        buildProps: async () => {
+          throw new Error("the binder threw");
+        },
+      }),
+    );
+    // The core deliberately does not catch: a throwing port is a defect in the
+    // binder, not a silently floored card whose cause nobody sees.
+    await expect(r).rejects.toThrow("the binder threw");
+  });
+});
