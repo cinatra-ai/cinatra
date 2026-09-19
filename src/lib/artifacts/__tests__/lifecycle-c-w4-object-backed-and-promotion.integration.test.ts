@@ -439,6 +439,75 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(after[1]!.resource_id).toBe(seeded.resourceId);
   });
 
+  // W9 (cinatra#3033) — THE PERSON'S OWN ASSERTION, against the real store.
+  // The ratified drawing (app-artifact-review §XI.10): "Promotion happens only on
+  // the matcher's assertion at its threshold and with the person's confirmation,
+  // or on the person's own assertion, which outranks the matcher." A pack that
+  // ships a display and no classifier — every one of this issue's four — reaches
+  // its own type only here.
+  it("PROMOTES on the PERSON'S OWN assertion with NO matcher and NO threshold at all", async () => {
+    const objectId = nextId("obj-person");
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "user-1" });
+
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      createdBy: "user-1",
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    const after = representationsOf(objectId);
+    expect(after).toHaveLength(2);
+    expect(after[1]!.resource_id).toBe(seeded.resourceId);
+  });
+
+  it("REFUSES a claimed person road with NO durable user assertion — the authority is READ, not believed", async () => {
+    const objectId = nextId("obj-personless");
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "no-matcher-assertion" });
+    expect(typeOf(objectId)).toBe(BASE_TYPE);
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("A MATCHER'S assertion is NOT the person's — the person road refuses on it", async () => {
+    const objectId = nextId("obj-matcheronly");
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.99 });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    });
+    expect(out).toEqual({ ok: false, reason: "no-matcher-assertion" });
+    expect(typeOf(objectId)).toBe(BASE_TYPE);
+  });
+
   it("REFUSES a confirmation the matcher never backed — and writes nothing", async () => {
     const objectId = nextId("obj-nomatch");
     seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });

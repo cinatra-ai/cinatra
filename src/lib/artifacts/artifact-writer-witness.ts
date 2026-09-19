@@ -71,7 +71,43 @@ export interface ArtifactWriterWitnessOp {
 export function buildArtifactWriterWitnessOp(
   schema: string,
   f: ArtifactWriterWitnessFacts,
+  opts?: {
+    /**
+     * Emit the witness ONLY IF THE WITNESS IS NOT ALREADY THERE.
+     *
+     * For a writer whose representation INSERT is itself idempotent — one that
+     * converges by re-running (`ON CONFLICT DO NOTHING` on a DETERMINISTIC
+     * representation id, the typed-promotion append) — the plain VALUES form
+     * would stack a second `create` row on every re-drive, so the row's audit
+     * would say the bytes were authored twice when they were authored once.
+     * The guard is the WITNESS PREDICATE ITSELF (`artifactWriterWitnessExistsSql`
+     * below), so the writer and the readers still cannot drift apart about what
+     * "host-authored" means, and it is race-free because the only writers that
+     * ask for it run under the per-artifact advisory lock their transaction
+     * takes first.
+     */
+    ifAbsent?: boolean;
+  },
 ): ArtifactWriterWitnessOp {
+  if (opts?.ifAbsent === true) {
+    return {
+      text: `INSERT INTO "${schema}"."artifact_audit"
+  (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
+SELECT gen_random_uuid()::text, $1::text, $2::text, $3::text, '${ARTIFACT_WRITER_WITNESS_ACTION}', $4::text, $5::jsonb
+WHERE NOT ${artifactWriterWitnessExistsSql(schema, {
+        orgId: "$1::text",
+        artifactId: "$2::text",
+        representationRevisionId: "$3::text",
+      })}`,
+      values: [
+        f.orgId,
+        f.artifactId,
+        f.representationRevisionId,
+        f.actor ?? null,
+        JSON.stringify(f.detail ?? {}),
+      ],
+    };
+  }
   return {
     text: `INSERT INTO "${schema}"."artifact_audit"
   (id, org_id, artifact_id, representation_revision_id, action, actor, detail)

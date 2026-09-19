@@ -209,6 +209,143 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     );
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#3033 fix leg 3 — the setup-resume hand-off deadlock, at the seam
+  // that owns the transition.
+  //
+  // The real runs: an agent whose setup asks for TWO fields (postTitle, then
+  // blogPostUrl) takes the sequential per-field path. Approval one merges its
+  // field, flips `pending_approval -> queued` and enqueues `resume-setup-<runId>`;
+  // that leg re-parks the run on the second field. Approval two merges ITS field
+  // and flips the run back to `queued` again — and then enqueues the SAME job id,
+  // which BullMQ silently drops because the first leg's job is still retained on
+  // the queue (`removeOnComplete: 200`). The run stalls at `queued` with no job,
+  // no trigger row and no error, and every further press is refused by the
+  // `pending_approval` guard naming the run's own current status.
+  //
+  // Clearing a settled entry of the shared id is NOT enough: the leg that
+  // re-parks the run is still ACTIVE for the rest of its own unwind after the
+  // park commits, so a press inside that window meets a LIVE job of the same id
+  // and is dropped exactly as before. The fix is an id no two legs can share, so
+  // the assertions below pin that the two legs enqueue under DIFFERENT ids — the
+  // whole point is that the second one is a real enqueue.
+  //
+  // That id is now minted PER CONFIRMATION (cinatra#3585) out of nothing the run
+  // can repeat, so it no longer names the run at all — which is the shape the
+  // per-call assertion below reads.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3033: EVERY setup leg gets its OWN job id, so a second approval really enqueues", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-two-field",
+      templateId: "tpl-two-field",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    // Leg one — the first setup field.
+    await approveReviewTaskInternal(
+      "setup-run-two-field",
+      "actor-1",
+      { postTitle: "A title" },
+      "postTitle",
+    );
+
+    // The run re-parks on the second field; the form is pressed again.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-two-field",
+      templateId: "tpl-two-field",
+      status: "pending_approval",
+      inputParams: { postTitle: "A title" },
+    });
+
+    // Leg two — the field the stalled real runs died on.
+    await approveReviewTaskInternal(
+      "setup-run-two-field",
+      "actor-1",
+      { blogPostUrl: "https://example.test/post" },
+      "blogPostUrl",
+    );
+
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const jobIds: string[] = [];
+    for (const call of bgJobs.enqueueBackgroundJob.mock.calls) {
+      const [, payload, options] = call as [
+        string,
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      expect(payload).toEqual({ runId: "run-two-field", resumedFromSetup: true });
+      // The id is the per-confirmation one the seam mints...
+      expect(String(options.jobId)).toMatch(/^resume-[0-9a-f-]{36}$/);
+      jobIds.push(String(options.jobId));
+    }
+    // ...but the two legs are DIFFERENT jobs. A shared id is what let BullMQ
+    // drop the second leg — whether the first was retained-and-settled or still
+    // active — and strand the run at `queued` with nothing to run it.
+    expect(jobIds[0]).not.toBe(jobIds[1]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3033 — THE SEPARATOR. The per-leg id above is necessary but its
+  // separator must be one the QUEUE accepts. BullMQ validates a custom job id
+  // and throws `Custom Id cannot contain :` outright, so a colon between the
+  // review-task id and the per-leg suffix turns the whole setup approval into a
+  // 500 before anything is enqueued: the run's status write has already landed,
+  // so the run sits at `queued` with no job and no trigger row — the very
+  // deadlock the per-leg id was added to close, reached by a different door.
+  //
+  // The id is now minted PER CONFIRMATION (cinatra#3585) and no longer names the
+  // run, so the case reads that shape; the colon reading it pins is unchanged,
+  // because the queue's rule is about the id whatever mints it.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3033: the per-leg resume job id carries NO colon (the queue rejects one) and stays unique per leg", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-no-colon",
+      templateId: "tpl-no-colon",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    // Leg one.
+    await approveReviewTaskInternal(
+      "setup-run-no-colon",
+      "actor-1",
+      { postTitle: "A title" },
+      "postTitle",
+    );
+
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-no-colon",
+      templateId: "tpl-no-colon",
+      status: "pending_approval",
+      inputParams: { postTitle: "A title" },
+    });
+
+    // Leg two.
+    await approveReviewTaskInternal(
+      "setup-run-no-colon",
+      "actor-1",
+      { blogPostUrl: "https://example.test/post" },
+      "blogPostUrl",
+    );
+
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const jobIds = bgJobs.enqueueBackgroundJob.mock.calls.map((call) => {
+      const [, , options] = call as [string, Record<string, unknown>, Record<string, unknown>];
+      return String(options.jobId);
+    });
+
+    for (const jobId of jobIds) {
+      // The queue's own rule. A colon here is not a style question: `add`
+      // throws and the approval never enqueues.
+      expect(jobId).not.toContain(":");
+      // And it is the per-confirmation id the seam now mints — the constant,
+      // run-named id is what stranded the run before.
+      expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    }
+    expect(jobIds[0]).not.toBe(jobIds[1]);
+  });
+
   // Regression: assert the SQL fragment serializes only values[fieldName],
   // NOT the whole values object. The single-field path must not serialize the
   // whole `{ url: "..." }` object and then wrap it again via

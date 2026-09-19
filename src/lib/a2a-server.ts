@@ -30,6 +30,7 @@ import { resolveEdgeBoundServingDecision } from "@/lib/a2a-edge-bound-serving";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import { mintExternalA2ADispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 // ---------------------------------------------------------------------------
 // A2A server mount singleton builder.
@@ -99,11 +100,48 @@ async function buildA2AMount(): Promise<A2AMount> {
   // closes the eventBus early. The wrapped taskStore adds DB fallback for
   // tasks/get after process restart. Both share the same underlying Map.
   const innerTaskStore = new InMemoryTaskStore();
+  // The authority each run was CREATED with, by run id (cinatra#3033). The
+  // external-A2A creation callback below resolves it per run — a delegating
+  // member's for a human principal, the system dispatch authority for a peer —
+  // and the enqueue that follows must compensate with that exact one.
+  const authorityByCreatedRunId = new Map<string, OrgWriteAuthority | undefined>();
+  /** Land a run this executor created `queued` when its dispatch died, then
+   *  re-raise. Without it the row stays `queued` with no job behind it and no
+   *  error on it, which nothing later recovers (convergence review, Q1). */
+  const compensateDispatch = async (runId: string, err: unknown): Promise<never> => {
+    const { failRunOnCallerDispatchFailure } = await import(
+      "@cinatra-ai/agents/lifecycle-coordinator"
+    );
+    await failRunOnCallerDispatchFailure({
+      runId,
+      authority: takeCreationAuthority(runId),
+      error: err,
+    });
+    throw err;
+  };
+  /** TAKE, never merely read (convergence review). This mount is process-cached
+   *  for the life of its generation, so an entry left behind after the dispatch
+   *  settles would retain that run id and its authority for as long as the
+   *  process lives. Every terminal path — the enqueue that succeeded and the one
+   *  that was compensated — goes through here exactly once. */
+  const takeCreationAuthority = (runId: string): OrgWriteAuthority | undefined => {
+    const authority = authorityByCreatedRunId.get(runId);
+    authorityByCreatedRunId.delete(runId);
+    return authority;
+  };
   const executor = new MultiAgentExecutor({
     templates,
     // Preferred chokepoint. Runs connector preflight before the BullMQ enqueue.
     createAndEnqueueAgentRun: async (record, options) => {
-      await enqueueAgentRun(record, options);
+      // The run row already exists at `queued` (createRunWithAuthority below
+      // creates it `create.kind: "full"`), so a refused enqueue strands it —
+      // compensate before re-raising (cinatra#3033).
+      try {
+        await enqueueAgentRun(record, options);
+        takeCreationAuthority(record.runId);
+      } catch (err) {
+        await compensateDispatch(record.runId, err);
+      }
     },
     // cinatra#1940 P3: the creation perimeter is now guarded (run.execute).
     // The executor runs inside the same ALS ActorContext frame the route
@@ -152,6 +190,8 @@ async function buildA2AMount(): Promise<A2AMount> {
       if (launched.carrier.kind !== "run") {
         throw new Error("the A2A launch answered with a carrier that is not a run");
       }
+      // Remember it for the dispatch compensation above (cinatra#3033).
+      authorityByCreatedRunId.set(launched.carrier.run.id, authority);
       return launched.carrier.run;
     },
     // Retained for the rare legacy code path inside the a2a package that
@@ -159,7 +199,12 @@ async function buildA2AMount(): Promise<A2AMount> {
     // because the executor prefers `createAndEnqueueAgentRun` when set.
     enqueueJob: async (_jobName, data) => {
       const payload = data as { runId: string };
-      await enqueueAgentRun({ runId: payload.runId });
+      try {
+        await enqueueAgentRun({ runId: payload.runId });
+        takeCreationAuthority(payload.runId);
+      } catch (err) {
+        await compensateDispatch(payload.runId, err);
+      }
     },
     taskStore: innerTaskStore,
     // cinatra#1392 Gap 2 — edge-bound serving: resolve the TRUSTED dependent

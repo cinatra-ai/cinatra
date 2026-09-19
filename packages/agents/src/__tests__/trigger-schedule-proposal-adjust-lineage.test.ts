@@ -684,16 +684,23 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
 /**
  * A one-off in another zone — an adjust that moves the DURABLE fields too.
  *
- * The instant is far ahead on purpose. `mintProposal` refuses a `scheduled`
- * proposal whose `runAt` has already passed, so a fixture dated near the day it
- * was written stops testing the adjust the moment real time overtakes it and
- * silently starts testing the past-time guard instead. Nothing here reads the
- * date — only the KIND and the ZONE are asserted — so it carries no meaning
- * beyond "still ahead", exactly as `RUN_AT` does further down this file.
+ * The instant is derived from NOW rather than written as a calendar literal.
+ * `mintProposal` and `adjustTriggerSchedule` both refuse a `scheduled` proposal
+ * whose `runAt` has already passed, so a fixture dated near the day it was
+ * written stops testing the adjust the moment real time overtakes it and
+ * silently starts testing the past-time guard instead — and a literal merely
+ * far out is the same time bomb with a longer fuse. Nothing here reads the
+ * date, only the KIND and the ZONE are asserted, so any comfortably-future
+ * instant serves and 30 days out clears every zone offset. (`RUN_AT` further
+ * down stays a literal on purpose: it is paired with a faked system clock, so
+ * it must be a fixed instant.)
  */
+const ONCE_NEW_YORK_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
 const ONCE_NEW_YORK: ProposalSchedule = {
   kind: "scheduled",
-  runAt: "2099-09-01T08:00",
+  runAt: `${ONCE_NEW_YORK_DATE}T08:00`,
   timezone: "America/New_York",
 };
 
