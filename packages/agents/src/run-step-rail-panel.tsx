@@ -110,7 +110,20 @@ export function RunStepRailPanel({
         orientation="vertical"
         indicators={{ completed: <Check className="h-3 w-3" /> }}
       >
-        <StepperNav>
+        {/* THE NAV STATES THE COLUMN'S WIDTH (cinatra#3449). The vendored
+            StepperNav is an inline-flex nav given a width only in the
+            HORIZONTAL orientation (`src/components/reui/stepper.tsx:412-427`),
+            so in the vertical orientation this rail uses it shrink-wraps to
+            its widest child — and every box below it states its width as a
+            share of what is above it (the entry wrapper and the shared row
+            class, `run-step-rail-extra-entry.tsx:97-98,422`). Mounted with no
+            class of its own, the two review entries' rows resolved to the
+            shrink-wrapped nav rather than to the `w-52` column above it: the
+            third picture round measured them at 137px inside a 208px column,
+            which is not the column's row. Stated here, on the ONE call site
+            this rail owns, so the shared vendored component — and every other
+            stepper in the product drawn through it — is untouched. */}
+        <StepperNav className="w-full">
           {entries.map((entry, i) => {
             const displayStep = i + 1 + stepOffset;
             const isResolved = entry.status === "resolved";
@@ -152,6 +165,26 @@ export function RunStepRailPanel({
                 </StepperItem>
               );
             }
+
+            // THE ROW'S OWN STATE, IN THE RAIL'S ONE VOCABULARY (cinatra#3449),
+            // derived from `entry.status` exactly as the rail's other rows
+            // derive it (`run-step-rail-extra-entry`): an entry the run has not
+            // got to yet is not reached, and an entry whose state is terminal
+            // -- resolved, completed or skipped -- is settled.
+            const railReached = entry.status !== "upcoming";
+            const railSettled =
+              entry.status === "resolved" || entry.status === "completed" || entry.status === "skipped";
+            // AND "CURRENT" IS THE `isActive` READING THIS FILE ALREADY
+            // COMPUTES, taken with the rail's own reached vocabulary — because
+            // the stepper's active INDEX can sit on a step the run has not got
+            // to yet, and a step still ahead is not a step anyone is standing
+            // on. That is the frame's own rule where it decides the same thing
+            // ("neither does a row its page has said the run has not reached",
+            // `emphasised`, run-surface-rail.tsx), and it is what the parked
+            // review's reading states in its own words: with the review on the
+            // detail, no spine row reads current
+            // (`run-page-parked-review-opens-in-place.test.tsx`).
+            const railSelected = isActive && railReached;
 
             const titleNode = (
               <StepperTitle
@@ -222,12 +255,32 @@ export function RunStepRailPanel({
                     <div
                       className={`flex items-center ${RUN_PAGE_RAIL_ROW_CLASS} ${RUN_PAGE_RAIL_INERT_ROW_CLASS}`}
                       data-rail-inert=""
+                      // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
+                      // (cinatra#3449), on the node that carries the shared row
+                      // box -- never on the box around it, which would make one
+                      // entry read as two rows down the composed rail.
+                      data-run-surface-rail-step=""
+                      data-run-surface-rail-reached={railReached ? "true" : "false"}
+                      data-run-surface-rail-settled={railSettled ? "true" : "false"}
+                      data-run-surface-rail-selected={railSelected ? "true" : "false"}
                     >
                       {indicatorNode}
                       {titleNode}
                     </div>
                   ) : (
-                    <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} tabIndex={-1}>
+                    <StepperTrigger
+                      className={RUN_PAGE_RAIL_ROW_CLASS}
+                      tabIndex={-1}
+                      // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
+                      // (cinatra#3449), and it is THIS node rather than the box
+                      // around it: the row a reading of the rail already finds
+                      // here, so the composed rail still reads one row per
+                      // entry and one rhythm down its whole length.
+                      data-run-surface-rail-step=""
+                      data-run-surface-rail-reached={railReached ? "true" : "false"}
+                      data-run-surface-rail-settled={railSettled ? "true" : "false"}
+                      data-run-surface-rail-selected={railSelected ? "true" : "false"}
+                    >
                       {indicatorNode}
                       {titleNode}
                     </StepperTrigger>

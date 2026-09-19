@@ -1719,6 +1719,17 @@ function StepperColumn({
                   >
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
+                      // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
+                      // (cinatra#3449), in the rail's one vocabulary and
+                      // derived as the rail's other rows derive it
+                      // (`run-step-rail-extra-entry`): a step still ahead is
+                      // not reached, a completed one is settled. This mount's
+                      // spine rows carried no mark at all, so a reading of THIS
+                      // rail answered for its trailing entries only.
+                      data-run-surface-rail-step=""
+                      data-run-surface-rail-reached={isCompleted || isActive ? "true" : "false"}
+                      data-run-surface-rail-settled={isCompleted ? "true" : "false"}
+                      data-run-surface-rail-selected={isActive ? "true" : "false"}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={

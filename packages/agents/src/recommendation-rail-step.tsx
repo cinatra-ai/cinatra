@@ -86,6 +86,17 @@ export function RecommendationRailStepRow({
       data-recommendation-rail-step=""
       data-recommendation-step-selected={selected ? "true" : "false"}
       data-recommendation-step-settled={settled ? "true" : "false"}
+      // AND THE RAIL'S OWN STATE MARKS, ON THIS ROW (cinatra#3449). This row is
+      // the page's own, and the frame "decorates only its generic rows on the
+      // way through" (`instance-screens`) -- so the rail's first gate was drawn
+      // with none of the marks every generic row carries. The readings are the
+      // ones this row already computes: `openable` is the frame's own answer to
+      // whether the run has reached this step, and the settled and selected
+      // readings are the two it draws its circle from.
+      data-run-surface-rail-step=""
+      data-run-surface-rail-reached={openable ? "true" : "false"}
+      data-run-surface-rail-settled={settled ? "true" : "false"}
+      data-run-surface-rail-selected={selected ? "true" : "false"}
       // The same two names the rail's generic row uses, so one walk reads one
       // vocabulary on every row of the rail.
       data-action={openable ? "open-recommendation-step" : "recommendation-step-unavailable"}

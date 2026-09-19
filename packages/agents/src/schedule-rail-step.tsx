@@ -136,6 +136,21 @@ export function ScheduleRailStepRow({
       // (`data-recommendation-step-settled`), so one walk reads the settled
       // circle the same way on every row it appears in.
       data-schedule-step-settled={settled ? "true" : "false"}
+      // AND THE RAIL'S OWN STATE MARKS, ON THIS ROW (cinatra#3449). The frame
+      // "decorates only its generic rows on the way through"
+      // (`instance-screens`), so this row -- the page's own -- carried the
+      // schedule anchors and NONE of the rail's marks: the picture round read a
+      // drawn, settled Schedule entry with no step node at all, on its row or
+      // inside it. The names are the frame's own (`run-surface-rail`), the
+      // readings are the ones this row already has, and they sit on the row box
+      // rather than on a box around it -- one marked row per drawn entry.
+      data-run-surface-rail-step=""
+      // THE RUN HAS BEEN THROUGH IT: the schedule is how the run was
+      // dispatched, which is the reason the screen states where it composes
+      // this entry (`instance-screens`, `reached: true`).
+      data-run-surface-rail-reached="true"
+      data-run-surface-rail-settled={settled ? "true" : "false"}
+      data-run-surface-rail-selected={scheduleSelected ? "true" : "false"}
       data-action="open-schedule-step"
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
