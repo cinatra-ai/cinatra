@@ -38,6 +38,10 @@ import {
   scopeSelectionMatchesAny,
   type ScopeToken,
 } from "@/lib/scope-filter";
+import {
+  selectScopeOwnedArtifacts,
+  type ArtifactOwnershipLocus,
+} from "@/lib/scope-surface-artifact-rows";
 import { artifactScopeEntries } from "@/lib/artifacts/artifact-scope-entries";
 import {
   listArtifacts,
@@ -108,6 +112,7 @@ export async function LibraryMode({
   query,
   facet,
   scopeParam,
+  ownership,
 }: {
   orgId: string | null;
   actor: ActorContext;
@@ -117,6 +122,22 @@ export async function LibraryMode({
   facet?: string;
   /** The raw `?scope=` search param (parsed by the canonical parser here). */
   scopeParam?: string | string[];
+  /**
+   * The OWNERSHIP subset this mount lists (cinatra#2810, per-scope surfaces
+   * S4) — the viewed scope of a per-scope Artifacts tab.
+   *
+   * Present ⇒ the listing is narrowed to the rows that scope OWNS, read from
+   * each row's durable ownership tuple by `selectScopeOwnedArtifacts`. That is
+   * a different question from the `?scope=` filter below, which asks whether a
+   * row's footprint INTERSECTS a selection and whose default token collapses to
+   * the broadest view; an ownership subset cannot be expressed in that grammar
+   * at all.
+   *
+   * ABSENT ⇒ this is the global `/artifacts` library, unchanged in every
+   * respect. The narrowing is the only thing this prop does, and it does
+   * nothing when no locus is given.
+   */
+  ownership?: ArtifactOwnershipLocus;
 }) {
   // Scope filter (cinatra#2449) — the SAME wiring as /connectors and /skills:
   // build the actor's accessible scopes (orgs they belong to, projects they
@@ -151,6 +172,12 @@ export async function LibraryMode({
   let all: ArtifactSummary[];
   try {
     all = listArtifacts({ orgId, actor, limit: 200 });
+    // The OWNERSHIP subset (cinatra#2810), applied to the already-authorized
+    // listing: `listArtifacts` has run the object-store ownership filter and
+    // the canonical per-row `object.read` for THIS actor, so this only ever
+    // narrows — a row it keeps was already readable, and a fail-closed row is
+    // dropped from every scope.
+    if (ownership) all = selectScopeOwnedArtifacts(all, ownership);
   } catch {
     return (
       <LibraryToolbarShell
