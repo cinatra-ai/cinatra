@@ -171,6 +171,23 @@ const PUBLIC_EXACT_PATHS = [
 // reason the header-rule entry above is: without it guardAppRoute 307s the
 // unauthenticated harness to /sign-in before the fixture renders, and every
 // assertion then fails on a fixture that never rendered.
+// "/design-fixtures/header-band-opacity" (cinatra#3105): the sticky-header
+// OPACITY harness — the app shell's own header band over known content, so the
+// gate can assert the band is fully opaque and nothing reads through it. Its
+// sibling "/design-fixtures/overlay-header-band" was listed when it landed and
+// this one was not, so every one of its assertions failed on a fixture that
+// never rendered under the production build.
+// "/design-fixtures/timezone-control" and "/design-fixtures/combobox"
+// (cinatra#3142): the schedule step's Timezone control, and the plain Combobox
+// the drawing names at @/components/ui/combobox, each mounted on a fixed option
+// list so the drawing's COLOUR claims about them — the current value's indigo
+// check, the highlighted row's indigo soft-tint, the popover's surface, the
+// trigger's Input chrome — can be measured in a browser where the palette
+// actually resolves. Same static, dataless, seeded-render contract as their
+// siblings (no DB, no session, no user data). Listed here for the SAME reason
+// the run-step-rail entry above is: without it guardAppRoute 307s the
+// unauthenticated harness to /sign-in before either fixture renders, and every
+// assertion then fails on a fixture that never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -182,6 +199,9 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/extension-settings",
   "/design-fixtures/run-step-rail",
   "/design-fixtures/overlay-header-band",
+  "/design-fixtures/header-band-opacity",
+  "/design-fixtures/timezone-control",
+  "/design-fixtures/combobox",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
