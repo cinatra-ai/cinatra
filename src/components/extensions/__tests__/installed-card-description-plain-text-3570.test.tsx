@@ -177,14 +177,14 @@ function renderAgentAllCard(description: string): string {
 /** MOUNT 3 — the scope Assistants tab. */
 function renderScopeAssistantsTab(description: string): string {
   const row: ScopeAssistantCardRow = {
-    key: "@cinatra-ai/assistant",
-    packageName: "@cinatra-ai/assistant",
-    vendor: "cinatra-ai",
-    slug: "assistant",
-    displayName: "Assistant",
+    key: "@acme/research-assistant",
+    packageName: "@acme/research-assistant",
+    vendor: "acme",
+    slug: "research-assistant",
+    displayName: "Research Assistant",
     description,
     chatHref: "/workspace/chat",
-    settingsHref: "/workspace/assistants/cinatra-ai/assistant/settings?tab=skills",
+    settingsHref: "/workspace/assistants/acme/research-assistant/settings?tab=skills",
     remoteCapable: false,
     remoteInstances: [],
     version: null,
