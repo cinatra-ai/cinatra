@@ -3,14 +3,14 @@
   "component_type": "Flow",
   "id": "synthetic-gemini-agent-flow",
   "name": "Synthetic Gemini Agent",
-  "description": "Hermetic OAS fixture. Declares metadata.cinatra.llm with preferredProvider=gemini + preferredModel=gemini-2.5-flash + capabilityRequired=media_input, one ApiNode targeting /api/llm-bridge, one EndNode. Used by telemetry assertions without coupling to media-transcript-agent readiness.",
+  "description": "Hermetic OAS fixture. Declares metadata.cinatra.llm with preferredProvider=gemini + preferredModel=gemini-3.5-flash + capabilityRequired=media_input, one ApiNode targeting /api/llm-bridge, one EndNode. Used by telemetry assertions without coupling to media-transcript-agent readiness.",
   "metadata": {
     "cinatra": {
       "type": "node",
       "hitlScreens": [],
       "llm": {
         "preferredProvider": "gemini",
-        "preferredModel": "gemini-2.5-flash",
+        "preferredModel": "gemini-3.5-flash",
         "capabilityRequired": "media_input"
       }
     }
@@ -113,7 +113,7 @@
         "agent_id": "synthetic-gemini-agent",
         "cinatra_llm": {
           "preferredProvider": "gemini",
-          "preferredModel": "gemini-2.5-flash",
+          "preferredModel": "gemini-3.5-flash",
           "capabilityRequired": "media_input"
         }
       },

@@ -1041,9 +1041,7 @@ END $$` },
       ('seed-openai-gpt4o', 'openai', 'gpt-4o', 2.50000000, 10.00000000, 1.25000000, 'litellm', now()),
       ('seed-openai-gpt4o-mini', 'openai', 'gpt-4o-mini', 0.15000000, 0.60000000, 0.07500000, 'litellm', now()),
       ('seed-anthropic-sonnet', 'anthropic', 'claude-sonnet-4-5-20250929', 3.00000000, 15.00000000, 0.30000000, 'litellm', now()),
-      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now()),
-      ('seed-gemini-flash', 'gemini', 'gemini-2.5-flash', 0.07500000, 0.30000000, NULL, 'litellm', now()),
-      ('seed-gemini-pro', 'gemini', 'gemini-2.5-pro', 1.25000000, 10.00000000, NULL, 'litellm', now())
+      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now())
     ON CONFLICT DO NOTHING` },
     // legacy_costs table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."legacy_costs" (

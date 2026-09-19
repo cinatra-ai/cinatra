@@ -24,7 +24,7 @@ const EXPECTED_THRESHOLD = 0.7;
 const PROVIDER_PROBES = [
   { provider: "openai", model: "gpt-5.4" },
   { provider: "anthropic", model: "claude-sonnet-4-6" },
-  { provider: "gemini", model: "gemini-2.5-flash" },
+  { provider: "gemini", model: "gemini-3.5-flash" },
 ] as const;
 
 describe("blog-image-artifact — registration + visibility", () => {
