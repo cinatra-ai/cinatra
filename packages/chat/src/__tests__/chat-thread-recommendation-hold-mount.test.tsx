@@ -166,6 +166,7 @@ import {
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 
 import {
+  FIXTURE_THREAD_ID,
   installWidgetServiceStub,
   mountSurface,
   surfaceElement,
@@ -804,5 +805,48 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountHeldTurn();
     expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
     expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+  });
+});
+
+describe("settled recommendation history survives a terminal stream error", () => {
+  it.each([false, true])("retains the decided card and original slot when slackMode=%s", async (slackMode) => {
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const messages = dispatchTurn();
+    const assistant = messages[1]!;
+    // A non-lifecycle predecessor proves filtering must retain the original slot.
+    assistant.parts!.unshift({ kind: "text", content: "The earlier dispatch context." });
+    const result = await mountSurface("chat", { messages, slackMode });
+    const selector = '[data-lifecycle-card="recommendation_hold"][data-run-recommendation-decision="confirmed"]';
+    await waitFor(() => expect(result.container.querySelector(selector)).not.toBeNull());
+    const settled = result.container.querySelector(selector)!;
+    const slot = settled.closest("[data-transcript-slot]")!;
+    expect(slot.getAttribute("data-transcript-slot")).toBe("1");
+    const readsBeforeError = holdState.calls.length;
+    // A remount cannot recover the already seen decision from this unanswered
+    // server read. The existing reading must survive in its own mounted card.
+    holdState.pending = new Promise(() => {});
+    const { agUiReduce, initialConversationState } = await import("../renderer/ag-ui-reducer");
+    const initial = initialConversationState();
+    const failed = agUiReduce({
+      ...initial,
+      message: { ...initial.message, ...assistant, role: "assistant", parts: assistant.parts! },
+    }, { type: "RUN_ERROR", threadId: FIXTURE_THREAD_ID, runId: RUN_ID, message: "connect ECONNREFUSED 127.0.0.1:59999" });
+    expect(failed.status).toBe("error");
+    await act(async () => {
+      result.rerender(surfaceElement("chat", {
+        messages: [messages[0]!, { ...assistant, ...failed.message }], slackMode,
+      }));
+    });
+    const roots = result.container.querySelectorAll(selector);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toBe(settled);
+    expect(roots[0]!.closest("[data-transcript-slot]")).toBe(slot);
+    expect(holdState.calls).toHaveLength(readsBeforeError);
+    const errors = result.container.querySelectorAll("[data-chat-error-card]");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.compareDocumentPosition(settled) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(roots[0]!.querySelector("[data-skill-action]")).toBeNull();
+    expect(result.container.querySelectorAll('[data-testid="inline-run-panel"]')).toHaveLength(1);
+    expect(result.container.textContent).not.toContain("The earlier dispatch context.");
   });
 });
