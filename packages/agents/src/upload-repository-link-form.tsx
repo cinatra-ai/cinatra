@@ -223,7 +223,7 @@ export function ImportPackageFromGitHubForm({
             </div>
             <FieldDescription>
               A link to a public github.com repository holding an agent, skill, connector or
-              artifact package — the repository page, a branch, a release page, or the archive ZIP
+              artifact package - the repository page, a branch, a release page, or the archive ZIP
               link. The archive is downloaded without signing in to GitHub. The package declares
               its own kind; this instance reads it from the archive.
             </FieldDescription>
