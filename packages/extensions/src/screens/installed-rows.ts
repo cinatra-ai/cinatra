@@ -327,6 +327,59 @@ function runtimeOnlyConnectorRows(input: {
   return rows;
 }
 
+/**
+ * SKILL, both sides (cinatra#3569). The skill reader facet
+ * (`packages/skills/src/extension-handler.ts`) intersects the skill catalog
+ * against the owner-visible lifecycle-live package set by PACKAGE NAME
+ * (`live.has(skill.packageName)`). The allowlisted chat-successor skill packages
+ * register their catalog rows under the privileged VIRTUAL `@cinatra-ai/chat`
+ * name (`extension-skill-resolver.ts`), which is "never a real installable
+ * package" and so is never in that set — the join therefore drops every one of
+ * their rows and the facet resolves no descriptor for them, on the live side AND
+ * the archived side, because both facets return through that one filter. Their
+ * canonical `installed_extension` rows were then drawn nowhere, against §III.3
+ * ("no row is dropped or double-counted across views, and every view's count is
+ * exact").
+ *
+ * Give the kind the same package-level fallback the artifact kind was given in
+ * cinatra#3533: one descriptor per scope-VISIBLE PACKAGE the surviving
+ * descriptors do not already cover (several owner identities of one pack
+ * collapse to a single descriptor), under the SAME shared owner-scope manifest
+ * gate the facet applies — so a fallback row is never MORE visible than a
+ * facet-resolved one.
+ *
+ * It carries NO per-skill content: no skill name, no description, no count.
+ * That is deliberate, and it is the facet's own recorded reason: the skill
+ * catalog holds per-owner PRIVATE rows joined to manifests only by package name,
+ * so reading one back out on a package-name match would risk a cross-org leak
+ * when two orgs author a private skill under a colliding name. The card says
+ * only that the package is installed — which the actor already sees from the
+ * same canonical row for every other kind — and everything it draws (name,
+ * version, lifecycle status, kind label, settings href) comes from
+ * `collapseKindRows`, the same road every other kind's row travels. No skill id,
+ * namespace or reader-facet predicate changes.
+ */
+function skillDescriptorsWithFallback(input: {
+  resolved: unknown[];
+  manifests: Awaited<ReturnType<typeof readActiveManifestsFromStore>>;
+  scope: ExtensionDiscoveryScope;
+}): unknown[] {
+  const descriptors = [...input.resolved];
+  const resolvedPackages = new Set(
+    (descriptors as SkillDescriptorLike[])
+      .map((descriptor) => descriptor.packageName ?? null)
+      .filter((packageName): packageName is string => packageName !== null),
+  );
+  const uncovered = visibleManifestPackageNames(
+    input.manifests.filter((manifest) => !resolvedPackages.has(manifest.packageName)),
+    input.scope,
+  );
+  for (const packageName of uncovered) {
+    descriptors.push({ packageName } satisfies SkillDescriptorLike);
+  }
+  return descriptors;
+}
+
 function sortRows(rows: InstalledCardRow[]): InstalledCardRow[] {
   return rows.sort((a, b) => {
     const kindDelta = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
@@ -454,6 +507,8 @@ export async function loadInstalledCardRows(
     activeManifests,
     archivedManifests,
     activeArtifactManifests,
+    activeSkillManifests,
+    archivedSkillManifests,
   ] = await Promise.all([
       availableOutcome_,
       // Active = canonical dispatcher across ALL kinds: installed_extension
@@ -471,6 +526,17 @@ export async function loadInstalledCardRows(
       // threaded canonical snapshot and applies its kind filter in memory, so
       // it costs no extra database read.
       readActiveManifestsFromStore({ kind: "artifact", canonicalRows }),
+      // The SKILL twin of that coarse read (cinatra#3569). The skill reader
+      // facet joins its catalog to the manifests by PACKAGE NAME, and the
+      // allowlisted chat-successor packages' catalog rows carry the privileged
+      // VIRTUAL `@cinatra-ai/chat` name instead of their own, so that join drops
+      // them on BOTH the live and the archived side (`listActive` and
+      // `listArchived` return through the one filter) — so both sides need the
+      // read. Like the artifact twin it rides the SAME threaded canonical
+      // snapshot and applies its kind filter in memory, so it costs no extra
+      // database read.
+      readActiveManifestsFromStore({ kind: "skill", canonicalRows }),
+      readArchivedManifestsFromStore({ kind: "skill", canonicalRows }),
     ]);
 
   // FAIL-SOFT, narrowly (cinatra#2539). The registry is an OPTIONAL hydration
@@ -638,6 +704,17 @@ export async function loadInstalledCardRows(
     activeArtifactDescriptors.push({ packageName } satisfies ArtifactDescriptorLike);
   }
 
+  const activeSkillDescriptors = skillDescriptorsWithFallback({
+    resolved: discoveredActive.byKind.skill ?? [],
+    manifests: activeSkillManifests,
+    scope,
+  });
+  const archivedSkillDescriptors = skillDescriptorsWithFallback({
+    resolved: discoveredArchived.byKind.skill ?? [],
+    manifests: archivedSkillManifests,
+    scope,
+  });
+
   const active = sortRows([
     ...KIND_ORDER.flatMap((kind) =>
       collapseKindRows({
@@ -645,7 +722,9 @@ export async function loadInstalledCardRows(
         descriptors:
           kind === "artifact"
             ? activeArtifactDescriptors
-            : (discoveredActive.byKind[kind] ?? []),
+            : kind === "skill"
+              ? activeSkillDescriptors
+              : (discoveredActive.byKind[kind] ?? []),
         status: "active",
         availableByName,
         canonicalByKey,
@@ -670,7 +749,10 @@ export async function loadInstalledCardRows(
     ...KIND_ORDER.flatMap((kind) =>
       collapseKindRows({
         kind,
-        descriptors: discoveredArchived.byKind[kind] ?? [],
+        descriptors:
+          kind === "skill"
+            ? archivedSkillDescriptors
+            : (discoveredArchived.byKind[kind] ?? []),
         status: "archived",
         availableByName,
         canonicalByKey,
