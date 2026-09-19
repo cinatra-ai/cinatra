@@ -411,7 +411,7 @@
       "selector": "[data-conformance-id=\"connector-sharing\"][data-state] \u2014 one panel per owned connection on the Sharing tab: the identity row ([data-slot=\"connection-row\"], name + mono line, no badge and no action) over the app's access picker and ownership card ([role=\"combobox\"] for the scope picker, the \"Search by name or email\u2026\" field, the per-owner \"Remove {name}\" buttons and the one right-aligned \"Save changes\"). Loading variant: [data-slot=\"connector-sharing-loading\"].",
       "requires": [
         {
-          "file": "src/components/extensions/connector-sharing-panels.tsx",
+          "file": "packages/sdk-ui/src/connector-sharing-panels.tsx",
           "literals": [
             "data-conformance-id=\"connector-sharing\"",
             "data-state=\"loading\"",
@@ -429,7 +429,7 @@
       "selector": "[data-conformance-id=\"connector-sharing-rollup\"] \u2014 the roll-up card above the panel list: the Connections status card ([data-slot=\"connection-status-card\"][data-variant=\"multi\"]) with one count badge per status in play and NO action slot (no Check, no All connections link).",
       "requires": [
         {
-          "file": "src/components/extensions/connector-sharing-panels.tsx",
+          "file": "packages/sdk-ui/src/connector-sharing-panels.tsx",
           "literals": ["data-conformance-id=\"connector-sharing-rollup\""]
         },
         {
@@ -443,7 +443,7 @@
       "selector": "[data-conformance-id=\"connector-sharing-locked\"][data-variant] \u2014 a panel whose connector constrains its scope: data-variant=\"locked\" (every out-of-ceiling option [role=\"option\"][aria-disabled=\"true\"] carrying the reason, and the same sentence under the picker with a lock) or data-variant=\"recommended\" (the recommendation line, nothing shared until Save changes).",
       "requires": [
         {
-          "file": "src/components/extensions/connector-sharing-panels.tsx",
+          "file": "packages/sdk-ui/src/connector-sharing-panels.tsx",
           "literals": [
             "data-conformance-id=\"connector-sharing-locked\"",
             "data-variant={panel.scopeConstraint}"

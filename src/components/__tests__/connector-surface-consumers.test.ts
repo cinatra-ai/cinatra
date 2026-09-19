@@ -45,13 +45,17 @@ const SHARING_SECTION = readFileSync(
 );
 
 /**
- * The Sharing TAB's body (cinatra#3374). The composition claim moved here with
- * the surface: the section still resolves each panel's data, and this
- * presentational component draws the roll-up, the identity rows and the three
- * conformance ids — so it is the file that composes the sdk-ui primitives.
+ * The Sharing TAB's body (cinatra#3374), offered by the SDK as ONE component
+ * (cinatra#3385). The composition claim moved with the surface: the section
+ * still resolves each panel's data, and this presentational component draws
+ * the roll-up, the identity rows and the three conformance ids — so it is the
+ * file that composes the sdk-ui primitives. It lives IN sdk-ui because a
+ * connector that draws its own setup page has no seam for the app to inject a
+ * tab into, so both pages draw this one component; the app page consumes it
+ * from its dedicated subpath and keeps no copy of its own.
  */
 const SHARING_PANELS = readFileSync(
-  join(ROOT, "components", "extensions", "connector-sharing-panels.tsx"),
+  join(ROOT, "..", "packages", "sdk-ui", "src", "connector-sharing-panels.tsx"),
   "utf8",
 );
 
@@ -90,14 +94,19 @@ describe("connector dispatch route — the §II error treatment has a PRODUCTION
 });
 
 describe("ConnectionSharingSection — the REAL consumer of the §II connection primitives", () => {
-  it("imports the shipped primitives from sdk-ui", () => {
+  it("composes the shipped primitives, as their own sibling in sdk-ui", () => {
     expect(SHARING_PANELS).toContain(
-      'import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card"',
+      'import { ConnectionsStatusCard } from "./connection-status-card"',
     );
     expect(SHARING_PANELS).toContain(
-      'import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list"',
+      'import { ConnectionsList, ConnectionRow } from "./connections-list"',
     );
-    // …and the section still mounts them, through the panels component.
+    // …and the section still mounts them, through the panels component —
+    // imported from the SDK's dedicated subpath (cinatra#3385): the app page
+    // CONSUMES the one implementation and holds no second copy of it.
+    expect(SHARING_SECTION).toContain(
+      'from "@cinatra-ai/sdk-ui/connector-sharing-panels"',
+    );
     expect(SHARING_SECTION).toContain("<ConnectorSharingPanels");
     expect(SHARING_SECTION).toContain("panels={panelViews}");
   });

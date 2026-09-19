@@ -110,7 +110,7 @@ import {
   ConnectorSharingPanels,
   CONNECTOR_SHARING_INTRO,
   type ConnectorSharingPanelView,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 type ConnectionSharingSectionProps = {
   /** The connector package whose OWN connections the actor manages here. */

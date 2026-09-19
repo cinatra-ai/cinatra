@@ -18,6 +18,7 @@
     "./connection-status-badge": "./src/connection-status-badge.tsx",
     "./connection-status-card": "./src/connection-status-card.tsx",
     "./connections-list": "./src/connections-list.tsx",
+    "./connector-sharing-panels": "./src/connector-sharing-panels.tsx",
     "./icons": "./src/icons.tsx",
     "./tabs": "./src/ui/tabs.tsx",
     "./section-header": "./src/section-header.tsx",
