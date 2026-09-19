@@ -15,7 +15,10 @@ import { describe, expect, it } from "vitest";
 import {
   CONFORMANCE_SEED_CAPABILITY_ENV,
   CONFORMANCE_SEED_CAPABILITY_MIN_LENGTH,
+  CONFORMANCE_SEED_DIAGNOSTIC_ENV,
+  CONFORMANCE_SEED_REFUSAL_HEADER,
   conformanceSeedVerdict,
+  refusalDiagnosticHeaders,
 } from "../conformance-seed-fence";
 
 /** 57 chars — comfortably over the minimum, and not a prefix of anything below. */
@@ -170,5 +173,54 @@ describe("every refusal is a 404 — never a 403", () => {
       expect(verdict.ok).toBe(false);
       expect(verdict).toHaveProperty("status", 404);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE REFUSAL DIAGNOSTIC (cinatra#3416).
+//
+// The refusal stays a bare 404 to the outside — that contract is what the file
+// above protects and it does not move. What was missing is a channel the DESIGN
+// SUITE owns: when the server is a harness server (the documented browser-e2e
+// switch is armed on it), a refusal names the fence that refused, so the next
+// red says "capability-not-presented" instead of leaving a bare 404 to be
+// guessed at. On any other build the header does not exist, so an unauthorized
+// caller still cannot tell a refusal from a missing route.
+// ---------------------------------------------------------------------------
+describe("the refusal diagnostic (cinatra#3416)", () => {
+  const BYPASSED = { ...ARMED, [CONFORMANCE_SEED_DIAGNOSTIC_ENV]: "true" };
+
+  it("names the fence that refused when the harness switch is armed", () => {
+    const verdict = conformanceSeedVerdict(req({ authorization: "Bearer nope" }), BYPASSED);
+    expect(refusalDiagnosticHeaders(verdict, BYPASSED)).toEqual({
+      [CONFORMANCE_SEED_REFUSAL_HEADER]: "capability-not-presented",
+    });
+  });
+
+  it("names the forwarded-chain fence too", () => {
+    const verdict = conformanceSeedVerdict(req({ "x-forwarded-for": "203.0.113.7" }), BYPASSED);
+    expect(refusalDiagnosticHeaders(verdict, BYPASSED)).toEqual({
+      [CONFORMANCE_SEED_REFUSAL_HEADER]: "forwarded-from-off-host",
+    });
+  });
+
+  it("emits NOTHING on a build that did not arm the harness switch", () => {
+    const verdict = conformanceSeedVerdict(req({ authorization: "Bearer nope" }), ARMED);
+    expect(refusalDiagnosticHeaders(verdict, ARMED)).toEqual({});
+  });
+
+  it("emits nothing for the switch set to anything other than the documented value", () => {
+    const env = { ...ARMED, [CONFORMANCE_SEED_DIAGNOSTIC_ENV]: "1" };
+    const verdict = conformanceSeedVerdict(req({ authorization: "Bearer nope" }), env);
+    expect(refusalDiagnosticHeaders(verdict, env)).toEqual({});
+  });
+
+  it("emits nothing for a caller the fence ADMITTED", () => {
+    expect(refusalDiagnosticHeaders(conformanceSeedVerdict(req(), BYPASSED), BYPASSED)).toEqual({});
+  });
+
+  it("reads the documented header and switch names", () => {
+    expect(CONFORMANCE_SEED_REFUSAL_HEADER).toBe("x-conformance-seed-refusal");
+    expect(CONFORMANCE_SEED_DIAGNOSTIC_ENV).toBe("CINATRA_E2E_SETUP_BYPASS");
   });
 });

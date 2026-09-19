@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { conformanceSeedVerdict } from "@/lib/test-support/conformance-seed-fence";
+import {
+  conformanceSeedVerdict,
+  refusalDiagnosticHeaders,
+} from "@/lib/test-support/conformance-seed-fence";
 
+import type { ConformanceSeedVerdict } from "@/lib/test-support/conformance-seed-fence";
 import type { TransitionOpts } from "@cinatra-ai/extensions/lifecycle-primitive";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 
@@ -111,14 +115,30 @@ function seedingEnabled(): boolean {
  * Returns the refusal response, or null when the caller may proceed. The
  * refusal REASON is logged for the operator of this server (a harness that
  * forgot to forward the capability is otherwise indistinguishable from a
- * missing route) and is never returned to the caller.
+ * missing route) and is never returned to the caller — except as the harness-
+ * only header `refusalDiagnosticHeaders` adds on a build that armed the
+ * documented browser-e2e switch (cinatra#3416). The status and the empty body
+ * are the same on every build.
  */
 function refuseUncapableCaller(req: NextRequest): NextResponse | null {
-  if (!seedingEnabled()) return new NextResponse(null, { status: 404 });
+  const disabled: ConformanceSeedVerdict = {
+    ok: false,
+    status: 404,
+    reason: "seeding-disabled-on-this-build",
+  };
+  if (!seedingEnabled()) {
+    return new NextResponse(null, {
+      status: disabled.status,
+      headers: refusalDiagnosticHeaders(disabled),
+    });
+  }
   const verdict = conformanceSeedVerdict(req);
   if (verdict.ok) return null;
   console.warn(`[design-conformance seed] refused: ${verdict.reason}`);
-  return new NextResponse(null, { status: verdict.status });
+  return new NextResponse(null, {
+    status: verdict.status,
+    headers: refusalDiagnosticHeaders(verdict),
+  });
 }
 
 async function parseRunId(req: NextRequest): Promise<string | null> {
