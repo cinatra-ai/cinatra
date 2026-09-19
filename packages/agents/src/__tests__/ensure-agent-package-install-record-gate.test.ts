@@ -266,7 +266,7 @@ describe("cinatra#2536 — a version match alone is not 'already up to date'", (
     expect(logged(infoSpy)).not.toContain("already up to date");
   });
 
-  it("a genuine version bump still re-imports without consulting the install record", async () => {
+  it("a genuine version bump decides to re-import without consulting the install record FIRST", async () => {
     readAgentTemplateByPackageNameMock.mockResolvedValue({
       ...CURRENT_TEMPLATE,
       packageVersion: "0.1.1",
@@ -278,8 +278,24 @@ describe("cinatra#2536 — a version match alone is not 'already up to date'", (
       healInstallRecord: heal.fn,
     });
 
+    // The decision this case has always stood for is unchanged: the version bump
+    // ALONE re-imports, with nothing read from the install record before it. The
+    // canonical record is then anchored AFTER the import (cinatra#3589), so the
+    // seam is consulted exactly once, at the NEW version, and never ahead of the
+    // decision.
     expect(result.skipped).toBe(false);
-    expect(heal.fn).not.toHaveBeenCalled();
+    expect(importAgentTemplateCoreMock).toHaveBeenCalledTimes(1);
+    expect(heal.calls).toEqual([
+      {
+        packageName: "@cinatra-ai/blog-draft-writer-agent",
+        kind: "agent",
+        packageDir: PACKAGE_DIR,
+        version: "0.1.2",
+      },
+    ]);
+    expect(heal.fn.mock.invocationCallOrder[0]).toBeGreaterThan(
+      importAgentTemplateCoreMock.mock.invocationCallOrder[0]!,
+    );
   });
 });
 
