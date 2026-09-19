@@ -111,10 +111,16 @@ const emitSpy = vi.fn<
 const readGateSpy = vi.fn<
   (runId: string, reviewTaskId: string) => Promise<{ orgId: string; status: string } | null>
 >(async () => null);
+// cinatra#3035 (epic #3023 W11): the seam also lists the run's own gates, so a
+// review that opens one per artifact can route to the first still unread.
+const listGatesSpy = vi.fn<
+  (runId: string) => Promise<Array<{ reviewTaskId: string; status: string }>>
+>(async () => []);
 function bindSeam() {
   (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
     emit: emitSpy,
     readGate: readGateSpy,
+    listGates: listGatesSpy,
   };
 }
 function unbindSeam() {
@@ -220,6 +226,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     storeMock.updateAgentRunA2AContextId.mockResolvedValue(undefined);
     emitSpy.mockResolvedValue({ ok: true });
     readGateSpy.mockResolvedValue(null);
+    listGatesSpy.mockResolvedValue([]);
     bindSeam();
   });
   afterEach(() => unbindSeam());
@@ -237,12 +244,21 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     });
 
     // (1) Pinned with the run's immutable targets under the wayflow reviewTaskId.
-    expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(emitSpy).toHaveBeenCalledWith({
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, {
       runId: "run-rev-1",
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
-      targets: TARGETS,
+      targets: [TARGETS[0]],
+    });
+    expect(emitSpy).toHaveBeenNthCalledWith(2, {
+      runId: "run-rev-1",
+      orgId: "org-rev",
+      reviewTaskId: "wayflow-task-rev-1#2",
+      targets: [TARGETS[1]],
     });
 
     // (2) Routed via the redirect renderer id — NOT the legacy reviewer envelope.
@@ -258,7 +274,9 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "/agents/cinatra-ai/web-research-agent/run-rev-1/review/wayflow-task-rev-1",
     );
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
-    expect(v.targetCount).toBe(2);
+    // cinatra#3035 (epic #3023 W11): the surface a person lands on shows ONE
+    // artifact — the first of the two the set named.
+    expect(v.targetCount).toBe(1);
     expect(v.agentSummary).toBe("Two items ready for your review.");
     // cinatra#1796: the host synthesizes no review envelope at all any more —
     // the synthesis was deleted with the reviewer rendering teardown. These stay
@@ -423,7 +441,10 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });

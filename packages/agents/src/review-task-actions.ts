@@ -181,6 +181,7 @@ async function assertRunScopeOrDeny(
   }
 }
 
+
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
   actorId: string,
@@ -647,6 +648,15 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
+    // MERGED (cinatra#3035 bring-up-to-date). This branch carried its own
+    // answer to the SAME defect — a job id derived from the decision rather
+    // than from `reviewTaskId`, which is constant for a run. The run-setup
+    // fix below landed on main first and supersedes it: a field-derived id
+    // still collides where a run parks on ONE field twice (the clear road
+    // removes an answered key again), which is the stall both changes exist
+    // to end. Both intents stand here — no confirmation of one run is
+    // swallowed, and a resume the runner is never handed lands the run
+    // failed with a message naming the field just answered.
     // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
     // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
     // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic

@@ -599,6 +599,49 @@ type InterruptCtx = NonNullable<
   ReturnType<typeof useAgUiRunStream>["interruptContext"]
 >;
 
+/**
+ * Does this declared object schema ask the person for nothing of its own?
+ *
+ * The step-confirmation bypass below exists for the shape its comment names —
+ * "object schema with only { approved: boolean }" — and it used to fire on ANY
+ * object-typed schema, so a gate that declares a REAL field was swallowed whole:
+ * no renderer, no message, no prompt window, a card holding a Continue and
+ * nothing above it (cinatra#3035). A gate that declares a property the person is
+ * being asked for is not a bare confirmation, and the host already owns its
+ * drawing — SchemaFieldRenderer's object arm draws one control per declared
+ * property. A gate that declares no properties, or only the bare `approved`
+ * flag, has nothing for that arm to draw and keeps the bypass it has today.
+ */
+function declaresNoAskedProperty(schema: unknown): boolean {
+  const declared = schema as Record<string, unknown> | null | undefined;
+  // A schema that carries its fields behind a reference or a composition
+  // keyword declares them somewhere this host does not read (neither the
+  // compiler nor the schema-field renderer resolves `$ref`). It is not the bare
+  // confirmation this bypass is for, so it keeps the host's own drawing — the
+  // renderer's object arm, which floors at a JSON control — rather than the
+  // blank card this leg exists to end (convergence round, cinatra#3035).
+  if (
+    declared != null &&
+    (declared.$ref !== undefined ||
+      declared.allOf !== undefined ||
+      declared.oneOf !== undefined ||
+      declared.anyOf !== undefined)
+  ) {
+    return false;
+  }
+  const properties = declared?.properties;
+  if (properties === null || typeof properties !== "object") return true;
+  // `approved` is exempt as the CONFIRMATION FLAG the comment above names —
+  // `{ approved: boolean }` — never as a name. A property called `approved`
+  // that declares another type is something the person is asked to write, and
+  // swallowing it would draw the same blank card for it (convergence round).
+  return Object.entries(properties as Record<string, unknown>).every(([name, spec]) => {
+    if (name !== "approved") return false;
+    const type = (spec as { type?: unknown } | null | undefined)?.type;
+    return type === undefined || type === "boolean";
+  });
+}
+
 function HitlApprovalCard({
   interruptContext,
   runId,
@@ -1037,7 +1080,12 @@ function HitlApprovalCard({
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
+    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    // NARROWED to what the comment above says the guard is for (cinatra#3035).
+    // A gate that declares a real property is drawn by the schema-field
+    // renderer's object arm; only a gate that asks for nothing of its own —
+    // no declared properties, or none besides a bare `approved` — bypasses it.
+    declaresNoAskedProperty(interruptContext.schema);
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
