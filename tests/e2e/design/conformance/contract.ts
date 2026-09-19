@@ -7246,7 +7246,7 @@ async function resolveUploadReference(root: Locator): Promise<Locator> {
 }
 
 const UPLOAD_EXTENSION_SCREEN_DRIVER: SurfaceDriver = {
-  path: HARNESS_PATH,
+  path: `${HARNESS_PATH}/upload`,
   root: (page) => page.locator(UPLOAD_SCREEN_MOUNT),
   present: async (_page, root) => {
     const screenRoot = root.locator(UPLOAD_SCREEN_NODE);
@@ -7302,7 +7302,7 @@ const UPLOAD_EXTENSION_SCREEN_DRIVER: SurfaceDriver = {
 };
 
 const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
-  path: HARNESS_PATH,
+  path: `${HARNESS_PATH}/upload`,
   root: (page) => page.locator(UPLOAD_GITHUB_FORM_MOUNT),
   present: async (_page, root) => {
     await expect(root.locator(UPLOAD_FORM_NODE)).toBeVisible();
@@ -7360,7 +7360,7 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
 };
 
 const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
-  path: HARNESS_PATH,
+  path: `${HARNESS_PATH}/upload`,
   root: (page) => page.locator(UPLOAD_PANEL_MOUNT),
   present: async (_page, root) => {
     const panel = root.locator(UPLOAD_PANEL_NODE);

@@ -164,4 +164,38 @@ describe("the Upload Extension conformance mounts", () => {
     );
     expect(toastState.error).not.toHaveBeenCalled();
   });
+
+  it("keeps the three mounts on their OWN harness route, off the shared conformance page", () => {
+    // Two of these three mounts plant a RESOLVED install panel, and that panel
+    // takes focus on mount (packages/extensions/src/screens/extension-install-scope-panel.tsx).
+    // The browser scrolls the focused control into view, which moves every
+    // other mount sharing the page between the two viewport-relative box
+    // readings a geometry expectation compares. So this family lives on a
+    // sub-page of its own, exactly as the seeded harness already does.
+    const shared = source("src/app/design-fixtures/conformance/page.tsx");
+    expect(shared).not.toContain("UploadExtensionConformanceFixtures");
+    expect(shared).not.toContain("./upload-extension-fixtures");
+    const own = source("src/app/design-fixtures/conformance/upload/page.tsx");
+    expect(own).toContain("<UploadExtensionConformanceFixtures");
+    expect(own).toContain('from "../upload-extension-fixtures"');
+  });
+
+  it("draws all three mounts on that own route's page", async () => {
+    // Imported through a runtime specifier: this file's other six cases pin the
+    // mounts themselves and must keep running whichever route mounts them.
+    const ownRoute = "../upload/page";
+    const { default: UploadConformanceHarnessPage } = (await import(
+      /* @vite-ignore */ ownRoute
+    )) as { default: () => React.ReactElement };
+    const { container } = render(<UploadConformanceHarnessPage />);
+    for (const surfaceId of [
+      "upload-extension-screen",
+      "upload-github-form",
+      "upload-resolved-install-panel",
+    ]) {
+      const root = container.querySelector(`[data-surface-id="${surfaceId}"]`);
+      expect(root, `the Upload harness route mounts "${surfaceId}"`).not.toBeNull();
+      expect(root?.getAttribute("data-variant")).toBe("populated");
+    }
+  });
 });

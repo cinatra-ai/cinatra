@@ -24,6 +24,7 @@
       "tests/e2e/design/conformance/manifests/app-extensions.json",
       "tests/e2e/design/conformance/contract.ts",
       "src/app/design-fixtures/conformance/page.tsx",
+      "src/app/design-fixtures/conformance/upload/page.tsx",
       "src/app/design-fixtures/conformance/card-fixtures.tsx",
       "src/app/design-fixtures/conformance/fixture-data.ts",
       "src/app/design-fixtures/conformance/install-config-needs-fixture.tsx",
