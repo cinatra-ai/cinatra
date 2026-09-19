@@ -63,12 +63,33 @@ const KIND_LABEL: Record<string, string> = {
   artifact: "Artifact",
 };
 
+/**
+ * The design-conformance harness seam (cinatra#3546, drawing §VIII).
+ *
+ * /design-fixtures/conformance mounts THIS component — the shipped GitHub tab —
+ * and substitutes only what a harness with no session and no database cannot
+ * provide: the two bound SERVER calls, and, for the mount that grades the
+ * resolved panel, the resolved state itself. It is the same substitution the
+ * §I.1 install-panel mount already makes for the store's own bound action
+ * (src/app/design-fixtures/conformance/card-fixtures.tsx). Every shipped road
+ * renders this form with no `harness` prop at all, so the defaults below are
+ * what the product runs.
+ */
+export type UploadGitHubFormHarness = {
+  /** The mount opens already resolved on this preview. */
+  initialPreview?: SuppliedPackagePreview;
+  previewPackage?: typeof previewSuppliedRepositoryAction;
+  installPackage?: typeof installSuppliedRepositoryAction;
+};
+
 export type ImportPackageFromGitHubFormProps = {
   installScope: UploadInstallScopeContext;
+  harness?: UploadGitHubFormHarness;
 };
 
 export function ImportPackageFromGitHubForm({
   installScope,
+  harness,
 }: ImportPackageFromGitHubFormProps) {
   const router = useRouter();
   // The kind's own listing, recorded by a completed install (see the note
@@ -80,7 +101,12 @@ export function ImportPackageFromGitHubForm({
   }, [installedDestination, router]);
   const [repoUrl, setRepoUrl] = useState("");
   const [ref, setRef] = useState("");
-  const [preview, setPreview] = useState<SuppliedPackagePreview | null>(null);
+  const [preview, setPreview] = useState<SuppliedPackagePreview | null>(
+    harness?.initialPreview ?? null,
+  );
+  // The conformance mount substitutes ONLY these two bound server calls.
+  const previewPackage = harness?.previewPackage ?? previewSuppliedRepositoryAction;
+  const installPackage = harness?.installPackage ?? installSuppliedRepositoryAction;
   const [isLooking, startLookup] = useTransition();
   // The upload-consent confirmation rides on the preview (the server builds it
   // from the same builder the File tab's own lookup uses). Always starts
@@ -94,7 +120,7 @@ export function ImportPackageFromGitHubForm({
     setPreview(null);
     setConsentChecked(false);
     startLookup(async () => {
-      const result = await previewSuppliedRepositoryAction({
+      const result = await previewPackage({
         repoUrl,
         ...(ref.trim() ? { ref: ref.trim() } : {}),
       });
@@ -128,7 +154,7 @@ export function ImportPackageFromGitHubForm({
   const installAction: ExtensionScopedInstallAction = async ({ accessTarget }) => {
     if (!preview || !preview.resolvedSha) return;
     const consent = consentPayload(consentPrompt, consentChecked);
-    const result = await installSuppliedRepositoryAction({
+    const result = await installPackage({
       repoUrl,
       ref: preview.ref ?? "",
       pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
@@ -148,7 +174,15 @@ export function ImportPackageFromGitHubForm({
 
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={handleLookup} className="flex flex-col gap-6">
+      {/* The manifest surface id and its one state variant, on the element the
+          drawing draws as the repository form. `data-state` is TRUTHFUL: it is
+          present only while the lookup the operator started is in flight. */}
+      <form
+        onSubmit={handleLookup}
+        className="flex flex-col gap-6"
+        data-conformance-id="upload-github-form"
+        data-state={isLooking ? "loading" : undefined}
+      >
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="github-repo-url">Repository URL</FieldLabel>
@@ -174,6 +208,7 @@ export function ImportPackageFromGitHubForm({
               <Button
                 type="submit"
                 data-testid="github-upload-submit"
+                data-conformance-id="resolve-reference"
                 disabled={!repoUrl.trim() || isLooking}
               >
                 {isLooking ? (
@@ -233,10 +268,18 @@ export function ImportPackageFromGitHubForm({
                 <Badge variant="outline" data-testid="upload-resolved-kind">
                   {KIND_LABEL[preview.kind] ?? preview.kind}
                 </Badge>
-                <p className="truncate text-sm font-semibold text-foreground">
+                <p
+                  className="truncate text-sm font-semibold text-foreground"
+                  data-testid="upload-resolved-name"
+                >
                   {preview.packageName}
                 </p>
-                <span className="text-xs text-muted-foreground">{preview.version}</span>
+                <span
+                  className="text-xs text-muted-foreground"
+                  data-testid="upload-resolved-version"
+                >
+                  {preview.version}
+                </span>
               </div>
               <p className="font-mono text-[11px] text-muted-foreground" data-testid="upload-pinned-sha">
                 {preview.repo} pinned at {preview.resolvedSha}
