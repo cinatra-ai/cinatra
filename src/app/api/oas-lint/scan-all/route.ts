@@ -93,6 +93,36 @@ function readProducesExtensions(
     .filter((e): e is string => typeof e === "string" && e.length > 0);
 }
 
+/**
+ * The OWNER of each declared object type id, read from the sibling package.json's
+ * own `cinatra.produces` entries (cinatra#3597). Each entry pairs the providing
+ * `extension` with the `objectTypeId` it provides — the same pairing the claim
+ * registry is written from — so a type whose id namespace is not its package
+ * name (`@cinatra-ai/linkedin-artifacts` provides `@cinatra-ai/linkedin:post-draft`)
+ * is measured against the package that really owns it instead of the package its
+ * id looks like. A type the manifest does not pair stays unknown (null), and the
+ * scan then reads the id as it always has.
+ */
+function readDeclaredTypeOwners(
+  packageJson: Record<string, unknown> | null,
+): Map<string, string> {
+  const owners = new Map<string, string>();
+  if (packageJson === null) return owners;
+  const cinatra = packageJson.cinatra;
+  if (!cinatra || typeof cinatra !== "object") return owners;
+  const produces = (cinatra as { produces?: unknown }).produces;
+  if (!Array.isArray(produces)) return owners;
+  for (const entry of produces) {
+    if (!entry || typeof entry !== "object") continue;
+    const extension = (entry as { extension?: unknown }).extension;
+    const objectTypeId = (entry as { objectTypeId?: unknown }).objectTypeId;
+    if (typeof extension !== "string" || extension.length === 0) continue;
+    if (typeof objectTypeId !== "string" || objectTypeId.length === 0) continue;
+    owners.set(objectTypeId, extension);
+  }
+  return owners;
+}
+
 function asObject(value: string | Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (value === undefined) return null;
   if (typeof value === "object") return value;
@@ -177,9 +207,11 @@ export async function POST(req: Request): Promise<Response> {
   // Runs unconditionally; the produces-coverage check reads sibling
   // `cinatra.produces` (null when no/ malformed package.json ⇒ that check is
   // skipped, the rest still run). All findings are WARNING severity.
+  const declaredTypeOwners = readDeclaredTypeOwners(packageJson);
   findings.push(
     ...scanOasForArtifactParityFindings(oas, {
       produces: readProducesExtensions(packageJson),
+      resolveTypeOwner: (typeId) => declaredTypeOwners.get(typeId) ?? null,
     }),
   );
 
